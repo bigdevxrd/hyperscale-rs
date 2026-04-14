@@ -1,123 +1,103 @@
-# Hyperscale-RS Handoff — 2026-04-09
+# hyperscale-rs — Work Session Handoff (2026-04-12)
 
 ## What This Project Is
-Rust BFT consensus protocol for Radix. 55K LOC, 28 crates, 738 tests. Built by hyperscalers team. We're contributing as external collaborators.
+Rust BFT consensus protocol for Radix. 28 crates, 500+ tests. Built by hyperscalers team. We're contributing as external collaborators via fork.
 
-## Repo
 - Upstream: https://github.com/hyperscalers/hyperscale-rs
-- Our fork: https://github.com/bigdevxrd/hyperscale-rs
+- Fork: https://github.com/bigdevxrd/hyperscale-rs
 - Local: /Users/bigdev/Projects/hyperscale-rs
-- Builds clean on Mac (`cargo check` passes)
 
-## What We've Done So Far
-1. **Forked + cloned** (Apr 8)
-2. **Full security audit** — 17 unbounded data structures found across 5 crates, 3 critical
-3. **Posted audit on issue #22** — https://github.com/hyperscalers/hyperscale-rs/issues/22#issuecomment-4205053762
-4. **Researcher agent** triaged all 21 open issues and recommended contribution path
-5. **CONTRIBUTION-PLAN.md** written — 6-PR phased approach
+## Current PR Status
 
-## No Response Yet From Maintainer
-Our #22 comment is the only external contribution. No reply yet. But the maintainer made 10 commits on Apr 8 (same day), merged 5 PRs in 2 weeks. Very active, just hasn't responded to our audit yet.
+| PR | Title | Branch | Status |
+|----|-------|--------|--------|
+| #55 | Bounded mempool pool eviction | `bounded-mempool-pool` | Open, awaiting review |
+| #56 | Age-based cleanup for early execution results | `execution-early-results-cleanup` | Open, awaiting review |
+| #57 | Age-based cleanup for early wave attestations | `execution-early-attestations-cleanup` | Open, awaiting review |
+| #58 | Timeout for stale inclusion proof fetches | `livelock-proof-fetch-timeout` | Open, awaiting review |
+| #59 | Cap early votes buffer per wave (HashMap dedup) | `execution-early-votes-bounds` | Open, awaiting review |
 
-Hashlock (security audit firm) also opened #52 introducing themselves — signals the project is getting attention.
+All PRs: tests pass, clippy clean, fmt clean. Reviewed for Byzantine safety.
 
-## First PR: Bounded Mempool Pool
+## #22 Audit Completion
 
-**Target:** `crates/mempool/src/state.rs`
+| Structure | Risk | Status |
+|-----------|------|--------|
+| `mempool::pool` | Critical | PR #55 |
+| `execution::early_execution_results` | Critical | PR #56 |
+| `livelock::tombstones` | ~~Critical~~ | Already wired |
+| `execution::early_wave_attestations` | High | PR #57 |
+| `livelock::pending_proof_fetches` | High | PR #58 |
+| `execution::early_votes` inner Vec | Medium | PR #59 |
+| `pending_abort_intents` | Low | Cleaned on commit |
+| `provision_tracker.seen` | Low | Cleaned per-tx terminal |
 
-**Problem:** `pool: BTreeMap<Hash, PoolEntry>` grows without bound. `DEFAULT_IN_FLIGHT_LIMIT` (12,288) throttles proposals but doesn't evict old transactions. Attacker can flood with cross-shard txns that never finalize.
+## Crate Map
 
-**Fix:**
-1. Add `max_pool_size: usize` to config (default 50,000)
-2. Add `fn maybe_evict(&mut self)` after every insert
-3. FIFO eviction by `created_at` (simplest, least controversial)
-4. Add `mempool_pool_size` metric gauge
-5. Test: pool reaches limit → oldest evicted on next insert
+| Crate | Purpose |
+|-------|---------|
+| **bft** | HotStuff-2 consensus state machine |
+| **core** | Event/Action/StateMachine traits |
+| **execution** | TX execution, cross-shard 2PC, vote aggregation |
+| **livelock** | Cross-shard deadlock prevention (cycle detection) |
+| **mempool** | TX staging, gossip, conflict detection |
+| **node** | Composed state machine (BFT + execution + mempool) |
+| **provisions** | Cross-shard state provision coordination |
+| **remote-headers** | Cross-shard block header verification |
+| **storage** | Storage traits + verkle state tree |
+| **storage-memory** | In-memory storage (simulation) |
+| **storage-rocksdb** | RocksDB storage (production) |
+| **network** / **network-libp2p** / **network-memory** | Transport layer |
+| **simulation** / **simulator** | Deterministic sim runner + workload sim |
+| **production** | Production async runner |
+| **engine** | Radix Engine integration |
+| **messages** | Network message types (sbor) |
+| **metrics** / **metrics-prometheus** | Metrics facade + Prometheus |
+| **topology** | Shard committee management |
+| **types** | Core types (Hash, Block, WaveId, etc.) |
+| **test-helpers** | Properly-signed crypto fixtures |
+| **dispatch** / **dispatch-pooled** / **dispatch-sync** | Work scheduling |
+| **spammer** | Load testing TX generator |
 
-**Key files to read:**
-- `crates/mempool/src/state.rs` — the full mempool state (2,151 LOC)
-- `crates/mempool/src/config.rs` — where to add max_pool_size
-- `crates/core/src/lib.rs` — Action enum, ProtocolEvent (understand the event model)
-- `crates/simulation/tests/` — see how existing tests work
+## Architecture: Transaction Flow
 
-**Before starting:**
-```bash
-cd /Users/bigdev/Projects/hyperscale-rs
-git pull origin main  # Codebase moves fast
-cargo test -p hyperscale-mempool  # Run existing tests
+```
+TX arrives → Mempool (validate, gossip)
+          → BFT Leader proposes block
+          → Validators vote → QC at 2f+1
+          → Two-chain commit (H finalized when QC at H+1)
+          → Execution:
+              Single-shard: execute → vote → EC
+              Cross-shard:  provisions → verify → execute → vote → EC → WaveCert
+          → Livelock: cycle detection via provision overlap, hash-based deferral
+          → State committed to storage
 ```
 
-## Second PR: Livelock Tombstone Cleanup
+Key: All state machines are synchronous, deterministic, zero I/O.
 
-**Target:** `crates/livelock/src/state.rs`
-**Problem:** `tombstones: HashMap<Hash, Duration>` — no cleanup despite `tombstone_ttl` config
-**Fix:** Add `cleanup_tombstones(committed_height)` matching mempool's cleanup pattern
-**Effort:** 2-3 hours, very low risk
+## Next Contribution Targets
 
-## Third PR: Execution Early State Cleanup
+### Tier 1 — Best Next
+1. **#23 — Simulator trait unification** — Extract common trait from parallel + deterministic sims. Medium effort, high visibility.
+2. **#15 — Benchmarks** — Criterion for BFT voting, execution waves, mempool insertion.
 
-**Target:** `crates/execution/src/state.rs`
-**Problem:** `early_provisioning_complete`, `early_certificates`, `early_votes` leak on orphaned blocks
-**Fix:** Age-based cleanup in `prune_execution_state()`, remove entries older than committed_height - 100
-**Effort:** 4-6 hours, medium risk
+### Tier 2 — Good Follow-ups
+3. **#18 — Transaction/substate test suite** — Start single-shard, expand cross-shard.
+4. **#9 — Use radix_common** — Dependency swap for crypto primitives.
+5. **#41 — Systemd service files** — Quick ops win.
 
-## Architecture Quick Reference
+### Avoid for Now
+- #3 (TLA+), #10/#11 (protocol design), #17 (fee economics)
 
-```
-NodeInput → IoLoop → ProtocolEvent → NodeStateMachine
-  ├── BftState (11,925 LOC) — HotStuff-2 consensus
-  ├── ExecutionState (2,776 LOC) — cross-shard 2PC
-  ├── MempoolState (2,151 LOC) — tx pool ← OUR TARGET
-  ├── ProvisionCoordinator — cross-shard state
-  ├── RemoteHeaderCoordinator — remote block headers
-  ├── LivelockState (1,524 LOC) — deadlock detection ← PR #2
-  └── TopologyState — shard membership
-```
+## Upstream Branches to Watch
+- `event-loop-overhaul` — Major refactor, merge conflict risk
+- `generic-consensus` — Abstracting consensus
+- `byzantine-backpressure` — Related to our DoS hardening
+- `jellyfish-verkle-tree` — State storage changes
 
-All state machine logic is **synchronous, deterministic, pure** (no I/O). I/O deferred to runner layer.
-
-## Key Crates By Size
-
-| Crate | LOC | What |
-|-------|-----|------|
-| bft | 11,925 | Core consensus (don't touch yet) |
-| types | 7,157 | Domain types (foundation) |
-| storage-rocksdb | 4,956 | Production storage |
-| execution | 2,776 | Cross-shard execution |
-| mempool | 2,151 | Transaction pool (PR #1) |
-| engine | 2,083 | Radix Engine integration |
-| production | 1,890 | Async tokio runner |
-| node | 1,840 | Composes all subsystems |
-| livelock | 1,524 | Deadlock detection (PR #2) |
-
-## PR Standards (Match Their Style)
-- `rustfmt` + `clippy` must pass (CI enforces)
-- Imperative commit messages ("Add bounded pool eviction")
+## PR Standards
+- `cargo fmt` + `cargo clippy --all-targets` must pass
+- Imperative commit messages
 - Every behavior change has a test
-- Comment on the issue before starting work
-- Keep PRs focused — one fix per PR
-
-## Don't Touch
-- Consensus protocol (#10, #11, #12) — design decisions pending
-- Gateway integration (#7, #8) — operational
-- TLA+ (#3) — formal methods
-- radix-transactions fork (#4, #43) — upstream dep
-
-## Files in This Repo
-- `CLAUDE.md` — project context for Claude Code sessions
-- `CONTRIBUTION-PLAN.md` — full 6-PR phased plan with timeline
-- `HANDOFF.md` — this file
-
-## Agent Support
-- `bigdev-agents` CLI can run the researcher agent for analysis:
-  ```bash
-  cd /Users/bigdev/Projects/bigdev-agents
-  ANTHROPIC_API_KEY=<key> node scripts/run-agent.js researcher --profile hyperscale "<question>"
-  ```
-- Budget: Haiku for research ($0.001/1k tokens), free models for quick questions
-- Yesterday's agent output: `bigdev-agents/output/researcher-2026-04-08T10-01-54.md` (issue triage)
-
-## Memory References
-- `~/.claude/projects/-Users-bigdev-Projects-auto-trader-xrd/memory/project_agent_architecture.md` — agent setup
-- `openclaw-bert/workspace/PROJECT-HYPERSCALERS.md` — Bert's original analysis (20 issues mapped)
-- `scrypto-xrd/SCRYPTO-AUDIT-2026-04-08.md` — our Scrypto audit methodology (same rigor)
+- One fix per PR, keep diffs focused
+- Rebase onto upstream/main before submitting
