@@ -1,12 +1,22 @@
 # Running a Distributed Hyperscale Cluster
 
-This guide explains how to run a `hyperscale` cluster across multiple physical machines or VMs using raw binaries (process-based). You can run multiple validators per host, but each validator must run on a different port. The configs will be generated for you locally, and you will need to copy them to the target machines. If one of your nodes is behind NAT, you can enable UPnP to forward the ports automatically. Make sure that the ports are whitelisted in your firewall with the correct protocol (UDP/TCP). Use the distributed monitoring script to set up a Prometheus / Grafana stack to monitor your distributed cluster. The monitoring host will have to scrape the target RPC ports (8080, 8081, 808x...) on your validator node hosts.
+This guide explains how to run a `hyperscale` cluster across multiple physical machines or VMs using raw binaries (process-based).
+
+**Key points:**
+- Run multiple validators per host, each on a different port.
+- Configs are generated locally, then copied to target machines.
+- If a node is behind NAT, enable UPnP to forward ports automatically.
+- Ensure firewall rules whitelist the required ports with the correct protocol (UDP/TCP).
+- Use the distributed monitoring script to set up Prometheus and Grafana for cluster monitoring. The monitoring host scrapes the RPC ports (`8080`, `8081`, `808x`...) on your validator node hosts.
 
 ## Prerequisites
+
+Ensure the following are in place before proceeding:
+
 - Rust and build tools installed on your local machine (to generate configs).
 - SSH access to all target machines.
 - **Port 9000 (UDP/TCP)** open between all machines (P2P).
-- **Port 30500 (TCP)** open between all machines (TCP fallback - only if enabled).
+- **Port 30500 (TCP)** open between all machines (TCP fallback — only if enabled).
 - **Port 8080 (TCP)** open to query metrics/RPC remotely.
 
 ## Step 1: Generate Configuration
@@ -34,8 +44,8 @@ The script will also output convenient `scp` commands to copy the files to your 
 
 Follow the instructions output by the generator script. Generally, you will:
 
-1.  Copy the `host-N` directory to the respective machine.
-2.  Copy the compiled `hyperscale-validator` binary.
+1. Copy the `host-N` directory to the respective machine.
+2. Copy the compiled `hyperscale-validator` binary.
 
 ## Step 3: Launch
 
@@ -53,7 +63,7 @@ SSH into each machine and start the validator nodes.
 ./hyperscale-validator --config ~/distributed-cluster-data/host-1/node-1/config.toml &
 ```
 
-## 4. Monitoring (Optional)
+## Step 4: Monitoring (Optional)
 
 You can launch a Prometheus + Grafana stack to monitor your distributed cluster from your local machine.
 
@@ -70,4 +80,4 @@ Access the dashboards:
 ## Troubleshooting
 
 - **Connection Refused**: Check your firewall rules (ufw/iptables) to ensure ports 9000-9100 range and 30500+ range are open.
-- **Logs**: Check output to see if they are connecting. You should see "New peer connected" or similar libp2p events.
+- **Logs**: Check logs to confirm nodes are connecting. Look for "New peer connected" or similar libp2p events.

@@ -6,7 +6,7 @@ Rust BFT consensus protocol for Radix. 55K LOC, 28 crates, 738 tests. Built by h
 ## Repo
 - Upstream: https://github.com/hyperscalers/hyperscale-rs
 - Our fork: https://github.com/bigdevxrd/hyperscale-rs
-- Local: /Users/bigdev/Projects/hyperscale-rs
+- Local: `/path/to/hyperscale-rs`
 - Builds clean on Mac (`cargo check` passes)
 
 ## What We've Done So Far
@@ -17,7 +17,7 @@ Rust BFT consensus protocol for Radix. 55K LOC, 28 crates, 738 tests. Built by h
 5. **CONTRIBUTION-PLAN.md** written — 6-PR phased approach
 
 ## No Response Yet From Maintainer
-Our #22 comment is the only external contribution. No reply yet. But the maintainer made 10 commits on Apr 8 (same day), merged 5 PRs in 2 weeks. Very active, just hasn't responded to our audit yet.
+Our #22 comment is the only external contribution so far; no reply yet. The maintainer made 10 commits on Apr 8 (same day) and merged 5 PRs in 2 weeks. Very active, just hasn't responded to our audit yet.
 
 Hashlock (security audit firm) also opened #52 introducing themselves — signals the project is getting attention.
 
@@ -42,7 +42,7 @@ Hashlock (security audit firm) also opened #52 introducing themselves — signal
 
 **Before starting:**
 ```bash
-cd /Users/bigdev/Projects/hyperscale-rs
+cd /path/to/hyperscale-rs
 git pull origin main  # Codebase moves fast
 cargo test -p hyperscale-mempool  # Run existing tests
 ```
@@ -63,7 +63,7 @@ cargo test -p hyperscale-mempool  # Run existing tests
 
 ## Architecture Quick Reference
 
-```
+```text
 NodeInput → IoLoop → ProtocolEvent → NodeStateMachine
   ├── BftState (11,925 LOC) — HotStuff-2 consensus
   ├── ExecutionState (2,776 LOC) — cross-shard 2PC
@@ -111,7 +111,7 @@ All state machine logic is **synchronous, deterministic, pure** (no I/O). I/O de
 ## Agent Support
 - `bigdev-agents` CLI can run the researcher agent for analysis:
   ```bash
-  cd /Users/bigdev/Projects/bigdev-agents
+  cd /path/to/bigdev-agents
   ANTHROPIC_API_KEY=<key> node scripts/run-agent.js researcher --profile hyperscale "<question>"
   ```
 - Budget: Haiku for research ($0.001/1k tokens), free models for quick questions

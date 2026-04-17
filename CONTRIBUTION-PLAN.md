@@ -1,5 +1,17 @@
 # Hyperscale-RS — Contribution Plan
+
 > bigdev (@bigdevxrd) | Updated: 2026-04-09
+
+## Table of Contents
+
+- [The Opportunity](#the-opportunity)
+- [Codebase Profile](#codebase-profile)
+- [Contribution Path](#contribution-path-ordered-by-impact--feasibility)
+- [How We Work](#how-we-work)
+- [Don't Touch (Yet)](#dont-touch-yet)
+- [Tools & Setup](#tools--setup)
+- [Timeline](#timeline)
+- [Success Metrics](#success-metrics)
 
 ## The Opportunity
 
@@ -162,7 +174,7 @@ We posted a detailed security audit on #22 (unbounded data structures) — first
 
 ```bash
 # Build
-cd /Users/bigdev/Projects/hyperscale-rs
+cd /path/to/hyperscale-rs
 cargo build --release
 
 # Test specific crate

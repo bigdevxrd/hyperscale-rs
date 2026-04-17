@@ -12,6 +12,18 @@ Rust implementation of Hyperscale consensus protocol.
 - Improved cross-shard livelock prevention
 - Real Radix Engine integration
 
+## Table of Contents
+
+- [Crates](#crates)
+- [Installation](#installation)
+- [Prerequisites](#prerequisites)
+- [Cloning with Submodules](#cloning-with-submodules)
+- [Building](#building)
+- [Running the Simulator](#running-the-simulator)
+- [Running Tests](#running-tests)
+- [Running a Local Cluster](#running-a-local-cluster)
+- [Troubleshooting](#troubleshooting)
+
 ## Crates
 
 | Crate | Purpose |
@@ -86,10 +98,10 @@ sudo apt-get update && sudo apt-get install -y \
 ```
 
 #### Windows
-1.  Install [Rust](https://rustup.rs/).
-2.  Install [LLVM](https://releases.llvm.org/download.html).
-3.  Install [Protoc](https://github.com/protocolbuffers/protobuf/releases).
-4.  Ensure `clang` and `protoc` are in your `PATH`.
+1. Install [Rust](https://rustup.rs/).
+2. Install [LLVM](https://releases.llvm.org/download.html).
+3. Install [Protoc](https://github.com/protocolbuffers/protobuf/releases).
+4. Ensure `clang` and `protoc` are in your `PATH`.
 
 ### 3. Install Docker (Optional)
 
@@ -205,20 +217,19 @@ Example command (adjust ports as needed):
   --duration 30s
 ```
 
-
 ## Troubleshooting
 
 ### Windows: "Path too long" Error
 
 If you encounter "path too long" errors during `cargo build` on Windows (often due to deep dependency trees), you need to enable Long Paths in Windows.
 
-1.  Open **PowerShell** as Administrator.
-2.  Run the following command to enable long paths in the registry:
+1. Open **PowerShell** as Administrator.
+2. Run the following command to enable long paths in the registry:
     ```powershell
     New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
     ```
-3.  Restart your computer (or sign out and back in).
-4.  Run this git command to ensure git uses long paths:
+3. Restart your computer (or sign out and back in).
+4. Run this git command to ensure git uses long paths:
     ```bash
     git config --system core.longpaths true
     ```
@@ -227,9 +238,9 @@ If you encounter "path too long" errors during `cargo build` on Windows (often d
 
 If you see errors about missing `clang.dll` or `libclang.dll` during build (usually from `rocksdb` or `bindgen`), you need to set the `LIBCLANG_PATH` environment variable.
 
-1.  Ensure LLVM is installed (`choco install llvm`).
-2.  Ensure protobuf is installed (`choco install protobuf`).
-3.  Set the environment variable to your LLVM `bin` directory:
+1. Ensure LLVM is installed (`choco install llvm`).
+2. Ensure protobuf is installed (`choco install protobuf`).
+3. Set the environment variable to your LLVM `bin` directory:
     ```powershell
     $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
     ```
