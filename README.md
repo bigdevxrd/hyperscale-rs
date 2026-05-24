@@ -1,8 +1,8 @@
 # hyperscale-rs
 
-> **Warning**: Work in progress. Do not use.
+> **Status:** Alpha → Beta transition. Consensus core is heavily tested (~170 tests). See [PRODUCTION-AUDIT.md](PRODUCTION-AUDIT.md) for phased readiness assessment.
 
-Rust implementation of Hyperscale consensus protocol.
+Rust implementation of the Hyperscale BFT consensus protocol for Radix DLT.
 
 **What's different:**
 - Pure consensus layer — no I/O, no locks, no async
@@ -42,6 +42,16 @@ Rust implementation of Hyperscale consensus protocol.
 | `hyperscale-production` | Production runner: async event loop, RPC server, telemetry |
 | `hyperscale-spammer` | Transaction spammer CLI and library for load testing |
 | `hyperscale-test-helpers` | Test helpers providing properly-signed fixtures for crypto testing |
+| `hyperscale-topology` | Shard topology configuration, validator assignment, and committee management |
+| `hyperscale-remote-headers` | Remote header fetching and validation for light clients and sync |
+| `hyperscale-jmt` | Jellyfish Merkle Tree for state root computation and storage proofs |
+
+## Related Documentation
+
+- **[KNOWLEDGE-BASE.md](KNOWLEDGE-BASE.md)** — Deep architecture reference with source citations (829 lines)
+- **[PRODUCTION-AUDIT.md](PRODUCTION-AUDIT.md)** — Production readiness assessment and phased roadmap
+- **[COMMUNITY-TASKS.md](COMMUNITY-TASKS.md)** — Bite-size contributor tasks organized by phase
+- **[README_DISTRIBUTED.md](README_DISTRIBUTED.md)** — Multi-machine cluster deployment guide
 
 ## Installation
 
