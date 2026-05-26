@@ -1,0 +1,29 @@
+[Unit]
+Description=Hyperscale Validator Node
+Documentation=https://github.com/hyperscalers/hyperscale-rs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hyperscale
+Group=hyperscale
+WorkingDirectory=/opt/hyperscale
+ExecStart=/opt/hyperscale/bin/hyperscale-validator --config /opt/hyperscale/config.toml
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+
+# Security hardening
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+EnvironmentFile=-/opt/hyperscale/.env
+
+[Install]
+WantedBy=multi-user.target
