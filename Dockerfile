@@ -27,6 +27,8 @@ RUN apt-get update && apt-get install -y \
 COPY . .
 
 ENV PKG_CONFIG_ALLOW_CROSS=1
+# Overrides rust-toolchain.toml, which pins nightly for fmt and clippy.
+ENV RUSTUP_TOOLCHAIN=stable
 
 # build with xx-cargo to cross compile (github runners are linux/amd64, but we may want to build for arm64)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
