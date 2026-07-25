@@ -660,7 +660,9 @@ impl DbCodec<ImportProgress> for ImportProgressCodec {
         let staged_bytes =
             u64::from_be_bytes(bytes[45..53].try_into().expect("length checked above"));
         let cursors = bytes[IMPORT_PROGRESS_HEADER..]
-            .chunks_exact(IMPORT_CURSOR_BYTES)
+            .as_chunks::<IMPORT_CURSOR_BYTES>()
+            .0
+            .iter()
             .map(|chunk| ImportCursor {
                 next: chunk[..32].try_into().expect("chunk is 65 bytes"),
                 end: chunk[32..64].try_into().expect("chunk is 65 bytes"),
