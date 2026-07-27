@@ -65,6 +65,55 @@ const fn decision_label(decision: TransactionDecision) -> &'static str {
     }
 }
 
+/// Precedence when several hosts have decided: the same order the protocol
+/// itself aggregates outcomes in across a wave's certificates, so the demo
+/// reduces a transaction the way its own participants would.
+const fn decision_precedence(decision: TransactionDecision) -> u8 {
+    match decision {
+        TransactionDecision::Accept => 0,
+        TransactionDecision::Reject => 1,
+        TransactionDecision::Aborted => 2,
+    }
+}
+
+/// A status to display, and the height that ordered the transaction where
+/// there is one.
+type Reported = (&'static str, Option<u64>);
+
+/// Reduce every host's answer to the one status to report.
+///
+/// Status is per host, and a host only tracks the shards it serves, so a
+/// transaction's answer has to be pieced together from all of them: after a
+/// split, whichever child a host does not carry reports nothing at all, and
+/// polling one host would leave those transactions pending forever.
+///
+/// Every host that has decided is supposed to have decided the same way
+/// (INV-EXEC-1), so the precedence below is not expected to discriminate
+/// between them. It is here because *something* has to be well defined:
+/// reducing by "furthest progressed" alone leaves every terminal decision
+/// tied, and a settled transaction then changes on screen as each further
+/// host finishes and the poll order resolves the tie differently.
+fn resolve_status(answers: &[TransactionStatus]) -> Option<Reported> {
+    let decided = answers
+        .iter()
+        .filter_map(|status| match status {
+            TransactionStatus::Completed(decision) => Some(*decision),
+            _ => None,
+        })
+        .max_by_key(|decision| decision_precedence(*decision));
+    if let Some(decision) = decided {
+        return Some((decision_label(decision), None));
+    }
+    // Nothing terminal yet: the furthest along any host has got.
+    answers
+        .iter()
+        .max_by_key(|status| status_rank(status))
+        .map(|status| match status {
+            TransactionStatus::Committed(height) => ("committed", Some(height.inner())),
+            _ => ("pending", None),
+        })
+}
+
 /// Derive the cross-shard events a block's wave certificates attest to.
 ///
 /// A wave certificate reaches a block only once every participating shard's
@@ -165,7 +214,7 @@ pub struct Session {
     attested_wt: u64,
     /// Submitted transactions and the last status reported for each, so a
     /// step emits only transitions.
-    tracked: BTreeMap<TxHash, Option<TransactionStatus>>,
+    tracked: BTreeMap<TxHash, Option<Reported>>,
     /// Events raised between steps — submissions happen on the caller's
     /// clock, not the simulation's, so they wait here for the next drain.
     pending: Vec<TraceEvent>,
@@ -285,10 +334,11 @@ impl Session {
             }
         }
         let hash = tx.hash();
+        let tx = Arc::new(tx);
         self.runner.schedule_initial_event(
             0,
             Duration::from_millis(1),
-            HostEvent::process(ProcessScopedInput::SubmitTransaction { tx: Arc::new(tx) }),
+            HostEvent::process(ProcessScopedInput::SubmitTransaction { tx }),
         );
         self.nonce += 1;
         self.tracked.insert(hash, None);
@@ -398,28 +448,23 @@ impl Session {
         // serves — so after a split, whichever child this host does not carry
         // would report nothing at all and its transactions would appear to
         // hang in pending forever.
-        let latest: Vec<(TxHash, Option<TransactionStatus>)> = self
+        let latest: Vec<(TxHash, Option<Reported>)> = self
             .tracked
             .keys()
             .map(|hash| {
-                let best = (0..self.runner.num_hosts())
+                let answers: Vec<TransactionStatus> = (0..self.runner.num_hosts())
                     .filter_map(|host| self.runner.tx_status(host, hash))
-                    .max_by_key(status_rank);
-                (*hash, best)
+                    .collect();
+                (*hash, resolve_status(&answers))
             })
             .collect();
 
         for (hash, current) in latest {
             let last = self.tracked.get_mut(&hash).expect("hash came from tracked");
-            if current.as_ref() == last.as_ref() {
+            if current == *last {
                 continue;
             }
-            if let Some(status) = current.clone() {
-                let (label, height) = match &status {
-                    TransactionStatus::Pending => ("pending", None),
-                    TransactionStatus::Committed(h) => ("committed", Some(h.inner())),
-                    TransactionStatus::Completed(decision) => (decision_label(*decision), None),
-                };
+            if let Some((label, height)) = current {
                 events.push(TraceEvent::tx_status(wt, hash, label, height));
             }
             *last = current;

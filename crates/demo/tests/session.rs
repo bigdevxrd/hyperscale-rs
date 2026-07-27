@@ -540,6 +540,65 @@ fn a_split_parent_reports_one_terminal_that_closes_its_handoff_window() {
 }
 
 #[test]
+fn a_terminal_status_never_turns_into_a_different_one() {
+    // Status is polled from every host, and hosts reach a decision at
+    // different times. Reducing their answers by "furthest progressed" alone
+    // leaves every terminal decision tied with every other, so which one is
+    // reported depends on the poll order — and a transaction shown as aborted
+    // flips to succeeded the moment another host finishes. Whatever is
+    // reported, it must not change out from under a viewer.
+    let mut session = Session::new(
+        SessionConfig {
+            max_shards: 2,
+            ..SessionConfig::default()
+        },
+        42,
+    );
+    // Submit hard, straight through the reshape: the disagreements that
+    // exposed this only appear under sustained cross-shard load.
+    let mut events = Vec::new();
+    for i in 0..900 {
+        if i % 3 == 0 {
+            session.submit_transfer();
+        }
+        events.extend(session.step(500));
+    }
+
+    let terminal = |s: &str| matches!(s, "succeeded" | "aborted" | "rejected");
+    let mut reported: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for event in &events {
+        if let TraceKind::TxStatusChanged { tx, status, .. } = &event.kind {
+            reported
+                .entry(tx.0.clone())
+                .or_default()
+                .push((*status).to_string());
+        }
+    }
+    assert!(!reported.is_empty(), "the run must report statuses at all");
+
+    let mut flipped: Vec<(&String, &Vec<String>)> = Vec::new();
+    for (tx, steps) in &reported {
+        let mut latched: Option<&str> = None;
+        for status in steps {
+            match latched {
+                Some(prev) if terminal(status) && prev != status => {
+                    flipped.push((tx, steps));
+                    break;
+                }
+                _ => {}
+            }
+            if terminal(status) {
+                latched = Some(status);
+            }
+        }
+    }
+    assert!(
+        flipped.is_empty(),
+        "a settled transaction must keep its outcome; flipped: {flipped:?}",
+    );
+}
+
+#[test]
 fn shard_paths_spell_the_trie_so_a_parent_prefixes_its_children() {
     let root = ShardPath::from(ShardId::ROOT).0;
     let left = ShardPath::from(ShardId::leaf(1, 0)).0;
