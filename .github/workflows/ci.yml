@@ -391,6 +391,61 @@ jobs:
             -H 'Content-Type: application/json' \
             -d @payload.json
 
+  site:
+    name: Build Site
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # Overrides rust-toolchain.toml, which pins nightly for fmt and clippy.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Resolve wasm-bindgen Version
+        id: wasm_bindgen
+        run: |
+          version=$(sed -n 's/^wasm-bindgen = "\(.*\)"$/\1/p' Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wasm_bindgen.outputs.version }}
+      - name: Assemble Site
+        run: ./site/build.sh
+      - name: Upload Site Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy-site:
+    name: Deploy Site
+    runs-on: ubuntu-latest
+    needs: [site, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Site Bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: site/dist
+      - name: Deploy To Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: site
+          command: deploy
+
   notify:
     runs-on: ubuntu-latest
     # permissions for gh api: commit stats + merged PR lookup

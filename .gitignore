@@ -67,3 +67,5 @@ scripts/docker-compose.generated.yml
 *.tfvars
 !*.auto.tfvars
 .terraform.lock.hcl
+# Assembled site bundle
+site/dist/

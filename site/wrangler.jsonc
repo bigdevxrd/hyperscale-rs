@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hyperscale-site",
+  "compatibility_date": "2026-07-28",
+  // Assets-only: there is no Worker script, so every request is served
+  // straight from dist/. "auto-trailing-slash" makes /journey resolve to
+  // journey.html, which is why the pages need no extension in a URL.
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  }
+}
