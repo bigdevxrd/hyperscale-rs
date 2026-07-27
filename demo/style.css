@@ -170,14 +170,15 @@ h1 em { font-style: normal; color: var(--ink2); }
    A panel of its own, on its own coordinates. The timeline says what
    consensus attested; this says what the transport carried, and the two
    never share an axis so a delivery is never mistaken for a settlement. */
-.network { margin-bottom: 14px; position: relative; }
+.network { margin-bottom: 14px; }
 #net { display: block; width: 100%; }
 /* Inspecting a message only makes sense while the timeline is stopped: at any
    playback rate the dot under the pointer is a different message by the next
-   frame, so the hit targets are drawn on pause and not before. */
+   frame, so the hit targets are drawn on pause and not before.
+   Placed against the viewport, which is what keeps it clear of the panel's
+   own clipping; the script nudges it back inside the window at the edges. */
 #nettip {
-  position: absolute; z-index: 2; pointer-events: none;
-  transform: translate(-50%, -100%);
+  position: fixed; z-index: 2; pointer-events: none;
   font-family: var(--mono); font-size: 10.5px; line-height: 1.55;
   color: var(--ink); background: var(--panel2);
   border: 1px solid var(--line2); border-radius: 6px;
@@ -219,7 +220,6 @@ h1 em { font-style: normal; color: var(--ink2); }
 .m.cross_shard_progress { background: var(--cls-cross-shard-progress); }
 .m.recovery { background: var(--cls-recovery); }
 .m.bulk { background: var(--cls-bulk); }
-.cap .thinned { color: var(--warn); }
 
 .txs { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 7px;
   max-height: 210px; overflow-y: auto; }

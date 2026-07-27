@@ -102,7 +102,7 @@ const state = {
   hosts: [],            // { host, shards, pooled } — every host, in host order
   flights: [],          // { from, to, sentAt, deliveredAt, class } in flight
   edges: new Map(),     // "a-b" -> deliveries seen, decayed — degrade-mode weight
-  traffic: [],          // { at, byClass: Map, sampled, dropped } per step
+  traffic: [],          // { at, byClass: Map } per step
   layout: new Map(),    // host -> { x, y, tx, ty } — positions ease to targets
   dirtyLayout: true,
   txs: new Map(),       // label -> { status, height, submittedWt }
@@ -213,11 +213,12 @@ function apply(event) {
       break;
     }
     case "trafficSampled":
+      // Only the per-class totals are drawn. The event's own sampled and
+      // dropped counts describe the budget the session drew under, which is
+      // a fact about this renderer rather than about the network.
       state.traffic.push({
         at: state.simNow,
         byClass: new Map(k.byClass.map(([cls, deliveries]) => [cls, deliveries])),
-        sampled: k.sampled,
-        dropped: k.dropped,
       });
       break;
     case "hostsChanged":
@@ -591,8 +592,8 @@ function renderNetwork() {
     const g = el("g", {
       class: `host${pooled ? " pooled" : ""}`,
       "data-tip": pooled
-        ? `host ${host.host}\nfree pool — ${host.pooled} following the beacon`
-        : `host ${host.host}\nserving ${host.shards.map(labelOf).join(", ")}`,
+        ? `host ${host.host} · free pool`
+        : `host ${host.host} · ${host.shards.map(labelOf).join(", ")}`,
     }, svg);
     el("circle", { cx: spot.x, cy: spot.y, r: 11 }, g);
     el("text", { x: spot.x, y: spot.y }, g).textContent = host.host;
@@ -616,9 +617,8 @@ function renderNetwork() {
       el("circle", {
         class: "hit", cx, cy, r: 9,
         "data-tip":
-          `${flight.messageType}\n${flight.cls.replace(/_/g, " ")}\n` +
-          `host ${flight.from} → host ${flight.to}\n` +
-          `${span}ms in flight, ${Math.round(t * 100)}% of the way`,
+          `${flight.messageType} · ${flight.cls.replace(/_/g, " ")}\n` +
+          `${flight.from} → ${flight.to} · ${span}ms · ${Math.round(t * 100)}%`,
       }, hits);
     }
   }
@@ -629,15 +629,25 @@ function renderNetwork() {
 function bindNetworkTip() {
   const svg = $("net");
   const tip = $("nettip");
-  const panel = svg.closest(".panel");
+  const EDGE = 8;
   svg.addEventListener("pointermove", (ev) => {
     const target = ev.target.closest("[data-tip]");
     if (!target) { tip.hidden = true; return; }
-    const box = panel.getBoundingClientRect();
     tip.textContent = target.dataset.tip;
-    tip.style.left = `${ev.clientX - box.left}px`;
-    tip.style.top = `${ev.clientY - box.top - 10}px`;
     tip.hidden = false;
+    // Measured after the text is in, so the clamp knows the real size. The
+    // browser paints once this handler returns, so reading the box and
+    // writing the position here costs a layout but never a visible jump.
+    const box = tip.getBoundingClientRect();
+    const left = Math.min(
+      Math.max(ev.clientX - box.width / 2, EDGE),
+      window.innerWidth - box.width - EDGE,
+    );
+    // Above the pointer, or below it when the top of the window is closer
+    // than the tooltip is tall.
+    const above = ev.clientY - box.height - 12;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${above >= EDGE ? above : ev.clientY + 16}px`;
   });
   svg.addEventListener("pointerleave", () => { tip.hidden = true; });
 }
@@ -646,14 +656,10 @@ function bindNetworkTip() {
 // just the ones the sample kept.
 function renderMeter() {
   const totals = new Map(CLASSES.map((cls) => [cls, 0]));
-  let sampled = 0;
-  let dropped = 0;
   for (const step of state.traffic) {
     for (const [cls, deliveries] of step.byClass) {
       totals.set(cls, (totals.get(cls) ?? 0) + deliveries);
     }
-    sampled += step.sampled;
-    dropped += step.dropped;
   }
   const carried = [...totals.values()].reduce((a, b) => a + b, 0);
 
@@ -676,22 +682,16 @@ function renderMeter() {
   }
   $("meter").replaceChildren(key);
 
-  const thinned = dropped > 0
-    ? ` <span class="thinned">Drawing ${sampled} of ${sampled + dropped}</span> —` +
-      ` the counts cover all of them.`
-    : "";
-  $("netcap").innerHTML =
-    `Deliveries over the last ${TRAFFIC_WINDOW_MS / 1000}s of simulated time, ` +
-    `urgent class first. Latency is configured, not geographic &mdash; ` +
-    `positions carry no distance.${thinned}`;
+  $("netcap").textContent =
+    `Last ${TRAFFIC_WINDOW_MS / 1000}s of simulated time. Dots are a sample; counts are not.`;
   if (!state.playing) {
     $("netclock").textContent = state.speed > DOT_SPEED_LIMIT
-      ? "paused — messages resolve below 8×"
-      : "paused — hover a message in flight";
+      ? `paused — dots below ${DOT_SPEED_LIMIT}×`
+      : "paused — hover a message";
   } else if (state.speed > DOT_SPEED_LIMIT) {
-    $("netclock").textContent = `${state.speed}× — edge weight, too fast for single messages`;
+    $("netclock").textContent = `${state.speed}× — edge weight`;
   } else {
-    $("netclock").textContent = `t = ${fmtWt(state.simNow)} on the harness clock`;
+    $("netclock").textContent = `t = ${fmtWt(state.simNow)}`;
   }
 }
 

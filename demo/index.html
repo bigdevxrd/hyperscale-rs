@@ -47,7 +47,6 @@
   <section class="panel network">
     <h2>NETWORK <span id="netclock">&mdash;</span></h2>
     <svg id="net" aria-label="Hosts grouped by committee, and the messages between them"></svg>
-    <div id="nettip" role="tooltip" hidden></div>
     <div class="meter" id="meter"></div>
     <p class="cap" id="netcap"></p>
   </section>
@@ -69,6 +68,9 @@
     animation frame &mdash; not a recording. Same seed, same run, byte for byte.
   </footer>
 </div>
+<!-- Outside every panel: a panel clips its own overflow, and a tooltip near
+     an edge is exactly the one worth reading. -->
+<div id="nettip" role="tooltip" hidden></div>
 <script type="module" src="./main.js"></script>
 </body>
 </html>
