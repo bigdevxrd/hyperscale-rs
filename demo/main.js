@@ -423,6 +423,11 @@ function txRow(id) {
   root.className = "tx";
   root.type = "button";
   root.dataset.tx = id;
+  // The grid lives on a wrapper rather than the button itself: WebKit has a
+  // long history of not laying out a button's children as grid or flex items,
+  // and a row that collapses is a row nobody can aim at.
+  const grid = document.createElement("span");
+  grid.className = "txgrid";
   const label = document.createElement("span");
   label.className = "id";
   label.textContent = id;
@@ -433,7 +438,8 @@ function txRow(id) {
   const pill = document.createElement("span");
   const span = document.createElement("span");
   span.className = "span";
-  for (const child of [label, track, pill, span]) root.appendChild(child);
+  for (const child of [label, track, pill, span]) grid.appendChild(child);
+  root.appendChild(grid);
   const row = { root, bar, pill, span, sig: null };
   txRows.set(id, row);
   return row;
@@ -615,6 +621,10 @@ $("txs").addEventListener("click", (ev) => {
   state.selected = state.selected === id ? null : id;
   renderTxs();
   renderChrome();
+  // The timeline has to answer the tap here rather than wait for the next
+  // frame: the animation loop only renders while the session is playing, and
+  // on a touch device it is suspended outright for the length of a scroll.
+  renderLanes();
 });
 
 main();

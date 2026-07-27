@@ -143,13 +143,21 @@ h1 em { font-style: normal; color: var(--ink2); }
   max-height: 210px; overflow-y: auto; }
 .txs .empty { color: var(--muted); font-family: var(--mono); font-size: 11.5px; margin: 4px 0; }
 .tx {
-  display: grid; grid-template-columns: 78px 1fr auto 58px; align-items: center;
-  gap: 10px; font-family: var(--mono); font-size: 12px;
-  width: 100%; text-align: left; padding: 2px 4px;
+  display: block; width: 100%; text-align: left; padding: 4px;
+  font-family: var(--mono); font-size: 12px;
   background: none; border: 1px solid transparent; border-radius: 5px;
   color: inherit; cursor: pointer;
+  /* A tap is a tap, not a candidate double-tap-to-zoom: without this iOS
+     holds the gesture open and the click that follows is easy to lose. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.txgrid {
+  display: grid; grid-template-columns: 78px 1fr auto 58px;
+  align-items: center; gap: 10px;
 }
 .tx:hover { border-color: var(--line2); }
+.tx:active { background: var(--panel2); }
 .tx.traced { border-color: var(--run); background: var(--panel2); }
 .tx .id { font-weight: 700; }
 .tx .span { font-size: 9.5px; color: var(--muted); text-align: right; }
@@ -180,4 +188,10 @@ footer code { font-family: var(--mono); font-size: 11px; }
 @media (max-width: 980px) {
   .main, .bottom { grid-template-columns: 1fr; }
   .transport .time { text-align: left; }
+}
+@media (max-width: 560px) {
+  /* The shard count is the first thing to go: it is a detail the arcs
+     already show, and keeping it costs the row more width than it has. */
+  .txgrid { grid-template-columns: 72px 1fr auto; gap: 8px; }
+  .tx .span { display: none; }
 }
