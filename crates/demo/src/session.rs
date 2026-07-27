@@ -8,8 +8,9 @@ use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_simulation::{EPOCH_MS, SimConfig, SimulationRunner};
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{
-    BeaconChainConfig, BlockHeight, ReshapeThresholds, ShardId, TimestampRange,
-    TransactionDecision, TransactionStatus, TxHash, WeightedTimestamp, build_transfer_tx,
+    BeaconChainConfig, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
+    SharedCertificates, TimestampRange, TransactionDecision, TransactionStatus, TxHash,
+    WeightedTimestamp, build_transfer_tx,
 };
 use radix_common::crypto::Ed25519PrivateKey;
 use radix_common::math::Decimal;
@@ -64,6 +65,55 @@ const fn decision_label(decision: TransactionDecision) -> &'static str {
     }
 }
 
+/// Derive the cross-shard events a block's wave certificates attest to.
+///
+/// A wave certificate reaches a block only once every participating shard's
+/// execution certificate is in hand and verified, so a certificate committed
+/// here stands for artifacts this committee checked: 2f+1 aggregated
+/// signatures per certificate, and — transitively, because the shard could
+/// not have executed otherwise — a merkle multiproof per provision against
+/// the source's QC-attested state root. That is what makes an arc drawn from
+/// one of these a claim about proofs rather than about messages.
+///
+/// Single-shard waves land here too and produce no arcs of their own: they
+/// carry one certificate, from the committing shard itself.
+fn settlement_events(
+    events: &mut Vec<TraceEvent>,
+    wt: u64,
+    shard: ShardId,
+    height: BlockHeight,
+    certificates: &SharedCertificates,
+) {
+    for wave in certificates.iter() {
+        let wave = wave.as_unverified();
+        for certificate in wave.execution_certificates() {
+            let id = certificate.wave_id();
+            events.push(TraceEvent::execution_certified(
+                wt,
+                id,
+                shard,
+                height,
+                certificate.tx_outcomes(),
+            ));
+            // One edge, not two: the state this shard read and the
+            // certificate attesting what came of it both originate in the
+            // remote's block at `id.block_height()` and both land here. The
+            // opposite direction is reported by the remote, which commits
+            // this shard's certificate in a block of its own.
+            if id.shard_id() != shard {
+                events.push(TraceEvent::provisions_verified(
+                    wt,
+                    id,
+                    shard,
+                    height,
+                    certificate.tx_outcomes(),
+                ));
+            }
+        }
+        events.push(TraceEvent::wave_finalized(wt, shard, height, wave));
+    }
+}
+
 /// How the cluster a session opens is shaped.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionConfig {
@@ -99,6 +149,10 @@ pub struct Session {
     reported_through: BTreeMap<ShardId, BlockHeight>,
     /// The partition as last reported, so a step emits only changes.
     reported_shards: Vec<ShardId>,
+    /// First height seen carrying a settled-waves root, per shard — the
+    /// start of the handoff window a terminating shard closes with its last
+    /// block. Absent for every shard that is not on its way out.
+    handoff_from: BTreeMap<ShardId, BlockHeight>,
     /// Highest beacon epoch already reported.
     reported_epoch: Option<u64>,
     /// Highest canonical weighted timestamp any shard has reported.
@@ -170,6 +224,7 @@ impl Session {
             runner,
             now: Duration::ZERO,
             reported_shards: opening,
+            handoff_from: BTreeMap::new(),
             reported_epoch: None,
             attested_wt: 0,
             reported_through: BTreeMap::new(),
@@ -179,19 +234,14 @@ impl Session {
         }
     }
 
-    /// Submit an XRD transfer between two funded accounts, returning its hash.
-    ///
-    /// Payer and payee rotate with the nonce, so a caller driving a steady
-    /// rate spreads load across accounts instead of serializing on one.
+    /// Build an XRD transfer between two funded accounts.
     ///
     /// # Panics
     ///
     /// Panics if the transfer fails to build, which for genesis-funded demo
     /// accounts means a malformed manifest — a programming error, not input.
-    pub fn submit_transfer(&mut self) -> TxHash {
-        let from = u8::try_from(self.nonce % u32::from(ACCOUNTS)).unwrap_or(0) + 1;
-        let to = (from % ACCOUNTS) + 1;
-        let tx = build_transfer_tx(
+    fn build_transfer(&self, from: u8, to: u8) -> RoutableTransaction {
+        build_transfer_tx(
             &signer_from_seed(from),
             account_from_seed(from),
             account_from_seed(to),
@@ -200,7 +250,40 @@ impl Session {
             self.nonce,
             validity_around(self.now),
         )
-        .expect("a transfer between funded demo accounts builds");
+        .expect("a transfer between funded demo accounts builds")
+    }
+
+    /// Submit an XRD transfer between two funded accounts, returning its hash.
+    ///
+    /// The payer rotates with the nonce, so a caller driving a steady rate
+    /// spreads load across accounts instead of serializing on one. The payee
+    /// is the first account in rotation that the trie routes to a different
+    /// shard: roughly half of all pairs land on the same shard once the root
+    /// has split, and a same-shard transfer settles with no counterparty, so
+    /// picking by rotation alone would leave every other press of the button
+    /// with nothing crossing to show. Falls back to the plain rotation on a
+    /// topology where nothing crosses at all.
+    pub fn submit_transfer(&mut self) -> TxHash {
+        let from = u8::try_from(self.nonce % u32::from(ACCOUNTS)).unwrap_or(0) + 1;
+        let topology =
+            (0..self.runner.num_hosts()).find_map(|host| self.runner.host_topology(host));
+        let crosses = |tx: &RoutableTransaction| {
+            topology
+                .as_ref()
+                .is_some_and(|t| t.is_cross_shard_transaction(tx))
+        };
+        // The next account in rotation is the fallback, so a topology where
+        // nothing crosses still submits the pair it would have picked anyway.
+        let mut tx = self.build_transfer(from, (from % ACCOUNTS) + 1);
+        if !crosses(&tx) {
+            for step in 2..ACCOUNTS {
+                let candidate = self.build_transfer(from, ((from + step - 1) % ACCOUNTS) + 1);
+                if crosses(&candidate) {
+                    tx = candidate;
+                    break;
+                }
+            }
+        }
         let hash = tx.hash();
         self.runner.schedule_initial_event(
             0,
@@ -266,15 +349,40 @@ impl Session {
             .filter(|s| !self.reported_shards.contains(s))
             .copied()
             .collect();
-        let retired = self
+        let retired: Vec<ShardId> = self
             .reported_shards
             .iter()
             .filter(|s| !current.contains(s))
             .copied()
             .collect();
-        let event = TraceEvent::topology_changed(self.attested_wt, &current, appeared, retired);
+        // A retired shard has proposed its last block, so its chain's final
+        // height is settled now and its store is retained past the cut
+        // (INV-BEACON-8) for exactly this kind of read. The walk itself
+        // never reaches that height: it reports a block only once a
+        // committing child carries its timestamp, and the last block has no
+        // child.
+        let mut events: Vec<TraceEvent> = retired
+            .iter()
+            .filter_map(|shard| {
+                let height = (0..self.runner.num_hosts())
+                    .find_map(|host| self.runner.hosts_shard(host, *shard))?
+                    .committed_height();
+                Some(TraceEvent::shard_terminal(
+                    self.attested_wt,
+                    *shard,
+                    height,
+                    self.handoff_from.get(shard).copied(),
+                ))
+            })
+            .collect();
+        events.push(TraceEvent::topology_changed(
+            self.attested_wt,
+            &current,
+            appeared,
+            retired,
+        ));
         self.reported_shards = current;
-        vec![event]
+        events
     }
 
     /// Report every tracked transaction whose status moved this step.
@@ -347,6 +455,7 @@ impl Session {
     fn drain_committed(&mut self) -> Vec<TraceEvent> {
         let mut events = Vec::new();
         let mut watermarks: Vec<(ShardId, BlockHeight)> = Vec::new();
+        let mut handoffs: BTreeMap<ShardId, BlockHeight> = BTreeMap::new();
         let mut frontier = self.attested_wt;
 
         for shard in self.live_shards() {
@@ -376,13 +485,14 @@ impl Session {
 
             // The tip has no committing child yet, so stop one short of it.
             for height in (reported + 1)..committed {
-                let Some(header) = storage.get_certified_header(BlockHeight::new(height)) else {
+                let Some(block) = storage.get_block(BlockHeight::new(height)) else {
                     break;
                 };
                 let Some(child) = storage.get_certified_header(BlockHeight::new(height + 1)) else {
                     break;
                 };
-                let header = header.as_ref().header();
+                let block = block.as_ref().block();
+                let header = block.header();
                 let wt = child
                     .as_ref()
                     .header()
@@ -399,12 +509,28 @@ impl Session {
                     header.proposer().inner(),
                     u32::try_from(header.waves().len()).unwrap_or(u32::MAX),
                 ));
+                // A settled-waves root rides every header of a terminating
+                // shard's final epoch, so the first one seen opens the
+                // handoff window that the shard's last block closes.
+                if header.settled_waves_root().is_some() {
+                    handoffs.entry(shard).or_insert_with(|| header.height());
+                }
+                settlement_events(
+                    &mut events,
+                    wt,
+                    shard,
+                    header.height(),
+                    block.certificates(),
+                );
                 watermarks.push((shard, BlockHeight::new(height)));
             }
         }
 
         for (shard, height) in watermarks {
             self.reported_through.insert(shard, height);
+        }
+        for (shard, height) in handoffs {
+            self.handoff_from.entry(shard).or_insert(height);
         }
         self.attested_wt = self.attested_wt.max(frontier);
         events.sort_by_key(|event| event.wt);

@@ -3,7 +3,7 @@
 //! Runs natively: the derivation is target independent, so the properties the
 //! browser depends on are checked without a wasm toolchain.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hyperscale_demo::{Session, SessionConfig, ShardPath, TraceEvent, TraceKind};
 use hyperscale_types::ShardId;
@@ -253,6 +253,289 @@ fn transfers_reach_a_terminal_outcome_on_either_side_of_a_split() {
     assert!(
         unresolved.is_empty(),
         "every transfer settles on whichever child owns it; unresolved: {unresolved:?}",
+    );
+}
+
+/// Run a two-shard session past its split, then submit `count` transfers
+/// spaced far enough apart to settle, returning every event observed.
+fn run_past_split(seed: u64, count: usize) -> Vec<TraceEvent> {
+    let mut session = Session::new(
+        SessionConfig {
+            max_shards: 2,
+            ..SessionConfig::default()
+        },
+        seed,
+    );
+    let mut events = Vec::new();
+    for _ in 0..440 {
+        events.extend(session.step(500));
+    }
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.kind, TraceKind::TopologyChanged { .. })),
+        "the split must land before transfers are submitted",
+    );
+    for i in 0..(count * 20 + 100) {
+        if i % 20 == 0 && i / 20 < count {
+            session.submit_transfer();
+        }
+        events.extend(session.step(500));
+    }
+    events
+}
+
+#[test]
+fn a_cross_shard_transfer_is_provisioned_and_certified_in_both_directions() {
+    let events = run_past_split(42, 6);
+
+    // Which shards provisioned state to which, per transaction.
+    let mut provisioned: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    // Which shards signed a certificate covering each transaction.
+    let mut certified: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // Which shards committed a wave certificate covering it, and who they
+    // named as participants.
+    let mut finalized: BTreeMap<String, BTreeSet<(String, Vec<String>)>> = BTreeMap::new();
+
+    for event in &events {
+        match &event.kind {
+            TraceKind::ProvisionsVerified { from, to, txs, .. } => {
+                for tx in txs {
+                    provisioned
+                        .entry(tx.0.clone())
+                        .or_default()
+                        .insert((from.0.clone(), to.0.clone()));
+                }
+            }
+            TraceKind::ExecutionCertified {
+                shard, outcomes, ..
+            } => {
+                for (tx, _) in outcomes {
+                    certified
+                        .entry(tx.0.clone())
+                        .or_default()
+                        .insert(shard.0.clone());
+                }
+            }
+            TraceKind::WaveFinalized {
+                shard,
+                participants,
+                txs,
+                ..
+            } => {
+                let named: Vec<String> = participants.iter().map(|p| p.0.clone()).collect();
+                for tx in txs {
+                    finalized
+                        .entry(tx.0.clone())
+                        .or_default()
+                        .insert((shard.0.clone(), named.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        !provisioned.is_empty(),
+        "a session past the split must produce cross-shard transfers",
+    );
+
+    for (tx, pairs) in &provisioned {
+        let shards: BTreeSet<&String> = pairs.iter().flat_map(|(a, b)| [a, b]).collect();
+        assert_eq!(
+            shards.len(),
+            2,
+            "tx {tx} spans exactly two shards, saw {pairs:?}",
+        );
+        // Both sides provisioned: each shard read the other's state, which
+        // is what makes the settlement atomic rather than two local runs.
+        let reversed: BTreeSet<(String, String)> =
+            pairs.iter().map(|(a, b)| (b.clone(), a.clone())).collect();
+        assert_eq!(
+            *pairs, reversed,
+            "provisions must be reported in both directions for tx {tx}",
+        );
+
+        // Every participating shard signed a certificate covering it.
+        let signers = certified.get(tx).expect("a provisioned tx is certified");
+        assert_eq!(
+            signers.iter().collect::<BTreeSet<_>>(),
+            shards,
+            "tx {tx} needs a certificate from each participant",
+        );
+
+        // And both sides committed the wave, each naming both participants.
+        let commits = finalized.get(tx).expect("a certified tx is finalized");
+        assert_eq!(
+            commits.iter().map(|(s, _)| s).collect::<BTreeSet<_>>(),
+            shards,
+            "tx {tx} must finalize on both shards, saw {commits:?}",
+        );
+        for (shard, participants) in commits {
+            assert_eq!(
+                participants.iter().collect::<BTreeSet<_>>(),
+                shards,
+                "the wave {shard} committed must name both participants",
+            );
+        }
+    }
+}
+
+#[test]
+fn every_cross_shard_arc_names_a_shard_and_height_the_timeline_can_place() {
+    // An arc is drawn between two committed blocks, so both endpoints must
+    // be heights the session also reported as blocks — otherwise the viewer
+    // has a line with nowhere to attach it.
+    let events = run_past_split(42, 6);
+
+    let mut blocks: BTreeMap<(String, u64), u64> = BTreeMap::new();
+    let mut endpoints: Vec<(String, u64)> = Vec::new();
+    // The oldest endpoint each arc reaches back to, so the span an arc has
+    // to cover can be checked against the window the viewer draws.
+    let mut spans: Vec<(u64, String, u64)> = Vec::new();
+    for event in &events {
+        match &event.kind {
+            TraceKind::BlockCommitted { shard, height, .. } => {
+                blocks.insert((shard.0.clone(), *height), event.wt);
+            }
+            TraceKind::ProvisionsVerified {
+                from,
+                from_height,
+                to,
+                to_height,
+                ..
+            } => {
+                endpoints.push((from.0.clone(), *from_height));
+                endpoints.push((to.0.clone(), *to_height));
+                spans.push((event.wt, from.0.clone(), *from_height));
+            }
+            TraceKind::ExecutionCertified {
+                shard,
+                height,
+                into,
+                into_height,
+                ..
+            } => {
+                endpoints.push((shard.0.clone(), *height));
+                endpoints.push((into.0.clone(), *into_height));
+                spans.push((event.wt, shard.0.clone(), *height));
+            }
+            _ => {}
+        }
+    }
+
+    assert!(!endpoints.is_empty(), "the run must produce arcs at all");
+    let orphaned: Vec<_> = endpoints
+        .iter()
+        .filter(|e| !blocks.contains_key(*e))
+        .cloned()
+        .collect();
+    assert!(
+        orphaned.is_empty(),
+        "every arc endpoint is a reported block; orphaned: {orphaned:?}",
+    );
+
+    // An arc is only drawn while both its blocks are still on screen. The
+    // viewer's default window is 15s of attested time and it keeps blocks
+    // for twice that, so a settlement round reaching further back than one
+    // window would leave arcs that never render.
+    let widest = spans
+        .iter()
+        .map(|(wt, shard, height)| wt - blocks[&(shard.clone(), *height)])
+        .max()
+        .expect("endpoints are non-empty");
+    assert!(
+        widest < 15_000,
+        "an arc spans {widest}ms, wider than the window that draws it",
+    );
+}
+
+#[test]
+fn the_load_generator_picks_pairs_the_trie_routes_across_shards() {
+    // A transfer is cross-shard only when payer and payee land on different
+    // shards, which is a property of where the trie routes their addresses.
+    // Rotating the payee by nonce alone leaves about half of them local,
+    // and a local transfer draws nothing.
+    let events = run_past_split(42, 8);
+
+    let submitted: BTreeSet<String> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            TraceKind::TxSubmitted { tx } => Some(tx.0.clone()),
+            _ => None,
+        })
+        .collect();
+    let crossed: BTreeSet<String> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            TraceKind::ProvisionsVerified { txs, .. } => Some(txs),
+            _ => None,
+        })
+        .flatten()
+        .map(|tx| tx.0.clone())
+        .collect();
+
+    assert_eq!(submitted.len(), 8, "every submission is reported");
+    let local: Vec<_> = submitted.difference(&crossed).collect();
+    assert!(
+        local.is_empty(),
+        "every submission past a split must cross shards; local: {local:?}",
+    );
+}
+
+#[test]
+fn a_split_parent_reports_one_terminal_that_closes_its_handoff_window() {
+    let mut session = Session::new(
+        SessionConfig {
+            max_shards: 2,
+            ..SessionConfig::default()
+        },
+        42,
+    );
+    let mut events = Vec::new();
+    for _ in 0..600 {
+        events.extend(session.step(500));
+    }
+
+    let terminals: Vec<(String, u64, Option<u64>)> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            TraceKind::ShardTerminal {
+                shard,
+                height,
+                handoff_from,
+            } => Some((shard.0.clone(), *height, *handoff_from)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        terminals.len(),
+        1,
+        "only the retiring root terminates, saw {terminals:?}",
+    );
+    let (shard, height, handoff_from) = &terminals[0];
+    assert_eq!(shard, "", "the root is what retires");
+    let handoff_from = handoff_from.expect("a split parent certifies its own handoff");
+    assert!(
+        handoff_from < *height,
+        "the handoff window opens before the last block, saw {handoff_from}..={height}",
+    );
+
+    // The terminal is past every block the timeline placed: the walk reports
+    // a block only once a committing child carries its timestamp, and the
+    // last block of a stopped chain never gets one.
+    let last_drawn = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            TraceKind::BlockCommitted { shard, height, .. } if shard.0.is_empty() => Some(*height),
+            _ => None,
+        })
+        .max()
+        .expect("the root committed blocks");
+    assert!(
+        *height > last_drawn,
+        "terminal h{height} sits past the last drawn block h{last_drawn}",
     );
 }
 

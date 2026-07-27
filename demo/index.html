@@ -34,14 +34,18 @@
 
     <section class="panel lanes">
       <h2>CHAINS <span>x = weighted time, BFT-attested</span></h2>
-      <svg id="lanes" aria-label="Per-shard block lanes"></svg>
+      <svg id="lanes" aria-label="Per-shard block lanes and cross-shard arcs"></svg>
       <div class="legend" id="legend"></div>
+      <p class="cap arckey">
+        <span class="k"><svg width="26" height="8"><line class="arc" x1="1" y1="4" x2="25" y2="4"/></svg>state provisioned and certified across</span>
+        <span class="k"><svg width="16" height="14"><circle class="converge" cx="8" cy="7" r="5.5"/></svg>wave settled</span>
+      </p>
     </section>
   </div>
 
   <div class="bottom">
     <section class="panel">
-      <h2>TRANSACTIONS <span>real Radix transfers</span></h2>
+      <h2>TRANSACTIONS <span id="tracing">click a transaction to trace it</span></h2>
       <div class="txs" id="txs"><p class="empty">none yet &mdash; press SUBMIT TX</p></div>
     </section>
     <section class="panel">

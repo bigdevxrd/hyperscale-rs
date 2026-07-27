@@ -18,6 +18,9 @@ serde.workspace = true
 serde-wasm-bindgen.workspace = true
 wasm-bindgen.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 # Unused in code: these exist to select a wasm backend for RNG crates pulled
 # in transitively, which have no default on this target. Three getrandom
 # majors are in the graph and each needs its own.

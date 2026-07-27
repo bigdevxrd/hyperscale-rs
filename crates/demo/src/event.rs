@@ -4,7 +4,9 @@
 //! JavaScript values and never hashed, signed, or gossiped, so the ordered
 //! collection discipline the wire types carry does not apply here.
 
-use hyperscale_types::{BlockHeight, Round, ShardId, TxHash};
+use hyperscale_types::{
+    BlockHeight, ExecutionOutcome, FinalizedWave, Round, ShardId, TxHash, TxOutcome, WaveId,
+};
 use serde::Serialize;
 
 /// One observation, stamped with the BFT-attested time it happened at.
@@ -81,6 +83,73 @@ pub enum TraceKind {
         /// children a merge composed away.
         retired: Vec<ShardPath>,
     },
+    /// State committed on `from` that `to` executed against.
+    ///
+    /// Drawn as an arc from `(from, fromHeight)` — the block whose state was
+    /// provisioned — to `(to, toHeight)`, the block where `to` committed the
+    /// settled outcome. Derived at the destination: `to` could not have
+    /// reached that outcome without first checking the provisions against
+    /// `from`'s QC-attested state root, so the arc stands for a proof that
+    /// checked out rather than a message that was sent.
+    ///
+    /// One arc per direction per settlement. The reverse arc is reported by
+    /// `from` when it commits `to`'s certificate in a block of its own,
+    /// which is what makes a settlement round read as mutual on screen.
+    #[serde(rename_all = "camelCase")]
+    ProvisionsVerified {
+        from: ShardPath,
+        from_height: u64,
+        to: ShardPath,
+        to_height: u64,
+        txs: Vec<TxLabel>,
+    },
+    /// One shard's execution certificate, as accepted by the shard that
+    /// committed it.
+    ///
+    /// `shard` and `height` locate the wave on the committee that signed
+    /// the certificate; `into` and `intoHeight` locate the block that
+    /// carried it. They differ exactly when the certificate crossed a shard
+    /// boundary, which is when the viewer draws an arc.
+    #[serde(rename_all = "camelCase")]
+    ExecutionCertified {
+        shard: ShardPath,
+        height: u64,
+        wave: WaveLabel,
+        into: ShardPath,
+        into_height: u64,
+        /// Per-transaction `succeeded`, `failed`, or `aborted`, in the
+        /// wave's canonical order.
+        outcomes: Vec<(TxLabel, &'static str)>,
+    },
+    /// Every participating shard reported and the wave certificate is
+    /// committed — the point where the arcs on both sides converge.
+    #[serde(rename_all = "camelCase")]
+    WaveFinalized {
+        shard: ShardPath,
+        /// The block that committed the certificate.
+        height: u64,
+        /// The block whose transactions opened the wave. The gap between
+        /// the two is the settlement round's latency.
+        opened_at: u64,
+        wave: WaveLabel,
+        /// Every shard that signed a certificate in this wave, `shard`
+        /// included. A single entry means the wave never left the shard.
+        participants: Vec<ShardPath>,
+        txs: Vec<TxLabel>,
+    },
+    /// A shard reached its last block.
+    ///
+    /// `height` is the chain's final height. `handoffFrom` is the first
+    /// height whose header carried a settled-waves root: from there to the
+    /// end the shard is certifying its own handoff rather than merely
+    /// running, which is the difference between a chain that stopped and one
+    /// that finished.
+    #[serde(rename_all = "camelCase")]
+    ShardTerminal {
+        shard: ShardPath,
+        height: u64,
+        handoff_from: Option<u64>,
+    },
     #[serde(rename_all = "camelCase")]
     TxSubmitted { tx: TxLabel },
     #[serde(rename_all = "camelCase")]
@@ -109,6 +178,43 @@ impl From<TxHash> for TxLabel {
             .collect();
         Self(short)
     }
+}
+
+/// A wave's identity on the shard that opened it, `<shard>@<height>` —
+/// the same pair a [`WaveId`] binds.
+///
+/// Not comparable across shards: one logical settlement round gives every
+/// participant its own wave id, so the viewer relates the two sides by the
+/// shard-and-height endpoints each event carries, never by this string.
+#[derive(Debug, Clone, Serialize)]
+pub struct WaveLabel(pub String);
+
+impl WaveLabel {
+    fn new(shard: ShardId, height: BlockHeight) -> Self {
+        let path = ShardPath::from(shard).0;
+        let name = if path.is_empty() { "ROOT" } else { &path };
+        Self(format!("{name}@{}", height.inner()))
+    }
+}
+
+/// The outcome vocabulary the docs use, per transaction.
+const fn outcome_label(outcome: &ExecutionOutcome) -> &'static str {
+    match outcome {
+        ExecutionOutcome::Succeeded { .. } => "succeeded",
+        ExecutionOutcome::Failed => "failed",
+        ExecutionOutcome::Aborted => "aborted",
+    }
+}
+
+fn labelled_outcomes(outcomes: &[TxOutcome]) -> Vec<(TxLabel, &'static str)> {
+    outcomes
+        .iter()
+        .map(|o| (o.tx_hash().into(), outcome_label(o.outcome())))
+        .collect()
+}
+
+fn tx_labels(outcomes: &[TxOutcome]) -> Vec<TxLabel> {
+    outcomes.iter().map(|o| o.tx_hash().into()).collect()
 }
 
 impl TraceEvent {
@@ -154,6 +260,96 @@ impl TraceEvent {
                 shards: shards.iter().copied().map(ShardPath::from).collect(),
                 appeared: paths(appeared),
                 retired: paths(retired),
+            },
+        }
+    }
+
+    pub(crate) fn provisions_verified(
+        wt: u64,
+        from: &WaveId,
+        to: ShardId,
+        to_height: BlockHeight,
+        outcomes: &[TxOutcome],
+    ) -> Self {
+        Self {
+            wt,
+            kind: TraceKind::ProvisionsVerified {
+                from: from.shard_id().into(),
+                from_height: from.block_height().inner(),
+                to: to.into(),
+                to_height: to_height.inner(),
+                txs: tx_labels(outcomes),
+            },
+        }
+    }
+
+    pub(crate) fn execution_certified(
+        wt: u64,
+        wave: &WaveId,
+        into: ShardId,
+        into_height: BlockHeight,
+        outcomes: &[TxOutcome],
+    ) -> Self {
+        Self {
+            wt,
+            kind: TraceKind::ExecutionCertified {
+                shard: wave.shard_id().into(),
+                height: wave.block_height().inner(),
+                wave: WaveLabel::new(wave.shard_id(), wave.block_height()),
+                into: into.into(),
+                into_height: into_height.inner(),
+                outcomes: labelled_outcomes(outcomes),
+            },
+        }
+    }
+
+    /// The convergence point: `wave`'s certificate, committed on `shard` at
+    /// `height`.
+    ///
+    /// The transaction list is read off the wave's own certificate — the one
+    /// whose id matches the wave — rather than through
+    /// [`FinalizedWave::local_ec`], which panics on a malformed certificate.
+    /// A viewer must not be able to take the tab down by rendering one.
+    pub(crate) fn wave_finalized(
+        wt: u64,
+        shard: ShardId,
+        height: BlockHeight,
+        wave: &FinalizedWave,
+    ) -> Self {
+        let id = wave.wave_id();
+        let certificates = wave.execution_certificates();
+        let txs = certificates
+            .iter()
+            .find(|ec| ec.wave_id() == id)
+            .map_or_else(Vec::new, |ec| tx_labels(ec.tx_outcomes()));
+        Self {
+            wt,
+            kind: TraceKind::WaveFinalized {
+                shard: shard.into(),
+                height: height.inner(),
+                opened_at: id.block_height().inner(),
+                wave: WaveLabel::new(id.shard_id(), id.block_height()),
+                participants: certificates
+                    .iter()
+                    .map(|ec| ec.wave_id().shard_id().into())
+                    .collect(),
+                txs,
+            },
+        }
+    }
+
+    pub(crate) fn shard_terminal(
+        wt: u64,
+        shard: ShardId,
+        height: BlockHeight,
+        handoff_from: Option<BlockHeight>,
+    ) -> Self {
+        Self {
+            wt,
+            kind: TraceKind::ShardTerminal {
+                shard: shard.into(),
+                height: height.inner(),
+                handoff_from: handoff_from.map(BlockHeight::inner),
             },
         }
     }

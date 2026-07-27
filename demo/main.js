@@ -64,16 +64,32 @@ const state = {
   wt: 0,
   shards: [],           // live trie leaves, in order
   beacon: [],           // { wt, epoch } — one per committed epoch
-  lanes: new Map(),     // path -> { blocks: [{wt, fallback}], retiredAt: number|null }
+  lanes: new Map(),     // path -> { blocks, heights, retiredAt, terminal }
   splits: [],           // { wt, appeared, retired }
+  // Cross-shard arcs. One per direction per settlement, from the block
+  // whose state was provisioned to the block that committed the certified
+  // outcome. Endpoints are (shard, height) pairs resolved to positions at
+  // render time, so an arc whose blocks have scrolled off simply stops
+  // being drawn.
+  arcs: [],             // { wt, from, fromHeight, to, toHeight, txs }
+  waves: [],            // { wt, shard, height, wave, participants, txs }
   txs: new Map(),       // label -> { status, height, submittedWt }
+  // Which blocks carry each transaction, as `path height` keys. Built
+  // from the certificates that name it, so it covers every shard that ran
+  // it rather than only the one that reported its status.
+  txBlocks: new Map(),  // label -> Set<string>
+  selected: null,       // traced transaction label, or null
   log: [],
   events: 0,
 };
 
+const blockKey = (path, height) => `${path} ${height}`;
+
 function laneFor(path) {
   if (!state.lanes.has(path)) {
-    state.lanes.set(path, { blocks: [], retiredAt: null, height: 0 });
+    state.lanes.set(path, {
+      blocks: [], heights: new Map(), retiredAt: null, height: 0, terminal: null,
+    });
     // A child's lane appears when it commits its first block, which is later
     // than the partition change that created it — so the trie and legend key
     // off lanes rather than off topology events alone.
@@ -95,13 +111,59 @@ function apply(event) {
   switch (k.type) {
     case "blockCommitted": {
       const lane = laneFor(k.shard);
-      lane.blocks.push({ wt: event.wt, fallback: k.fallback });
+      lane.blocks.push({ wt: event.wt, height: k.height, fallback: k.fallback });
+      lane.heights.set(k.height, event.wt);
       lane.height = k.height;
       // Drop what has scrolled off: this page is meant to run for hours.
       const floor = state.wt - WINDOW_MS * 2;
       if (lane.blocks.length > 64 && lane.blocks[0].wt < floor) {
+        for (const b of lane.blocks) if (b.wt < floor) lane.heights.delete(b.height);
         lane.blocks = lane.blocks.filter((b) => b.wt >= floor);
       }
+      break;
+    }
+    case "provisionsVerified":
+      state.arcs.push({
+        wt: event.wt,
+        from: k.from, fromHeight: k.fromHeight, to: k.to, toHeight: k.toHeight, txs: k.txs,
+      });
+      break;
+    case "executionCertified":
+      // The certificate rides the same edge the provisions did, so it draws
+      // no line of its own. What it adds is which block on which shard ran
+      // each transaction — the index the tracer dims everything else
+      // against, and the only source that covers both participants.
+      for (const [tx] of k.outcomes) {
+        if (!state.txBlocks.has(tx)) state.txBlocks.set(tx, new Set());
+        state.txBlocks.get(tx).add(blockKey(k.shard, k.height));
+      }
+      break;
+    case "waveFinalized":
+      // A wave with one participant never left its shard; its transactions'
+      // own status already tells that story, and logging it would bury the
+      // settlements that did cross.
+      if (k.participants.length > 1) {
+        state.waves.push({
+          wt: event.wt, shard: k.shard, height: k.height,
+          wave: k.wave, participants: k.participants, txs: k.txs,
+        });
+        note(
+          event.wt,
+          `wave ${k.wave} settled across ${k.participants.map(labelOf).join(" + ")}` +
+            ` at h${k.height} — opened h${k.openedAt}`,
+          "ok",
+        );
+      }
+      break;
+    case "shardTerminal": {
+      const lane = laneFor(k.shard);
+      lane.terminal = { height: k.height, handoffFrom: k.handoffFrom };
+      note(
+        event.wt,
+        `${labelOf(k.shard)} terminal at h${k.height}` +
+          (k.handoffFrom == null ? "" : ` — certifying its handoff since h${k.handoffFrom}`),
+        "split",
+      );
       break;
     }
     case "beaconBlockCommitted":
@@ -138,6 +200,33 @@ function apply(event) {
     default:
       // Unknown to this build: surface it rather than dropping it.
       note(event.wt, `unhandled event: ${k.type}`);
+  }
+}
+
+// ── the tracer ───────────────────────────────────────────────────────────
+// Selecting a transaction dims every mark that does not carry its label.
+// Both predicates answer false while nothing is selected, so the whole
+// timeline stays at full opacity until a viewer asks a question of it.
+const dimmed = (txs) => state.selected != null && !txs.includes(state.selected);
+const dimmedBlock = (path, height) =>
+  state.selected != null && !state.txBlocks.get(state.selected)?.has(blockKey(path, height));
+
+// Arcs and convergence points live as long as the blocks they attach to,
+// which the lanes already bound by the visible window.
+function prune() {
+  const floor = state.wt - WINDOW_MS * 2;
+  if (state.arcs.length > 512) state.arcs = state.arcs.filter((a) => a.wt >= floor);
+  if (state.waves.length > 256) state.waves = state.waves.filter((w) => w.wt >= floor);
+  // Transactions and the blocks that carry them are kept long past the
+  // window so a settled one can still be traced, but not forever. Both maps
+  // are insertion-ordered and drop together, so nothing left in the panel
+  // loses the marks the tracer would dim against.
+  while (state.txs.size > 200) {
+    const oldest = state.txs.keys().next().value;
+    state.txs.delete(oldest);
+    state.txBlocks.delete(oldest);
+    txRows.delete(oldest);
+    if (state.selected === oldest) state.selected = null;
   }
 }
 
@@ -221,6 +310,33 @@ function renderLanes() {
     el("text", { class: "gridlab", x: x(t) + 3, y: 12 }, svg).textContent = `${Math.round(t / 1000)}s`;
   }
 
+  // Lane rows are laid out before anything is drawn, so the arcs between
+  // them can go down first and sit under the blocks they connect.
+  const laneY = new Map();
+  paths.forEach((path, row) => laneY.set(path, 30 + (row + 1) * rowH));
+
+  for (const arc of state.arcs) {
+    const y0 = laneY.get(arc.from);
+    const y1 = laneY.get(arc.to);
+    const wt0 = state.lanes.get(arc.from)?.heights.get(arc.fromHeight);
+    const wt1 = state.lanes.get(arc.to)?.heights.get(arc.toHeight);
+    // Either end may have scrolled out of the window, or not have arrived
+    // yet: draw nothing rather than guess where it belongs.
+    if (y0 == null || y1 == null || wt0 == null || wt1 == null) continue;
+    if (wt1 < t0 || wt0 > t1) continue;
+    const [x0, x1] = [x(wt0), x(wt1)];
+    const mid = (x0 + x1) / 2;
+    el("path", {
+      class: `arc${dimmed(arc.txs) ? " dim" : ""}`,
+      d: `M ${x0} ${y0} C ${mid} ${y0}, ${mid} ${y1}, ${x1} ${y1}`,
+      stroke: colorOf(arc.from),
+    }, svg);
+    el("circle", {
+      class: `archead${dimmed(arc.txs) ? " dim" : ""}`,
+      cx: x1, cy: y1, r: 2.6, fill: colorOf(arc.from),
+    }, svg);
+  }
+
   const beaconY = 30;
   el("text", { class: "lane-label", x: 4, y: beaconY, fill: BEACON_COLOR }, svg).textContent = "BEACON";
   el("line", {
@@ -236,28 +352,56 @@ function renderLanes() {
       .textContent = `E${b.epoch}`;
   }
 
-  paths.forEach((path, row) => {
+  paths.forEach((path) => {
     const lane = state.lanes.get(path);
-    const y = 30 + (row + 1) * rowH;
+    const y = laneY.get(path);
     const c = colorOf(path);
     el("text", { class: "lane-label", x: 4, y, fill: c }, svg).textContent = labelOf(path);
     const endX = lane.retiredAt == null ? x(t1) : x(lane.retiredAt);
     el("line", { class: "baseline", x1: 46, y1: y, x2: endX, y2: y, stroke: c }, svg);
+    // A shard on its way out spends its last epoch certifying the handoff
+    // rather than merely running. Marking that stretch is what separates a
+    // chain that finished from one that stopped.
+    const handoff = lane.terminal?.handoffFrom;
+    if (handoff != null) {
+      const from = lane.heights.get(handoff);
+      el("line", {
+        class: "handoff",
+        x1: x(Math.max(from ?? t0, t0)), y1: y - 13, x2: endX, y2: y - 13, stroke: c,
+      }, svg);
+    }
     for (const b of lane.blocks) {
       if (b.wt < t0) continue;
+      const inHandoff = handoff != null && b.height >= handoff;
       el("rect", {
-        class: `blk${b.fallback ? " fallback" : ""}`,
+        class: `blk${b.fallback ? " fallback" : ""}${inHandoff ? " handoff" : ""}` +
+          `${dimmedBlock(path, b.height) ? " dim" : ""}`,
         x: x(b.wt) - 3, y: y - 8, width: 6, height: 16,
         fill: c, stroke: c,
       }, svg);
     }
-    // The tip height, so the lane carries scale: marks show rhythm, this
-    // shows how far the chain has actually got.
-    if (lane.height) {
+    if (lane.terminal) {
+      el("line", { class: "terminal", x1: endX, y1: y - 11, x2: endX, y2: y + 11, stroke: c }, svg);
+      el("text", { class: "tip", x: endX - 4, y: y - 14, fill: c }, svg)
+        .textContent = `TERMINAL h${lane.terminal.height}`;
+    } else if (lane.height) {
+      // The tip height, so the lane carries scale: marks show rhythm, this
+      // shows how far the chain has actually got.
       el("text", { class: "tip", x: width - 6, y: y - 12, fill: c }, svg)
         .textContent = `h${lane.height}`;
     }
   });
+
+  // Where a settlement round closed: both sides' arcs land on this block.
+  for (const wave of state.waves) {
+    const y = laneY.get(wave.shard);
+    const wt = state.lanes.get(wave.shard)?.heights.get(wave.height);
+    if (y == null || wt == null || wt < t0) continue;
+    el("circle", {
+      class: `converge${dimmed(wave.txs) ? " dim" : ""}`,
+      cx: x(wt), cy: y, r: 6.5, stroke: colorOf(wave.shard),
+    }, svg);
+  }
 
   for (const s of state.splits) {
     if (s.wt < t0) continue;
@@ -266,21 +410,65 @@ function renderLanes() {
   }
 }
 
+// Row elements are built once per transaction and updated in place. Rebuilding
+// them would replace the node under the pointer between mousedown and mouseup,
+// and a click only fires when both land on the same element — at this panel's
+// refresh rate that loses most of them.
+const txRows = new Map(); // label -> { root, bar, pill, span, sig }
+let txOrder = "";
+
+function txRow(id) {
+  if (txRows.has(id)) return txRows.get(id);
+  const root = document.createElement("button");
+  root.className = "tx";
+  root.type = "button";
+  root.dataset.tx = id;
+  const label = document.createElement("span");
+  label.className = "id";
+  label.textContent = id;
+  const track = document.createElement("span");
+  track.className = "bar";
+  const bar = document.createElement("i");
+  track.appendChild(bar);
+  const pill = document.createElement("span");
+  const span = document.createElement("span");
+  span.className = "span";
+  for (const child of [label, track, pill, span]) root.appendChild(child);
+  const row = { root, bar, pill, span, sig: null };
+  txRows.set(id, row);
+  return row;
+}
+
 function renderTxs() {
   const box = $("txs");
   if (!state.txs.size) return;
   const rows = [...state.txs.entries()].slice(-8).reverse();
-  box.replaceChildren(...rows.map(([id, tx]) => {
-    const row = document.createElement("div");
-    row.className = "tx";
+  const nodes = rows.map(([id, tx]) => {
+    const row = txRow(id);
     const done = ["succeeded", "aborted", "rejected"].includes(tx.status);
     const pct = done ? 100 : tx.status === "committed" ? 66 : 25;
-    row.innerHTML =
-      `<span class="id">${id}</span>` +
-      `<span class="bar"><i style="width:${pct}%"></i></span>` +
-      `<span class="pill ${tx.status}">${tx.status.toUpperCase()}${tx.height != null && !done ? ` h${tx.height}` : ""}</span>`;
-    return row;
-  }));
+    const shards = state.txBlocks.get(id)?.size ?? 0;
+    const traced = state.selected === id;
+    const sig = `${tx.status}|${tx.height}|${shards}|${traced}`;
+    if (row.sig !== sig) {
+      row.sig = sig;
+      row.root.className = `tx${traced ? " traced" : ""}`;
+      row.root.setAttribute("aria-pressed", String(traced));
+      row.bar.style.width = `${pct}%`;
+      row.pill.className = `pill ${tx.status}`;
+      row.pill.textContent =
+        tx.status.toUpperCase() + (tx.height != null && !done ? ` h${tx.height}` : "");
+      row.span.textContent = shards > 1 ? `${shards} shards` : "";
+    }
+    return row.root;
+  });
+  // Reordering detaches nodes too, so only touch the container when the
+  // visible set actually moved.
+  const order = rows.map(([id]) => id).join(",");
+  if (order !== txOrder) {
+    txOrder = order;
+    box.replaceChildren(...nodes);
+  }
 }
 
 function renderLog() {
@@ -303,6 +491,9 @@ function renderChrome() {
   $("triecap").innerHTML = split
     ? `<span class="good">hash(r₀ ∥ r₁) = r_root ✓</span> — the root retired into its children.`
     : `A shard <b>is</b> a prefix subtree. Watch it split.`;
+  $("tracing").textContent = state.selected == null
+    ? "click a transaction to trace it"
+    : `tracing ${state.selected} — click again to clear`;
 }
 
 function renderLegend() {
@@ -355,6 +546,7 @@ function frame(clock) {
     }
     const before = state.shards.length;
     for (const e of events) apply(e);
+    prune();
     if (state.wt >= MAX_SIM_MS) {
       state.playing = false;
       $("play").innerHTML = "&#9654; PLAY";
@@ -416,6 +608,13 @@ $("speed").addEventListener("click", () => {
 });
 $("submit").addEventListener("click", () => {
   if (state.session) state.session.submit_transfer();
+});
+$("txs").addEventListener("click", (ev) => {
+  const id = ev.target.closest("[data-tx]")?.dataset.tx;
+  if (!id) return;
+  state.selected = state.selected === id ? null : id;
+  renderTxs();
+  renderChrome();
 });
 
 main();

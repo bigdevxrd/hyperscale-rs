@@ -1,0 +1,168 @@
+//! The event stream is the only channel between the session and the page,
+//! so the field names a `TraceKind` serializes to are the interface.
+//!
+//! The page switches on `type` and reads fields off the payload by name. A
+//! rename that compiles here still breaks the viewer silently — it renders
+//! `undefined` rather than failing — so the shape is pinned rather than
+//! left to the derive.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use hyperscale_demo::{Session, SessionConfig, TraceKind};
+use serde_json::{Value, to_value};
+
+/// Every event kind, and the exact keys its payload carries.
+fn expected() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
+    let kinds: [(&str, &[&str]); 9] = [
+        (
+            "blockCommitted",
+            &[
+                "shard",
+                "height",
+                "round",
+                "fallback",
+                "proposer",
+                "crossShardWaves",
+            ],
+        ),
+        ("beaconBlockCommitted", &["epoch"]),
+        ("topologyChanged", &["shards", "appeared", "retired"]),
+        (
+            "provisionsVerified",
+            &["from", "fromHeight", "to", "toHeight", "txs"],
+        ),
+        (
+            "executionCertified",
+            &["shard", "height", "wave", "into", "intoHeight", "outcomes"],
+        ),
+        (
+            "waveFinalized",
+            &["shard", "height", "openedAt", "wave", "participants", "txs"],
+        ),
+        ("shardTerminal", &["shard", "height", "handoffFrom"]),
+        ("txSubmitted", &["tx"]),
+        ("txStatusChanged", &["tx", "status", "height"]),
+    ];
+    kinds
+        .into_iter()
+        .map(|(kind, fields)| (kind, fields.iter().copied().collect()))
+        .collect()
+}
+
+/// Drive a two-shard session long enough to produce every kind: past the
+/// split for the topology and terminal events, then under transfer load for
+/// the cross-shard ones.
+fn every_kind() -> Vec<Value> {
+    let mut session = Session::new(
+        SessionConfig {
+            max_shards: 2,
+            ..SessionConfig::default()
+        },
+        42,
+    );
+    let mut events = Vec::new();
+    for _ in 0..440 {
+        events.extend(session.step(500));
+    }
+    for i in 0..200 {
+        if i % 20 == 0 {
+            session.submit_transfer();
+        }
+        events.extend(session.step(500));
+    }
+    events
+        .iter()
+        .map(|event| to_value(event).expect("a trace event serializes"))
+        .collect()
+}
+
+#[test]
+fn every_event_kind_carries_exactly_the_fields_the_page_reads() {
+    let expected = expected();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for event in every_kind() {
+        let object = event.as_object().expect("an event is an object");
+        assert!(
+            object.contains_key("wt"),
+            "every event is stamped: {event:?}",
+        );
+        let kind = object["kind"].as_object().expect("kind is an object");
+        let tag = kind["type"].as_str().expect("kind is tagged").to_string();
+        let fields: BTreeSet<&str> = kind
+            .keys()
+            .map(String::as_str)
+            .filter(|k| *k != "type")
+            .collect();
+        let want = expected
+            .get(tag.as_str())
+            .unwrap_or_else(|| panic!("unknown event kind {tag}: {kind:?}"));
+        assert_eq!(fields, *want, "fields of {tag} changed");
+        seen.insert(tag);
+    }
+
+    let missing: Vec<_> = expected
+        .keys()
+        .filter(|k| !seen.contains(**k))
+        .copied()
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the run must exercise every kind; never produced: {missing:?}",
+    );
+}
+
+#[test]
+fn an_arcs_payload_reads_as_the_page_expects() {
+    // The page indexes outcomes as `[tx, outcome]` pairs and treats every
+    // shard and transaction label as a bare string, so a newtype that
+    // started serializing as an object would break it without a type error
+    // anywhere.
+    let events = every_kind();
+
+    let certified = events
+        .iter()
+        .find(|e| e["kind"]["type"] == "executionCertified")
+        .expect("a session under load certifies executions");
+    let kind = &certified["kind"];
+    assert!(kind["shard"].is_string(), "a shard path is a bare string");
+    assert!(kind["wave"].is_string(), "a wave label is a bare string");
+    let outcome = &kind["outcomes"][0];
+    assert!(outcome[0].is_string(), "an outcome names its transaction");
+    assert!(
+        matches!(
+            outcome[1].as_str(),
+            Some("succeeded" | "failed" | "aborted")
+        ),
+        "an outcome uses the docs' vocabulary, saw {outcome:?}",
+    );
+
+    let provisions = events
+        .iter()
+        .find(|e| e["kind"]["type"] == "provisionsVerified")
+        .expect("a session past the split verifies provisions");
+    let kind = &provisions["kind"];
+    assert!(kind["from"].is_string() && kind["to"].is_string());
+    assert!(kind["fromHeight"].is_u64() && kind["toHeight"].is_u64());
+    assert!(
+        kind["txs"][0].is_string(),
+        "a transaction label is a string"
+    );
+}
+
+/// The one kind whose payload is not exercised by the shared run above: a
+/// single-shard session never splits, so nothing terminates.
+#[test]
+fn a_shard_that_never_terminates_reports_no_terminal() {
+    let mut session = Session::new(SessionConfig::default(), 42);
+    let mut events = Vec::new();
+    for _ in 0..60 {
+        events.extend(session.step(500));
+    }
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.kind, TraceKind::ShardTerminal { .. })),
+        "a lone root shard has no handoff to certify",
+    );
+}

@@ -8,7 +8,7 @@
 pub mod event;
 mod session;
 
-pub use event::{ShardPath, TraceEvent, TraceKind};
+pub use event::{ShardPath, TraceEvent, TraceKind, TxLabel, WaveLabel};
 pub use session::{Session, SessionConfig};
 
 #[cfg(target_arch = "wasm32")]
