@@ -260,8 +260,9 @@ mod tests {
     use hyperscale_types::test_utils::TestCommittee;
     use hyperscale_types::{
         BeaconWitnessRoot, BlockHeight, ConsensusSignature, NetworkDefinition, ReadySignal,
-        ReshapeTrigger, Round, Stake, StakePoolId, TopologySnapshot, ValidatorId, ValidatorInfo,
-        ValidatorSet, VrfProof, WeightedTimestamp, WitnessSources, compute_merkle_root,
+        ReshapeSeat, ReshapeTrigger, Round, Stake, StakePoolId, TopologySnapshot, ValidatorId,
+        ValidatorInfo, ValidatorSet, VrfProof, WeightedTimestamp, WitnessSources,
+        compute_merkle_root,
     };
 
     use super::*;
@@ -302,7 +303,13 @@ mod tests {
             HashMap::new(),
             BTreeMap::from([(
                 ShardId::ROOT,
-                BTreeMap::from([(ValidatorId::new(observer), left)]),
+                BTreeMap::from([(
+                    ValidatorId::new(observer),
+                    ReshapeSeat {
+                        shard: left,
+                        ready: false,
+                    },
+                )]),
             )]),
             BTreeMap::new(),
             BTreeMap::new(),

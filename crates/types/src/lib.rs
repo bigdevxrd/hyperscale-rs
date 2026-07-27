@@ -184,7 +184,7 @@ pub use topology::schedule::{
 pub use topology::settled_set::{SettledSetVerdict, SettledWaveSet, settled_set_verdict};
 pub use topology::shard_prefix::shard_prefix_path;
 pub use topology::snapshot::{
-    ShardAnchor, TopologySnapshot, node_id_hash_u64, uniform_shard_for_node,
+    ReshapeSeat, ShardAnchor, TopologySnapshot, node_id_hash_u64, uniform_shard_for_node,
 };
 pub use topology::trie::ShardTrie;
 pub use topology::validator::{ValidatorInfo, ValidatorSet};

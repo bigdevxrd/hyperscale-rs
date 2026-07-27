@@ -14,8 +14,8 @@
 use std::collections::BTreeMap;
 
 use hyperscale_types::{
-    EpochWindows, NetworkDefinition, ResolvedCommittee, ShardAnchor, ShardId, TopologySnapshot,
-    ValidatorId, WeightedTimestamp,
+    EpochWindows, NetworkDefinition, ReshapeSeat, ResolvedCommittee, ShardAnchor, ShardId,
+    TopologySnapshot, ValidatorId, WeightedTimestamp,
 };
 
 /// Reshape gate predicates over one host's [`TopologySnapshot`] — the
@@ -139,16 +139,34 @@ impl<'a> ReshapeView<'a> {
     /// The pending-split observer cohorts, keyed by splitting parent — the
     /// orchestrator scans these for its host's observer seats.
     #[must_use]
-    pub const fn observer_cohorts(&self) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> {
+    pub const fn observer_cohorts(&self) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> {
         self.topology_snapshot.reshape_observer_cohorts()
     }
 
     /// The pending-merge keeper cohorts, keyed by the child each keeper runs —
-    /// each maps a keeper to the parent it reforms. The orchestrator scans these
-    /// for its host's keeper seats.
+    /// each maps a keeper to its seat on the parent it reforms. The
+    /// orchestrator scans these for its host's keeper seats.
     #[must_use]
-    pub const fn keeper_cohorts(&self) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> {
+    pub const fn keeper_cohorts(&self) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> {
         self.topology_snapshot.reshape_keeper_cohorts()
+    }
+
+    /// Whether the beacon has credited `validator`'s observer seat in
+    /// `parent`'s pending split. `false` for a seat that does not exist —
+    /// a cohort that has lapsed has nothing left to assert either.
+    #[must_use]
+    pub fn observer_ready(&self, parent: ShardId, validator: ValidatorId) -> bool {
+        self.topology_snapshot
+            .reshape_observer_seat(parent, validator)
+            .is_some_and(|seat| seat.ready)
+    }
+
+    /// Whether the beacon has credited `validator`'s keeper seat on `child`.
+    #[must_use]
+    pub fn keeper_ready(&self, child: ShardId, validator: ValidatorId) -> bool {
+        self.topology_snapshot
+            .reshape_keeper_seat(child, validator)
+            .is_some_and(|seat| seat.ready)
     }
 
     /// The executed-split parent-half cohorts, keyed by the child each member

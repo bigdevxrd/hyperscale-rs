@@ -14,7 +14,7 @@ use std::time::Duration;
 use common::ShardCoordinatorSim;
 use hyperscale_shard::ready_signal_pool::MIN_READY_SIGNAL_DWELL;
 use hyperscale_types::{
-    NetworkDefinition, NetworkParams, ReshapeThresholds, ShardId, ShardWitnessPayload,
+    NetworkDefinition, NetworkParams, ReshapeSeat, ReshapeThresholds, ShardId, ShardWitnessPayload,
     TopologySchedule, TopologySnapshot, ValidatorId, ValidatorInfo, ValidatorSet,
     WeightedTimestamp,
 };
@@ -120,7 +120,16 @@ fn observer_ready_signal_commits_as_reshape_ready_leaf() {
         HashMap::from([(ShardId::ROOT, consensus)]),
         HashMap::new(),
         HashMap::new(),
-        BTreeMap::from([(ShardId::ROOT, BTreeMap::from([(observer, left)]))]),
+        BTreeMap::from([(
+            ShardId::ROOT,
+            BTreeMap::from([(
+                observer,
+                ReshapeSeat {
+                    shard: left,
+                    ready: false,
+                },
+            )]),
+        )]),
         BTreeMap::new(),
         BTreeMap::new(),
         BTreeSet::from([ShardId::ROOT]),

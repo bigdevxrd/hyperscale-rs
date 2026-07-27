@@ -822,8 +822,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        BlockHeight, CompletedRecovery, NetworkDefinition, RecoveryCause, ShardRecovery,
-        ValidatorSet,
+        BlockHeight, CompletedRecovery, NetworkDefinition, RecoveryCause, ReshapeSeat,
+        ShardRecovery, ValidatorSet,
     };
 
     fn snapshot() -> Arc<TopologySnapshot> {
@@ -1547,13 +1547,19 @@ mod tests {
         merge_keeper_children: &[ShardId],
         cut: &[(ShardId, u64)],
     ) -> Arc<TopologySnapshot> {
-        let reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> =
+        let reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> =
             merge_keeper_children
                 .iter()
                 .map(|child| {
                     (
                         *child,
-                        BTreeMap::from([(ValidatorId::new(0), ShardId::ROOT)]),
+                        BTreeMap::from([(
+                            ValidatorId::new(0),
+                            ReshapeSeat {
+                                shard: ShardId::ROOT,
+                                ready: false,
+                            },
+                        )]),
                     )
                 })
                 .collect();

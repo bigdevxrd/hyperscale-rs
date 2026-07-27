@@ -35,7 +35,7 @@ use sbor::prelude::*;
 use crate::beacon::constants::{HALT_THRESHOLD_EPOCHS, MIN_STAKE_FLOOR, POOL_BUFFER_TARGET};
 use crate::beacon::genesis::BeaconChainConfig;
 use crate::beacon::params::{NetworkParams, ParamProposal};
-use crate::topology::snapshot::{ShardAnchor, TopologySnapshot};
+use crate::topology::snapshot::{ReshapeSeat, ShardAnchor, TopologySnapshot};
 use crate::topology::validator::{ValidatorInfo, ValidatorSet};
 use crate::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, ConsensusPublicKey, Epoch, RETENTION_HORIZON,
@@ -577,18 +577,22 @@ pub struct FrozenWindow {
     /// shards already coasting to their terminal.
     pub settled_window_floors: BTreeMap<ShardId, WeightedTimestamp>,
     /// Each pending split's observer cohort, keyed by parent, mapping
-    /// observer to child sub-shard. A window's `ReshapeReady` leaf
+    /// observer to its seat. A window's `ReshapeReady` leaf
     /// classification reads it, and the applying fold flips the cohort to
     /// `OnShard` mid-fold — so a live projection would differ between the
     /// two writes and fork the beacon-witness root across replicas at
     /// different fold heights.
-    pub reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
+    ///
+    /// The seat's `ready` bit rides the same freeze: it moves only at a
+    /// fold, and an emitter reads it to tell whether its `ReshapeReady`
+    /// has landed.
+    pub reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
     /// Each pending merge's keepers, keyed by the child each keeper runs,
-    /// mapping keeper to merging parent. Drives a child's `ReshapeReady`
-    /// classification and the merge-terminal settled-waves carry; the
-    /// applying fold consumes the keepers mid-fold, under the same
-    /// argument as the observer cohort.
-    pub reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
+    /// mapping keeper to its seat on the merging parent. Drives a child's
+    /// `ReshapeReady` classification and the merge-terminal settled-waves
+    /// carry; the applying fold consumes the keepers mid-fold, under the
+    /// same argument as the observer cohort.
+    pub reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
 }
 
 /// Global beacon state. Updated atomically per epoch by `apply_epoch`.
@@ -1026,8 +1030,8 @@ impl StakePool {
 struct WindowProjection {
     consensus_members: BTreeMap<ShardId, Vec<ValidatorId>>,
     witness_bases: BTreeMap<ShardId, BeaconWitnessLeafCount>,
-    reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
-    reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
+    reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
+    reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
     /// The live retained parent-half cohorts — not window-frozen like the
     /// fields above, since a parent half is discovered and seated entirely
     /// within the window the split executes in, so the head and lookahead
@@ -1556,13 +1560,24 @@ impl BeaconState {
     /// next promotion freezes into [`Self::reshape_observers_window`], and
     /// what the lookahead snapshot projects for the window it describes.
     #[must_use]
-    pub fn live_reshape_observers(&self) -> BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> {
+    pub fn live_reshape_observers(&self) -> BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> {
         self.pending_reshapes
             .iter()
             .filter_map(|(target, reshape)| match reshape {
                 PendingReshape::Split { cohort, .. } => Some((
                     *target,
-                    cohort.iter().map(|(id, seat)| (*id, seat.child)).collect(),
+                    cohort
+                        .iter()
+                        .map(|(id, seat)| {
+                            (
+                                *id,
+                                ReshapeSeat {
+                                    shard: seat.child,
+                                    ready: seat.ready,
+                                },
+                            )
+                        })
+                        .collect(),
                 )),
                 PendingReshape::Merge { .. } => None,
             })
@@ -1575,15 +1590,18 @@ impl BeaconState {
     /// [`Self::reshape_keepers_window`]. One merge contributes both
     /// children's keeper sets.
     #[must_use]
-    pub fn live_reshape_keepers(&self) -> BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> {
-        let mut keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> = BTreeMap::new();
+    pub fn live_reshape_keepers(&self) -> BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> {
+        let mut keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> = BTreeMap::new();
         for (parent, reshape) in &self.pending_reshapes {
             if let PendingReshape::Merge { keepers: seats, .. } = reshape {
                 for (validator, seat) in seats {
-                    keepers
-                        .entry(seat.child)
-                        .or_default()
-                        .insert(*validator, *parent);
+                    keepers.entry(seat.child).or_default().insert(
+                        *validator,
+                        ReshapeSeat {
+                            shard: *parent,
+                            ready: seat.ready,
+                        },
+                    );
                 }
             }
         }

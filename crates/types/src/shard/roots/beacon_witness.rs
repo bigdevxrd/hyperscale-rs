@@ -450,8 +450,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        ConsensusSignature, NetworkDefinition, ValidatorId, ValidatorInfo, ValidatorSet, VrfProof,
-        shard_reveal_sign,
+        ConsensusSignature, NetworkDefinition, ReshapeSeat, ValidatorId, ValidatorInfo,
+        ValidatorSet, VrfProof, shard_reveal_sign,
     };
 
     /// The single committee member's key. Deterministic so a test can both
@@ -496,11 +496,28 @@ mod tests {
             HashMap::from([(shard, vec![ValidatorId::new(0)])]),
             HashMap::new(),
             HashMap::from([(shard, BeaconWitnessLeafCount::new(base))]),
-            BTreeMap::from([(shard, observers)]),
+            BTreeMap::from([(shard, seats(observers))]),
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeSet::from([shard]),
         )
+    }
+
+    /// Cohort seats for a fixture that cares only about placement — the
+    /// classification these tests exercise reads the shard, never `ready`.
+    fn seats(placements: BTreeMap<ValidatorId, ShardId>) -> BTreeMap<ValidatorId, ReshapeSeat> {
+        placements
+            .into_iter()
+            .map(|(id, shard)| {
+                (
+                    id,
+                    ReshapeSeat {
+                        shard,
+                        ready: false,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// [`snapshot_with_observers`] with no cohort.
@@ -528,7 +545,7 @@ mod tests {
             HashMap::new(),
             HashMap::from([(shard, BeaconWitnessLeafCount::new(base))]),
             BTreeMap::new(),
-            BTreeMap::from([(shard, keepers)]),
+            BTreeMap::from([(shard, seats(keepers))]),
             BTreeMap::new(),
             BTreeSet::from([shard]),
         )

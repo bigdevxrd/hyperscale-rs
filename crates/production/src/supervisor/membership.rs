@@ -627,8 +627,8 @@ mod tests {
 
     use hyperscale_crypto_bls::BlsSigner;
     use hyperscale_types::{
-        NetworkDefinition, RoutingCommittees, ShardId, Signer, TopologySnapshot, ValidatorId,
-        ValidatorInfo, ValidatorSet,
+        NetworkDefinition, ReshapeSeat, RoutingCommittees, ShardId, Signer, TopologySnapshot,
+        ValidatorId, ValidatorInfo, ValidatorSet,
     };
 
     use super::{host_holds_seat, host_in_committee, shard_retired};
@@ -661,7 +661,24 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
-            observers,
+            observers
+                .into_iter()
+                .map(|(parent, cohort)| {
+                    let seats = cohort
+                        .into_iter()
+                        .map(|(id, shard)| {
+                            (
+                                id,
+                                ReshapeSeat {
+                                    shard,
+                                    ready: false,
+                                },
+                            )
+                        })
+                        .collect();
+                    (parent, seats)
+                })
+                .collect(),
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeSet::new(),

@@ -29,12 +29,14 @@ use hyperscale_storage_rocksdb::RocksDbShardStorage;
 use hyperscale_types::network::notification::ReadySignalNotification;
 use hyperscale_types::network::request::{GetRemoteHeadersRequest, GetStateRangeRequest};
 use hyperscale_types::{
-    Block, BlockHeight, ChainOrigin, ShardAnchor, ShardId, StateRoot, StoredReceipt, ValidatorId,
+    Block, BlockHeight, ChainOrigin, ReshapeSeat, ShardAnchor, ShardId, StateRoot, StoredReceipt,
+    ValidatorId,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use super::{ShardSupervisor, SupervisorEvent};
+use crate::runner::wall_clock_local;
 
 /// One reshape io result fed back into the orchestrator's pump. The io
 /// callbacks (network responses, off-loop store work) push these onto the
@@ -145,7 +147,8 @@ impl ShardSupervisor {
         let requests = {
             let topology_snapshot = self.process.topology_snapshot().load_full();
             let view = ReshapeView::new(&topology_snapshot, self.epoch_duration_ms);
-            self.reshape.step(&view, self.verifier.as_ref(), events)
+            self.reshape
+                .step(&view, self.verifier.as_ref(), events, wall_clock_local())
         };
         for request in requests {
             self.dispatch_reshape(request);
@@ -759,8 +762,8 @@ impl ShardSupervisor {
 /// two and as a merge parent via the third.
 fn host_reshape_owns(
     parent_half_cohorts: &BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
-    observer_cohorts: &BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
-    keeper_cohorts: &BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
+    observer_cohorts: &BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
+    keeper_cohorts: &BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
     shard: ShardId,
     owned: impl Fn(&ValidatorId) -> bool,
 ) -> bool {
@@ -770,15 +773,15 @@ fn host_reshape_owns(
     {
         return true;
     }
-    if observer_cohorts
-        .values()
-        .any(|seats| seats.iter().any(|(v, child)| *child == shard && owned(v)))
-    {
-        return true;
-    }
-    keeper_cohorts
-        .values()
-        .any(|seats| seats.iter().any(|(v, parent)| *parent == shard && owned(v)))
+    [observer_cohorts, keeper_cohorts]
+        .into_iter()
+        .any(|cohorts| {
+            cohorts.values().any(|seats| {
+                seats
+                    .iter()
+                    .any(|(v, seat)| seat.shard == shard && owned(v))
+            })
+        })
 }
 
 #[cfg(test)]
@@ -787,9 +790,18 @@ mod tests {
 
     use hyperscale_types::{ShardId, ValidatorId};
 
-    use super::host_reshape_owns;
+    use super::{ReshapeSeat, host_reshape_owns};
 
     const HOST: ValidatorId = ValidatorId::new(1);
+
+    /// A cohort seat pairing the holder with `shard`. Ownership reads the
+    /// pairing, never the readiness.
+    const fn seat(shard: ShardId) -> ReshapeSeat {
+        ReshapeSeat {
+            shard,
+            ready: false,
+        }
+    }
 
     /// A host whose validator holds a parent-half seat owns the split child —
     /// so an ordinary join for the child yields to the reshape duty.
@@ -813,7 +825,7 @@ mod tests {
     fn host_reshape_owns_a_split_child_via_observer() {
         let parent = ShardId::ROOT;
         let child = ShardId::leaf(1, 0);
-        let observers = BTreeMap::from([(parent, BTreeMap::from([(HOST, child)]))]);
+        let observers = BTreeMap::from([(parent, BTreeMap::from([(HOST, seat(child))]))]);
         assert!(host_reshape_owns(
             &BTreeMap::new(),
             &observers,
@@ -829,7 +841,7 @@ mod tests {
     fn host_reshape_owns_a_merge_parent_via_keeper() {
         let parent = ShardId::ROOT;
         let child = ShardId::leaf(1, 0);
-        let keepers = BTreeMap::from([(child, BTreeMap::from([(HOST, parent)]))]);
+        let keepers = BTreeMap::from([(child, BTreeMap::from([(HOST, seat(parent))]))]);
         assert!(host_reshape_owns(
             &BTreeMap::new(),
             &BTreeMap::new(),

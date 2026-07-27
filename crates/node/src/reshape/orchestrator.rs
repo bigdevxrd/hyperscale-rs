@@ -20,6 +20,7 @@
 //! projection and sequenced to the shared adopt and seat tail.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use hyperscale_storage::{ImportLeaf, ImportProgress};
 use hyperscale_types::network::request::{
@@ -29,8 +30,9 @@ use hyperscale_types::network::response::{
     GetBlockResponse, GetRemoteHeadersResponse, GetStateRangeResponse,
 };
 use hyperscale_types::{
-    Block, BlockHash, BlockHeader, BlockHeight, ChainOrigin, NetworkDefinition, QuorumCertificate,
-    ShardAnchor, ShardId, StateRoot, StoredReceipt, ValidatorId, Verifier, WeightedTimestamp,
+    Block, BlockHash, BlockHeader, BlockHeight, ChainOrigin, LocalTimestamp, NetworkDefinition,
+    QuorumCertificate, ShardAnchor, ShardId, StateRoot, StoredReceipt, ValidatorId, Verifier,
+    WeightedTimestamp,
 };
 
 use crate::bootstrap::{BootstrapRequest, ShardBootstrap, StateRangeOutcome};
@@ -308,6 +310,86 @@ enum ObserverPhase {
     Seated,
 }
 
+/// Wait between a seat's first two ready assertions.
+const READY_REASSERT_MIN: Duration = Duration::from_secs(1);
+
+/// Ceiling the re-assert wait doubles up to, so a seat the beacon never
+/// credits keeps asserting rather than falling silent.
+///
+/// The anchor window turns over about once an epoch and restarts the
+/// backoff, so this governs how many assertions a seat makes inside one
+/// epoch rather than how long it can go quiet. Held well under the epoch
+/// because the readiness gate needs a quorum of seats pooled at one
+/// committee at one time, and an emitter cannot see how close that is:
+/// raising the ceiling to 16s drops a 30s-epoch cohort to about five
+/// assertions per epoch, which is under what a halt recovery's committee
+/// churn needs to reach its gate.
+const READY_REASSERT_MAX: Duration = Duration::from_secs(4);
+
+/// One seat's ready assertion schedule.
+///
+/// A ready signal only says something new when the anchor window it is cut
+/// from turns over, which happens once per epoch — the boundary record the
+/// emitter windows from refreshes at the epoch fold, and the gate that
+/// consumes the signal re-evaluates at the same fold. Everything between is
+/// retransmission against loss, so it backs off rather than repeating at
+/// the pump's rate.
+///
+/// Real time, not steps: the production supervisor pumps the orchestrator on
+/// a timer while the simulation drives it to a fixpoint, so a step means
+/// different things on either side and only a clock reads the same on both.
+struct ReadyAssert {
+    /// Anchor window start the last assertion was cut from. A different
+    /// value is a genuinely new signal and restarts the backoff.
+    window: WeightedTimestamp,
+    /// Committee the last assertion went to. A pool is per member and
+    /// local, so a member seated since then holds nothing this seat sent —
+    /// a committee redraw or shuffle silently undoes every assertion so
+    /// far, and only re-sending repairs it.
+    recipients: Vec<ValidatorId>,
+    /// When the next assertion comes due.
+    due: LocalTimestamp,
+    /// Wait applied after the next assertion, doubling to
+    /// [`READY_REASSERT_MAX`].
+    backoff: Duration,
+}
+
+impl ReadyAssert {
+    /// Whether to assert at `now` for an anchor windowed at `window`,
+    /// addressed to `recipients`, advancing the schedule when it answers
+    /// `true`.
+    ///
+    /// Asserts immediately for anything it has not asserted for — a fresh
+    /// window, or a committee it has not sent this window to — then backs
+    /// off geometrically.
+    fn should_assert(
+        slot: &mut Option<Self>,
+        window: WeightedTimestamp,
+        recipients: &[ValidatorId],
+        now: LocalTimestamp,
+    ) -> bool {
+        match slot {
+            Some(state) if state.window == window && state.recipients == recipients => {
+                if now < state.due {
+                    return false;
+                }
+                state.backoff = (state.backoff * 2).min(READY_REASSERT_MAX);
+                state.due = now.plus(state.backoff);
+                true
+            }
+            _ => {
+                *slot = Some(Self {
+                    window,
+                    recipients: recipients.to_vec(),
+                    due: now.plus(READY_REASSERT_MIN),
+                    backoff: READY_REASSERT_MIN,
+                });
+                true
+            }
+        }
+    }
+}
+
 /// One split observer duty, keyed by the child it syncs. A host may hold more
 /// than one cohort seat for the same child (multiple co-hosted validators drawn
 /// into it); they share the one child-span sync and store, each re-asserting its
@@ -330,12 +412,17 @@ struct ObserverDuty {
     /// lands; a mismatch means the parent chain this host followed is not
     /// the one the network committed.
     adopted_genesis: Option<BlockHash>,
+    /// Per-seat ready re-assertion schedules. A seat the beacon has already
+    /// credited is absent — it stops asserting for good.
+    ready_asserts: BTreeMap<ValidatorId, Option<ReadyAssert>>,
 }
 
 /// One keeper seat this host runs in a pending merge.
 struct KeeperMember {
     validator: ValidatorId,
     own_child: ShardId,
+    /// Ready re-assertion schedule for this seat.
+    ready_assert: Option<ReadyAssert>,
 }
 
 /// One child half's progress in a keeper's merged-store build: its
@@ -586,6 +673,7 @@ impl ReshapeOrchestrator {
         view: &ReshapeView,
         verifier: &dyn Verifier,
         events: Vec<ReshapeEvent>,
+        now: LocalTimestamp,
     ) -> Vec<ReshapeRequest> {
         for event in events {
             self.apply_event(event);
@@ -597,11 +685,11 @@ impl ReshapeOrchestrator {
         let mut requests = Vec::new();
         let children: Vec<ShardId> = self.observers.keys().copied().collect();
         for child in children {
-            self.advance_observer(child, view, verifier, &mut requests);
+            self.advance_observer(child, view, verifier, now, &mut requests);
         }
         let parents: Vec<ShardId> = self.keepers.keys().copied().collect();
         for parent in parents {
-            self.advance_keeper(parent, view, verifier, &mut requests);
+            self.advance_keeper(parent, view, verifier, now, &mut requests);
         }
         let halves: Vec<ShardId> = self.parent_halves.keys().copied().collect();
         for child in halves {
@@ -894,10 +982,11 @@ impl ReshapeOrchestrator {
     /// isn't already running.
     fn discover_observer_duties(&mut self, view: &ReshapeView) {
         for (&parent, cohort) in view.observer_cohorts() {
-            for (&validator, &child) in cohort {
+            for (&validator, seat) in cohort {
                 if !self.me.contains(&validator) {
                     continue;
                 }
+                let child = seat.shard;
                 let duty = self.observers.entry(child).or_insert_with(|| ObserverDuty {
                     parent,
                     child,
@@ -908,6 +997,7 @@ impl ReshapeOrchestrator {
                     pending_stage: Vec::new(),
                     stages_unacked: 0,
                     adopted_genesis: None,
+                    ready_asserts: BTreeMap::new(),
                 });
                 if !duty.validators.contains(&validator) {
                     duty.validators.push(validator);
@@ -923,6 +1013,7 @@ impl ReshapeOrchestrator {
         child: ShardId,
         view: &ReshapeView,
         verifier: &dyn Verifier,
+        now: LocalTimestamp,
         out: &mut Vec<ReshapeRequest>,
     ) {
         let Some(duty) = self.observers.get_mut(&child) else {
@@ -1069,16 +1160,32 @@ impl ReshapeOrchestrator {
                     };
                     return;
                 }
-                // Re-assert ready to the splitting parent's committee until the
-                // split executes; harmless once the parent dissolves. Every
-                // co-hosted seat for this child re-asserts its own signal.
+                // Assert ready to the splitting parent's committee until the
+                // beacon credits the seat. Every co-hosted seat for this child
+                // asserts its own signal, on its own schedule.
                 if let Some(anchor) = view.boundary(duty.parent) {
                     for &validator in &duty.validators {
+                        if view.observer_ready(duty.parent, validator) {
+                            // The gate has banked this seat's readiness; a
+                            // further signal cannot change the count.
+                            duty.ready_asserts.remove(&validator);
+                            continue;
+                        }
+                        let recipients = recipients_for(view, duty.parent, validator);
+                        let slot = duty.ready_asserts.entry(validator).or_default();
+                        if !ReadyAssert::should_assert(
+                            slot,
+                            anchor.weighted_timestamp,
+                            &recipients,
+                            now,
+                        ) {
+                            continue;
+                        }
                         out.push(ReshapeRequest::BroadcastReady {
                             validator,
                             child: duty.child,
                             anchor,
-                            recipients: recipients_for(view, duty.parent, validator),
+                            recipients,
                         });
                     }
                 }
@@ -1149,10 +1256,11 @@ impl ReshapeOrchestrator {
     /// the members it runs for each merging parent.
     fn discover_keeper_duties(&mut self, view: &ReshapeView) {
         for (&child, cohort) in view.keeper_cohorts() {
-            for (&validator, &parent) in cohort {
+            for (&validator, seat) in cohort {
                 if !self.me.contains(&validator) {
                     continue;
                 }
+                let parent = seat.shard;
                 let duty = self.keepers.entry(parent).or_insert_with(|| KeeperDuty {
                     members: Vec::new(),
                     phase: KeeperPhase::ReassertingReady,
@@ -1169,6 +1277,7 @@ impl ReshapeOrchestrator {
                     duty.members.push(KeeperMember {
                         validator,
                         own_child: child,
+                        ready_assert: None,
                     });
                 }
             }
@@ -1182,6 +1291,7 @@ impl ReshapeOrchestrator {
         parent: ShardId,
         view: &ReshapeView,
         verifier: &dyn Verifier,
+        now: LocalTimestamp,
         out: &mut Vec<ReshapeRequest>,
     ) {
         let Some(duty) = self.keepers.get_mut(&parent) else {
@@ -1242,15 +1352,30 @@ impl ReshapeOrchestrator {
                     };
                     return;
                 }
-                for member in &duty.members {
-                    if let Some(anchor) = view.boundary(member.own_child) {
-                        out.push(ReshapeRequest::BroadcastReady {
-                            validator: member.validator,
-                            child: member.own_child,
-                            anchor,
-                            recipients: recipients_for(view, member.own_child, member.validator),
-                        });
+                for member in &mut duty.members {
+                    let Some(anchor) = view.boundary(member.own_child) else {
+                        continue;
+                    };
+                    if view.keeper_ready(member.own_child, member.validator) {
+                        // Credited: the merge gate has this seat's readiness.
+                        member.ready_assert = None;
+                        continue;
                     }
+                    let recipients = recipients_for(view, member.own_child, member.validator);
+                    if !ReadyAssert::should_assert(
+                        &mut member.ready_assert,
+                        anchor.weighted_timestamp,
+                        &recipients,
+                        now,
+                    ) {
+                        continue;
+                    }
+                    out.push(ReshapeRequest::BroadcastReady {
+                        validator: member.validator,
+                        child: member.own_child,
+                        anchor,
+                        recipients,
+                    });
                 }
             }
             KeeperPhase::Recognizing { left, right } => {
@@ -1724,9 +1849,9 @@ mod tests {
 
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
     use hyperscale_types::{
-        BeaconWitnessLeafCount, BlockHash, BlockHeight, Hash, NetworkDefinition, ShardAnchor,
-        ShardId, Signer, StateRoot, TopologySnapshot, ValidatorId, ValidatorInfo, ValidatorSet,
-        WeightedTimestamp,
+        BeaconWitnessLeafCount, BlockHash, BlockHeight, Hash, LocalTimestamp, NetworkDefinition,
+        ReshapeSeat, ShardAnchor, ShardId, Signer, StateRoot, TopologySnapshot, ValidatorId,
+        ValidatorInfo, ValidatorSet, WeightedTimestamp,
     };
 
     use super::{
@@ -1741,26 +1866,51 @@ mod tests {
         ValidatorId::new(id)
     }
 
+    /// The orchestrator's local clock at `ms`. Only the ready-assertion
+    /// schedule reads it; every other step is clock independent, so tests
+    /// that aren't about pacing pump at a fixed instant.
+    fn at(ms: u64) -> LocalTimestamp {
+        LocalTimestamp::from_millis(ms)
+    }
+
     /// A non-zero anchor whose `prev` height is a valid terminal.
     fn anchor() -> ShardAnchor {
+        anchor_at(WeightedTimestamp::ZERO)
+    }
+
+    /// [`anchor`] windowed at `wt` — the value a ready signal cuts its
+    /// validity window from, and so what distinguishes one assertion from
+    /// a re-assertion of the same thing.
+    fn anchor_at(wt: WeightedTimestamp) -> ShardAnchor {
         ShardAnchor {
             state_root: StateRoot::ZERO,
             block_hash: BlockHash::from_raw(Hash::from_bytes(b"seeded-boundary")),
             height: BlockHeight::new(8),
-            weighted_timestamp: WeightedTimestamp::ZERO,
+            weighted_timestamp: wt,
             witness_base: BeaconWitnessLeafCount::ZERO,
             settled_waves_root: None,
         }
     }
 
     /// Project a snapshot with the given committees, observer cohort seats
-    /// `(parent, validator, child)`, and seeded boundaries.
+    /// `(parent, validator, child)` none of which the beacon has credited,
+    /// and seeded boundaries.
     fn snapshot(
         committees: &[(ShardId, &[u64])],
         cohort: &[(ShardId, u64, ShardId)],
         seeded: &[ShardId],
     ) -> TopologySnapshot {
-        build(committees, cohort, &[], &[], seeded)
+        snapshot_with_ready(committees, &uncredited(cohort), seeded)
+    }
+
+    /// [`snapshot`] with each observer seat's credited readiness spelled
+    /// out: `(parent, validator, child, ready)`.
+    fn snapshot_with_ready(
+        committees: &[(ShardId, &[u64])],
+        cohort: &[(ShardId, u64, ShardId, bool)],
+        seeded: &[ShardId],
+    ) -> TopologySnapshot {
+        build(committees, cohort, &[], &[], seeded, anchor())
     }
 
     /// Project a snapshot with keeper cohort seats `(child, validator, parent)`.
@@ -1769,7 +1919,23 @@ mod tests {
         keepers: &[(ShardId, u64, ShardId)],
         seeded: &[ShardId],
     ) -> TopologySnapshot {
-        build(committees, &[], keepers, &[], seeded)
+        snapshot_keepers_with_ready(committees, &uncredited(keepers), seeded)
+    }
+
+    /// [`snapshot_keepers`] with each keeper seat's credited readiness
+    /// spelled out: `(child, validator, parent, ready)`.
+    fn snapshot_keepers_with_ready(
+        committees: &[(ShardId, &[u64])],
+        keepers: &[(ShardId, u64, ShardId, bool)],
+        seeded: &[ShardId],
+    ) -> TopologySnapshot {
+        build(committees, &[], keepers, &[], seeded, anchor())
+    }
+
+    /// Seat triples as the beacon projects them before any `ReshapeReady`
+    /// has folded.
+    fn uncredited(seats: &[(ShardId, u64, ShardId)]) -> Vec<(ShardId, u64, ShardId, bool)> {
+        seats.iter().map(|&(a, v, b)| (a, v, b, false)).collect()
     }
 
     /// Project a snapshot with parent-half cohort seats `(child, validator,
@@ -1779,21 +1945,25 @@ mod tests {
         parent_halves: &[(ShardId, u64, ShardId)],
         seeded: &[ShardId],
     ) -> TopologySnapshot {
-        build(committees, &[], &[], parent_halves, seeded)
+        build(committees, &[], &[], parent_halves, seeded, anchor())
     }
 
     fn build(
         committees: &[(ShardId, &[u64])],
-        observers: &[(ShardId, u64, ShardId)],
-        keepers: &[(ShardId, u64, ShardId)],
+        observers: &[(ShardId, u64, ShardId, bool)],
+        keepers: &[(ShardId, u64, ShardId, bool)],
         parent_halves: &[(ShardId, u64, ShardId)],
         seeded: &[ShardId],
+        boundary: ShardAnchor,
     ) -> TopologySnapshot {
         let mut ids: BTreeSet<u64> = BTreeSet::new();
         for (_, members) in committees {
             ids.extend(members.iter().copied());
         }
-        for (_, v, _) in observers.iter().chain(keepers).chain(parent_halves) {
+        for (_, v, _, _) in observers.iter().chain(keepers) {
+            ids.insert(*v);
+        }
+        for (_, v, _) in parent_halves {
             ids.insert(*v);
         }
         let validators: Vec<ValidatorInfo> = ids
@@ -1807,20 +1977,27 @@ mod tests {
             .iter()
             .map(|(s, members)| (*s, members.iter().map(|&m| vid(m)).collect()))
             .collect();
-        let mut observer_cohorts: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> =
+        let mut observer_cohorts: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> =
             BTreeMap::new();
-        for (parent, v, child) in observers {
-            observer_cohorts
-                .entry(*parent)
-                .or_default()
-                .insert(vid(*v), *child);
+        for (parent, v, child, ready) in observers {
+            observer_cohorts.entry(*parent).or_default().insert(
+                vid(*v),
+                ReshapeSeat {
+                    shard: *child,
+                    ready: *ready,
+                },
+            );
         }
-        let mut keeper_cohorts: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> = BTreeMap::new();
-        for (child, v, parent) in keepers {
-            keeper_cohorts
-                .entry(*child)
-                .or_default()
-                .insert(vid(*v), *parent);
+        let mut keeper_cohorts: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> =
+            BTreeMap::new();
+        for (child, v, parent, ready) in keepers {
+            keeper_cohorts.entry(*child).or_default().insert(
+                vid(*v),
+                ReshapeSeat {
+                    shard: *parent,
+                    ready: *ready,
+                },
+            );
         }
         let mut parent_half_cohorts: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> =
             BTreeMap::new();
@@ -1835,7 +2012,7 @@ mod tests {
             &ValidatorSet::new(validators),
             committee_map.clone(),
             committee_map,
-            seeded.iter().map(|&s| (s, anchor())).collect(),
+            seeded.iter().map(|&s| (s, boundary)).collect(),
             HashMap::new(),
             observer_cohorts,
             keeper_cohorts,
@@ -1860,6 +2037,7 @@ mod tests {
             pending_stage: Vec::new(),
             stages_unacked: 0,
             adopted_genesis: None,
+            ready_asserts: BTreeMap::new(),
         }
     }
 
@@ -1870,7 +2048,12 @@ mod tests {
         let snap = snapshot(&[], &[(parent, 5, child)], &[]);
         let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             matches!(requests.as_slice(), [ReshapeRequest::OpenStore { shard }] if *shard == child),
@@ -1886,8 +2069,13 @@ mod tests {
         let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
 
         assert!(
-            orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new())
-                .is_empty()
+            orch.step(
+                &ReshapeView::new(&snap, 1_000),
+                &BlsVerifier,
+                Vec::new(),
+                at(0)
+            )
+            .is_empty()
         );
     }
 
@@ -1907,7 +2095,12 @@ mod tests {
             ),
         );
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             requests.iter().any(|r| matches!(
@@ -1942,7 +2135,12 @@ mod tests {
         duty.pending_stage.push((progress.clone(), leaves.clone()));
         orch.observers.insert(child, duty);
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
         assert!(
             requests
                 .iter()
@@ -1962,6 +2160,7 @@ mod tests {
                 progress,
                 leaves,
             }],
+            at(0),
         );
         assert!(
             requests
@@ -1990,7 +2189,12 @@ mod tests {
             ),
         );
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             requests.iter().any(|r| matches!(
@@ -2000,6 +2204,186 @@ mod tests {
             )),
             "a following duty must re-assert ready to the parent committee minus self; got {requests:?}",
         );
+    }
+
+    /// An observer duty in `Following`, ready to assert against `parent`.
+    fn following_observer(parent: ShardId, child: ShardId) -> ReshapeOrchestrator {
+        let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
+        orch.observers.insert(
+            child,
+            observer_duty(
+                parent,
+                child,
+                5,
+                ObserverPhase::Following(Box::new(ObserverTail::new(anchor(), child))),
+            ),
+        );
+        orch
+    }
+
+    /// Ready assertions carry a window cut from the parent's boundary anchor,
+    /// so nothing new can be said until that anchor turns over. Pumping
+    /// against one anchor must back off in real time rather than assert once
+    /// per pump.
+    #[test]
+    fn ready_assertions_back_off_within_one_anchor_window() {
+        let parent = ShardId::ROOT;
+        let (child, _) = parent.children();
+        let snap = snapshot(&[(parent, &[1, 2, 3, 5])], &[], &[parent]);
+        let view = ReshapeView::new(&snap, 1_000);
+        let mut orch = following_observer(parent, child);
+
+        // A minute of pumping at the production tick's cadence.
+        let asserts = (0..60_000)
+            .step_by(1_000)
+            .filter(|&ms| {
+                orch.step(&view, &BlsVerifier, Vec::new(), at(ms))
+                    .iter()
+                    .any(|r| matches!(r, ReshapeRequest::BroadcastReady { .. }))
+            })
+            .count();
+
+        // Geometric backoff to the ceiling: assertions at 0, 1, 3 and 7
+        // seconds, then every four — seventeen inside the minute, against the
+        // sixty a per-pump assertion would cost.
+        assert_eq!(
+            asserts, 17,
+            "one anchor window must cost a bounded number of assertions",
+        );
+    }
+
+    /// The pump rate must not change the assertion rate: the simulation drives
+    /// the orchestrator to a fixpoint, so a schedule counting steps rather
+    /// than time would burn a whole window's backoff inside one slice and go
+    /// quiet — a divergence between the harnesses that only shows up as a
+    /// stalled reshape.
+    #[test]
+    fn pumping_without_the_clock_advancing_asserts_once() {
+        let parent = ShardId::ROOT;
+        let (child, _) = parent.children();
+        let snap = snapshot(&[(parent, &[1, 2, 3, 5])], &[], &[parent]);
+        let view = ReshapeView::new(&snap, 1_000);
+        let mut orch = following_observer(parent, child);
+
+        let asserts = (0..64)
+            .filter(|_| {
+                orch.step(&view, &BlsVerifier, Vec::new(), at(5_000))
+                    .iter()
+                    .any(|r| matches!(r, ReshapeRequest::BroadcastReady { .. }))
+            })
+            .count();
+
+        assert_eq!(
+            asserts, 1,
+            "a fixpoint that passes no time must cost exactly one assertion",
+        );
+    }
+
+    /// A fresh anchor window is a genuinely new signal — the previous one is
+    /// on its way to expiring — so the backoff restarts and the duty asserts
+    /// immediately rather than waiting out the old schedule.
+    #[test]
+    fn a_new_anchor_window_re_arms_the_assertion() {
+        let parent = ShardId::ROOT;
+        let (child, _) = parent.children();
+        let snap = snapshot(&[(parent, &[1, 2, 3, 5])], &[], &[parent]);
+        let mut orch = following_observer(parent, child);
+
+        // Run the first window out to where it has backed off well past the
+        // tick.
+        let view = ReshapeView::new(&snap, 1_000);
+        for ms in (0..60_000).step_by(1_000) {
+            let _ = orch.step(&view, &BlsVerifier, Vec::new(), at(ms));
+        }
+        assert!(
+            !orch
+                .step(&view, &BlsVerifier, Vec::new(), at(60_000))
+                .iter()
+                .any(|r| matches!(r, ReshapeRequest::BroadcastReady { .. })),
+            "the window must be deep into its backoff",
+        );
+
+        let rolled = build(
+            &[(parent, &[1, 2, 3, 5])],
+            &[],
+            &[],
+            &[],
+            &[parent],
+            anchor_at(WeightedTimestamp::from_millis(30_000)),
+        );
+        let requests = orch.step(
+            &ReshapeView::new(&rolled, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(60_000),
+        );
+
+        assert!(
+            requests
+                .iter()
+                .any(|r| matches!(r, ReshapeRequest::BroadcastReady { .. })),
+            "a rolled anchor window must assert at once; got {requests:?}",
+        );
+    }
+
+    /// Once the beacon has folded the seat's `ReshapeReady`, the gate has
+    /// banked it and a further signal cannot change the count. The duty must
+    /// fall silent for good rather than assert until the split executes.
+    #[test]
+    fn a_credited_observer_seat_stops_asserting() {
+        let parent = ShardId::ROOT;
+        let (child, _) = parent.children();
+        let snap = snapshot_with_ready(
+            &[(parent, &[1, 2, 3, 5])],
+            &[(parent, 5, child, true)],
+            &[parent],
+        );
+        let view = ReshapeView::new(&snap, 1_000);
+        let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
+        orch.observers.insert(
+            child,
+            observer_duty(
+                parent,
+                child,
+                5,
+                ObserverPhase::Following(Box::new(ObserverTail::new(anchor(), child))),
+            ),
+        );
+
+        for step in 0..8 {
+            let requests = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
+            assert!(
+                !requests
+                    .iter()
+                    .any(|r| matches!(r, ReshapeRequest::BroadcastReady { .. })),
+                "step {step}: a credited seat must not assert; got {requests:?}",
+            );
+        }
+    }
+
+    /// The keeper half of the same rule: a keeper the merge gate has already
+    /// counted stops re-asserting.
+    #[test]
+    fn a_credited_keeper_seat_stops_asserting() {
+        let parent = ShardId::ROOT;
+        let (own_child, _) = parent.children();
+        let snap = snapshot_keepers_with_ready(
+            &[(own_child, &[1, 2, 3, 5])],
+            &[(own_child, 5, parent, true)],
+            &[own_child],
+        );
+        let view = ReshapeView::new(&snap, 1_000);
+        let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
+
+        for step in 0..8 {
+            let requests = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
+            assert!(
+                !requests
+                    .iter()
+                    .any(|r| matches!(r, ReshapeRequest::BroadcastReady { .. })),
+                "step {step}: a credited keeper must not assert; got {requests:?}",
+            );
+        }
     }
 
     #[test]
@@ -2023,8 +2407,8 @@ mod tests {
 
         // First step fires the gate (Following → FetchingTerminal); the second
         // emits the terminal fetch.
-        let _ = orch.step(&view, &BlsVerifier, Vec::new());
-        let requests = orch.step(&view, &BlsVerifier, Vec::new());
+        let _ = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
+        let requests = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
 
         assert!(
             requests.iter().any(|r| matches!(
@@ -2048,7 +2432,12 @@ mod tests {
             observer_duty(parent, child, 5, ObserverPhase::Prepared),
         );
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             matches!(requests.as_slice(), [ReshapeRequest::Seat { shard }] if *shard == child),
@@ -2069,8 +2458,13 @@ mod tests {
         );
 
         assert!(
-            orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new())
-                .is_empty()
+            orch.step(
+                &ReshapeView::new(&snap, 1_000),
+                &BlsVerifier,
+                Vec::new(),
+                at(0)
+            )
+            .is_empty()
         );
     }
 
@@ -2087,7 +2481,12 @@ mod tests {
         );
         let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             requests.iter().any(|r| matches!(
@@ -2116,8 +2515,8 @@ mod tests {
         // First step fires the gate (ReassertingReady → Building); the second
         // opens the parent store. The halves stage straight into that store,
         // so their fetches wait for the open to land.
-        let _ = orch.step(&view, &BlsVerifier, Vec::new());
-        let requests = orch.step(&view, &BlsVerifier, Vec::new());
+        let _ = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
+        let requests = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
 
         assert!(
             requests
@@ -2136,6 +2535,7 @@ mod tests {
             &view,
             &BlsVerifier,
             vec![ReshapeEvent::Opened { shard: parent }],
+            at(0),
         );
         for half in [left, right] {
             assert!(
@@ -2161,6 +2561,7 @@ mod tests {
                 members: vec![KeeperMember {
                     validator: vid(5),
                     own_child,
+                    ready_assert: None,
                 }],
                 phase: KeeperPhase::Prepared,
                 open_requested: true,
@@ -2170,7 +2571,12 @@ mod tests {
             },
         );
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             matches!(requests.as_slice(), [ReshapeRequest::Seat { shard }] if *shard == parent),
@@ -2187,7 +2593,12 @@ mod tests {
         let snap = snapshot_parent_halves(&[(child, &[1, 5])], &[(child, 5, parent)], &[child]);
         let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             matches!(
@@ -2208,14 +2619,15 @@ mod tests {
         let mut orch = ReshapeOrchestrator::new(vec![vid(5)]);
 
         // The first step seeds; the seed is one-shot, so the next is quiet.
-        let _ = orch.step(&view, &BlsVerifier, Vec::new());
-        assert!(orch.step(&view, &BlsVerifier, Vec::new()).is_empty());
+        let _ = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
+        assert!(orch.step(&view, &BlsVerifier, Vec::new(), at(0)).is_empty());
 
         // A deferral (the local parent is still behind) re-arms the seed.
         let requests = orch.step(
             &view,
             &BlsVerifier,
             vec![ReshapeEvent::SeedDeferred { child }],
+            at(0),
         );
         assert!(
             requests.iter().any(
@@ -2233,14 +2645,20 @@ mod tests {
         // parent-half seat (validator 6) for the same child.
         let snap = build(
             &[(parent, &[1, 2])],
-            &[(parent, 5, child)],
+            &[(parent, 5, child, false)],
             &[],
             &[(child, 6, parent)],
             &[],
+            anchor(),
         );
         let mut orch = ReshapeOrchestrator::new(vec![vid(5), vid(6)]);
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             requests
@@ -2274,7 +2692,12 @@ mod tests {
 
         // Placed on the child committee → seat, then persist while the
         // projection still lists the cohort.
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
         assert!(
             matches!(requests.as_slice(), [ReshapeRequest::Seat { shard }] if *shard == child),
             "a prepared parent half seats once placed; got {requests:?}",
@@ -2291,6 +2714,7 @@ mod tests {
             &ReshapeView::new(&released, 1_000),
             &BlsVerifier,
             Vec::new(),
+            at(0),
         );
         assert!(
             !orch.parent_halves.contains_key(&child),
@@ -2321,7 +2745,12 @@ mod tests {
         orch.observers
             .insert(child, adopted_duty(parent, child, anchor().block_hash));
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             requests.is_empty(),
@@ -2352,7 +2781,12 @@ mod tests {
         orch.observers
             .insert(child, adopted_duty(parent, child, derived));
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             !requests
@@ -2379,7 +2813,12 @@ mod tests {
         orch.observers
             .insert(child, adopted_duty(parent, child, forged));
 
-        let requests = orch.step(&ReshapeView::new(&snap, 1_000), &BlsVerifier, Vec::new());
+        let requests = orch.step(
+            &ReshapeView::new(&snap, 1_000),
+            &BlsVerifier,
+            Vec::new(),
+            at(0),
+        );
 
         assert!(
             !requests
@@ -2422,7 +2861,7 @@ mod tests {
         let view = ReshapeView::new(&snap, 1_000);
         // The first step leaves `Recognizing`; the second emits the seed the
         // anchor path opens with.
-        let _ = orch.step(&view, &BlsVerifier, Vec::new());
+        let _ = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
         assert!(
             matches!(
                 orch.parent_halves[&child].phase,
@@ -2430,7 +2869,7 @@ mod tests {
             ),
             "the walk must hand back to the seed",
         );
-        let requests = orch.step(&view, &BlsVerifier, Vec::new());
+        let requests = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
         assert!(
             requests.iter().any(
                 |r| matches!(r, ReshapeRequest::SeedFromParent { child: c, .. } if *c == child)
@@ -2459,6 +2898,7 @@ mod tests {
                 members: vec![KeeperMember {
                     validator: vid(5),
                     own_child: left,
+                    ready_assert: None,
                 }],
                 phase: KeeperPhase::Recognizing {
                     left: Box::new(KeeperRecognition {
@@ -2480,7 +2920,7 @@ mod tests {
         );
 
         let view = ReshapeView::new(&snap, 1_000);
-        let _ = orch.step(&view, &BlsVerifier, Vec::new());
+        let _ = orch.step(&view, &BlsVerifier, Vec::new(), at(0));
         assert!(
             matches!(
                 orch.keepers[&parent].phase,

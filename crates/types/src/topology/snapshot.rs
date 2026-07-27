@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use blake3::hash as blake3_hash;
+use sbor::prelude::BasicSbor;
 
 use crate::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, CompletedRecovery, ConsensusPublicKey, Epoch,
@@ -60,6 +61,22 @@ pub struct ShardAnchor {
     /// to resolve split-straddling waves against the terminated shard's
     /// settled set; `None` for a live shard's anchor.
     pub settled_waves_root: Option<SettledWavesRoot>,
+}
+
+/// One reshape cohort seat as the topology projects it.
+///
+/// Projected from the `CohortSeat`/`KeeperSeat` records on
+/// `BeaconState.pending_reshapes`, which is where a seat's readiness is
+/// credited: `ready` is the same bit the split and merge gates count, so a
+/// seat holder that reads its own seat ready knows its `ReshapeReady` has
+/// folded and it has nothing left to assert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+pub struct ReshapeSeat {
+    /// The shard the seat pairs its holder with: the pending child an
+    /// observer syncs, or the parent a keeper reforms.
+    pub shard: ShardId,
+    /// Whether the beacon has folded the seat's `ReshapeReady` witness.
+    pub ready: bool,
 }
 
 /// Hash a `NodeId` to a u64 using blake3 (first 8 bytes, little-endian).
@@ -125,19 +142,19 @@ pub struct TopologySnapshot {
     /// Absent shards read as `ZERO` (nothing consumed).
     witness_bases: HashMap<ShardId, BeaconWitnessLeafCount>,
     /// Per-shard observer cohorts of pending splits — each splitting
-    /// shard's drawn observers and the pending child each one syncs,
-    /// projected from `BeaconState.pending_reshapes`. Observers ride
-    /// the splitting shard's committee in the networking view but never
-    /// its consensus subset; their ready signals classify as
-    /// `ReshapeReady` witness leaves.
-    reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
+    /// shard's drawn observers and the seat each one holds, projected
+    /// from `BeaconState.pending_reshapes`. Observers ride the splitting
+    /// shard's committee in the networking view but never its consensus
+    /// subset; their ready signals classify as `ReshapeReady` witness
+    /// leaves.
+    reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
     /// Per-child keeper sets of pending merges — each merging child's
-    /// drawn keepers and the parent each one reforms, projected from
+    /// drawn keepers and the seat each one holds, projected from
     /// `BeaconState.pending_reshapes`. Keepers stay ordinary `OnShard`
     /// members of their child (the networking and consensus view both
     /// see them), but their ready signals classify as `ReshapeReady`
     /// witness leaves: they signal that the sibling half has synced.
-    reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
+    reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
     /// Per-child parent-half sets of executed splits — each freshly split
     /// child mapped to the members that landed on it from the parent
     /// committee and the parent each one re-roots its local store from,
@@ -360,9 +377,9 @@ impl TopologySnapshot {
     /// `witness_bases` carries each shard's beacon-witness window base;
     /// shards absent from it read as `ZERO`. `reshape_observers` carries
     /// the observer cohorts of pending splits — each splitting shard
-    /// mapped to its drawn observers and the pending child each one
-    /// syncs; empty cohorts are pruned so an absent shard and a shard
-    /// with no cohort answer queries identically. `split_pending` carries
+    /// mapped to its drawn observers and the seat each one holds; empty
+    /// cohorts are pruned so an absent shard and a shard with no cohort
+    /// answer queries identically. `split_pending` carries
     /// the shards whose admitted split has not executed as of this
     /// window's committee freeze.
     ///
@@ -380,8 +397,8 @@ impl TopologySnapshot {
         mut consensus_members: HashMap<ShardId, Vec<ValidatorId>>,
         boundaries: HashMap<ShardId, ShardAnchor>,
         witness_bases: HashMap<ShardId, BeaconWitnessLeafCount>,
-        mut reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
-        mut reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
+        mut reshape_observers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
+        mut reshape_keepers: BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>>,
         mut reshape_parent_halves: BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>>,
         split_pending: BTreeSet<ShardId>,
     ) -> Self {
@@ -569,6 +586,19 @@ impl TopologySnapshot {
         shard: ShardId,
         validator: ValidatorId,
     ) -> Option<ShardId> {
+        self.reshape_observer_seat(shard, validator)
+            .map(|seat| seat.shard)
+    }
+
+    /// The observer seat `validator` holds in `shard`'s pending split, or
+    /// `None` when it holds none. Carries the pending child alongside
+    /// whether the beacon has credited the seat ready.
+    #[must_use]
+    pub fn reshape_observer_seat(
+        &self,
+        shard: ShardId,
+        validator: ValidatorId,
+    ) -> Option<ReshapeSeat> {
         self.reshape_observers
             .get(&shard)
             .and_then(|cohort| cohort.get(&validator))
@@ -583,6 +613,19 @@ impl TopologySnapshot {
     /// half into the merged store.
     #[must_use]
     pub fn reshape_keeper_parent(&self, child: ShardId, validator: ValidatorId) -> Option<ShardId> {
+        self.reshape_keeper_seat(child, validator)
+            .map(|seat| seat.shard)
+    }
+
+    /// The keeper seat `validator` holds on `child` in a pending merge, or
+    /// `None` when it holds none. Carries the parent it reforms alongside
+    /// whether the beacon has credited the seat ready.
+    #[must_use]
+    pub fn reshape_keeper_seat(
+        &self,
+        child: ShardId,
+        validator: ValidatorId,
+    ) -> Option<ReshapeSeat> {
         self.reshape_keepers
             .get(&child)
             .and_then(|keepers| keepers.get(&validator))
@@ -645,7 +688,7 @@ impl TopologySnapshot {
     #[must_use]
     pub const fn reshape_observer_cohorts(
         &self,
-    ) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> {
+    ) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> {
         &self.reshape_observers
     }
 
@@ -655,7 +698,7 @@ impl TopologySnapshot {
     #[must_use]
     pub const fn reshape_keeper_cohorts(
         &self,
-    ) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ShardId>> {
+    ) -> &BTreeMap<ShardId, BTreeMap<ValidatorId, ReshapeSeat>> {
         &self.reshape_keepers
     }
 
@@ -1063,7 +1106,16 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             BTreeMap::from([
-                (shard, BTreeMap::from([(observer, left)])),
+                (
+                    shard,
+                    BTreeMap::from([(
+                        observer,
+                        ReshapeSeat {
+                            shard: left,
+                            ready: false,
+                        },
+                    )]),
+                ),
                 // Empty cohorts prune away — an absent shard and a shard
                 // with no cohort answer identically.
                 (ShardId::leaf(1, 1), BTreeMap::new()),
@@ -1111,16 +1163,40 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             BTreeMap::from([
-                (parent, BTreeMap::from([(observer, left)])),
+                (
+                    parent,
+                    BTreeMap::from([(
+                        observer,
+                        ReshapeSeat {
+                            shard: left,
+                            ready: false,
+                        },
+                    )]),
+                ),
                 // A cohort seat on a different splitting shard does not
                 // exclude the validator here.
                 (
                     ShardId::leaf(1, 1),
-                    BTreeMap::from([(rider_elsewhere, right)]),
+                    BTreeMap::from([(
+                        rider_elsewhere,
+                        ReshapeSeat {
+                            shard: right,
+                            ready: false,
+                        },
+                    )]),
                 ),
             ]),
             // A keeper seat never affects membership.
-            BTreeMap::from([(parent, BTreeMap::from([(members[0], parent)]))]),
+            BTreeMap::from([(
+                parent,
+                BTreeMap::from([(
+                    members[0],
+                    ReshapeSeat {
+                        shard: parent,
+                        ready: false,
+                    },
+                )]),
+            )]),
             BTreeMap::new(),
             BTreeSet::from([parent]),
         );

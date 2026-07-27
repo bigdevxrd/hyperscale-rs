@@ -40,8 +40,8 @@ use hyperscale_types::network::notification::ReadySignalNotification;
 use hyperscale_types::network::request::{GetBlockRequest, GetRemoteHeadersRequest};
 use hyperscale_types::network::response::{GetBlockResponse, GetRemoteHeadersResponse};
 use hyperscale_types::{
-    Block, BlockHeight, CertifiedBlock, ChainOrigin, ShardId, ValidatorId, Verified,
-    shard_prefix_path,
+    Block, BlockHeight, CertifiedBlock, ChainOrigin, LocalTimestamp, ShardId, ValidatorId,
+    Verified, shard_prefix_path,
 };
 use tracing::error;
 
@@ -77,8 +77,19 @@ impl SimulationRunner {
         // a later tick.
         let mut events = std::mem::take(&mut self.reshape_pending[host as usize]);
         let mut retries: Vec<ReshapeEvent> = Vec::new();
+        // The whole fixpoint runs at one instant: the slice's io is
+        // synchronous, so no time passes across its rounds. Anything the
+        // orchestrator schedules against the clock therefore advances per
+        // slice, as the production tick does, rather than per round.
+        let now =
+            LocalTimestamp::from_millis(u64::try_from(self.now.as_millis()).unwrap_or(u64::MAX));
         for _ in 0..MAX_FIXPOINT_ROUNDS {
-            let requests = orch.step(&view, self.verifier.as_ref(), std::mem::take(&mut events));
+            let requests = orch.step(
+                &view,
+                self.verifier.as_ref(),
+                std::mem::take(&mut events),
+                now,
+            );
             let mut progressed = false;
             for request in requests {
                 if let Some(event) =
