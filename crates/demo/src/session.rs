@@ -47,6 +47,21 @@ fn validity_around(now: Duration) -> TimestampRange {
 /// and never accuracy.
 const DELIVERY_SAMPLE: usize = 64;
 
+/// Simulated time between reshape-orchestrator polls.
+///
+/// Polls land on a fixed grid of simulated time, so a caller asking for one
+/// long span and a caller asking for the short spans covering it drive the
+/// same run. Pacing on the span instead would make the run a function of how
+/// often the caller happens to paint.
+///
+/// The value has to be well inside `VIEW_CHANGE_TIMEOUT`. A duty gated on
+/// chain progress — recognising a terminal, proving its commit, seeding a
+/// half from its parent — retries once per poll, so the poll interval is
+/// what a child's committee seats staggered across. Seat it slower than the
+/// fresh committee's first round and the members already seated spend that
+/// round timing out on the ones that are not.
+const RESHAPE_TICK_MS: u64 = 100;
+
 /// Genesis-funded accounts the load generator draws from. Small enough that
 /// every transfer pair is visually distinguishable, large enough that
 /// consecutive transfers rarely contend on the same account — contending
@@ -392,23 +407,39 @@ impl Session {
     }
 
     /// Advance simulated time by `ms` and return everything observed.
+    ///
+    /// The span runs as the [`RESHAPE_TICK_MS`] intervals it spans, so one
+    /// long call and the short calls covering the same time produce the same
+    /// run. How much a caller asks for at once is a matter of how often it
+    /// wants to paint, and nothing else.
     pub fn step(&mut self, ms: u64) -> Vec<TraceEvent> {
-        // Reshape duties are driven by the harness, not by the event queue:
-        // an orchestrator only advances on a step. Driving it here is what
-        // lets a split unfold across the session instead of being completed
-        // before the first frame.
-        self.runner.reshape_step();
-        self.now += Duration::from_millis(ms);
-        self.runner.run_until(self.now);
-        // Blocks first: they carry attested time, and everything else is
-        // stamped against the frontier they establish.
-        let mut events = self.drain_committed();
-        events.extend(std::mem::take(&mut self.pending));
-        events.extend(self.drain_beacon());
-        events.extend(self.drain_topology());
-        events.extend(self.drain_hosts());
+        let target = self.now + Duration::from_millis(ms);
+        let mut events = Vec::new();
+        while self.now < target {
+            // Reshape duties are driven by the harness, not by the event
+            // queue: an orchestrator only advances when it is polled. Driving
+            // it here is what lets a split unfold across the session instead
+            // of being completed before the first frame.
+            let now_ms = u64::try_from(self.now.as_millis()).unwrap_or(u64::MAX);
+            if now_ms % RESHAPE_TICK_MS == 0 {
+                self.runner.reshape_step();
+            }
+            let next_poll = Duration::from_millis((now_ms / RESHAPE_TICK_MS + 1) * RESHAPE_TICK_MS);
+            self.now = next_poll.min(target);
+            self.runner.run_until(self.now);
+            // Blocks first: they carry attested time, and everything else is
+            // stamped against the frontier they establish.
+            events.extend(self.drain_committed());
+            events.extend(std::mem::take(&mut self.pending));
+            events.extend(self.drain_beacon());
+            events.extend(self.drain_topology());
+            events.extend(self.drain_hosts());
+            events.extend(self.drain_tx_status());
+        }
+        // Once for the whole span, unlike the derivations above: the delivery
+        // budget bounds what a viewer animates between paints, so it belongs
+        // to the call rather than to the intervals inside it.
         events.extend(self.drain_traffic());
-        events.extend(self.drain_tx_status());
         // One batch, one timeline: the viewer renders in weighted-time order
         // regardless of which derivation produced an event.
         events.sort_by_key(|event| event.wt);
