@@ -815,20 +815,54 @@ impl WaveState {
     }
 
     /// Build the final `WaveCertificate`. Local EC is always included;
-    /// remote ECs are included only if they cover at least one non-aborted
-    /// tx. Deterministic order: `(shard_id, wave_id)`.
+    /// a remote EC is included when it covers a tx this wave still needs a
+    /// verdict on, or when it is the EC carrying that tx's abort.
+    /// Deterministic order: `(shard_id, wave_id)`.
+    ///
+    /// The second clause is what keeps the two sides of a settlement in
+    /// agreement. `tracker_aborted` is fed by the very ECs being filtered
+    /// here — a remote abort lands as coverage *and* as an entry in that
+    /// set — so pruning on `tracker_aborted` alone discards the only
+    /// artifact carrying that verdict. Every downstream reader derives the
+    /// outcome from the certificate and nothing else
+    /// ([`FinalizedWave::tx_decisions`]), so what that drops is not merely
+    /// redundant: the local EC's success stands unopposed and this shard
+    /// commits an accept against the counterparty's abort. An abort the
+    /// local EC reports itself needs no such corroboration, which is why a
+    /// wave both sides aborted still keeps only the one certificate.
     ///
     /// Callers should invoke only when `is_complete()` is true.
     #[must_use]
     pub fn create_wave_certificate(&self) -> WaveCertificate {
+        // What the local EC says on its own. A tx it already reports as
+        // aborted needs no remote to corroborate it.
+        let locally_aborted: HashSet<TxHash> = self
+            .execution_certificates
+            .iter()
+            .find(|ec| ec.wave_id() == &self.wave_id)
+            .map(|ec| {
+                ec.tx_outcomes()
+                    .iter()
+                    .filter(|outcome| outcome.is_aborted())
+                    .map(TxOutcome::tx_hash)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let required_remote_wave_ids: HashSet<WaveId> = self
             .execution_certificates
             .iter()
             .filter(|ec| ec.wave_id() != &self.wave_id)
             .filter(|ec| {
                 ec.tx_outcomes().iter().any(|outcome| {
-                    self.participating_shards.contains_key(&outcome.tx_hash())
-                        && !self.tracker_aborted.contains(&outcome.tx_hash())
+                    let tx_hash = outcome.tx_hash();
+                    if !self.participating_shards.contains_key(&tx_hash) {
+                        return false;
+                    }
+                    // Still awaiting a verdict, or holding the only one that
+                    // says abort.
+                    !self.tracker_aborted.contains(&tx_hash)
+                        || (outcome.is_aborted() && !locally_aborted.contains(&tx_hash))
                 })
             })
             .map(|ec| ec.wave_id().clone())
@@ -1215,6 +1249,44 @@ mod tests {
         let ec_local = make_ec(w.wave_id(), ShardId::leaf(1, 0), &[h0, h1], true);
         assert!(w.add_execution_certificate(ec_local));
         assert!(w.is_complete());
+    }
+
+    #[test]
+    fn a_remote_abort_survives_into_the_wave_certificate() {
+        // A remote shard's abort is only ever carried by that shard's EC, and
+        // the certificate is the whole of what a committed block keeps: every
+        // downstream reader derives the outcome from it alone. Pruning the EC
+        // that carried the abort leaves the local EC's success unopposed, and
+        // the two shards commit opposite outcomes for the same transaction.
+        let mut w = make_cross_shard_wave(1);
+        let tx = w.tx_hashes()[0];
+        w.mark_tx_provisioned(tx, ts_for(WAVE_START + 1));
+        record_executed(&mut w, tx, true);
+
+        // This shard executed it successfully; the counterparty aborted.
+        let local = make_ec(w.wave_id(), ShardId::leaf(1, 0), &[tx], true);
+        let remote = make_ec(w.wave_id(), ShardId::leaf(1, 1), &[tx], false);
+        w.add_execution_certificate(local);
+        assert!(w.add_execution_certificate(remote), "wave completes");
+
+        let wc = w.create_wave_certificate();
+        let signers: BTreeSet<ShardId> = wc
+            .execution_certificates()
+            .iter()
+            .map(|ec| ec.wave_id().shard_id())
+            .collect();
+        assert_eq!(
+            signers,
+            BTreeSet::from([ShardId::leaf(1, 0), ShardId::leaf(1, 1)]),
+            "every participant's verdict must reach the certificate",
+        );
+
+        let decisions = FinalizedWave::new(Arc::new(wc), vec![]).tx_decisions();
+        assert_eq!(
+            decisions,
+            vec![(tx, TransactionDecision::Aborted)],
+            "one participant aborting aborts the transaction everywhere",
+        );
     }
 
     #[test]
