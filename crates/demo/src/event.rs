@@ -243,13 +243,40 @@ pub enum TraceKind {
 /// so a grown host lists the retired parent alongside its live child. The
 /// viewer already knows the live leaves from
 /// [`TraceKind::TopologyChanged`] and intersects.
+///
+/// `seated` is the subset of those the host holds a consensus seat on — the
+/// set quorum counts. Carrying a shard is not the same as voting on it: a
+/// rotation entrant bootstraps the shard's state for the better part of a
+/// minute before it signals Ready, and a committee that showed every host
+/// carrying the shard would report more members than the protocol seats.
+/// `observing` names the pending splits it has been drawn into and the child
+/// each sends it to, which the beacon settles an epoch before the cut.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(missing_docs)] // three flat readouts; their names are the documentation
+#[allow(missing_docs)] // flat readouts; their names are the documentation
 pub struct HostRole {
     pub host: u32,
     pub shards: Vec<ShardPath>,
+    pub seated: Vec<ShardPath>,
+    pub observing: Vec<ObserverSeat>,
     pub pooled: u32,
+}
+
+/// A seat binding a host to one half of `shard`'s pending split.
+///
+/// Covers both populations a split draws on, which never overlap: a cohort
+/// observer syncing `child`'s sub-prefix from the free pool, and a member of
+/// the splitting committee that will re-root onto `child` at the cut. The
+/// first holds no seat on `shard`; the second votes on it until the cut.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(missing_docs)] // flat readouts; their names are the documentation
+pub struct ObserverSeat {
+    pub shard: ShardPath,
+    pub child: ShardPath,
+    /// Whether the beacon has folded the seat's `ReshapeReady` witness — the
+    /// observer has the child's state, not merely the assignment.
+    pub ready: bool,
 }
 
 /// A transaction hash, shortened to the prefix a reader can match by eye.

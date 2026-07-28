@@ -10,14 +10,14 @@ use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{
     BeaconChainConfig, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
     SharedCertificates, TimestampRange, TransactionDecision, TransactionStatus, TxHash,
-    WeightedTimestamp, build_transfer_tx,
+    ValidatorId, WeightedTimestamp, build_transfer_tx,
 };
 use radix_common::crypto::Ed25519PrivateKey;
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
 use radix_common::types::ComponentAddress;
 
-use crate::event::{HostRole, ShardPath, TraceEvent};
+use crate::event::{HostRole, ObserverSeat, ShardPath, TraceEvent};
 
 /// The signer for demo account `seed`, and the preallocated account it
 /// controls. Deterministic so a seeded session funds and spends the same
@@ -205,16 +205,70 @@ fn settlement_events(
 /// Read from what hosts actually carry rather than from the trie, because
 /// that is the question the roster answers: which committee a host is in, and
 /// whether it is sitting in the free pool waiting to staff one.
+///
+/// Which of those it holds a seat on comes from the topology instead. The two
+/// disagree for as long as a rotation entrant takes to bootstrap: it carries
+/// the shard from the moment it starts syncing, and joins
+/// `consensus_committee_for_shard` only once it signals Ready.
 fn roster(runner: &SimulationRunner) -> Vec<HostRole> {
+    let topology = (0..runner.num_hosts()).find_map(|host| runner.host_topology(host));
     (0..runner.num_hosts())
-        .map(|host| HostRole {
-            host,
-            shards: runner
-                .hosted_shards_of(host)
-                .into_iter()
+        .map(|host| {
+            let shards = runner.hosted_shards_of(host);
+            // One vnode per host, so the host index is the validator it signs
+            // as — the same identity the committee lists.
+            let me = ValidatorId::new(u64::from(host));
+            let seated = shards
+                .iter()
+                .copied()
+                .filter(|&shard| {
+                    topology
+                        .as_ref()
+                        .is_some_and(|t| t.consensus_committee_for_shard(shard).contains(&me))
+                })
                 .map(ShardPath::from)
-                .collect(),
-            pooled: u32::try_from(runner.pooled_len(host)).unwrap_or(u32::MAX),
+                .collect();
+            // A pending split binds two populations to a child ahead of the
+            // cut, and a host is only ever in one of them. Observer cohorts
+            // are drawn from the free pool, keyed by the shard splitting;
+            // parent halves are the splitting committee's own members, keyed
+            // by the child each will seat on.
+            let observing = topology
+                .as_ref()
+                .map(|t| {
+                    let observers =
+                        t.reshape_observer_cohorts()
+                            .iter()
+                            .filter_map(|(&shard, cohort)| {
+                                let seat = cohort.get(&me)?;
+                                Some(ObserverSeat {
+                                    shard: ShardPath::from(shard),
+                                    child: ShardPath::from(seat.shard),
+                                    ready: seat.ready,
+                                })
+                            });
+                    let halves =
+                        t.reshape_parent_half_cohorts()
+                            .iter()
+                            .filter_map(|(&child, cohort)| {
+                                Some(ObserverSeat {
+                                    shard: ShardPath::from(*cohort.get(&me)?),
+                                    child: ShardPath::from(child),
+                                    // A member already holds the state its
+                                    // half re-roots from; nothing to sync.
+                                    ready: true,
+                                })
+                            });
+                    observers.chain(halves).collect()
+                })
+                .unwrap_or_default();
+            HostRole {
+                host,
+                shards: shards.iter().copied().map(ShardPath::from).collect(),
+                seated,
+                observing,
+                pooled: u32::try_from(runner.pooled_len(host)).unwrap_or(u32::MAX),
+            }
         })
         .collect()
 }

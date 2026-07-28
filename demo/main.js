@@ -110,6 +110,8 @@ const state = {
   edges: new Map(),     // "a-b" -> deliveries seen, decayed — degrade-mode weight
   traffic: [],          // { at, byClass: Map } per step
   layout: new Map(),    // host -> { x, y, tx, ty } — positions ease to targets
+  groups: new Map(),    // group key -> { group, cx, r, alpha, tcx, tr, talpha }
+  seats: new Map(),     // group key -> Map<host, slot> — ring position, held
   dirtyLayout: true,
   txs: new Map(),       // label -> { status, height, submittedWt }
   // Which blocks carry each transaction, as `path height` keys. Built
@@ -502,17 +504,69 @@ function renderLanes() {
 // grown host keeps its retired parent alongside its live child, so the
 // membership is the intersection with the live partition rather than
 // whatever the host still carries.
-function groupOf(host) {
-  const live = host.shards.filter((s) => state.shards.includes(s));
-  return live.length ? live[0] : null;
+//
+// Seats first. A rotation entrant carries the shard while it bootstraps but
+// holds no seat on it, so grouping on what it carries would draw it as a
+// committee member and report a committee larger than the one that votes.
+const seatsOf = (host) => (host.seated ?? host.shards).filter((s) => state.shards.includes(s));
+
+// The live committee a host is attached to without holding a seat on it:
+// either a shard it already carries and is bootstrapping into, or the split
+// it has been drawn to observe. Both belong beside that committee rather than
+// in the pool — a drawn observer is doing work for a shard, not waiting.
+function boundTo(host) {
+  const carrying = host.shards.filter((s) => state.shards.includes(s));
+  if (carrying.length) return carrying[0];
+  return host.observing?.find((seat) => state.shards.includes(seat.shard))?.shard ?? null;
 }
+
+function groupOf(host) {
+  const seated = seatsOf(host);
+  return seated.length ? seated[0] : boundTo(host);
+}
+
+// Attached to a committee it has not joined. Drawn against that committee but
+// outside its ring, so the seated count stays the count that votes.
+const syncingInto = (host) => !seatsOf(host).length && boundTo(host) !== null;
 
 const NET_ROW = 108;
 const NET_PAD = 30;
+// How much of the remaining distance a position, radius or opacity closes each
+// frame. Slow enough that a split is a movement you can follow, quick enough
+// that the panel has settled before the next thing happens in it.
+const EASE = 0.12;
 
-// Recompute where each host belongs. Targets only — the drawn positions ease
-// toward them, so a split slides its new committees into place instead of
-// teleporting every node the instant the partition changes.
+const POOL_KEY = " pool";
+const groupKey = (group) => (group === null ? POOL_KEY : group);
+
+// The seat a host holds in `group`'s pending split, or null. Names the child
+// it is bound for, an epoch before the cut sends it there.
+const observerSeat = (host, group) =>
+  host.observing?.find((seat) => seat.shard === group) ?? null;
+
+// Which seat on the ring each member holds. A host keeps its seat for as long
+// as it stays in the committee and a joiner takes the lowest vacant one, so a
+// shuffle moves the node that moved and leaves the rest where they were. The
+// seat a departure frees stays empty — a gap in the ring — until it is filled.
+function seatsFor(key, members) {
+  if (!state.seats.has(key)) state.seats.set(key, new Map());
+  const seats = state.seats.get(key);
+  const present = new Set(members.map((h) => h.host));
+  for (const host of [...seats.keys()]) if (!present.has(host)) seats.delete(host);
+  const taken = new Set(seats.values());
+  for (const { host } of members) {
+    if (seats.has(host)) continue;
+    let slot = 0;
+    while (taken.has(slot)) slot++;
+    taken.add(slot);
+    seats.set(host, slot);
+  }
+  return seats;
+}
+
+// Recompute where each host and each committee belongs. Targets only — the
+// drawn positions ease toward them, so a split slides its new committees into
+// place instead of teleporting every node the instant the partition changes.
 function retarget(width) {
   // Every live shard gets a group whether or not it is staffed yet; the pool
   // gets one only while somebody is sitting in it.
@@ -522,24 +576,58 @@ function retarget(width) {
   const radius = Math.max(14, Math.min(34, span / 2 - 22));
   const mid = NET_ROW / 2;
 
-  return present.map((group, column) => {
+  // Anything the new partition does not name is on its way out; the ones it
+  // does name overwrite this below.
+  for (const ring of state.groups.values()) ring.talpha = 0;
+  // Cohorts come and go with the splits that draw them, so the seats they
+  // held are dropped by what this pass did not touch.
+  const used = new Set();
+
+  present.forEach((group, column) => {
+    const key = groupKey(group);
     const cx = NET_PAD + span * (column + 0.5);
     const members = state.hosts.filter((h) => groupOf(h) === group);
-    members.forEach((host, i) => {
-      // Spread around the group's circle by index, so a host keeps its place
-      // within a committee for as long as it stays in one.
-      const angle = (i / Math.max(members.length, 1)) * Math.PI * 2 - Math.PI / 2;
+    // Only seated members take a place on the ring, so a committee's circle
+    // holds exactly the validators that vote on it.
+    const seated = members.filter((h) => !syncingInto(h));
+    const joining = members.filter(syncingInto);
+    const seats = seatsFor(key, seated);
+    used.add(key);
+    let slots = seated.length;
+    for (const slot of seats.values()) slots = Math.max(slots, slot + 1);
+
+    for (const host of seated) {
+      const angle = (seats.get(host.host) / Math.max(slots, 1)) * Math.PI * 2 - Math.PI / 2;
       const spot = state.layout.get(host.host) ?? { x: cx, y: mid };
       spot.tx = cx + Math.cos(angle) * radius;
       spot.ty = mid + Math.sin(angle) * radius;
       state.layout.set(host.host, spot);
+    }
+    // Waiting alongside the committee rather than in it. Beside the ring
+    // rather than above or below it, which the row has no height for, and in
+    // a block rather than a column — a whole observer cohort stacked one deep
+    // spans further than the row is tall.
+    const cols = Math.min(2, Math.ceil(joining.length / 2));
+    const rows = Math.ceil(joining.length / Math.max(cols, 1));
+    joining.forEach((host, i) => {
+      const spot = state.layout.get(host.host) ?? { x: cx, y: mid };
+      spot.tx = cx + radius + 28 + (i % cols) * 26;
+      spot.ty = mid + (Math.floor(i / cols) - (rows - 1) / 2) * 26;
+      state.layout.set(host.host, spot);
     });
-    return { group, cx, r: radius + 16 };
+
+    const ring = state.groups.get(key) ?? { cx, r: radius + 16, alpha: 0 };
+    ring.group = group;
+    ring.tcx = cx;
+    ring.tr = radius + 16;
+    ring.talpha = 1;
+    state.groups.set(key, ring);
   });
+
+  for (const key of state.seats.keys()) if (!used.has(key)) state.seats.delete(key);
 }
 
 let netWidth = 0;
-let netGroups = [];
 let netViewBox = "";
 
 function renderNetwork() {
@@ -548,7 +636,7 @@ function renderNetwork() {
     netWidth = svg.clientWidth || 900;
     state.dirtyLayout = true;
   }
-  if (state.dirtyLayout) { netGroups = retarget(netWidth); state.dirtyLayout = false; }
+  if (state.dirtyLayout) { retarget(netWidth); state.dirtyLayout = false; }
   const viewBox = `0 0 ${netWidth} ${NET_ROW}`;
   if (viewBox !== netViewBox) {
     netViewBox = viewBox;
@@ -561,14 +649,26 @@ function renderNetwork() {
   // Ease toward the targets. Membership animates; the layout is never
   // recomputed out from under a node mid-move.
   for (const spot of state.layout.values()) {
-    spot.x += (spot.tx - spot.x) * 0.12;
-    spot.y += (spot.ty - spot.y) * 0.12;
+    spot.x += (spot.tx - spot.x) * EASE;
+    spot.y += (spot.ty - spot.y) * EASE;
+  }
+  // Committees travel with the nodes they hold rather than snapping to the new
+  // arrangement ahead of them, so a split reads as the parent dissolving while
+  // its children take shape beside it.
+  for (const [key, ring] of state.groups) {
+    ring.cx += (ring.tcx - ring.cx) * EASE;
+    ring.r += (ring.tr - ring.r) * EASE;
+    ring.alpha += (ring.talpha - ring.alpha) * EASE;
+    if (ring.talpha === 0 && ring.alpha < 0.02) state.groups.delete(key);
   }
 
-  for (const { group, cx, r } of netGroups) {
-    el("ellipse", { class: "cluster", cx, cy: NET_ROW / 2, rx: r, ry: r * 0.86 }, svg);
+  for (const { group, cx, r, alpha } of state.groups.values()) {
+    const opacity = alpha.toFixed(3);
+    el("ellipse", {
+      class: "cluster", cx, cy: NET_ROW / 2, rx: r, ry: r * 0.86, opacity,
+    }, svg);
     el("text", {
-      class: "cluster-label", x: cx, y: 12,
+      class: "cluster-label", x: cx, y: 12, opacity,
       fill: group === null ? "var(--muted)" : colorOf(group),
     }, svg).textContent = group === null ? "FREE POOL" : labelOf(group);
   }
@@ -594,14 +694,30 @@ function renderNetwork() {
   for (const host of state.hosts) {
     const spot = at(host.host);
     if (!spot) continue;
-    const pooled = groupOf(host) === null;
+    const group = groupOf(host);
+    const pooled = group === null;
+    const syncing = syncingInto(host);
+    // Which child a pending split sends it to, where that is already drawn.
+    // On the tooltip only: it is a fact about the next epoch, and the panel
+    // should not assert it of a node still serving this one.
+    const seat = pooled ? null : observerSeat(host, group);
+    const bound = seat ? ` · bound for ${labelOf(seat.child)}` : "";
     const g = el("g", {
-      class: `host${pooled ? " pooled" : ""}`,
+      class: `host${pooled ? " pooled" : ""}${syncing ? " syncing" : ""}`,
       "data-tip": pooled
         ? `host ${host.host} · free pool`
-        : `host ${host.host} · ${host.shards.map(labelOf).join(", ")}`,
+        : syncing
+          ? `host ${host.host} · syncing into ${labelOf(group)}${bound} · no seat yet`
+          : `host ${host.host} · ${host.shards.map(labelOf).join(", ")}${bound}`,
     }, svg);
-    el("circle", { cx: spot.x, cy: spot.y, r: 11 }, g);
+    // Coloured by the committee it is in, which a pending split does not
+    // change: a member bound for a child still votes on the parent until the
+    // cut, and colour is what says which shard a node *is*. Where it is going
+    // is carried by where it sits, which claims less.
+    el("circle", {
+      cx: spot.x, cy: spot.y, r: 11,
+      stroke: pooled ? "var(--line2)" : colorOf(group),
+    }, g);
     el("text", { x: spot.x, y: spot.y }, g).textContent = host.host;
   }
 

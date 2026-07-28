@@ -191,8 +191,12 @@ h1 em { font-style: normal; color: var(--ink2); }
   font-family: var(--mono); font-size: 9.5px; font-weight: 700;
   letter-spacing: .1em; text-anchor: middle;
 }
-.host circle { fill: var(--panel2); stroke: var(--line2); stroke-width: 1.4; }
+.host circle { fill: var(--panel2); stroke-width: 1.4; }
 .host.pooled circle { stroke-dasharray: 2 2.5; }
+/* Carrying the shard but not yet voting on it: the committee's colour, so it
+   reads as bound for that ring, and dashed like the pool it came from. */
+.host.syncing circle { stroke-dasharray: 2 2.5; }
+.host.syncing text { fill: var(--muted); }
 .host text {
   font-family: var(--mono); font-size: 8.5px; fill: var(--ink2);
   text-anchor: middle; dominant-baseline: middle;
