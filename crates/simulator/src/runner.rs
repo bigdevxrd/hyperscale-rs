@@ -243,6 +243,19 @@ impl Simulator {
         info!("Two-phase funding complete");
     }
 
+    /// Advance simulated time to `target`, seating whatever the committed
+    /// topology asks for first.
+    ///
+    /// Every advance in this runner goes through here. Reshape duties and
+    /// committee placement only move when polled, so a bare `run_until` past
+    /// an epoch boundary lets the beacon rotate a validator onto a shard no
+    /// host is running — the shard then works a member short and the
+    /// throughput the run reports is of a network the config never described.
+    fn advance_to(&mut self, target: Duration) {
+        self.runner.topology_step();
+        self.runner.run_until(target);
+    }
+
     /// Run a warmup period to let consensus establish.
     fn run_warmup(&mut self) {
         let warmup_duration = Duration::from_millis(900);
@@ -250,7 +263,7 @@ impl Simulator {
             warmup_ms = warmup_duration.as_millis(),
             "Running warmup period for consensus to establish"
         );
-        self.runner.run_until(self.runner.now() + warmup_duration);
+        self.advance_to(self.runner.now() + warmup_duration);
     }
 
     /// Submit funding transactions in batches and wait for completion.
@@ -297,7 +310,7 @@ impl Simulator {
             let step = Duration::from_millis(100);
 
             while !pending.is_empty() && self.runner.now() < deadline {
-                self.runner.run_until(self.runner.now() + step);
+                self.advance_to(self.runner.now() + step);
 
                 let hashes: Vec<TxHash> = pending.keys().copied().collect();
                 for hash in hashes {
@@ -390,11 +403,10 @@ impl Simulator {
             // The event priority system processes Client events last, so a 1µs
             // advance is needed to drain the just-submitted txs into mempools
             // before any proposal timer fires this batch.
-            self.runner
-                .run_until(self.runner.now() + Duration::from_micros(1));
+            self.advance_to(self.runner.now() + Duration::from_micros(1));
 
             let next_time = self.runner.now() + batch_interval;
-            self.runner.run_until(next_time);
+            self.advance_to(next_time);
 
             self.check_completions();
 

@@ -550,7 +550,7 @@ impl SimulationRunner {
                 self.now < deadline,
                 "grow_to did not reach {target_shards} shards within {budget_epochs} epochs",
             );
-            self.reshape_step();
+            self.topology_step();
             let next = self.now + Duration::from_secs(1);
             self.run_until(next);
         }

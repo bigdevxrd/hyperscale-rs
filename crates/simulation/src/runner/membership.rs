@@ -15,8 +15,10 @@
 //! excluded); the teardown half reads full membership — the same
 //! asymmetry as the production supervisor's reconcile pair.
 //!
-//! Nothing here runs unless a test calls it, so simulations that never
-//! reconcile membership are byte-identical to before.
+//! Reshape duties and placement are two seaters over one set of shards, so
+//! a driver that polls only one leaves the other's work undone. Drive both
+//! through [`SimulationRunner::topology_step`] rather than calling them
+//! separately.
 
 use std::sync::Arc;
 
@@ -167,6 +169,20 @@ impl SimulationRunner {
         self.process_step_output(host, output);
         self.drain_host_io(host);
         kind
+    }
+
+    /// Advance both seaters over the committed topology: reshape duties
+    /// first so they claim `is_seating`, then ordinary committee placement.
+    ///
+    /// A driver that polls only [`Self::reshape_step`] grows and merges
+    /// correctly but never staffs a seat the shuffle rotates, so the beacon
+    /// moves a validator that nothing follows and the shard it left runs a
+    /// member short. Both are idempotent and self-gated — reshape on its
+    /// orchestrators, placement on the host's committed epoch — so a driver
+    /// calls this as often as it likes.
+    pub fn topology_step(&mut self) {
+        self.reshape_step();
+        self.reconcile_placement();
     }
 
     /// Reconcile this host's physical shard membership against the committed

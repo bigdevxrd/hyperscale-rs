@@ -234,12 +234,7 @@ impl Cluster for SimCluster {
         }
         let deadline = self.runner.now() + Self::span(budget);
         while self.runner.now() < deadline {
-            // Reshape first so its duties claim `is_seating`, then reconcile
-            // ordinary committee membership (shuffles, relocations) against the
-            // committed topology — the orchestrator and the placement path, the
-            // two seaters production runs, coordinated the same way.
-            self.runner.reshape_step();
-            self.runner.reconcile_placement();
+            self.runner.topology_step();
             let next = (self.runner.now() + SLICE).min(deadline);
             self.runner.run_until(next);
             if cond(self) {

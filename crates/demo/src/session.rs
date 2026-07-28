@@ -425,19 +425,15 @@ impl Session {
         let target = self.now + Duration::from_millis(ms);
         let mut events = Vec::new();
         while self.now < target {
-            // Reshape duties are driven by the harness, not by the event
-            // queue: an orchestrator only advances when it is polled. Driving
-            // it here is what lets a split unfold across the session instead
-            // of being completed before the first frame.
+            // Seating is driven by the harness, not by the event queue: an
+            // orchestrator only advances when it is polled, and placement
+            // only reconciles when it is scanned. Driving both here is what
+            // lets a split unfold across the session instead of being
+            // completed before the first frame, and what staffs the seat a
+            // shuffle rotates.
             let now_ms = u64::try_from(self.now.as_millis()).unwrap_or(u64::MAX);
             if now_ms % RESHAPE_TICK_MS == 0 {
-                // Reshape first so its duties claim `is_seating`, then
-                // reconcile ordinary committee membership against the
-                // committed topology: a shuffle moves a validator between
-                // shards, and without the second pass the beacon rotates a
-                // seat that nothing ever occupies.
-                self.runner.reshape_step();
-                self.runner.reconcile_placement();
+                self.runner.topology_step();
             }
             let next_poll = Duration::from_millis((now_ms / RESHAPE_TICK_MS + 1) * RESHAPE_TICK_MS);
             self.now = next_poll.min(target);
