@@ -224,16 +224,41 @@ fn halted_shard_recovers_by_committee_redraw_sim() {
     cluster.run_faultable(halted_shard_recovers_by_committee_redraw);
 }
 
+/// Assert straddler atomicity across a halted shard's recovery at `seed`. The
+/// seed draws both the committees and the network ordering, so each one races
+/// the straddler's settlement against the re-draw differently.
+fn halted_shard_straddler_atomic_at_seed(seed: u64) {
+    let mut cluster = SimCluster::with_dedicated_pool_hosts(
+        &halt_recovery_config(),
+        seed,
+        &halt_straddler_setup().balances,
+    );
+    cluster.run_faultable(halted_shard_straddler_atomic);
+}
+
 #[test]
-fn halted_shard_straddler_atomic_sim() {
-    for seed in [7u64, 11, 42, 2026, 1337] {
-        let mut cluster = SimCluster::with_dedicated_pool_hosts(
-            &halt_recovery_config(),
-            seed,
-            &halt_straddler_setup().balances,
-        );
-        cluster.run_faultable(halted_shard_straddler_atomic);
-    }
+fn halted_shard_straddler_atomic_seed_7_sim() {
+    halted_shard_straddler_atomic_at_seed(7);
+}
+
+#[test]
+fn halted_shard_straddler_atomic_seed_11_sim() {
+    halted_shard_straddler_atomic_at_seed(11);
+}
+
+#[test]
+fn halted_shard_straddler_atomic_seed_42_sim() {
+    halted_shard_straddler_atomic_at_seed(42);
+}
+
+#[test]
+fn halted_shard_straddler_atomic_seed_1337_sim() {
+    halted_shard_straddler_atomic_at_seed(1337);
+}
+
+#[test]
+fn halted_shard_straddler_atomic_seed_2026_sim() {
+    halted_shard_straddler_atomic_at_seed(2026);
 }
 
 /// A provable committee-level fork drives the same full re-draw a halt does,
@@ -572,21 +597,44 @@ fn split_straddler_atomic_sim() {
     split_straddler_atomic(&mut cluster);
 }
 
-/// Straddler atomicity under an asymmetric EC partition across a split boundary.
+/// Assert straddler atomicity under an asymmetric EC partition across a split
+/// boundary at `seed`.
 ///
-/// Drives the portable [`split_straddler_ec_partition_atomic`] scenario across a
-/// seed sweep, seating disjoint splitter/survivor committees via dedicated pool
-/// hosts so no co-hosted vnode bridges the EC cut in-process. The seeds vary how
-/// the survivor's finalization races its own counterpart-abort sweep; none may
+/// Drives the portable [`split_straddler_ec_partition_atomic`] scenario, seating
+/// disjoint splitter/survivor committees via dedicated pool hosts so no
+/// co-hosted vnode bridges the EC cut in-process. The seed varies how the
+/// survivor's finalization races its own counterpart-abort sweep; none may
 /// resolve one-sided.
+fn split_straddler_ec_partition_atomic_at_seed(seed: u64) {
+    let setup = split_straddler_setup();
+    let mut cluster =
+        SimCluster::with_dedicated_pool_hosts(&straddler_config(), seed, &setup.balances);
+    split_straddler_ec_partition_atomic(&mut cluster);
+}
+
 #[test]
-fn split_straddler_ec_partition_atomic_sim() {
-    for seed in [7u64, 11, 42, 2026, 1337] {
-        let setup = split_straddler_setup();
-        let mut cluster =
-            SimCluster::with_dedicated_pool_hosts(&straddler_config(), seed, &setup.balances);
-        split_straddler_ec_partition_atomic(&mut cluster);
-    }
+fn split_straddler_ec_partition_atomic_seed_7_sim() {
+    split_straddler_ec_partition_atomic_at_seed(7);
+}
+
+#[test]
+fn split_straddler_ec_partition_atomic_seed_11_sim() {
+    split_straddler_ec_partition_atomic_at_seed(11);
+}
+
+#[test]
+fn split_straddler_ec_partition_atomic_seed_42_sim() {
+    split_straddler_ec_partition_atomic_at_seed(42);
+}
+
+#[test]
+fn split_straddler_ec_partition_atomic_seed_1337_sim() {
+    split_straddler_ec_partition_atomic_at_seed(1337);
+}
+
+#[test]
+fn split_straddler_ec_partition_atomic_seed_2026_sim() {
+    split_straddler_ec_partition_atomic_at_seed(2026);
 }
 
 /// Four-shard topology whose `split_bytes` derives a `merge_bytes` bracketing
