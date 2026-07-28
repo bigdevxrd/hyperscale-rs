@@ -530,14 +530,35 @@ impl ExecutionCoordinator {
     /// 1. It's fully provisioned and every tx has an outcome, OR
     /// 2. The `WAVE_TIMEOUT` deadline has passed (wave aborts entirely)
     ///
-    /// Waves that already had an EC formed are skipped.
+    /// Waves that already had an EC formed are skipped, as are waves whose
+    /// committee the schedule cannot resolve.
+    ///
+    /// That last condition is part of votability rather than a check on the
+    /// way out because building the vote consumes it: `build_vote_data` is
+    /// one-shot and nothing clears the mark, so a wave scanned here and
+    /// dropped afterwards has spent its vote without emitting one and can
+    /// never vote again. A wave the schedule cannot route stays votable and
+    /// is picked up by a later commit instead.
     ///
     /// # Panics
     ///
     /// Panics if `waves_iter()` and `get_wave_mut()` disagree about wave
     /// presence — unreachable, no concurrent mutation between them.
-    pub fn scan_complete_waves(&mut self) -> Vec<CompletionData> {
+    pub fn scan_complete_waves(
+        &mut self,
+        topology_schedule: &TopologySchedule,
+    ) -> Vec<CompletionData> {
         let committed_ts = self.committed_ts;
+        let local_shard = self.local_shard;
+        let routable = |wave: &WaveState| {
+            topology_schedule
+                .at(wave.vote_anchor_ts())
+                .is_some_and(|snapshot| {
+                    !snapshot
+                        .consensus_committee_for_shard(local_shard)
+                        .is_empty()
+                })
+        };
 
         let votable_wave_ids: Vec<WaveId> = self
             .waves
@@ -546,6 +567,7 @@ impl ExecutionCoordinator {
                 !self.waves.is_ec_dispatched(wid)
                     && !w.local_ec_emitted()
                     && w.can_emit_vote(committed_ts)
+                    && routable(w)
             })
             .map(|(wid, _)| wid.clone())
             .collect();
@@ -641,16 +663,20 @@ impl ExecutionCoordinator {
     /// for timeout-abort).
     pub fn emit_vote_actions(&mut self, topology_schedule: &TopologySchedule) -> Vec<Action> {
         let local_vid = self.me;
-        let completions = self.scan_complete_waves();
+        let completions = self.scan_complete_waves(topology_schedule);
         let mut actions = Vec::with_capacity(completions.len());
         for completion in completions {
             // The wave's committee is the one seated at its vote anchor — the
-            // same committee that will verify the EC. `None` (beacon behind
-            // that epoch) defers this completion; it re-scans on a later commit.
+            // same committee that will verify the EC. The scan admits only
+            // waves this resolves for, so a miss here is not reachable; a
+            // wave dropped after the scan would have spent its one-shot vote
+            // without casting it.
             let Some(committee) = topology_schedule
                 .at(completion.vote_anchor_ts)
                 .map(|s| s.consensus_committee_for_shard(self.local_shard).to_vec())
+                .filter(|committee| !committee.is_empty())
             else {
+                debug_assert!(false, "scan_complete_waves admitted an unroutable wave");
                 continue;
             };
             let leader = wave_leader(&completion.wave_id, &committee);
@@ -2818,6 +2844,79 @@ mod tests {
             1,
             validator_set,
         )))
+    }
+
+    /// A wave that completes while its committee is unresolvable must keep
+    /// its vote.
+    ///
+    /// The vote is one-shot: `build_vote_data` marks the wave voted during
+    /// the scan, and nothing ever clears that mark. The committee lookup
+    /// happens afterwards, in `emit_vote_actions`, so a scan that finds no
+    /// committee spends the vote and emits nothing — no action, no retry
+    /// registration, and `can_emit_vote` false forever after. The wave then
+    /// holds its locks and never certifies, which is indistinguishable at
+    /// the mempool from a wave that was never ready.
+    #[test]
+    fn a_wave_keeps_its_vote_when_the_committee_cannot_be_resolved() {
+        let keys: Vec<BlsSigner> = (0..4).map(|_| BlsSigner::generate()).collect();
+        let validators: Vec<ValidatorInfo> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| ValidatorInfo {
+                validator_id: ValidatorId::new(i as u64),
+                public_key: k.public_key(),
+            })
+            .collect();
+        let snapshot = Arc::new(TopologySnapshot::new(
+            NetworkDefinition::simulator(),
+            1,
+            ValidatorSet::new(validators),
+        ));
+
+        // Second-long windows, with only epoch 0 recorded: a wave anchored
+        // at 5000ms falls in epoch 5, which the schedule cannot answer for.
+        let unresolvable = TopologySchedule::new(1_000, Epoch::new(0), Arc::clone(&snapshot));
+        let mut resolved = unresolvable.clone();
+        resolved.insert(Epoch::new(5), Arc::clone(&snapshot));
+
+        let mut state = make_test_state();
+        let tx = test_transaction(1);
+        let tx_hash = tx.hash();
+        let block = make_live_block(
+            BlockHeight::new(1),
+            5_000,
+            ValidatorId::new(0),
+            vec![Arc::new(tx)],
+        );
+        state.on_block_committed(&unresolvable, &test_certify(block, 5_000));
+
+        // Execution lands, so the wave is complete and ready to vote.
+        let wave_id = state
+            .waves
+            .wave_assignment(tx_hash)
+            .expect("the committed tx is assigned to a wave");
+        state.on_execution_batch_completed(
+            &unresolvable,
+            &wave_id,
+            vec![],
+            vec![TxOutcome::new(tx_hash, ExecutionOutcome::Failed)],
+        );
+
+        let blocked = state.emit_vote_actions(&unresolvable);
+        assert!(
+            blocked.is_empty(),
+            "an unresolvable committee routes nowhere, got {blocked:?}",
+        );
+
+        // The wave was ready the whole time; only the routing was missing.
+        // Once the schedule carries its epoch the vote must still be there.
+        let recovered = state.emit_vote_actions(&resolved);
+        assert!(
+            recovered
+                .iter()
+                .any(|a| matches!(a, Action::SignAndSendExecutionVote { .. })),
+            "the wave must still vote once its committee resolves, got {recovered:?}",
+        );
     }
 
     #[test]

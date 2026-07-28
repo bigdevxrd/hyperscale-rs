@@ -130,8 +130,8 @@ fn fresh_emit_vote_actions_is_empty() {
 
 #[test]
 fn fresh_scan_complete_waves_is_empty() {
-    let mut coord = fresh_coordinator();
-    assert!(coord.scan_complete_waves().is_empty());
+    let (mut coord, topology_schedule) = fresh_coordinator_with_topology();
+    assert!(coord.scan_complete_waves(&topology_schedule).is_empty());
 }
 
 #[test]

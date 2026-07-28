@@ -524,7 +524,8 @@ impl WaveState {
     /// would defer every certificate until the schedule reached it.
     ///
     /// [`VoteTracker`]: crate::vote_tracker::VoteTracker
-    const fn target_vote_anchor_ts(&self) -> WeightedTimestamp {
+    #[must_use]
+    pub const fn vote_anchor_ts(&self) -> WeightedTimestamp {
         self.wave_start_ts
     }
 
@@ -569,7 +570,7 @@ impl WaveState {
             return None;
         }
 
-        let target = self.target_vote_anchor_ts();
+        let target = self.vote_anchor_ts();
         let timed_out = self.all_provisioned_at.is_none();
 
         let outcomes: Vec<TxOutcome> = self
