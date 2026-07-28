@@ -43,7 +43,8 @@ pub struct DemoSession {
 #[wasm_bindgen]
 impl DemoSession {
     /// Build a `shard_size`-validator cluster at `seed`, grown to `shards`
-    /// leaves through the real split lifecycle.
+    /// leaves through the real split lifecycle, carrying `pool_spares`
+    /// validators the splits do not consume.
     ///
     /// # Panics
     ///
@@ -51,12 +52,13 @@ impl DemoSession {
     /// epoch budget.
     #[wasm_bindgen(constructor)]
     #[must_use]
-    pub fn new(seed: u32, shard_size: u32, max_shards: u32) -> Self {
+    pub fn new(seed: u32, shard_size: u32, max_shards: u32, pool_spares: u32) -> Self {
         Self {
             inner: Session::new(
                 SessionConfig {
                     shard_size,
                     max_shards,
+                    pool_spares,
                 },
                 u64::from(seed),
             ),

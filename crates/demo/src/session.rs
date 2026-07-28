@@ -220,6 +220,14 @@ pub struct SessionConfig {
     /// longer staff a child committee: admission is gated on a deep enough
     /// free pool, so the surplus is the ceiling.
     pub max_shards: u32,
+    /// Validators pooled beyond what the splits consume.
+    ///
+    /// Every split draws a full cohort, so a session staffed only for its
+    /// splits ends with an empty pool — and committee rotation refuses to
+    /// run without one, because removing a member it cannot backfill would
+    /// shrink the committee below `shard_size`. Spares are what let a
+    /// validator rotate.
+    pub pool_spares: u32,
 }
 
 impl Default for SessionConfig {
@@ -227,6 +235,7 @@ impl Default for SessionConfig {
         Self {
             shard_size: 4,
             max_shards: 1,
+            pool_spares: 0,
         }
     }
 }
@@ -279,7 +288,7 @@ impl Session {
             // Each split staffs its children from the free pool, so the grow
             // needs one spare cohort per split or the readiness gate never
             // passes (INV-RESHAPE-1).
-            pool_surplus: splits * config.shard_size,
+            pool_surplus: splits * config.shard_size + config.pool_spares,
             // One validator per host, pool included. Co-hosting is a real
             // deployment shape, but it means a split's observers snap-sync on
             // the same hosts that are running the parent's consensus — which
@@ -422,7 +431,13 @@ impl Session {
             // of being completed before the first frame.
             let now_ms = u64::try_from(self.now.as_millis()).unwrap_or(u64::MAX);
             if now_ms % RESHAPE_TICK_MS == 0 {
+                // Reshape first so its duties claim `is_seating`, then
+                // reconcile ordinary committee membership against the
+                // committed topology: a shuffle moves a validator between
+                // shards, and without the second pass the beacon rotates a
+                // seat that nothing ever occupies.
                 self.runner.reshape_step();
+                self.runner.reconcile_placement();
             }
             let next_poll = Duration::from_millis((now_ms / RESHAPE_TICK_MS + 1) * RESHAPE_TICK_MS);
             self.now = next_poll.min(target);

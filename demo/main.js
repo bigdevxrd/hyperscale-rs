@@ -9,6 +9,12 @@ import init, { DemoSession, last_panic } from "./vendor/hyperscale_demo.js";
 const SEED = 42;
 const SHARD_SIZE = 4;
 const MAX_SHARDS = 2;
+// Validators the split does not consume. Rotation refuses to run without a
+// pool to backfill the seat it empties, so a session staffed only for its
+// split spends its last spare on the children and never shuffles again. Two
+// spares keep the free pool on screen after the split and give the shuffle
+// somewhere to draw from.
+const POOL_SPARES = 2;
 // Largest real gap a single frame may replay, so returning to a backgrounded
 // tab resumes instead of lurching through minutes of simulated time at once.
 const MAX_CATCHUP_MS = 250;
@@ -871,7 +877,7 @@ async function main() {
   $("badge").textContent = "booting cluster…";
   $("badge").className = "badge boot";
   const t0 = performance.now();
-  state.session = new DemoSession(SEED, SHARD_SIZE, MAX_SHARDS);
+  state.session = new DemoSession(SEED, SHARD_SIZE, MAX_SHARDS, POOL_SPARES);
   state.shards = state.session.shards();
   state.hosts = state.session.hosts();
   for (const p of state.shards) laneFor(p);
@@ -885,8 +891,8 @@ async function main() {
 
   // ?warmup=<seconds> runs the session forward before the first paint, for
   // deep-linking past the wait to a state worth looking at — the split lands
-  // around three minutes of attested time. Blocking on purpose: there is
-  // nothing to show until it lands.
+  // around three minutes of attested time, the first committee shuffle around
+  // eight. Blocking on purpose: there is nothing to show until it lands.
   const warmup = Number(params.get("warmup")) || 0;
   if (warmup > 0) {
     $("badge").textContent = `skipping to ${warmup}s…`;

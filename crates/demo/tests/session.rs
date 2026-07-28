@@ -827,3 +827,89 @@ fn a_different_seed_produces_a_different_run() {
     assert!(!a.is_empty() && !b.is_empty());
     assert_ne!(format!("{a:?}"), format!("{b:?}"));
 }
+
+#[test]
+fn a_spare_stocked_session_rotates_a_validator_between_committees() {
+    // Rotation refuses to run without a pool to backfill from, and a session
+    // staffed only for its splits has spent every spare by the time they
+    // execute. Two spares outlive the split, so the shuffle has somewhere to
+    // draw from and somewhere to put the validator it takes.
+    let mut session = Session::new(
+        SessionConfig {
+            max_shards: 2,
+            pool_spares: 2,
+            ..SessionConfig::default()
+        },
+        42,
+    );
+
+    // The first shuffle boundary is `shuffle_interval_epochs` in, which is far
+    // enough past the split that the run has to cover both.
+    let mut roster = session.hosts();
+    let mut split_at = None;
+    let mut rotation_at = None;
+    let mut blocks_after: BTreeMap<String, u32> = BTreeMap::new();
+    for step in 0..1200 {
+        for event in session.step(500) {
+            match &event.kind {
+                TraceKind::TopologyChanged { .. } => split_at = Some(step),
+                TraceKind::BlockCommitted { shard, .. } if rotation_at.is_some() => {
+                    *blocks_after.entry(shard.0.clone()).or_default() += 1;
+                }
+                _ => {}
+            }
+        }
+        let next = session.hosts();
+        // A roster move that is not the split is a rotation: the split staffs
+        // its children in one batch at the flip, and nothing else moves a host
+        // between committees.
+        if next != roster && split_at.is_some_and(|at| at != step) {
+            rotation_at.get_or_insert(step);
+        }
+        roster = next;
+    }
+
+    let split_at = split_at.expect("the session splits");
+    let rotation_at = rotation_at.expect("a validator rotates once the pool has a spare");
+    assert!(
+        rotation_at > split_at,
+        "the rotation follows the split, not the staffing it does",
+    );
+
+    // A rotated seat has to be occupied, not just reassigned: the joiner
+    // snap-syncs into the shard it was drawn onto, and the committee it left
+    // keeps committing. A rotation the harness records but never staffs drops
+    // both children below quorum and the chains stop.
+    assert_eq!(
+        blocks_after.len(),
+        2,
+        "both children stay live through the rotation, saw {blocks_after:?}",
+    );
+    assert!(
+        blocks_after.values().all(|n| *n > 100),
+        "neither child stalls after the rotation, saw {blocks_after:?}",
+    );
+
+    // The rotation is a relocation, not a host quietly picking up a second
+    // shard: both committees end the run at full strength. Retained parent
+    // stores are filtered out — a grown host lists the retired root it still
+    // serves alongside the child it belongs to.
+    let live: BTreeSet<String> = session
+        .live_shards()
+        .into_iter()
+        .map(|s| ShardPath::from(s).0)
+        .collect();
+    let mut staffed: BTreeMap<String, u32> = BTreeMap::new();
+    for host in &roster {
+        for shard in host.shards.iter().filter(|s| live.contains(&s.0)) {
+            *staffed.entry(shard.0.clone()).or_default() += 1;
+        }
+    }
+    assert_eq!(
+        staffed,
+        [("0".to_string(), 4), ("1".to_string(), 4)]
+            .into_iter()
+            .collect(),
+        "both committees end at full strength, saw {roster:?}",
+    );
+}
