@@ -2797,22 +2797,47 @@ impl ShardCoordinator {
         );
 
         // Vote recipients are a routing hint (next-round proposers for
-        // pipelining), self-healing via gossip — resolved on the head. Once a
-        // coasting shard drops from the head the head carries no committee for
-        // it, so fall back to the terminal-clamped committee the block
-        // anchors against, which still certifies the coast.
-        let head_has_committee = !topology_schedule
-            .head()
-            .consensus_committee_for_shard(self.local_shard)
-            .is_empty();
-        let recipient_snapshot = if head_has_committee {
-            topology_schedule.head()
-        } else {
-            anchored_wt
-                .and_then(|wt| topology_schedule.at_for_shard(self.local_shard, wt))
-                .map_or_else(|| topology_schedule.head(), |(snapshot, _)| snapshot)
-        };
-        let next_proposers = vote_recipients(recipient_snapshot, self.local_shard, self.me, round);
+        // pipelining), self-healing via gossip — but a hint that names none
+        // of the round's real proposers costs a view change, so it spans
+        // every committee that round could resolve to. `can_propose` draws
+        // the proposer from the window its own tip anchors in, one
+        // certificate above the anchor a voter holds, so across an epoch
+        // cut the two sit either side of it. A committee whose membership
+        // moves at that cut — a rotation seats its entrant there — puts the
+        // entrant in the later window only, and a hint drawn from the
+        // earlier one alone leaves its first scheduled round without the QC
+        // it needs to propose. Falls back to the head where the schedule
+        // cannot answer: genesis has no anchor, and an evicted window is
+        // far enough back that the head is the better guess.
+        let mut governing: Vec<&TopologySnapshot> = anchored_wt
+            .map(|wt| {
+                topology_schedule
+                    .spanning_for_shard_live(self.local_shard, wt)
+                    .map(AsRef::as_ref)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if governing.is_empty() {
+            // Past a terminal cut the live windows carry the shard no
+            // longer, so the coast blocks certifying the crossing route to
+            // the terminal-clamped committee that signs them.
+            governing.extend(
+                anchored_wt
+                    .and_then(|wt| topology_schedule.at_for_shard(self.local_shard, wt))
+                    .map(|(snapshot, _)| snapshot.as_ref()),
+            );
+        }
+        if governing.is_empty() {
+            governing.push(topology_schedule.head().as_ref());
+        }
+        let mut next_proposers: Vec<ValidatorId> = Vec::new();
+        for snapshot in governing {
+            for validator in vote_recipients(snapshot, self.local_shard, self.me, round) {
+                if !next_proposers.contains(&validator) {
+                    next_proposers.push(validator);
+                }
+            }
+        }
 
         // Emit SignAndBroadcastBlockVote — the io_loop persists the
         // ratcheted registers, signs on the consensus crypto pool,

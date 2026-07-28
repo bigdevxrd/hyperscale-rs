@@ -834,6 +834,12 @@ fn a_different_seed_produces_a_different_run() {
 /// never tightens toward all-of-N: retiring first ran a four-member shard
 /// at three for the window and cost a view-change timeout entering it and
 /// another leaving.
+///
+/// The run has to reach the epoch that *seats* the entrant, which is a
+/// full sync window past the one that admits it. A horizon covering only
+/// the admission watches the half of a rotation that moves no seat: the
+/// consensus committee, and with it the proposer rotation and the routing
+/// every vote follows, changes at the flip.
 #[test]
 fn a_rotation_never_stalls_a_lane_for_a_view_change() {
     let mut session = Session::new(
@@ -850,7 +856,7 @@ fn a_rotation_never_stalls_a_lane_for_a_view_change() {
     let mut rotation_at = None;
     let mut last: BTreeMap<String, u64> = BTreeMap::new();
     let mut worst: BTreeMap<String, (u64, u64)> = BTreeMap::new();
-    for step in 0..1200 {
+    for step in 0..1300 {
         for event in session.step(500) {
             match &event.kind {
                 TraceKind::TopologyChanged { .. } => split_at = Some(step),
