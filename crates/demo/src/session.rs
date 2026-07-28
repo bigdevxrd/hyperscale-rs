@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
-use hyperscale_simulation::{EPOCH_MS, SimConfig, SimulationRunner};
+use hyperscale_simulation::{CryptoScheme, SimConfig, SimulationRunner};
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{
     BeaconChainConfig, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
@@ -46,6 +46,20 @@ fn validity_around(now: Duration) -> TimestampRange {
 /// the budget leaves out is still counted, so a thinned sample costs detail
 /// and never accuracy.
 const DELIVERY_SAMPLE: usize = 64;
+
+/// Beacon epoch length a session runs at.
+///
+/// A reshape is paced in epochs — trigger, admission, cohort draw, snap-sync,
+/// readiness gate, flip — so the epoch sets how long a viewer waits before the
+/// page shows a split. The production five-minute epoch makes that span
+/// thousands of blocks, which is minutes of boot before anything moves. Thirty
+/// seconds is the shortest value the recovery timeouts (`SPC_VIEW_TIMEOUT`,
+/// `SKIP_TIMEOUT`) are still sized against.
+///
+/// A constant of the demo, not of the simulation: the sims raise their epoch
+/// to production parity under their `ci` feature, and a session that followed
+/// them there would take half an hour of simulated time to split.
+const EPOCH_MS: u64 = 30_000;
 
 /// Simulated time between reshape-orchestrator polls.
 ///
@@ -297,10 +311,6 @@ impl Session {
             dedicated_pool_hosts: true,
             beacon_chain_config: Some(BeaconChainConfig {
                 shard_size: config.shard_size,
-                // The default five-minute epoch makes a split span thousands
-                // of blocks, which is minutes of boot before the page shows
-                // anything. The simulation's own epoch is the shortest value
-                // the recovery timeouts are still sized against.
                 epoch_duration_ms: EPOCH_MS,
                 // Arm the split trigger unconditionally: the demo grows on
                 // demand rather than waiting for a shard to outgrow a byte
@@ -308,6 +318,12 @@ impl Session {
                 reshape_thresholds: ReshapeThresholds { split_bytes: 0 },
                 ..BeaconChainConfig::default()
             }),
+            // Constant-cost signing, in the browser and in the tests alike: a
+            // session paints frames, so per-signature cost is frame budget.
+            // The sims default to real BLS under their `ci` feature and a
+            // session that followed them would run several times slower for a
+            // signature path it never draws.
+            crypto_scheme: CryptoScheme::Mock,
             ..SimConfig::default()
         };
         let mut runner = SimulationRunner::new(&sim_config, seed);
