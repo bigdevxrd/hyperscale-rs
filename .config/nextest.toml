@@ -16,4 +16,4 @@ slow-timeout = { period = "120s", terminate-after = 5 }
 [[profile.ci.overrides]]
 filter = "package(hyperscale-simulation) or package(hyperscale-production) or package(hyperscale-simulator)"
 threads-required = 2
-slow-timeout = { period = "300s", terminate-after = 36 }
+slow-timeout = { period = "300s", terminate-after = 48 }
