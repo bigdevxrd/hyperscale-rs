@@ -156,6 +156,31 @@ impl ShardSourceTracker {
             .insert(height, certified_header);
     }
 
+    /// `header`'s parent, when the shard's header window or retained
+    /// crossings hold it — keyed at the height below `header`'s own and
+    /// pinned by the parent hash the header names, so a sibling at the slot
+    /// never matches. What resolves the committee that signed a QC over
+    /// `header`'s block: a block's committee anchors on its parent.
+    #[must_use]
+    pub fn parent_header(&self, header: &BlockHeader) -> Option<&BlockHeader> {
+        let shard = header.shard_id();
+        let parent_height = header.height().prev()?;
+        let parent_hash = header.parent_block_hash();
+        self.shard_headers
+            .get(&shard)
+            .and_then(|window| window.get(&parent_height))
+            .filter(|held| held.block_hash() == parent_hash)
+            .or_else(|| {
+                self.boundary_crossings.get(&shard).and_then(|per_shard| {
+                    per_shard
+                        .values()
+                        .map(|crossing| &crossing.boundary_header)
+                        .find(|held| held.block_hash() == parent_hash)
+                })
+            })
+            .map(|held| held.header())
+    }
+
     /// Admit a verified chunk — the run `[lo, lo + payloads.len())` against
     /// `anchor` — and clear the matching pending-fetch entry. Replaces any
     /// chunk already held for the anchor: a later fetch is issued only for

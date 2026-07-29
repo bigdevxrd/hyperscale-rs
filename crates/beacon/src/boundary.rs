@@ -197,8 +197,15 @@ fn boundary_qc_admissible(
     let Some(header) = boundary_header_for(shard_source, shard, qc.block_hash()) else {
         return false;
     };
-    boundary_qc_authentic(verifier, shard, header, qc, topology_schedule, network)
-        && rules::is_boundary_crossing(header, qc, state.chain_config.epoch_windows())
+    boundary_qc_authentic(
+        verifier,
+        shard,
+        header,
+        qc,
+        shard_source,
+        topology_schedule,
+        network,
+    ) && rules::is_boundary_crossing(header, qc, state.chain_config.epoch_windows())
 }
 
 /// The locally-held header for `block_hash` in `shard`, via the
@@ -217,14 +224,18 @@ fn boundary_header_for(
 /// Whether `qc` is a genuine `2f+1` quorum of the committee that governed
 /// `boundary_header`, and commits exactly that block.
 ///
-/// The committee is resolved at the boundary block's parent-QC weighted
-/// timestamp — the window the block was produced in — through the
-/// [`TopologySchedule`], which retains historical committees the live
-/// `BeaconState` no longer holds (a tracked crossing can lag the tip by up
-/// to a few epochs). An unresolvable epoch fails closed either way: a
-/// not-yet-committed one is this node lagging the proposer (abstain and let
-/// it catch up), a below-floor one marks a crossing every consumer frontier
-/// has passed.
+/// The committee anchors on the boundary block's *parent*: the lookup keys
+/// on the parent header's own parent-QC weighted timestamp, read from the
+/// same tracker window the boundary itself was looked up from. When the
+/// parent isn't held, the boundary's own anchor stands in — the same window
+/// except when the crossing follows an epoch-length stall, and abstention
+/// is already this path's failure mode: the nodes that do hold the parent
+/// carry the fold. The [`TopologySchedule`] retains historical committees
+/// the live `BeaconState` no longer holds (a tracked crossing can lag the
+/// tip by up to a few epochs). An unresolvable epoch fails closed either
+/// way: a not-yet-committed one is this node lagging the proposer (abstain
+/// and let it catch up), a below-floor one marks a crossing every consumer
+/// frontier has passed.
 ///
 /// Resolution is terminal-clamped and recovery-bridged
 /// (`lookup_for_shard_certified`): a splitting shard's terminal crossing
@@ -241,12 +252,17 @@ fn boundary_qc_authentic(
     shard: ShardId,
     boundary_header: &BlockHeader,
     qc: &QuorumCertificate,
+    shard_source: &ShardSourceTracker,
     topology_schedule: &TopologySchedule,
     network: &NetworkDefinition,
 ) -> bool {
     if qc.block_hash() != boundary_header.hash() {
         return false;
     }
+    let committee_anchor_wt = shard_source.parent_header(boundary_header).map_or_else(
+        || boundary_header.parent_qc().weighted_timestamp(),
+        |parent| parent.parent_qc().weighted_timestamp(),
+    );
     // The only legitimate boundary crossing during a halt recovery is the
     // fresh committee's — the one that completes the recovery, which
     // re-binds (a stale anchor certified at or past the bridge) or anchors
@@ -256,7 +272,7 @@ fn boundary_qc_authentic(
     // clear the recovery and drop the cross-shard freeze.
     let snapshot = match topology_schedule.lookup_for_shard_certified_fenced(
         shard,
-        boundary_header.parent_qc().weighted_timestamp(),
+        committee_anchor_wt,
         qc.weighted_timestamp(),
     ) {
         None => {
@@ -277,9 +293,7 @@ fn boundary_qc_authentic(
         Some((ScheduleLookup::Evicted, _)) => {
             warn!(
                 shard = shard.inner(),
-                anchor_epoch = topology_schedule
-                    .epoch_for(boundary_header.parent_qc().weighted_timestamp())
-                    .inner(),
+                anchor_epoch = topology_schedule.epoch_for(committee_anchor_wt).inner(),
                 qc_epoch = topology_schedule.epoch_for(qc.weighted_timestamp()).inner(),
                 "Boundary QC's committee epoch is below the schedule floor — abstaining"
             );
@@ -304,4 +318,159 @@ fn boundary_qc_authentic(
         quorum_threshold: snapshot.quorum_threshold_for_shard(shard),
     })
     .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use hyperscale_crypto_bls::BlsVerifier;
+    use hyperscale_types::test_utils::TestCommittee;
+    use hyperscale_types::{
+        AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHeight, BlockVote,
+        CertificateRoot, CertifiedBlockHeader, Epoch, InFlightCount, LocalReceiptRoot,
+        ProposerTimestamp, ProvisionsRoot, RevealChain, Round, SignerBitfield, StateRoot,
+        TransactionRoot, WeightedTimestamp,
+    };
+
+    use super::*;
+
+    const ED: u64 = 1_000;
+    const SHARD: ShardId = ShardId::ROOT;
+
+    /// A header at `height` extending `parent_hash`, whose parent QC carries
+    /// `anchor_ms` — the block's own position on the weighted-time grid.
+    fn chained_header(height: u64, parent_hash: BlockHash, anchor_ms: u64) -> BlockHeader {
+        let parent_qc = QuorumCertificate::new(
+            parent_hash,
+            SHARD,
+            BlockHeight::new(height.saturating_sub(1)),
+            BlockHash::ZERO,
+            Round::INITIAL,
+            SignerBitfield::empty(),
+            AggregateSignature::ZERO,
+            WeightedTimestamp::from_millis(anchor_ms),
+        );
+        BlockHeader::new(
+            SHARD,
+            BlockHeight::new(height),
+            parent_hash,
+            parent_qc,
+            ValidatorId::new(0),
+            ProposerTimestamp::from_millis(0),
+            Round::INITIAL,
+            false,
+            StateRoot::ZERO,
+            TransactionRoot::ZERO,
+            CertificateRoot::ZERO,
+            LocalReceiptRoot::ZERO,
+            ProvisionsRoot::ZERO,
+            Vec::new(),
+            BTreeMap::new(),
+            InFlightCount::ZERO,
+            BeaconWitnessRoot::ZERO,
+            BeaconWitnessLeafCount::ZERO,
+            BeaconWitnessLeafCount::ZERO,
+            RevealChain::ZERO,
+            None,
+            None,
+        )
+    }
+
+    /// A genuine 2f+1 QC over `header`, signed by `committee`'s first three
+    /// seats, whose weighted timestamp lands at `wt_ms`.
+    fn signed_qc(committee: &TestCommittee, header: &BlockHeader, wt_ms: u64) -> QuorumCertificate {
+        let hash = header.hash();
+        let votes: Vec<(usize, Verified<BlockVote>)> = (0..3)
+            .map(|i| {
+                let vote = BlockVote::new(
+                    &NetworkDefinition::simulator(),
+                    hash,
+                    header.parent_block_hash(),
+                    SHARD,
+                    header.height(),
+                    Round::INITIAL,
+                    ValidatorId::new(i as u64),
+                    committee.signer(i).as_ref(),
+                    ProposerTimestamp::from_millis(wt_ms),
+                )
+                .expect("vote signs");
+                (i, Verified::new_unchecked_for_test(vote))
+            })
+            .collect();
+        Verified::<QuorumCertificate>::from_verified_votes(
+            &BlsVerifier,
+            hash,
+            SHARD,
+            header.height(),
+            Round::INITIAL,
+            header.parent_block_hash(),
+            header.parent_qc().weighted_timestamp(),
+            &votes,
+        )
+        .expect("aggregates over a non-empty vote set")
+        .into_inner()
+    }
+
+    /// A boundary QC is signed by the boundary block's committee, which
+    /// anchors on the block's *parent* — so a crossing that follows an
+    /// epoch-length stall (consecutive anchors straddling an extra cut)
+    /// verifies under the earlier window, resolved through the parent
+    /// header the tracker already holds. Without the parent held, the
+    /// block's own anchor stands in and resolves the later window, whose
+    /// rotated keys reject the QC — the node abstains, and the nodes that
+    /// do hold the parent carry the fold.
+    #[test]
+    fn a_boundary_qc_verifies_under_the_committee_its_parent_anchors() {
+        let committee_a = TestCommittee::new(4, 1);
+        let committee_b = TestCommittee::new(4, 2);
+        let mut schedule = TopologySchedule::new(
+            ED,
+            Epoch::new(2),
+            Arc::new(committee_b.topology_snapshot(1)),
+        );
+        schedule.insert(Epoch::new(0), Arc::new(committee_a.topology_snapshot(1)));
+        schedule.insert(Epoch::new(1), Arc::new(committee_b.topology_snapshot(1)));
+
+        // The parent anchors in epoch 0; the chain then stalls a full
+        // window, so the boundary block's own anchor lands in epoch 1. Its
+        // committee is epoch 0's — the window its parent anchors in.
+        let parent = chained_header(9, BlockHash::ZERO, ED - 1);
+        let boundary = chained_header(10, parent.hash(), ED + 1);
+        let qc = signed_qc(&committee_a, &boundary, ED + 2);
+
+        let mut shard_source = ShardSourceTracker::new();
+        shard_source.on_verified_source_header(Arc::new(Verified::new_unchecked_for_test(
+            CertifiedBlockHeader::new(parent.clone(), boundary.parent_qc().clone()),
+        )));
+
+        assert!(
+            boundary_qc_authentic(
+                &BlsVerifier,
+                SHARD,
+                &boundary,
+                &qc,
+                &shard_source,
+                &schedule,
+                &NetworkDefinition::simulator(),
+            ),
+            "the boundary QC must verify under the window its parent anchors, not the one it \
+             dates itself into",
+        );
+
+        assert!(
+            !boundary_qc_authentic(
+                &BlsVerifier,
+                SHARD,
+                &boundary,
+                &qc,
+                &ShardSourceTracker::new(),
+                &schedule,
+                &NetworkDefinition::simulator(),
+            ),
+            "without the parent held, the fallback resolves the block's own window and its \
+             rotated keys reject the QC — abstention, not mis-acceptance",
+        );
+    }
 }
