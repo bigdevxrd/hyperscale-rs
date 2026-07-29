@@ -694,10 +694,11 @@ impl Session {
         let mut frontier = self.attested_wt;
 
         for shard in self.live_shards() {
-            // Hosts of one shard agree on committed content, so the first
-            // one serving it answers for all of them.
-            let Some(storage) =
-                (0..self.runner.num_hosts()).find_map(|host| self.runner.hosts_shard(host, shard))
+            // Hosts of one shard agree on committed content, so the furthest
+            // along answers for all of them.
+            let Some(storage) = (0..self.runner.num_hosts())
+                .filter_map(|host| self.runner.hosts_shard(host, shard))
+                .max_by_key(|storage| storage.committed_height())
             else {
                 continue;
             };
