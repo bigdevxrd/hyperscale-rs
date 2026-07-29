@@ -774,12 +774,19 @@ where
         let signer = Arc::clone(&vnode.signer);
         let verifier = Arc::clone(&self.process.verifier);
         let par = self.process.dispatch.parallelism();
+        // Resolve the shard's handles here, on the shard's own thread,
+        // rather than inside the spawned closure: the dispatch pool is
+        // process-wide and outlives this `ShardLoop`, so a job spawned as
+        // the shard is torn down would otherwise find its entry already
+        // dropped from `per_shard`.
+        let shard_handles = handles
+            .per_shard
+            .load()
+            .get(&shard)
+            .expect("hosted shard derived from vnode")
+            .clone();
 
         self.process.dispatch.spawn(pool, move || {
-            let per_shard = handles.per_shard.load();
-            let shard_handles = per_shard
-                .get(&shard)
-                .expect("hosted shard derived from vnode");
             // Action handlers emit `ProtocolEvent`s; stamp each with the
             // dispatching vnode's shard so the receiver routes back to
             // the right `ShardLoop`. `Arc`-shaped so handlers can clone
