@@ -740,9 +740,9 @@ impl ShardCoordinatorSim {
 
     /// Fire `check_round_timeout` on `replica` and absorb any
     /// returned view-change actions. No-op when
-    /// `should_advance_round` declines (verification in flight,
-    /// pending block at tip within `MAX_PROGRESS_WAIT`, or
-    /// timeout not yet elapsed).
+    /// `should_advance_round` declines (verification in flight, this
+    /// round's unvoted proposal at the tip within `MAX_PROGRESS_WAIT`,
+    /// or timeout not yet elapsed).
     pub fn fire_view_change_timer(&mut self, replica: ValidatorId) {
         let idx = self.idx_of(replica);
         if let Some(actions) = self.coordinators[idx].check_round_timeout(&self.topology_schedule) {

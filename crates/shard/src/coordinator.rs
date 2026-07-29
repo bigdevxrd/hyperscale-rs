@@ -1095,21 +1095,27 @@ impl ShardCoordinator {
         // can't pin us at a stale round forever:
         //
         // 1. Verification in flight — block roots being checked.
-        // 2. A pending block exists at the proposal tip — covers both
-        //    followers fetching content and proposers awaiting their own
-        //    QC after broadcasting. Proposers' pending blocks are fully
-        //    assembled at emission time, so this case must include
-        //    complete blocks too, not just incomplete ones.
+        // 2. This round's proposal sits at the tip and we have yet to vote on
+        //    it — content still landing, or roots still to check.
         // 3. Block sync has unverified work in flight.
+        //
+        // Each is work this replica still owes the tip, which is what the
+        // progress window is for. What it deliberately excludes is waiting on
+        // *other* replicas: a proposal we have already voted on, and a block
+        // left over from a round the pacemaker abandoned, both need a quorum
+        // we cannot supply, and the round timer is what bounds that wait.
+        // Suppressing on either prices it at `MAX_PROGRESS_WAIT` — three
+        // times the nominal timeout — while the pacemaker sits on its hands.
         let next_height = self.latest_qc.as_ref().map_or_else(
             || self.committed_height.inner() + 1,
             |qc| qc.height().inner() + 1,
         );
-        let has_pending_at_tip = self
-            .pending_blocks
-            .has_any_at(BlockHeight::new(next_height));
+        let awaiting_tip_proposal = self.last_voted_round < self.view_change.view
+            && self
+                .pending_blocks
+                .has_any_at_round(BlockHeight::new(next_height), self.view_change.view);
         let suppressed = self.verification.has_verification_in_flight()
-            || has_pending_at_tip
+            || awaiting_tip_proposal
             || self.block_sync.has_unverified_in_flight();
         if suppressed {
             let within_progress_window = self

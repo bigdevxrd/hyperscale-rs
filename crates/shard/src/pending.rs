@@ -229,6 +229,17 @@ impl PendingBlocks {
             .any(|pending| pending.header().height() == height)
     }
 
+    /// True when a pending block sits at `height` and was proposed in `round`.
+    ///
+    /// Rounds separate a live proposal from the leavings of one the pacemaker
+    /// has already abandoned: both sit at the same height, and only the
+    /// former can still certify.
+    pub fn has_any_at_round(&self, height: BlockHeight, round: Round) -> bool {
+        self.0
+            .values()
+            .any(|pending| pending.header().height() == height && pending.header().round() == round)
+    }
+
     /// Total transaction count across all pending blocks (manifest counts,
     /// independent of how much data has actually arrived).
     pub fn total_transaction_count(&self) -> usize {

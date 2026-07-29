@@ -288,6 +288,62 @@ fn lone_timeout_does_not_advance() {
     }
 }
 
+/// The progress window covers work a replica still owes the tip, not the wait
+/// for a quorum it cannot supply on its own.
+///
+/// Every replica receives the round-1 proposal and votes on it, but the votes
+/// are withheld from each other, so no QC forms and each replica keeps a
+/// complete, verified block pending at its tip. Once a replica has voted it
+/// owes that block nothing, so the nominal timeout governs: the clock advances
+/// past `VIEW_CHANGE_TIMEOUT` and stops well short of `MAX_PROGRESS_WAIT`,
+/// and the timers still fire and carry a 2f+1 quorum. Charging the pending
+/// block against the progress window instead would hold every replica for the
+/// full `MAX_PROGRESS_WAIT` — three times the timeout the round is sized for.
+#[test]
+fn a_voted_tip_proposal_leaves_the_round_timer_to_the_nominal_timeout() {
+    let mut sim = ShardCoordinatorSim::new(4, 0x_0A_11);
+    // Round 1's proposal reaches everyone; its votes reach no one.
+    for idx in 0..sim.n() {
+        sim.hold_matching(
+            ValidatorId::new(idx as u64),
+            HoldFilter::VoteAtHeightRound(BlockHeight::new(1), Round::new(1)),
+        );
+    }
+    sim.kick_off();
+    sim.run_for_at_most(MAX_STEPS);
+
+    for idx in 0..sim.n() {
+        assert_eq!(
+            sim.coordinators[idx].last_voted_round(),
+            Round::new(1),
+            "replica {idx} should have voted the round-1 proposal",
+        );
+        assert!(
+            sim.coordinators[idx].latest_qc().is_none(),
+            "replica {idx} formed a QC despite withheld votes",
+        );
+    }
+
+    // Short of `MAX_PROGRESS_WAIT`, so a pending tip block that still counted
+    // as progress would keep every timer suppressed here.
+    let nominal = sim.coordinators[0].current_view_change_timeout();
+    assert!(
+        nominal + Duration::from_millis(100) < MAX_PROGRESS_WAIT,
+        "the test only says something while the nominal timeout is the shorter of the two",
+    );
+    sim.advance_clock(nominal + Duration::from_millis(100));
+    sim.fire_view_change_timer_all();
+    sim.run_for_at_most(MAX_STEPS);
+
+    for idx in 0..sim.n() {
+        assert!(
+            sim.coordinators[idx].view().inner() >= 2,
+            "replica {idx} didn't advance past round 1 on the nominal timeout; view {}",
+            sim.coordinators[idx].view().inner(),
+        );
+    }
+}
+
 /// A block received before its parent's header must not wedge: the receiver
 /// defers the child's parent-QC verification (it can't resolve the parent's
 /// committee without the parent header), and re-engages it once the parent
