@@ -632,12 +632,13 @@ Every shard block carries a **mandatory reveal**: the proposer's
 deterministic hash-based VRF over `(shard, height)` — unforgeable and
 unchooseable (fixed by key and slot before the epoch), verified by the shard
 committee at block validation. Each block folds its reveal into the running
-`reveal_chain` its header commits, reseeding whenever the block's anchor
-epoch (`epoch_for(parent_qc.weighted_timestamp)`) differs from its parent's.
-A boundary block is the last block anchored in the epoch its crossing ends,
-so the chain it carries is that epoch's closed run, QC-attested on the
-header the beacon already binds. The epoch seed folds one such chain value
-per crossing shard: one 32-byte commitment covering that shard's whole epoch.
+`reveal_chain` its header commits, reseeding whenever the block's committee
+epoch — the window its parent anchors in — differs from its parent's, so
+one chain collects exactly the reveals one epoch's committee produced. The
+boundary block closes its epoch's crossing, and the chain on its header is
+that committee run's QC-attested prefix through the boundary itself. The
+epoch seed folds one such chain value per crossing shard: one 32-byte
+commitment covering that shard's epoch.
 
 Two properties fall out with no new assumption. **There is no include/omit
 lever:** the chain is consensus-derived, not a per-member selection — a block

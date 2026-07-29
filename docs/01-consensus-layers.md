@@ -22,7 +22,7 @@ Each shard is an independent BFT chain producing `Block`s over the shard's trans
 
 - **Height** is chain position: strictly sequential, one committed block per height.
 - **Round** is a per-block consensus attempt counter that strictly increases along the chain. In a fault-free run, each height consumes one round; view changes (timeouts) burn rounds, so a block's round can exceed its height. Rounds, not heights, drive the safety rules.
-- **Proposer selection** is pure rotation by round: `proposer_for(round) = committee[round % committee_size]`. The selection is deterministic given the round and the committee, and the committee itself is resolved from the parent QC's weighted timestamp (§4), so every replica agrees on the proposer without communication.
+- **Proposer selection** is pure rotation by round: `proposer_for(round) = committee[round % committee_size]`. The selection is deterministic given the round and the committee, and the committee itself is resolved from the anchor of the parent block being extended (§4) — a header field every replica reads identically — so every replica agrees on the proposer without communication, before the height's block exists.
 
 Three proposal kinds exist: **normal** (payload plus the proposer's wall-clock reading), **fallback** (empty payload on timeout recovery, carrying the parent QC's timestamp so that Byzantine proposers cannot use empty blocks to drag consensus time), and **sync** (empty, for a proposer that is online but still catching up on execution).
 
@@ -47,7 +47,7 @@ Votes are BLS signatures over a domain-separated message binding the vote's full
 Two facts about this timestamp matter downstream:
 
 - **It is Byzantine-bounded.** The per-vote clamp makes the clock monotone along the chain, so Byzantine voters cannot drag it backwards at all. Forward skew is possible — a mean moves with every vote — but capped. A timestamp implausibly far ahead of the local clock is rejected wherever an untrusted QC enters chain state: header validation, synced-block admission, timeout `high_qc` adoption, and local aggregation itself. A far-future value therefore cannot poison the chain's clock.
-- **The canonical value for a block is the one in its committing child.** A QC is not unique (the same block can be re-certified in later rounds, for example during a reshape coast), and a QC's timestamp field rides outside the vote-signed message. The hash-pinned, consensus-canonical timestamp of block `B` is `child.parent_qc.weighted_timestamp` — the value embedded in the child block that committed `B`. Every protocol that anchors deadlines or committee lookups uses this parent-QC form (INV-SHARD-6). The distinction is load-bearing: reshape genesis derivation once diverged precisely by reading a re-cert QC's timestamp instead of the canonical one.
+- **The canonical value for a block is the one in its committing child.** A QC is not unique (the same block can be re-certified in later rounds, for example during a reshape coast), and a QC's timestamp field rides outside the vote-signed message. The hash-pinned, consensus-canonical timestamp of block `B` is `child.parent_qc.weighted_timestamp` — the value embedded in the child block that committed `B`. This canonical value is also `B`'s **anchor**: where `B` sits on the weighted-time grid is `B.parent_qc.weighted_timestamp`, the canonical timestamp of the block it extends. Every protocol that anchors deadlines or committee lookups uses this parent-QC form (INV-SHARD-6); committee lookups read it one block up — a block's committee keys on its *parent's* anchor, never on the aggregate over the parent (§4). The distinction is load-bearing: reshape genesis derivation once diverged precisely by reading a re-cert QC's timestamp instead of the canonical one.
 
 ### 1.4 The commit rule
 
@@ -55,7 +55,7 @@ A block `B` commits when a QC forms for a child at **exactly** `B.round + 1` —
 
 The division of labor between the two rules is the heart of fork safety. The safe-vote rule alone does *not* prevent two QCs at one height: two siblings both extending the same parent QC can each gather a quorum without any validator violating its lock. What it cannot allow is both siblings *committing*. Committing `B` requires a contiguous chain of QCs above it, and quorum intersection (any two 2f+1 quorums share an honest validator, whose lock has ratcheted) forces every subsequent QC to extend the committed branch. One height, at most one committed block (INV-SHARD-1). The `fork_safety` test asserts exactly this under adversarial scheduling.
 
-Every committed block's parent hash must equal the previously committed hash — commit order is exactly chain order (INV-SHARD-5). At commit, the chain state advances atomically: committed height/hash/state-root, the committee anchor timestamp, dedup indices for committed transactions/waves/provisions (retention-bounded), the beacon-witness accumulator (§3.3), and byte-growth counters that feed reshape triggers.
+Every committed block's parent hash must equal the previously committed hash — commit order is exactly chain order (INV-SHARD-5). At commit, the chain state advances atomically: committed height/hash/state-root, the tip's block and committee anchor timestamps, dedup indices for committed transactions/waves/provisions (retention-bounded), the beacon-witness accumulator (§3.3), and byte-growth counters that feed reshape triggers.
 
 ### 1.5 The pacemaker
 
@@ -138,7 +138,11 @@ Epochs are paced to wall-clock: the beacon's synthetic time advances as `epoch �
 
 The three layers stay mutually consistent through one discipline:
 
-**Every committee lookup, everywhere, is `schedule.at(weighted_timestamp)`.** Verifying a shard block's QC, validating a remote shard's header, checking a provision's source attestation, resolving an EC's signing committee, admitting a beacon boundary QC — all of them compute `epoch_for(wt) = floor(wt / epoch_duration_ms)` from the artifact's canonical (parent-QC) weighted timestamp and resolve the committee from the schedule. The binding is exact; there is no grace interval in which two committees are simultaneously acceptable (INV-SHARD-9).
+**Every committee lookup, everywhere, is `schedule.at(weighted_timestamp)`** — `epoch_for(wt) = floor(wt / epoch_duration_ms)` over an attested timestamp; what varies per artifact is only which timestamp keys the lookup.
+
+A shard block's committee — the one that elects its proposer, votes on it, and signs the QC over it — anchors on its **parent**: the lookup keys on the parent header's own `parent_qc.weighted_timestamp`. Anchoring one block up is what makes the committee resolvable *before the block exists*, from a header every replica already holds and reads identically. The block's own anchor cannot serve: it is a quorum aggregate whose timestamp varies by which votes each aggregator held, and within that spread of an epoch cut two replicas would resolve two committees and elect two leaders, splitting the round's votes between proposals that both verify. The same parent-anchored resolution governs every consumer of a shard QC — live voting, synced-block admission, remote-header verification, fork-proof checking (a commit proof carries the certified block's parent header for exactly this reason) — so a block verifies under one committee however it arrives. Artifacts that carry their own attested anchor — a provision's source attestation, an execution certificate's wave anchor — resolve at it, and epoch-crossing detection keys on the crossing pair's own grid positions.
+
+The binding is exact; there is no grace interval in which two committees are simultaneously acceptable (INV-SHARD-9).
 
 Three properties make this sound:
 

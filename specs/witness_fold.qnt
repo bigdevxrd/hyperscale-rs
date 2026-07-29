@@ -20,13 +20,13 @@
 //     `apply_contribution_witnesses` — exact-range, all-or-nothing.
 //   - Reveal collection: crates/beacon/src/state/epoch.rs
 //     `record_boundaries` — a fresh crossing contributes
-//     `header.reveal_chain()`, the closed chain of the anchor epoch that
-//     crossing ends; a drain re-fold of the recorded crossing contributes
+//     `header.reveal_chain()`, the chain of the committee epoch that
+//     crossing closes; a drain re-fold of the recorded crossing contributes
 //     nothing, so exactly-once needs no watermark.
 //   - Chain derivation: crates/types/src/shard/roots/reveal_chain.rs
-//     `next_reveal_chain` — reseeds when the block's anchor epoch differs
-//     from its parent's, so an epoch's chain descends from no earlier
-//     epoch's reveals.
+//     `next_reveal_chain` — reseeds when the block's committee epoch (the
+//     window its parent anchors in) differs from its parent's, so an
+//     epoch's chain descends from no earlier epoch's reveals.
 //   - Fence: crates/beacon/src/state/epoch.rs `reveal_chain_fenced` — a
 //     crossing above a pending recovery's `attested_frontier` contributes
 //     nothing. No band persists: per-epoch chains are independent, so
@@ -289,8 +289,8 @@ module reveal_fold {
   // `drain_refold` gate.
   const DRAIN_REFOLDS: bool
 
-  // The shard's current anchor epoch. Its blocks fold into one chain,
-  // which reseeds when the anchor epoch changes.
+  // The shard's current committee epoch. Its blocks fold into one chain,
+  // which reseeds when the committee epoch changes.
   var epoch: int
   // The last epoch whose crossing the beacon recorded. -1 before any.
   var recordedEpoch: int
@@ -316,7 +316,7 @@ module reveal_fold {
     dupFold' = false,
   }
 
-  // The chain crosses into its next anchor epoch.
+  // The chain crosses into its next committee epoch.
   action advanceEpoch = all {
     epoch + 1 <= MAX_EPOCH,
     epoch' = epoch + 1,

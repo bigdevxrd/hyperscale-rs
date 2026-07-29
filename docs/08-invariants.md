@@ -37,10 +37,10 @@ The consolidated register of the system's safety and liveness properties, with s
 | **INV-SHARD-3** | Safety | **Lock monotonicity.** `locked_round` never decreases; a vote requires `parent_qc.round ≥ locked_round`. There is no unlock rule of any kind. |
 | **INV-SHARD-4** | Safety | **Round-contiguous commit.** A block commits iff a QC forms for a child at exactly `round + 1`; view-change survivors commit only as the prefix of a later direct two-chain. |
 | **INV-SHARD-5** | Safety | **Commit linkage.** Every committed block's parent hash equals the previously committed hash; commit order is exactly chain order. |
-| **INV-SHARD-6** | Safety | **Canonical weighted time.** A block's canonical timestamp is its committing child's `parent_qc.weighted_timestamp`; it is monotone along the chain; every consensus-relevant deadline and committee lookup uses this form, never a served/re-certified QC's stamp. |
+| **INV-SHARD-6** | Safety | **Canonical weighted time.** A block's canonical timestamp is its committing child's `parent_qc.weighted_timestamp`; it is monotone along the chain; every consensus-relevant deadline and committee lookup uses this form, never a served/re-certified QC's stamp. A block's committee keys on its *parent's* anchor — the parent header's `parent_qc.weighted_timestamp` — not the block's own. |
 | **INV-SHARD-7** | Safety | **DA by vote.** A validator votes only holding the complete block content; hence every QC certifies that ≥2f+1 validators hold every byte the block commits to. |
 | **INV-SHARD-8** | Liveness | **Progress.** Under eventual synchrony with an honest proposer reachable by rotation, every height commits: timeout quorums (2f+1) advance rounds, f+1 amplification makes abandonment contagious, timeouts retransmit, and the adopted `high_qc` is the quorum max. |
-| **INV-SHARD-9** | Safety | **Committee-exact verification.** Every certificate is verified against the committee at `epoch_for(canonical WT)` — exactly one committee is acceptable for any artifact. |
+| **INV-SHARD-9** | Safety | **Committee-exact verification.** Every certificate is verified against exactly one committee: a QC over shard block `b` against the committee at `epoch_for` of `b`'s parent's anchor; artifacts carrying their own attested anchor against `epoch_for` of it. No artifact has two acceptable committees. |
 
 ## Beacon consensus and topology — [01 §3–4](01-consensus-layers.md)
 
