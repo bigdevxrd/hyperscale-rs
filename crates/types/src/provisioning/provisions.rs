@@ -12,7 +12,9 @@ use hyperscale_jmt::{Blake3Hasher, MultiProof, Tree};
 use sbor::prelude::*;
 use thiserror::Error;
 
-use crate::state_key::{DB_NODE_KEY_LEN, db_node_key_to_node_id, jmt_leaf_key, jmt_value_hash};
+use crate::state_key::{
+    DB_NODE_KEY_LEN, db_node_key_to_node_id, jmt_leaf_key, jmt_value_hash, vm_flat_key_parts,
+};
 use crate::{
     BlockHeight, BoundedVec, CertifiedBlockHeader, Hash, MAX_TXS_PER_BLOCK, MerkleInclusionProof,
     NodeId, ProvisionEntry, ProvisionHash, RETENTION_HORIZON, ShardId, SubstateEntry, TxHash,
@@ -275,9 +277,11 @@ pub enum ProvisionsVerifyError {
     /// entries.
     #[error("merkle inclusion verification failed against committed state root")]
     BadInclusion,
-    /// A `SubstateEntry` carried a `storage_key` shorter than a `db_node_key`,
-    /// so it cannot name a committed substate.
-    #[error("provision entry storage key is malformed (no db_node_key prefix)")]
+    /// A `SubstateEntry` carried a `storage_key` that is neither a VM flat
+    /// key nor `db_node_key`-prefixed, so it cannot name a committed substate.
+    #[error(
+        "provision entry storage key is malformed (neither VM flat key nor db_node_key prefixed)"
+    )]
     MalformedStorageKey,
 }
 
@@ -318,7 +322,8 @@ impl Verify<&ProvisionsContext<'_>> for Provisions {
         let owner_map = self.ownership_map();
         let mut expected: Vec<([u8; 32], Option<[u8; 32]>)> = Vec::with_capacity(entries.len());
         for e in &entries {
-            if e.storage_key.len() < DB_NODE_KEY_LEN {
+            if vm_flat_key_parts(&e.storage_key).is_none() && e.storage_key.len() < DB_NODE_KEY_LEN
+            {
                 return Err(ProvisionsVerifyError::MalformedStorageKey);
             }
             let owner =
@@ -644,6 +649,43 @@ mod tests {
             let (state_root, proof) = build_jmt(&[entry(1)]);
             let verified_header = header_with_state_root(state_root);
             let provisions = provisions_with(proof, vec![(vec![0u8; 10], vec![1, 2])]);
+            let ctx = ProvisionsContext {
+                certified_header: &verified_header,
+            };
+            assert_eq!(
+                provisions.verify(&ctx),
+                Err(ProvisionsVerifyError::MalformedStorageKey)
+            );
+        }
+
+        #[test]
+        fn verify_accepts_vm_flat_key_entries() {
+            use crate::state_key::vm_flat_key;
+            let items = vec![
+                (vm_flat_key([0x11; 16], [1; 16]), vec![1, 2]),
+                (vm_flat_key([0x22; 16], [2; 16]), vec![3]),
+            ];
+            let (state_root, proof) = build_jmt(&items);
+            let verified_header = header_with_state_root(state_root);
+            let provisions = provisions_with(proof, items);
+            let ctx = ProvisionsContext {
+                certified_header: &verified_header,
+            };
+            provisions
+                .verify(&ctx)
+                .expect("VM identity-keyed provisions must verify");
+        }
+
+        #[test]
+        fn verify_rejects_a_mistagged_vm_length_key() {
+            use crate::state_key::{VM_DB_NODE_KEY_LEN, vm_flat_key};
+            // Exactly VM-length but with a nonzero partition byte: neither
+            // namespace claims it, so it is malformed — not panicked on.
+            let (state_root, proof) = build_jmt(&[entry(1)]);
+            let verified_header = header_with_state_root(state_root);
+            let mut bad_key = vm_flat_key([0x11; 16], [1; 16]);
+            bad_key[VM_DB_NODE_KEY_LEN] = 1;
+            let provisions = provisions_with(proof, vec![(bad_key, vec![9])]);
             let ctx = ProvisionsContext {
                 certified_header: &verified_header,
             };

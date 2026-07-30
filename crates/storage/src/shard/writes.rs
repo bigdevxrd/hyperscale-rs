@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use hyperscale_jmt::NibblePath;
-use hyperscale_types::state_key::{db_node_key_to_node_id, node_routing_hash};
+use hyperscale_types::state_key::{
+    db_node_key_to_node_id, node_routing_hash, vm_db_node_key_owner,
+};
 use hyperscale_types::{NodeId, StoredReceipt};
 use indexmap::map::Entry;
 use radix_common::prelude::DatabaseUpdate;
@@ -48,8 +50,10 @@ pub fn merge_owned_nodes<'a>(
 ///
 /// Leaf keys are owner-major ([`node_routing_hash`] forms the high
 /// half), so every substate of one entity shares the prefix decision
-/// and the filter is per entity, resolved through `owner_map` exactly
-/// as the JMT build resolves it. An entity key too short to embed a
+/// and the filter is per entity: a Radix entity resolves through
+/// `owner_map` exactly as the JMT build resolves it, and a VM entity
+/// key carries its owner prefix directly — the identity leaves' routing
+/// half. An entity key that is neither VM-shaped nor embeds a
 /// `db_node_key` is dropped — nothing the engine commits is shaped that
 /// way, and a store must never bucket a key it cannot route.
 #[must_use]
@@ -64,6 +68,13 @@ pub fn filter_updates_to_prefix(
             .node_updates
             .iter()
             .filter(|(entity_key, _)| {
+                if let Some(owner) = vm_db_node_key_owner(entity_key) {
+                    // A shard prefix is under 64 bits (trie depth bound), so
+                    // the zero-padded low half is never consulted.
+                    let mut routing = [0u8; 32];
+                    routing[..16].copy_from_slice(&owner);
+                    return hash_under_prefix(&routing, prefix);
+                }
                 db_node_key_to_node_id(entity_key).is_some_and(|node| {
                     let routing = owner_map.get(&node).copied().unwrap_or(node);
                     hash_under_prefix(&node_routing_hash(&routing), prefix)
@@ -257,6 +268,31 @@ mod tests {
                 }
             })
         })
+    }
+
+    #[test]
+    fn filter_routes_vm_updates_by_their_owner_prefix() {
+        use hyperscale_types::state_key::vm_db_node_key;
+        use hyperscale_types::{ShardId, shard_prefix_path};
+
+        // Owners on either side of the top bit against a depth-1 split.
+        let under = vm_db_node_key([0x00; 16]);
+        let outside = vm_db_node_key([0x80; 16]);
+        let mut updates = make_delta_updates(&under, 0, vec![1], DatabaseUpdate::Set(vec![1]));
+        merge_into(
+            &mut updates,
+            &make_delta_updates(&outside, 0, vec![1], DatabaseUpdate::Set(vec![2])),
+        );
+
+        let left = shard_prefix_path(ShardId::leaf(1, 0));
+        let filtered = filter_updates_to_prefix(&updates, &HashMap::new(), &left);
+        assert!(filtered.node_updates.contains_key(&under));
+        assert!(!filtered.node_updates.contains_key(&outside));
+
+        let right = shard_prefix_path(ShardId::leaf(1, 1));
+        let filtered = filter_updates_to_prefix(&updates, &HashMap::new(), &right);
+        assert!(!filtered.node_updates.contains_key(&under));
+        assert!(filtered.node_updates.contains_key(&outside));
     }
 
     #[test]

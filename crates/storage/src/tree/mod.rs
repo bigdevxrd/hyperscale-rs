@@ -5,7 +5,9 @@
 //!
 //! # Key mapping
 //!
-//! `jmt_key = BLAKE3(entity_key || partition_num || sort_key)` → `[u8; 32]`
+//! Radix keys: `jmt_key = BLAKE3(entity_key || partition_num || sort_key)` →
+//! `[u8; 32]`. VM flat keys read as the identity leaf `[owner | local]` with
+//! no hashing (see `hyperscale_types::state_key`).
 //!
 //! # Value encoding
 //!
@@ -97,7 +99,9 @@ pub type Jmt = Tree<Blake3Hasher, 1>;
 /// ancestor; a key whose node is present is prefixed under that owner so the
 /// owner's footprint stays a contiguous prefix subtree. Globals are absent and
 /// key under themselves. The map is the merge of every committed receipt's
-/// `owned_nodes`, so the key bytes are identical on every node.
+/// `owned_nodes`, so the key bytes are identical on every node. VM flat keys
+/// map by identity — their owner and local halves are the leaf key — and are
+/// never in `owner_map`.
 #[must_use]
 #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
 pub fn hash_storage_key(storage_key: &[u8], owner_map: &HashMap<NodeId, NodeId>) -> Key {
@@ -548,5 +552,49 @@ mod tests {
         assert_eq!(collected.leaf_associations.len(), 2);
         assert_eq!(by_key(&set_raw).storage_key, Some(set_raw.clone()));
         assert_eq!(by_key(&del_raw).storage_key, None);
+    }
+
+    /// A VM update keys its leaf by identity — `[owner | local]` — and the
+    /// association records the flat key so range serving resolves it.
+    #[test]
+    fn put_at_version_keys_vm_updates_by_identity() {
+        use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key, vm_leaf_key};
+
+        let store = MemoryStore::new();
+        let owner = [0xA5u8; 16];
+        let local = [0x3Cu8; 16];
+
+        let mut updates = DatabaseUpdates::default();
+        updates.node_updates.insert(
+            vm_db_node_key(owner),
+            NodeDatabaseUpdates {
+                partition_updates: std::iter::once((
+                    VM_PARTITION,
+                    PartitionDatabaseUpdates::Delta {
+                        substate_updates: std::iter::once((
+                            DbSortKey(local.to_vec()),
+                            DatabaseUpdate::Set(vec![42]),
+                        ))
+                        .collect(),
+                    },
+                ))
+                .collect(),
+            },
+        );
+
+        let (root, collected) = put_at_version(
+            &store,
+            None,
+            1,
+            &[&updates],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert_ne!(root, StateRoot::ZERO);
+        assert_eq!(collected.leaf_associations.len(), 1);
+        let association = &collected.leaf_associations[0];
+        assert_eq!(association.leaf_key, vm_leaf_key(owner, local));
+        assert_eq!(association.storage_key, Some(vm_flat_key(owner, local)));
     }
 }
