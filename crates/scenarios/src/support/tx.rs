@@ -294,6 +294,76 @@ pub fn account_routing_to(
     account_in_n(shard, num_shards, &mut Vec::new())
 }
 
+/// The first `count` seeded accounts routing to `shard` under a
+/// `num_shards`-wide uniform trie, with signing keys. `taken` threads seed
+/// exclusions across calls, so successive account sets stay disjoint.
+#[must_use]
+pub fn accounts_routing_to(
+    shard: ShardId,
+    num_shards: u64,
+    count: usize,
+    taken: &mut Vec<u8>,
+) -> Vec<(Ed25519PrivateKey, ComponentAddress)> {
+    (0..count)
+        .map(|_| account_in_n(shard, num_shards, taken))
+        .collect()
+}
+
+/// Seed base for the contention scenarios' payers; each sender occupies
+/// one seed so no two payments share a payer account.
+const CONTENTION_SENDER_BASE: u8 = 120;
+
+/// Seed base for the contention scenarios' payees, disjoint from every
+/// sender seed.
+const CONTENTION_RECIPIENT_BASE: u8 = 200;
+
+/// Contention sender `index`: its signing key and account. Funded at
+/// genesis via [`contention_genesis_balances`].
+#[must_use]
+pub fn contention_sender(index: u8) -> (Ed25519PrivateKey, ComponentAddress) {
+    let seed = CONTENTION_SENDER_BASE + index;
+    (signer_from_seed(seed), account_from_seed(seed))
+}
+
+/// Contention recipient `index`: a payee account. Never funded — deposits
+/// instantiate it.
+#[must_use]
+pub fn contention_recipient(index: u8) -> ComponentAddress {
+    account_from_seed(CONTENTION_RECIPIENT_BASE + index)
+}
+
+/// Genesis funding for the contention scenarios: `senders` payers, plus
+/// `recipients` payees.
+///
+/// Shared payees must exist at genesis — a virtual account instantiated
+/// by concurrent conflicting commits (the pipeline admits up to the
+/// two-chain window of them before locks engage) is torn by their
+/// interleaved creation write sets and faults on every later open.
+#[must_use]
+pub fn contention_genesis_balances(
+    senders: u8,
+    recipients: u8,
+) -> Vec<(ComponentAddress, Decimal)> {
+    (0..senders)
+        .map(|index| (contention_sender(index).1, Decimal::from(10_000)))
+        .chain((0..recipients).map(|index| (contention_recipient(index), Decimal::from(10))))
+        .collect()
+}
+
+/// Genesis funding for the cross-shard contention scenarios: `senders`
+/// payers routed to the left child shard of a two-shard trie.
+///
+/// The scenarios regenerate the same accounts with an identical `taken`
+/// walk.
+#[must_use]
+pub fn cross_contention_genesis_balances(senders: usize) -> Vec<(ComponentAddress, Decimal)> {
+    let mut taken = Vec::new();
+    accounts_routing_to(ShardId::leaf(1, 0), 2, senders, &mut taken)
+        .into_iter()
+        .map(|(_, account)| (account, Decimal::from(10_000)))
+        .collect()
+}
+
 /// Push `count` funded accounts routing to `shard` under a `num_shards`-wide
 /// trie onto `balances`, drawing from the wide `u64` seed space so a single
 /// shard's prefix can be funded far past the `u8`-seeded [`account_in_n`] ceiling

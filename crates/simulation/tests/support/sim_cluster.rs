@@ -18,7 +18,8 @@ use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::query::{chain_fate, status_rank};
 use hyperscale_scenarios::tx::{merge_vote_payer, straddler_genesis_balances};
 use hyperscale_scenarios::{
-    Budget, Cluster, FaultHandle, FaultableCluster, ScenarioConfig, grow_to, vote_reshape_threshold,
+    Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
+    vote_reshape_threshold,
 };
 use hyperscale_simulation::{EPOCH_MS, SimConfig, SimulationRunner};
 use hyperscale_storage::{ShardChainReader, SubstateStore};
@@ -300,6 +301,16 @@ impl Cluster for SimCluster {
             .filter_map(|storage| storage.latest_committed())
             .max_by_key(|(_, state)| state.current_epoch)
             .map(|(_, state)| state)
+    }
+
+    fn deferral_stats(&self) -> Option<DeferralStats> {
+        let mut total = DeferralStats::default();
+        for state in self.runner.all_vnode_states() {
+            if let Some(stats) = state.mempool_deferral_stats() {
+                total.absorb(&stats);
+            }
+        }
+        Some(total)
     }
 
     fn tx_status(&self, tx: TxHash) -> Option<TransactionStatus> {

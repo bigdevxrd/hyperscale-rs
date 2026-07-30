@@ -11,29 +11,32 @@ use std::time::Duration;
 use hyperscale_core::ProtocolEvent;
 use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
-    halt_recovery_genesis_balances, halt_straddler_setup, intershard_partition_genesis_balances,
-    merge_straddler_setup, split_straddler_setup, witness_genesis_balances,
+    contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
+    halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
+    split_straddler_setup, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, ScenarioConfig, beacon_lag_drops_skipped_epochs_reveal_chains,
     beacon_pool_partition_stalls_epoch_production, cross_shard_compound_drop_fetch_fallback,
-    cross_shard_exec_cert_drop_fetch_fallback, cross_shard_header_fetch_fallback,
-    cross_shard_provisions_drop_fetch_fallback, cross_shard_provisions_fetch_with_request_loss,
+    cross_shard_exec_cert_drop_fetch_fallback, cross_shard_fraction,
+    cross_shard_header_fetch_fallback, cross_shard_provisions_drop_fetch_fallback,
+    cross_shard_provisions_fetch_with_request_loss,
     cross_shard_provisions_recovers_after_transient_outage,
     cross_shard_transaction_da_fetch_fallback, cross_shard_tx, epochs,
     gossip_drop_engages_fetch_fallback, grow_reaches_four_shard_topology,
     grow_reaches_two_shard_topology, halted_shard_recovers_by_committee_redraw,
-    halted_shard_straddler_atomic, inter_shard_partition_aborts_waves_at_deadline,
-    isolated_validator_still_settles, livelock_resolves_promptly, liveness_baseline,
-    merge_lifecycle, merge_seats_full_keeper_committee, merge_straddler_atomic,
-    minority_fragment_rejoins_after_partition, multi_vnode_progress, partition_halts_and_heals,
-    partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
+    halted_shard_straddler_atomic, hot_component_saturation,
+    inter_shard_partition_aborts_waves_at_deadline, isolated_validator_still_settles,
+    livelock_resolves_promptly, liveness_baseline, merge_lifecycle,
+    merge_seats_full_keeper_committee, merge_straddler_atomic,
+    minority_fragment_rejoins_after_partition, multi_vnode_progress, participant_count_sweep,
+    partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
     single_shard_tx, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
     surviving_sibling_split_seats_full_committees,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::test_utils::shard_fork_proof_signed_by;
@@ -133,6 +136,47 @@ fn split_lifecycle_sim() {
 fn cross_shard_tx_sim() {
     let mut cluster = SimCluster::new(&split_config(), 11);
     cross_shard_tx(&mut cluster);
+}
+
+// ─── Contention scenarios ──────────────────────────────────────────────
+// CI pins one point per family; the parameterized bodies carry the full
+// sweeps for workstation runs. Reports print for the phase record.
+
+#[test]
+fn zipf_payments_sim() {
+    let mut cluster =
+        SimCluster::with_balances(&liveness_config(), 42, &contention_genesis_balances(24, 6));
+    let report = cluster.run_faultable(|c| zipf_payments(c, 24, 6, 1.0));
+    let executed = cluster.metric("transactions_executed", None);
+    println!("zipf_payments s=1.0 senders=24 recipients=6 executed={executed}: {report:?}");
+}
+
+#[test]
+fn hot_component_saturation_sim() {
+    let mut cluster =
+        SimCluster::with_balances(&liveness_config(), 42, &contention_genesis_balances(12, 1));
+    let (report, height_span) = cluster.run_faultable(|c| hot_component_saturation(c, 12));
+    let executed = cluster.metric("transactions_executed", None);
+    println!(
+        "hot_component_saturation senders=12 height_span={height_span} executed={executed}: {report:?}"
+    );
+}
+
+#[test]
+fn cross_shard_fraction_sim() {
+    let mut cluster =
+        SimCluster::with_balances(&split_config(), 11, &cross_contention_genesis_balances(16));
+    let report = cluster.run_faultable(|c| cross_shard_fraction(c, 16, 500));
+    let executed = cluster.metric("transactions_executed", None);
+    println!("cross_shard_fraction total=16 cross=50% executed={executed}: {report:?}");
+}
+
+#[test]
+fn participant_count_sweep_sim() {
+    let mut cluster =
+        SimCluster::with_balances(&split_config(), 11, &cross_contention_genesis_balances(1));
+    let latencies = participant_count_sweep(&mut cluster, 2, 2);
+    println!("participant_count_sweep shards=2: {latencies:?}");
 }
 
 #[test]

@@ -256,6 +256,11 @@ pub trait MetricsRecorder: Send + Sync + 'static {
     /// Observability only — the digest is never a consensus value.
     fn record_routing_digest(&self, digest: [u8; 32]) {}
 
+    /// Record one engine execution of a transaction. Together with
+    /// [`Self::record_transaction_finalized`] this yields executions per
+    /// terminal transaction — the replicated-execution factor.
+    fn record_transaction_executed(&self) {}
+
     /// Set the current block height gauge for a shard.
     fn set_block_height(&self, shard: u64, height: u64) {}
 
@@ -618,6 +623,12 @@ pub fn record_transaction_finalized(latency_secs: f64, cross_shard: bool) {
 #[inline]
 pub fn record_routing_digest(digest: [u8; 32]) {
     recorder().record_routing_digest(digest);
+}
+
+/// Record one engine execution of a transaction.
+#[inline]
+pub fn record_transaction_executed() {
+    recorder().record_transaction_executed();
 }
 
 /// Set the current block height gauge for a shard.

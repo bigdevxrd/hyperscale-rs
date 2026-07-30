@@ -28,11 +28,61 @@ struct ReadyEntry {
     added_at: LocalTimestamp,
 }
 
+/// Aggregated deferral statistics: how often admission deferred, why, and
+/// how long deferred transactions waited before promotion.
+///
+/// Waits are protocol-time deltas across events — one clock reading per
+/// event, never a span within one.
+///
+/// A deferral is **read-read** when every blocking overlap is a declared
+/// read held only by declared reads — exactly the deferrals a
+/// read-compatible admission policy would admit. Any write on either side
+/// classifies the event **write-involved**.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeferralStats {
+    /// Transactions that entered the deferred set (admission or a lock
+    /// landing on a ready claim), counted per entry event.
+    pub deferral_events: u64,
+    /// Deferral events whose every blocking overlap was read-read.
+    pub read_read_deferrals: u64,
+    /// Deferral events with a write on either side of some blocking
+    /// overlap.
+    pub write_involved_deferrals: u64,
+    /// Deferred transactions later promoted to ready.
+    pub promotions: u64,
+    /// Total deferred-to-ready wait across all promotions.
+    pub total_deferral_wait: Duration,
+    /// The longest single deferred-to-ready wait.
+    pub max_deferral_wait: Duration,
+    /// High-water mark of any single node's deferred queue.
+    pub peak_deferred_queue_depth: usize,
+}
+
+impl DeferralStats {
+    /// Fold `other` into `self` — sums for the counters, maxima for the
+    /// extremes — so per-node readouts aggregate across a cluster.
+    pub fn absorb(&mut self, other: &Self) {
+        self.deferral_events += other.deferral_events;
+        self.read_read_deferrals += other.read_read_deferrals;
+        self.write_involved_deferrals += other.write_involved_deferrals;
+        self.promotions += other.promotions;
+        self.total_deferral_wait += other.total_deferral_wait;
+        self.max_deferral_wait = self.max_deferral_wait.max(other.max_deferral_wait);
+        self.peak_deferred_queue_depth = self
+            .peak_deferred_queue_depth
+            .max(other.peak_deferred_queue_depth);
+    }
+}
+
 pub struct ReadySet {
     ready: BTreeMap<TxHash, ReadyEntry>,
     deferred_by_nodes: HashMap<TxHash, HashSet<NodeId>>,
     txs_deferred_by_node: HashMap<NodeId, HashSet<TxHash>>,
     ready_txs_by_node: HashMap<NodeId, HashSet<TxHash>>,
+    /// When each currently deferred tx first entered the deferred set;
+    /// removed on promotion (recording the wait) or removal.
+    deferred_since: HashMap<TxHash, LocalTimestamp>,
+    stats: DeferralStats,
 }
 
 impl ReadySet {
@@ -42,7 +92,45 @@ impl ReadySet {
             deferred_by_nodes: HashMap::new(),
             txs_deferred_by_node: HashMap::new(),
             ready_txs_by_node: HashMap::new(),
+            deferred_since: HashMap::new(),
+            stats: DeferralStats::default(),
         }
+    }
+
+    pub const fn deferral_stats(&self) -> DeferralStats {
+        self.stats
+    }
+
+    fn declares_write(tx: &RoutableTransaction, node: &NodeId) -> bool {
+        tx.declared_writes().iter().any(|write| write == node)
+    }
+
+    /// Whether any ready-set claimant of `node` declared it as a write.
+    fn ready_claim_is_write(&self, node: &NodeId) -> bool {
+        self.ready_txs_by_node
+            .get(node)
+            .into_iter()
+            .flatten()
+            .any(|hash| {
+                self.ready
+                    .get(hash)
+                    .is_some_and(|entry| Self::declares_write(&entry.tx, node))
+            })
+    }
+
+    fn record_deferral(&mut self, hash: TxHash, write_involved: bool, now: LocalTimestamp) {
+        self.stats.deferral_events += 1;
+        if write_involved {
+            self.stats.write_involved_deferrals += 1;
+        } else {
+            self.stats.read_read_deferrals += 1;
+        }
+        self.deferred_since.entry(hash).or_insert(now);
+    }
+
+    fn note_queue_depth(&mut self, node: &NodeId) {
+        let depth = self.txs_deferred_by_node.get(node).map_or(0, HashSet::len);
+        self.stats.peak_deferred_queue_depth = self.stats.peak_deferred_queue_depth.max(depth);
     }
 
     /// Add a transaction. If any declared node is currently locked or already
@@ -50,11 +138,16 @@ impl ReadySet {
     /// otherwise it lands in the ready set. `locks` is read-only — the store
     /// does not mutate lock state. Idempotent: a hash already in either set
     /// is a no-op.
+    ///
+    /// `added_at` anchors the dwell filter (the pool admission time, also
+    /// on re-adds after promotion); `now` is this event's clock reading,
+    /// consumed by the deferral statistics only.
     pub fn add(
         &mut self,
         hash: TxHash,
         tx: Arc<Verified<RoutableTransaction>>,
         added_at: LocalTimestamp,
+        now: LocalTimestamp,
         locks: &LockTracker,
     ) {
         if self.ready.contains_key(&hash) || self.deferred_by_nodes.contains_key(&hash) {
@@ -68,16 +161,29 @@ impl ReadySet {
             .collect();
 
         if !blocking_nodes.is_empty() {
+            let write_involved = blocking_nodes.iter().any(|node| {
+                Self::declares_write(&tx, node)
+                    || locks.is_write_locked(node)
+                    || self.ready_claim_is_write(node)
+            });
             for node in &blocking_nodes {
                 self.txs_deferred_by_node
                     .entry(*node)
                     .or_default()
                     .insert(hash);
+                self.note_queue_depth(node);
             }
             self.deferred_by_nodes.insert(hash, blocking_nodes);
+            self.record_deferral(hash, write_involved, now);
             return;
         }
 
+        if let Some(since) = self.deferred_since.remove(&hash) {
+            let wait = now.saturating_sub(since);
+            self.stats.promotions += 1;
+            self.stats.total_deferral_wait += wait;
+            self.stats.max_deferral_wait = self.stats.max_deferral_wait.max(wait);
+        }
         for node in tx.all_declared_nodes() {
             self.ready_txs_by_node
                 .entry(*node)
@@ -106,6 +212,7 @@ impl ReadySet {
         }
 
         if let Some(blocking_nodes) = self.deferred_by_nodes.remove(hash) {
+            self.deferred_since.remove(hash);
             for node in blocking_nodes {
                 if let Some(deferred_txs) = self.txs_deferred_by_node.get_mut(&node) {
                     deferred_txs.remove(hash);
@@ -120,8 +227,10 @@ impl ReadySet {
     }
 
     /// Move every ready-set tx touching `node` into the deferred set. Called
-    /// when `node` becomes locked.
-    pub fn block_node(&mut self, node: NodeId) {
+    /// when `node` becomes locked; `write_locked` is the new holder's mode
+    /// on `node` and `now` this event's clock reading, both consumed by the
+    /// deferral statistics only.
+    pub fn block_node(&mut self, node: NodeId, write_locked: bool, now: LocalTimestamp) {
         let Some(tx_hashes) = self.ready_txs_by_node.remove(&node) else {
             return;
         };
@@ -140,11 +249,14 @@ impl ReadySet {
                     }
                 }
             }
+            let write_involved = write_locked || Self::declares_write(&entry.tx, &node);
             self.deferred_by_nodes.entry(hash).or_default().insert(node);
             self.txs_deferred_by_node
                 .entry(node)
                 .or_default()
                 .insert(hash);
+            self.note_queue_depth(&node);
+            self.record_deferral(hash, write_involved, now);
         }
     }
 
@@ -316,7 +428,7 @@ mod tests {
         let locks = LockTracker::new();
         let (hash, tx) = tx_with(1, &[10]);
 
-        rs.add(hash, tx, LocalTimestamp::ZERO, &locks);
+        rs.add(hash, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
         assert_eq!(rs.ready_count(), 1);
         assert_eq!(rs.deferred_count(), 0);
         check_invariants(&rs).unwrap();
@@ -329,7 +441,7 @@ mod tests {
         locks.lock_nodes([test_node(10)]);
 
         let (hash, tx) = tx_with(1, &[10]);
-        rs.add(hash, tx, LocalTimestamp::ZERO, &locks);
+        rs.add(hash, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
         assert_eq!(rs.ready_count(), 0);
         assert_eq!(rs.deferred_count(), 1);
         check_invariants(&rs).unwrap();
@@ -342,8 +454,8 @@ mod tests {
         let (h1, tx1) = tx_with(1, &[10]);
         let (h2, tx2) = tx_with(2, &[10]);
 
-        rs.add(h1, tx1, LocalTimestamp::ZERO, &locks);
-        rs.add(h2, tx2, LocalTimestamp::ZERO, &locks);
+        rs.add(h1, tx1, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
+        rs.add(h2, tx2, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
         assert_eq!(rs.ready_count(), 1);
         assert_eq!(rs.deferred_count(), 1);
         check_invariants(&rs).unwrap();
@@ -355,7 +467,7 @@ mod tests {
         let locks = LockTracker::new();
         let (h, tx) = tx_with(1, &[10, 20]);
 
-        rs.add(h, tx, LocalTimestamp::ZERO, &locks);
+        rs.add(h, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
         // `all_declared_nodes` iterates reads then writes; the fixture passes
         // the same nodes for both, so duplicates in `freed` are expected.
         // Only membership matters — the caller feeds each node through the
@@ -373,7 +485,7 @@ mod tests {
         locks.lock_nodes([test_node(10)]);
         let (h, tx) = tx_with(1, &[10]);
 
-        rs.add(h, tx, LocalTimestamp::ZERO, &locks);
+        rs.add(h, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
         let freed = rs.remove(&h);
         assert!(freed.is_empty());
         check_invariants(&rs).unwrap();
@@ -384,9 +496,9 @@ mod tests {
         let mut rs = ReadySet::new();
         let locks = LockTracker::new();
         let (h, tx) = tx_with(1, &[10]);
-        rs.add(h, tx, LocalTimestamp::ZERO, &locks);
+        rs.add(h, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
 
-        rs.block_node(test_node(10));
+        rs.block_node(test_node(10), false, LocalTimestamp::ZERO);
         assert_eq!(rs.ready_count(), 0);
         assert_eq!(rs.deferred_count(), 1);
         check_invariants(&rs).unwrap();
@@ -400,12 +512,24 @@ mod tests {
 
         // Single-blocker tx: only blocked by node 10.
         let (h_single, tx_single) = tx_with(1, &[10]);
-        rs.add(h_single, tx_single, LocalTimestamp::ZERO, &locks);
+        rs.add(
+            h_single,
+            tx_single,
+            LocalTimestamp::ZERO,
+            LocalTimestamp::ZERO,
+            &locks,
+        );
 
         // Dual-blocker tx: blocked by both 10 and 20. Removing node 10 from
         // its blocker set should NOT mark it promotable (20 still blocks).
         let (h_dual, tx_dual) = tx_with(2, &[10, 20]);
-        rs.add(h_dual, tx_dual, LocalTimestamp::ZERO, &locks);
+        rs.add(
+            h_dual,
+            tx_dual,
+            LocalTimestamp::ZERO,
+            LocalTimestamp::ZERO,
+            &locks,
+        );
 
         let promotable = rs.promotable_for_node(test_node(10));
         assert_eq!(promotable, vec![h_single]);
@@ -418,7 +542,13 @@ mod tests {
         let mut rs = ReadySet::new();
         let locks = LockTracker::new();
         let (h, tx) = tx_with(1, &[10]);
-        rs.add(h, tx, LocalTimestamp::from_millis(100), &locks);
+        rs.add(
+            h,
+            tx,
+            LocalTimestamp::from_millis(100),
+            LocalTimestamp::from_millis(100),
+            &locks,
+        );
 
         assert!(
             rs.iter_ready(Duration::from_millis(200), LocalTimestamp::from_millis(250))
@@ -441,8 +571,8 @@ mod tests {
         let (h1, tx1) = tx_with(1, &[10]);
         let (h2, tx2) = tx_with(2, &[20]);
 
-        rs.add(h1, tx1, LocalTimestamp::ZERO, &locks);
-        rs.add(h2, tx2, LocalTimestamp::ZERO, &locks);
+        rs.add(h1, tx1, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
+        rs.add(h2, tx2, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
 
         let order: Vec<_> = rs
             .iter_ready(Duration::ZERO, LocalTimestamp::from_millis(1_000))
@@ -487,7 +617,13 @@ mod tests {
         match op {
             Op::Add(i) => {
                 let (hash, tx) = &fixture[(*i as usize) % pool_len];
-                rs.add(*hash, Arc::clone(tx), LocalTimestamp::ZERO, locks);
+                rs.add(
+                    *hash,
+                    Arc::clone(tx),
+                    LocalTimestamp::ZERO,
+                    LocalTimestamp::ZERO,
+                    locks,
+                );
             }
             Op::Remove(i) => {
                 let (hash, _) = &fixture[(*i as usize) % pool_len];
@@ -499,7 +635,7 @@ mod tests {
             Op::BlockNode(n) => {
                 let node = test_node(*n);
                 if !locks.lock_nodes([node]).is_empty() {
-                    rs.block_node(node);
+                    rs.block_node(node, false, LocalTimestamp::ZERO);
                 }
             }
             Op::UnlockNode(n) => {
@@ -521,7 +657,13 @@ mod tests {
         promotable.sort();
         for hash in promotable {
             if let Some((_, tx)) = fixture.iter().find(|(h, _)| *h == hash) {
-                rs.add(hash, Arc::clone(tx), LocalTimestamp::ZERO, locks);
+                rs.add(
+                    hash,
+                    Arc::clone(tx),
+                    LocalTimestamp::ZERO,
+                    LocalTimestamp::ZERO,
+                    locks,
+                );
             }
         }
     }

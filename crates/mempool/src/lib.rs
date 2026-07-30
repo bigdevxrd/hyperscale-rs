@@ -26,4 +26,5 @@ pub use coordinator::{
     DEFAULT_QUIESCE_SINGLE_SHARD_MARGIN, LockContentionStats, MempoolConfig, MempoolCoordinator,
     MempoolMemoryStats, RoutingObserver,
 };
+pub use ready_set::DeferralStats;
 pub use tx_store::TxStore;

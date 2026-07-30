@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hyperscale_crypto_bls::BlsSigner;
+use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
     BeaconState, BlockHeight, RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision,
     TransactionStatus, TxHash,
@@ -74,6 +75,14 @@ pub trait Cluster {
     /// configured scheme.
     fn signer_from_seed(&self, seed: &[u8; 32]) -> Arc<dyn Signer> {
         Arc::new(BlsSigner::from_seed(seed))
+    }
+
+    /// Aggregated mempool deferral statistics across every hosted vnode,
+    /// when the harness can observe them synchronously. `None` on a
+    /// harness whose node state is not reachable from the driving thread;
+    /// scenarios treat the readout as optional.
+    fn deferral_stats(&self) -> Option<DeferralStats> {
+        None
     }
 
     /// The status of `tx`, if any hosted mempool or execution still tracks it.

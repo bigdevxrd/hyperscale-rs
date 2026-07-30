@@ -158,10 +158,11 @@ impl ShardParticipation {
         }
     }
 
-    /// Push the current wall-clock into the shard coordinator and the mirrored
-    /// `now`, before any handler runs.
+    /// Push the current wall-clock into the shard and mempool coordinators
+    /// and the mirrored `now`, before any handler runs.
     pub(in crate::state) const fn set_time(&mut self, now: LocalTimestamp) {
         self.now = now;
         self.shard_coordinator.set_time(now);
+        self.mempool_coordinator.set_time(now);
     }
 }

@@ -17,6 +17,11 @@ use hyperscale_types::NodeId;
 
 pub struct LockTracker {
     locked_nodes: HashSet<NodeId>,
+    /// Locked nodes whose holder declared them as writes. Bookkeeping for
+    /// deferral-cause classification only — locking semantics never read
+    /// it. A node has at most one lock holder (two ready transactions
+    /// cannot claim the same node), so membership is the holder's mode.
+    write_locked: HashSet<NodeId>,
     in_flight_count: usize,
 }
 
@@ -24,6 +29,7 @@ impl LockTracker {
     pub fn new() -> Self {
         Self {
             locked_nodes: HashSet::new(),
+            write_locked: HashSet::new(),
             in_flight_count: 0,
         }
     }
@@ -44,8 +50,26 @@ impl LockTracker {
     pub fn unlock_nodes(&mut self, nodes: impl IntoIterator<Item = NodeId>) -> Vec<NodeId> {
         nodes
             .into_iter()
-            .filter(|node| self.locked_nodes.remove(node))
+            .filter(|node| {
+                self.write_locked.remove(node);
+                self.locked_nodes.remove(node)
+            })
             .collect()
+    }
+
+    /// Record that the holder of each (already locked) node declared it as
+    /// a write. Classification bookkeeping; no effect on lock state.
+    pub fn mark_write_locked(&mut self, nodes: impl IntoIterator<Item = NodeId>) {
+        for node in nodes {
+            if self.locked_nodes.contains(&node) {
+                self.write_locked.insert(node);
+            }
+        }
+    }
+
+    /// Whether `node`'s lock holder declared it as a write.
+    pub fn is_write_locked(&self, node: &NodeId) -> bool {
+        self.write_locked.contains(node)
     }
 
     pub fn is_locked(&self, node: &NodeId) -> bool {

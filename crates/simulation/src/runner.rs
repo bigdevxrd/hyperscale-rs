@@ -718,6 +718,21 @@ impl SimulationRunner {
         vnodes
     }
 
+    /// Every live vnode state machine across every host and shard.
+    #[must_use]
+    pub fn all_vnode_states(&self) -> Vec<&NodeStateMachine> {
+        let mut vnodes = Vec::new();
+        for host in &self.hosts {
+            let shards: Vec<ShardId> = host.hosted_shards().collect();
+            for shard in shards {
+                for v in 0..host.vnodes_len(shard) {
+                    vnodes.push(host.vnode_state(shard, v));
+                }
+            }
+        }
+        vnodes
+    }
+
     /// The state machine of `host`'s vnode in `shard`, or `None` when
     /// the host doesn't carry that shard. Relocation puts two vnodes
     /// with one validator id on a host (the draining shard's and the

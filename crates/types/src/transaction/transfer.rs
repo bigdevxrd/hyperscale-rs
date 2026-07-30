@@ -48,3 +48,45 @@ pub fn build_transfer_tx(
     let notarized = sign_and_notarize(manifest, network, nonce, payer)?;
     routable_from_notarized_v1(notarized, validity)
 }
+
+/// Build a signed, notarized XRD fan-out: one withdrawal from `from`,
+/// `amount` deposited to each of `recipients`.
+///
+/// Every recipient account joins the transaction's declared set, so the
+/// participant count — and with it the number of shards the transaction
+/// touches — scales with the recipient list.
+///
+/// `payer` must control `from`: it both signs the withdrawal and notarizes.
+///
+/// # Errors
+///
+/// Returns [`TransactionError`] if signing or notarization fails, which in
+/// practice means a malformed manifest.
+///
+/// # Panics
+///
+/// Panics if `recipients` is empty.
+pub fn build_fan_out_transfer_tx(
+    payer: &Ed25519PrivateKey,
+    from: ComponentAddress,
+    recipients: &[ComponentAddress],
+    amount: Decimal,
+    network: &NetworkDefinition,
+    nonce: u32,
+    validity: TimestampRange,
+) -> Result<RoutableTransaction, TransactionError> {
+    assert!(!recipients.is_empty(), "fan-out needs a recipient");
+    let total = amount
+        * Decimal::from(u64::try_from(recipients.len()).expect("recipient count fits in u64"));
+    let mut builder = ManifestBuilder::new()
+        .lock_fee(from, Decimal::from(TRANSFER_FEE))
+        .withdraw_from_account(from, XRD, total);
+    for (index, recipient) in recipients.iter().enumerate() {
+        let bucket = format!("fan_out_{index}");
+        builder = builder
+            .take_from_worktop(XRD, amount, &bucket)
+            .try_deposit_or_abort(*recipient, None, bucket);
+    }
+    let notarized = sign_and_notarize(builder.build(), network, nonce, payer)?;
+    routable_from_notarized_v1(notarized, validity)
+}

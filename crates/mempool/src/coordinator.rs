@@ -46,7 +46,7 @@ use tracing::instrument;
 
 use crate::expected_txs::{EXPECTED_TX_GRACE, ExpectedTxs};
 use crate::lock_tracker::LockTracker;
-use crate::ready_set::ReadySet;
+use crate::ready_set::{DeferralStats, ReadySet};
 use crate::tombstones::TombstoneStore;
 use crate::tx_store::TxStore;
 
@@ -306,6 +306,11 @@ pub struct MempoolCoordinator {
     /// The routing-overlay observer, when the wiring layer injected one.
     /// `None` is the off path.
     routing_observer: Option<Arc<dyn RoutingObserver>>,
+
+    /// The dispatch seam's clock reading, pushed by [`Self::set_time`]
+    /// before each handler runs. Consumed by the deferral statistics only;
+    /// admission and selection read the timestamps their handlers receive.
+    now: LocalTimestamp,
 }
 
 impl std::fmt::Debug for MempoolCoordinator {
@@ -360,7 +365,19 @@ impl MempoolCoordinator {
             local_shard,
             fork_fence: ForkFence::new(),
             routing_observer: None,
+            now: LocalTimestamp::ZERO,
         }
+    }
+
+    /// Push the dispatch seam's clock reading, before any handler runs.
+    pub const fn set_time(&mut self, now: LocalTimestamp) {
+        self.now = now;
+    }
+
+    /// Aggregated deferral statistics for this mempool.
+    #[must_use]
+    pub const fn deferral_stats(&self) -> DeferralStats {
+        self.ready.deferral_stats()
     }
 
     /// Install the routing-overlay observer. Wiring-layer only, driven by
@@ -966,8 +983,15 @@ impl MempoolCoordinator {
                 .filter(|node| topology_snapshot.shard_for_node_id(node) == local_shard)
                 .copied(),
         );
+        self.locks.mark_write_locked(
+            tx.declared_writes()
+                .iter()
+                .filter(|node| topology_snapshot.shard_for_node_id(node) == local_shard)
+                .copied(),
+        );
         for node in newly_locked {
-            self.ready.block_node(node);
+            let write_locked = self.locks.is_write_locked(&node);
+            self.ready.block_node(node, write_locked, self.now);
         }
     }
 
@@ -1001,7 +1025,8 @@ impl MempoolCoordinator {
         tx: &Arc<Verified<RoutableTransaction>>,
         added_at: LocalTimestamp,
     ) {
-        self.ready.add(hash, Arc::clone(tx), added_at, &self.locks);
+        self.ready
+            .add(hash, Arc::clone(tx), added_at, added_at, &self.locks);
     }
 
     /// Remove a transaction from ready tracking. If the tx was in the ready
@@ -1030,7 +1055,7 @@ impl MempoolCoordinator {
             }
         }
         for (hash, tx, added_at) in to_readd {
-            self.ready.add(hash, tx, added_at, &self.locks);
+            self.ready.add(hash, tx, added_at, self.now, &self.locks);
         }
     }
 

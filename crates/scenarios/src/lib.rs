@@ -17,6 +17,7 @@
 
 mod support;
 
+mod contention;
 mod faults;
 mod liveness;
 mod multi_vnode;
@@ -25,6 +26,10 @@ mod straddler;
 mod transactions;
 mod witnesses;
 
+pub use contention::{
+    ContentionReport, cross_shard_fraction, hot_component_saturation, participant_count_sweep,
+    zipf_payments,
+};
 pub use faults::{
     beacon_lag_drops_skipped_epochs_reveal_chains, beacon_pool_partition_stalls_epoch_production,
     cross_shard_compound_drop_fetch_fallback, cross_shard_exec_cert_drop_fetch_fallback,
@@ -37,6 +42,7 @@ pub use faults::{
     minority_fragment_rejoins_after_partition, partition_halts_and_heals,
     partition_heals_at_exact_quorum,
 };
+pub use hyperscale_mempool::DeferralStats;
 pub use liveness::liveness_baseline;
 pub use multi_vnode::multi_vnode_progress;
 pub use reshape::{

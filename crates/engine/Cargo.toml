@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Radix Engine integration"
 
 [dependencies]
+hyperscale-metrics.workspace = true
 hyperscale-storage.workspace = true
 hyperscale-types.workspace = true
 

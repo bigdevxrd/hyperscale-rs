@@ -184,6 +184,10 @@ impl MetricsRecorder for MemoryRecorder {
         self.inc("routing_overlay_digests", None, 1);
     }
 
+    fn record_transaction_executed(&self) {
+        self.inc("transactions_executed", None, 1);
+    }
+
     fn set_block_height(&self, shard: u64, height: u64) {
         self.set("block_height", Some(&shard.to_string()), height as f64);
     }

@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{SubstateDatabase, SubstateStore};
 use hyperscale_types::{BlockHeight, NodeId, RoutableTransaction, Stopwatch, SubstateEntry};
 use radix_common::network::NetworkDefinition;
@@ -142,6 +143,7 @@ impl RadixExecutor {
             return CachedVmOutput::validation_failed(tx.hash());
         };
         let executable = validated.clone().create_executable();
+        record_transaction_executed();
         let receipt = execute_transaction(
             snapshot,
             &self.caches.vm_modules,
@@ -195,6 +197,7 @@ impl RadixExecutor {
         let executable = validated.clone().create_executable();
         let entry_slices: Vec<&[SubstateEntry]> = provisions.iter().map(|p| p.as_slice()).collect();
         let provisioned = ProvisionedSnapshot::from_provisions(snapshot, &entry_slices);
+        record_transaction_executed();
         let receipt = provisioned.execute(
             &executable,
             &self.caches.vm_modules,

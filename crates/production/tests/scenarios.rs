@@ -12,29 +12,30 @@ mod support;
 use std::time::Duration;
 
 use hyperscale_scenarios::tx::{
-    halt_recovery_genesis_balances, halt_straddler_setup, intershard_partition_genesis_balances,
-    merge_straddler_setup, split_straddler_setup, witness_genesis_balances,
+    contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
+    halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
+    split_straddler_setup, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     ScenarioConfig, beacon_pool_partition_stalls_epoch_production,
     cross_shard_compound_drop_fetch_fallback, cross_shard_exec_cert_drop_fetch_fallback,
-    cross_shard_header_fetch_fallback, cross_shard_provisions_drop_fetch_fallback,
-    cross_shard_provisions_fetch_with_request_loss,
+    cross_shard_fraction, cross_shard_header_fetch_fallback,
+    cross_shard_provisions_drop_fetch_fallback, cross_shard_provisions_fetch_with_request_loss,
     cross_shard_provisions_recovers_after_transient_outage,
     cross_shard_transaction_da_fetch_fallback, cross_shard_tx, gossip_drop_engages_fetch_fallback,
     grow_reaches_four_shard_topology, grow_reaches_two_shard_topology,
     halted_shard_recovers_by_committee_redraw, halted_shard_straddler_atomic,
-    inter_shard_partition_aborts_waves_at_deadline, isolated_validator_still_settles,
-    livelock_resolves_promptly, liveness_baseline, merge_lifecycle,
-    merge_seats_full_keeper_committee, merge_straddler_atomic,
-    minority_fragment_rejoins_after_partition, multi_vnode_progress, partition_halts_and_heals,
-    partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
+    hot_component_saturation, inter_shard_partition_aborts_waves_at_deadline,
+    isolated_validator_still_settles, livelock_resolves_promptly, liveness_baseline,
+    merge_lifecycle, merge_seats_full_keeper_committee, merge_straddler_atomic,
+    minority_fragment_rejoins_after_partition, multi_vnode_progress, participant_count_sweep,
+    partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
     single_shard_tx, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
     surviving_sibling_split_seats_full_committees,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use serial_test::serial;
 use support::ProdCluster;
@@ -199,6 +200,74 @@ fn split_lifecycle_prod() {
 fn cross_shard_tx_prod() {
     let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
     cross_shard_tx(&mut cluster);
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn zipf_payments_prod() {
+    let mut cluster = ProdCluster::start_with_balances(
+        &liveness_config(),
+        42,
+        EPOCH_MS,
+        contention_genesis_balances(24, 6),
+    );
+    let report = zipf_payments(&mut cluster, 24, 6, 1.0);
+    println!("zipf_payments s=1.0 senders=24 recipients=6: {report:?}");
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn hot_component_saturation_prod() {
+    let mut cluster = ProdCluster::start_with_balances(
+        &liveness_config(),
+        42,
+        EPOCH_MS,
+        contention_genesis_balances(12, 1),
+    );
+    let (report, height_span) = hot_component_saturation(&mut cluster, 12);
+    println!("hot_component_saturation senders=12 height_span={height_span}: {report:?}");
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn cross_shard_fraction_prod() {
+    let mut cluster = ProdCluster::start_with_balances(
+        &split_config(),
+        11,
+        EPOCH_MS,
+        cross_contention_genesis_balances(16),
+    );
+    let report = cross_shard_fraction(&mut cluster, 16, 500);
+    println!("cross_shard_fraction total=16 cross=50%: {report:?}");
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn participant_count_sweep_prod() {
+    let mut cluster = ProdCluster::start_with_balances(
+        &split_config(),
+        11,
+        EPOCH_MS,
+        cross_contention_genesis_balances(1),
+    );
+    let latencies = participant_count_sweep(&mut cluster, 2, 2);
+    println!("participant_count_sweep shards=2: {latencies:?}");
 }
 
 #[test]
