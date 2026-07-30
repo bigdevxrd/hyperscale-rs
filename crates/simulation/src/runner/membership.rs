@@ -448,7 +448,12 @@ impl SimulationRunner {
             shard,
             recovered,
             shard_config: &ShardConsensusConfig::default(),
-            mempool_config: MempoolConfig::default(),
+            // Harness default: the routing overlay runs in every
+            // simulation; prod stays off unless configured.
+            mempool_config: MempoolConfig {
+                routing_overlay: true,
+                ..MempoolConfig::default()
+            },
             provision_config: ProvisionConfig::default(),
             vnodes: vec![(validator, signer)],
         })

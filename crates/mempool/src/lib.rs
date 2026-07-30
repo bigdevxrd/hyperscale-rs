@@ -24,6 +24,6 @@ mod tx_store;
 pub use coordinator::{
     DEFAULT_MIN_DWELL_TIME, DEFAULT_QUIESCE_CROSS_SHARD_MARGIN,
     DEFAULT_QUIESCE_SINGLE_SHARD_MARGIN, LockContentionStats, MempoolConfig, MempoolCoordinator,
-    MempoolMemoryStats,
+    MempoolMemoryStats, RoutingObserver,
 };
 pub use tx_store::TxStore;

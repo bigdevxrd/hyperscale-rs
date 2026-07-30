@@ -39,6 +39,7 @@ pub mod host;
 pub mod pool_loop;
 pub mod process;
 pub mod reshape;
+pub mod routing_observer;
 pub mod shard;
 mod state;
 mod sync;

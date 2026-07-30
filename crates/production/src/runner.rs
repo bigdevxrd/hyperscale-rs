@@ -250,7 +250,13 @@ impl ProductionRunnerBuilder {
             publishers: RpcPublishers::default(),
             genesis_config: None,
             network_definition: None,
-            mempool_config: MempoolConfig::default(),
+            // Harness default: the routing overlay runs in production
+            // tests; the validator binary always overrides this from its
+            // config file, where the overlay defaults off.
+            mempool_config: MempoolConfig {
+                routing_overlay: true,
+                ..MempoolConfig::default()
+            },
             provision_config: ProvisionConfig::default(),
             beacon_chain_config: None,
             storage_factory,

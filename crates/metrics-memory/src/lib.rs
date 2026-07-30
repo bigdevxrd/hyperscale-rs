@@ -180,6 +180,10 @@ impl MetricsRecorder for MemoryRecorder {
         self.observe("transaction_latency", Some(label), latency_secs);
     }
 
+    fn record_routing_digest(&self, _digest: [u8; 32]) {
+        self.inc("routing_overlay_digests", None, 1);
+    }
+
     fn set_block_height(&self, shard: u64, height: u64) {
         self.set("block_height", Some(&shard.to_string()), height as f64);
     }

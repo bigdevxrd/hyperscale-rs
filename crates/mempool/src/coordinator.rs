@@ -114,6 +114,12 @@ pub struct MempoolConfig {
     /// [`DEFAULT_QUIESCE_SINGLE_SHARD_MARGIN`] is the operator recommendation.
     #[serde(default = "default_quiesce_single_shard_margin")]
     pub quiesce_single_shard_margin: Duration,
+
+    /// Whether the wiring layer injects a [`RoutingObserver`] at node
+    /// construction. Observability only — no admission decision keys on
+    /// it. Off by default; the test harnesses turn it on.
+    #[serde(default)]
+    pub routing_overlay: bool,
 }
 
 const fn default_max_pending() -> usize {
@@ -139,8 +145,21 @@ impl Default for MempoolConfig {
             min_dwell_time: DEFAULT_MIN_DWELL_TIME,
             quiesce_cross_shard_margin: Duration::ZERO,
             quiesce_single_shard_margin: Duration::ZERO,
+            routing_overlay: false,
         }
     }
+}
+
+/// Observer port for the routing overlay: notified once per newly
+/// admitted transaction, with the topology the admission decision used.
+///
+/// The mempool defines this seam and never sees what the observer
+/// derives — implementations live at the wiring layer, and absence of an
+/// observer is the off path. Purely observational: nothing the observer
+/// does can influence admission, selection, or any consensus value.
+pub trait RoutingObserver: Send + Sync {
+    /// A transaction was newly admitted to the pool.
+    fn on_admitted(&self, tx: &RoutableTransaction, topology: &TopologySnapshot);
 }
 
 /// Lock contention statistics from the mempool.
@@ -283,6 +302,10 @@ pub struct MempoolCoordinator {
     /// shard's recovery completes, so mid-recovery txs can't flow back in,
     /// take locks, and stall on fenced provisions.
     fork_fence: ForkFence,
+
+    /// The routing-overlay observer, when the wiring layer injected one.
+    /// `None` is the off path.
+    routing_observer: Option<Arc<dyn RoutingObserver>>,
 }
 
 impl std::fmt::Debug for MempoolCoordinator {
@@ -336,7 +359,14 @@ impl MempoolCoordinator {
             config,
             local_shard,
             fork_fence: ForkFence::new(),
+            routing_observer: None,
         }
+    }
+
+    /// Install the routing-overlay observer. Wiring-layer only, driven by
+    /// [`MempoolConfig::routing_overlay`].
+    pub fn set_routing_observer(&mut self, observer: Arc<dyn RoutingObserver>) {
+        self.routing_observer = Some(observer);
     }
 
     /// Reference to the shared body store. Callers that need to read
@@ -410,6 +440,10 @@ impl MempoolCoordinator {
         // Tx is in the pool — any pending cross-shard expectation is satisfied,
         // regardless of which source originally signaled it.
         self.expected_txs.forget(&hash);
+
+        if let Some(observer) = &self.routing_observer {
+            observer.on_admitted(tx, topology_snapshot);
+        }
 
         Some(cross_shard)
     }

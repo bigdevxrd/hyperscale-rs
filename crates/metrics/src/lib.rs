@@ -252,6 +252,10 @@ pub trait MetricsRecorder: Send + Sync + 'static {
     /// Record a transaction finalized.
     fn record_transaction_finalized(&self, latency_secs: f64, cross_shard: bool) {}
 
+    /// Record one routing-overlay digest computed at mempool ingest.
+    /// Observability only — the digest is never a consensus value.
+    fn record_routing_digest(&self, digest: [u8; 32]) {}
+
     /// Set the current block height gauge for a shard.
     fn set_block_height(&self, shard: u64, height: u64) {}
 
@@ -608,6 +612,12 @@ pub fn record_block_committed(shard: u64, commit_latency_secs: f64, source: &str
 #[inline]
 pub fn record_transaction_finalized(latency_secs: f64, cross_shard: bool) {
     recorder().record_transaction_finalized(latency_secs, cross_shard);
+}
+
+/// Record one routing-overlay digest computed at mempool ingest.
+#[inline]
+pub fn record_routing_digest(digest: [u8; 32]) {
+    recorder().record_routing_digest(digest);
 }
 
 /// Set the current block height gauge for a shard.
