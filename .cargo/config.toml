@@ -1,3 +1,6 @@
+[net]
+git-fetch-with-cli = true
+
 [env]
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 # secp256k1-sys ships its own wasm sysroot whose headers omit a `memmove`

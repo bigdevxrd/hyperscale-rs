@@ -1,0 +1,16 @@
+[package]
+name = "hyperscale-effects-bridge"
+version.workspace = true
+edition.workspace = true
+description = "The workspace's binding to the VM effect vocabulary: protocol hasher and declared-effects adapter"
+
+[dependencies]
+blake3.workspace = true
+hyperscale-types.workspace = true
+hyperscale-vm-effects.workspace = true
+
+[dev-dependencies]
+hyperscale-types = { workspace = true, features = ["test-utils"] }
+
+[lints]
+workspace = true

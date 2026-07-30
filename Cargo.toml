@@ -10,6 +10,7 @@ members = [
     "crates/dispatch",
     "crates/dispatch-pooled",
     "crates/dispatch-sync",
+    "crates/effects-bridge",
     "crates/engine",
     "crates/execution",
     "crates/jmt",
@@ -50,6 +51,7 @@ hyperscale-demo = { path = "crates/demo" }
 hyperscale-dispatch = { path = "crates/dispatch" }
 hyperscale-dispatch-pooled = { path = "crates/dispatch-pooled" }
 hyperscale-dispatch-sync = { path = "crates/dispatch-sync" }
+hyperscale-effects-bridge = { path = "crates/effects-bridge" }
 hyperscale-engine = { path = "crates/engine" }
 hyperscale-execution = { path = "crates/execution" }
 hyperscale-jmt = { path = "crates/jmt", features = ["parallel"] }
@@ -115,6 +117,12 @@ tracing-opentelemetry = "0.33.0"
 tracing-subscriber = "0.3.23"
 tracing-test = "0.2.6"
 wasm-bindgen = "0.2.126"
+
+# VM dependency (github.com/hyperscalers/hyperscale-vm @ 4f2cf9e2b3). The
+# workspace consumes exactly this one crate from the VM repo — types and the
+# routing vocabulary, dependency closure `thiserror`. Bumps are deliberate
+# rev-pin commits, never `cargo update` drift.
+hyperscale-vm-effects = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "4f2cf9e2b3af6e619b345bd6bfbcde73aea1ab57" }
 
 # Radix dependencies (github.com/hyperscalers/radixdlt-scrypto @ f7fcb1f62f)
 radix-common = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
