@@ -107,7 +107,7 @@ impl ReadySet {
     }
 
     fn declares_write(tx: &RoutableTransaction, key: &DeclaredKey) -> bool {
-        tx.admission_write_keys().any(|write| write == *key)
+        tx.admission_write_keys().iter().any(|write| write == key)
     }
 
     /// Whether any ready-set claimant of `key` declared it as a write.
@@ -165,6 +165,7 @@ impl ReadySet {
         // write claim — read-read overlap admits.
         let blocking_keys: HashSet<DeclaredKey> = tx
             .admission_keys()
+            .into_iter()
             .filter(|key| {
                 if self.share_reads && !Self::declares_write(&tx, key) {
                     locks.is_write_locked(key) || self.ready_claim_is_write(key)
@@ -506,7 +507,7 @@ mod tests {
                         "ready_txs_by_node[{node:?}] has {hash:?} but it's not in ready"
                     ));
                 };
-                if !entry.tx.admission_keys().any(|k| k == *node) {
+                if !entry.tx.admission_keys().iter().any(|k| k == node) {
                     return Err(format!(
                         "ready_txs_by_node[{node:?}] has {hash:?} which does not declare that key"
                     ));

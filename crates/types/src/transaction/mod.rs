@@ -21,3 +21,4 @@ pub mod routable;
 pub mod status;
 pub mod system_action;
 pub mod transfer;
+pub mod vm;

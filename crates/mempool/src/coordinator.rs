@@ -989,10 +989,10 @@ impl MempoolCoordinator {
     fn add_locked_nodes(&mut self, topology_snapshot: &TopologySnapshot, tx: &RoutableTransaction) {
         let local_shard = self.local_shard;
         let local =
-            |key: &DeclaredKey| topology_snapshot.shard_for_node_id(&key.node) == local_shard;
+            |key: &DeclaredKey| topology_snapshot.shard_for_declared_key(key) == local_shard;
         let blocking = self.locks.lock_declared(
-            tx.admission_read_keys().filter(local),
-            tx.admission_write_keys().filter(local),
+            tx.admission_read_keys().into_iter().filter(local),
+            tx.admission_write_keys().into_iter().filter(local),
         );
         for (key, scope) in blocking {
             let write_locked = self.locks.is_write_locked(&key);
@@ -1012,10 +1012,10 @@ impl MempoolCoordinator {
     ) {
         let local_shard = self.local_shard;
         let local =
-            |key: &DeclaredKey| topology_snapshot.shard_for_node_id(&key.node) == local_shard;
+            |key: &DeclaredKey| topology_snapshot.shard_for_declared_key(key) == local_shard;
         let promotable = self.locks.unlock_declared(
-            tx.admission_read_keys().filter(local),
-            tx.admission_write_keys().filter(local),
+            tx.admission_read_keys().into_iter().filter(local),
+            tx.admission_write_keys().into_iter().filter(local),
         );
         for key in promotable {
             self.promote_transactions_for_key(key);

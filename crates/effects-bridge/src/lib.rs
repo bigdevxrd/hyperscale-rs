@@ -14,6 +14,8 @@
 //! and asserted for determinism via [`routing_digest`], never a consensus
 //! artifact or an admission input.
 
+pub mod vm_statics;
+
 use std::collections::BTreeMap;
 
 use blake3::Hasher as Blake3;
@@ -21,6 +23,7 @@ use hyperscale_types::{NodeId, RoutableTransaction, ShardId, TopologySnapshot};
 use hyperscale_vm_effects::{
     Address, Effect, EffectSet, EffectTarget, Hash32, Hasher, LocalKey, Mode, SubstateKey, Window,
 };
+pub use vm_statics::{BridgeStatics, decode_graph, encode_graph};
 
 const DOMAIN_NODE_ADDRESS: &[u8] = b"hyperscale/effects-bridge/node-address";
 const DOMAIN_ROUTING_DIGEST: &[u8] = b"hyperscale/effects-bridge/routing-digest";

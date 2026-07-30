@@ -61,7 +61,8 @@ impl ShardTrie {
         }
     }
 
-    /// The shard owning `node_id`, by longest-prefix match.
+    /// The shard owning `node_id`, by longest-prefix match over the
+    /// node's hash bits.
     ///
     /// # Panics
     /// Panics if the trie is not a complete partition (a hash path descends
@@ -69,11 +70,26 @@ impl ShardTrie {
     #[must_use]
     pub fn shard_for(&self, node_id: &NodeId) -> ShardId {
         let hash = blake3_hash(&node_id.0);
-        let bits = u64::from_be_bytes(
+        self.walk(u64::from_be_bytes(
             hash.as_bytes()[..8]
                 .try_into()
                 .expect("blake3 output is 32 bytes"),
-        );
+        ))
+    }
+
+    /// The shard owning `prefix`'s key space: the walk on the prefix's own
+    /// bits, no hashing — the prefix is the placement.
+    ///
+    /// # Panics
+    /// As [`Self::shard_for`].
+    #[must_use]
+    pub fn shard_for_prefix(&self, prefix: [u8; 16]) -> ShardId {
+        self.walk(u64::from_be_bytes(
+            prefix[..8].try_into().expect("prefix is 16 bytes"),
+        ))
+    }
+
+    fn walk(&self, bits: u64) -> ShardId {
         let mut id = ShardId::ROOT;
         loop {
             if self.leaves.contains(&id) {
@@ -180,6 +196,18 @@ mod tests {
         let parent = trie.merge(l, r);
         assert_eq!(parent, ShardId::ROOT);
         assert_eq!(trie, ShardTrie::single());
+    }
+
+    #[test]
+    fn shard_for_prefix_walks_the_prefix_bits_directly() {
+        // The routed shard's path equals the top `depth` bits of the
+        // prefix itself — no hashing, the prefix is the placement.
+        let trie = ShardTrie::uniform(3);
+        for prefix in [[0x00; 16], [0x5A; 16], [0xFF; 16]] {
+            let shard = trie.shard_for_prefix(prefix);
+            let bits = u64::from_be_bytes(prefix[..8].try_into().unwrap());
+            assert_eq!(shard.path(), bits >> (64 - 3));
+        }
     }
 
     #[test]

@@ -12,10 +12,10 @@ use blake3::hash as blake3_hash;
 use sbor::prelude::BasicSbor;
 
 use crate::{
-    BeaconWitnessLeafCount, BlockHash, BlockHeight, CompletedRecovery, ConsensusPublicKey, Epoch,
-    NetworkDefinition, NetworkParams, NodeId, ReshapeThresholds, Round, RoutableTransaction,
-    SettledWavesRoot, ShardId, ShardRecovery, ShardTrie, StateRoot, ValidatorId, ValidatorSet,
-    VoteCount, WeightedTimestamp,
+    BeaconWitnessLeafCount, BlockHash, BlockHeight, CompletedRecovery, ConsensusPublicKey,
+    DeclaredKey, Epoch, NetworkDefinition, NetworkParams, NodeId, ReshapeThresholds, Round,
+    RoutableTransaction, SettledWavesRoot, ShardId, ShardRecovery, ShardTrie, StateRoot,
+    ValidatorId, ValidatorSet, VoteCount, WeightedTimestamp,
 };
 
 /// Per-shard committee membership, split into its two consumer views.
@@ -991,11 +991,38 @@ impl TopologySnapshot {
         self.shard_trie.shard_for(node_id)
     }
 
-    /// Every shard a transaction touches via either `declared_reads` or
-    /// `declared_writes`. Each shard executes the whole transaction, so
-    /// every touched shard needs every input substate it doesn't own
-    /// locally — reads and writes participate symmetrically here.
+    /// The shard owning a VM owner prefix's key space: the trie walk on
+    /// the prefix's own bits, no hashing.
+    #[must_use]
+    pub fn shard_for_prefix(&self, prefix: [u8; 16]) -> ShardId {
+        self.shard_trie.shard_for_prefix(prefix)
+    }
+
+    /// The shard owning a declared admission key, per its variant's
+    /// identity space.
+    #[must_use]
+    pub fn shard_for_declared_key(&self, key: &DeclaredKey) -> ShardId {
+        match key {
+            DeclaredKey::Node { node, .. } => self.shard_for_node_id(node),
+            DeclaredKey::Prefix { owner, .. } => self.shard_for_prefix(*owner),
+        }
+    }
+
+    /// Every shard a transaction touches via its declared access sets —
+    /// node-derived for the Radix variant, prefix-derived for the VM
+    /// variant. Each shard executes the whole transaction, so every
+    /// touched shard needs every input substate it doesn't own locally —
+    /// reads and writes participate symmetrically here.
     pub fn all_shards_for_transaction(&self, tx: &RoutableTransaction) -> Vec<ShardId> {
+        if let Some(routing) = tx.vm_routing() {
+            return routing
+                .all_prefixes()
+                .into_iter()
+                .map(|prefix| self.shard_for_prefix(prefix))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+        }
         tx.declared_reads()
             .iter()
             .chain(tx.declared_writes().iter())
@@ -1018,6 +1045,12 @@ impl TopologySnapshot {
     /// Check if `shard` is involved in `tx`'s consensus path — i.e. owns at
     /// least one of `tx`'s declared writes.
     pub fn involves_shard_for_consensus(&self, shard: ShardId, tx: &RoutableTransaction) -> bool {
+        if let Some(routing) = tx.vm_routing() {
+            return routing
+                .write_prefixes
+                .iter()
+                .any(|prefix| self.shard_for_prefix(*prefix) == shard);
+        }
         tx.declared_writes()
             .iter()
             .any(|node_id| self.shard_for_node_id(node_id) == shard)
@@ -1025,6 +1058,12 @@ impl TopologySnapshot {
 
     /// Check if `shard` is involved in `tx` at all (reads or writes).
     pub fn involves_shard(&self, shard: ShardId, tx: &RoutableTransaction) -> bool {
+        if let Some(routing) = tx.vm_routing() {
+            return routing
+                .all_prefixes()
+                .into_iter()
+                .any(|prefix| self.shard_for_prefix(prefix) == shard);
+        }
         tx.declared_writes()
             .iter()
             .chain(tx.declared_reads().iter())

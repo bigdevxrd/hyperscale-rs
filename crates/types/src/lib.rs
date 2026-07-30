@@ -200,6 +200,7 @@ pub use transaction::notarize::{
 };
 pub use transaction::routable::{
     RoutableTransaction, RoutableTransactionContext, RoutableTransactionVerifyError,
+    TransactionBody, VM_BODY_TAG,
 };
 pub use transaction::status::{
     TransactionDecision, TransactionError, TransactionStatus, TransactionStatusParseError,
@@ -209,6 +210,9 @@ pub use transaction::system_action::{
     system_action,
 };
 pub use transaction::transfer::{build_fan_out_transfer_tx, build_transfer_tx};
+pub use transaction::vm::{
+    VmRouting, VmStatics, VmStaticsError, VmTransaction, install_vm_statics, vm_statics_installed,
+};
 pub use verifiable::{Verifiable, Verified, Verify};
 pub use wave::certificate::{
     MAX_EXECUTION_CERTIFICATES_PER_WAVE, WaveCertificate, wave_receipt_hash,

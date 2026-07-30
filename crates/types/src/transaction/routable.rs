@@ -14,10 +14,31 @@ use radix_transactions::validation::TransactionValidator;
 use sbor::prelude::*;
 use thiserror::Error;
 
+use crate::transaction::vm::vm_statics;
 use crate::{
     BoundedBytes, BoundedVec, DeclaredKey, Hash, MAX_DECLARED_NODES_PER_TX, MAX_TX_BYTES_LEN,
-    NodeId, TimestampRange, TxHash, Verified, Verify, uniform_shard_for_node,
+    NodeId, ShardTrie, TimestampRange, TxHash, Verified, Verify, VmRouting, VmStaticsError,
+    VmTransaction, uniform_shard_for_node,
 };
+
+/// First byte of a VM-variant body.
+///
+/// Distinct from manifest-SBOR's payload prefix, so the two engines' wire
+/// bodies are disjoint by construction: a Radix body is raw
+/// manifest-encoded `UserTransaction` bytes, and a VM body is this tag
+/// followed by the basic-SBOR encoding of [`VmTransaction`].
+pub const VM_BODY_TAG: u8 = 0x56;
+
+/// A transaction's decoded body: wholly one engine's, by construction —
+/// cross-engine composition is inexpressible.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // one cache slot per transaction; the Radix body sat inline before
+pub enum TransactionBody {
+    /// A Radix `UserTransaction`.
+    Radix(UserTransaction),
+    /// A VM signed manifest graph.
+    Vm(VmTransaction),
+}
 
 /// A transaction with routing information.
 ///
@@ -38,11 +59,17 @@ pub struct RoutableTransaction {
     declared_writes: BoundedVec<NodeId, MAX_DECLARED_NODES_PER_TX>,
     validity_range: TimestampRange,
 
-    /// Deserialized `UserTransaction`, populated by `transaction()` on
-    /// first access via `manifest_decode(&serialized_bytes)`. `::new`
-    /// pre-populates from the input. Not on the wire.
+    /// Deserialized body, populated by `body()` on first access from
+    /// `serialized_bytes`. Constructors pre-populate. Not on the wire.
     #[sbor(skip)]
-    transaction: OnceLock<UserTransaction>,
+    body: OnceLock<TransactionBody>,
+
+    /// The VM variant's derived routing identity, populated at
+    /// verification (or lazily for committed transactions). Never
+    /// populated for the Radix variant. Not on the wire — derivation is
+    /// local by construction.
+    #[sbor(skip)]
+    vm_routing: OnceLock<VmRouting>,
 
     /// Content hash, populated on first call to `hash()` via
     /// `blake3(&serialized_bytes)`. `::new` pre-populates. Not on the
@@ -81,9 +108,13 @@ impl Eq for RoutableTransaction {}
 // (wave-state extract, mempool block-commit lift, proposal build).
 impl Clone for RoutableTransaction {
     fn clone(&self) -> Self {
-        let transaction = OnceLock::new();
-        if let Some(t) = self.transaction.get() {
-            let _ = transaction.set(t.clone());
+        let body = OnceLock::new();
+        if let Some(t) = self.body.get() {
+            let _ = body.set(t.clone());
+        }
+        let vm_routing = OnceLock::new();
+        if let Some(r) = self.vm_routing.get() {
+            let _ = vm_routing.set(r.clone());
         }
         let hash = OnceLock::new();
         if let Some(h) = self.hash.get() {
@@ -102,7 +133,8 @@ impl Clone for RoutableTransaction {
             declared_reads: self.declared_reads.clone(),
             declared_writes: self.declared_writes.clone(),
             validity_range: self.validity_range,
-            transaction,
+            body,
+            vm_routing,
             hash,
             validated,
             cached_sbor,
@@ -135,25 +167,47 @@ impl RoutableTransaction {
         &self.declared_writes
     }
 
-    /// The admission conflict keys for this transaction's reads: the
-    /// node-granular projection of `declared_reads`, derived at the call
-    /// site. Nothing key-granular is carried on the wire — the key domain
-    /// exists so finer-than-node derivations (effect metadata) slot into
-    /// admission without a wire change.
-    pub fn admission_read_keys(&self) -> impl Iterator<Item = DeclaredKey> + '_ {
-        self.declared_reads.iter().copied().map(DeclaredKey::node)
+    /// The admission conflict keys for this transaction's reads, derived
+    /// at the call site — the node-granular projection of
+    /// `declared_reads` for the Radix variant, the routed effect sets'
+    /// shared-mode keys for the VM variant. Nothing key-granular is
+    /// carried on the wire.
+    #[must_use]
+    pub fn admission_read_keys(&self) -> Vec<DeclaredKey> {
+        self.vm_routing().map_or_else(
+            || {
+                self.declared_reads
+                    .iter()
+                    .copied()
+                    .map(DeclaredKey::node)
+                    .collect()
+            },
+            |routing| routing.read_keys.clone(),
+        )
     }
 
     /// The admission conflict keys for this transaction's writes; see
     /// [`Self::admission_read_keys`].
-    pub fn admission_write_keys(&self) -> impl Iterator<Item = DeclaredKey> + '_ {
-        self.declared_writes.iter().copied().map(DeclaredKey::node)
+    #[must_use]
+    pub fn admission_write_keys(&self) -> Vec<DeclaredKey> {
+        self.vm_routing().map_or_else(
+            || {
+                self.declared_writes
+                    .iter()
+                    .copied()
+                    .map(DeclaredKey::node)
+                    .collect()
+            },
+            |routing| routing.write_keys.clone(),
+        )
     }
 
     /// Every admission conflict key, reads then writes.
-    pub fn admission_keys(&self) -> impl Iterator<Item = DeclaredKey> + '_ {
-        self.admission_read_keys()
-            .chain(self.admission_write_keys())
+    #[must_use]
+    pub fn admission_keys(&self) -> Vec<DeclaredKey> {
+        let mut keys = self.admission_read_keys();
+        keys.extend(self.admission_write_keys());
+        keys
     }
 
     /// Half-open `WeightedTimestamp` range during which this tx may be
@@ -186,8 +240,8 @@ impl RoutableTransaction {
         hasher.update(&payload);
         let hash = Hash::from_hash_bytes(hasher.finalize().as_bytes());
 
-        let tx_lock = OnceLock::new();
-        let _ = tx_lock.set(transaction);
+        let body_lock = OnceLock::new();
+        let _ = body_lock.set(TransactionBody::Radix(transaction));
         let hash_lock = OnceLock::new();
         let _ = hash_lock.set(hash);
 
@@ -196,7 +250,42 @@ impl RoutableTransaction {
             declared_reads: declared_reads.into(),
             declared_writes: declared_writes.into(),
             validity_range,
-            transaction: tx_lock,
+            body: body_lock,
+            vm_routing: OnceLock::new(),
+            hash: hash_lock,
+            validated: OnceLock::new(),
+            cached_sbor: OnceLock::new(),
+        }
+    }
+
+    /// Create a routable transaction from a VM transaction. The declared
+    /// node fields stay empty — the VM variant's admission keys and shard
+    /// sets are derived from its effect sets, never carried.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `VmTransaction` cannot be SBOR-encoded; it is a
+    /// closed basic-SBOR type, so encoding is infallible in practice.
+    #[must_use]
+    pub fn new_vm(vm: VmTransaction, validity_range: TimestampRange) -> Self {
+        let mut payload = vec![VM_BODY_TAG];
+        payload.extend(basic_encode(&vm).expect("VmTransaction SBOR encode is infallible"));
+        let mut hasher = Hasher::new();
+        hasher.update(&payload);
+        let hash = Hash::from_hash_bytes(hasher.finalize().as_bytes());
+
+        let body_lock = OnceLock::new();
+        let _ = body_lock.set(TransactionBody::Vm(vm));
+        let hash_lock = OnceLock::new();
+        let _ = hash_lock.set(hash);
+
+        Self {
+            serialized_bytes: payload.into(),
+            declared_reads: Vec::new().into(),
+            declared_writes: Vec::new().into(),
+            validity_range,
+            body: body_lock,
+            vm_routing: OnceLock::new(),
             hash: hash_lock,
             validated: OnceLock::new(),
             cached_sbor: OnceLock::new(),
@@ -215,35 +304,111 @@ impl RoutableTransaction {
         }))
     }
 
-    /// Get a reference to the underlying Radix transaction.
-    ///
-    /// Decodes `serialized_bytes` via `manifest_decode` on first call.
-    /// `::new` pre-populates the cache.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `serialized_bytes` doesn't decode under `manifest_decode`.
-    /// Wire-decoded transactions are validated by callers (admission /
-    /// pre-vote) before this is invoked.
-    pub fn transaction(&self) -> &UserTransaction {
-        self.transaction.get_or_init(|| {
-            manifest_decode(&self.serialized_bytes)
-                .expect("RoutableTransaction.serialized_bytes failed manifest_decode")
-        })
+    /// Whether this is a VM-variant transaction, read off the wire tag
+    /// without decoding.
+    #[must_use]
+    pub fn is_vm(&self) -> bool {
+        self.serialized_bytes.first() == Some(&VM_BODY_TAG)
     }
 
-    /// Consume self and return the underlying transaction, decoding from
-    /// the cached bytes if no decoded form is available.
+    /// Decode the body, or refuse malformed bytes. The fallible path for
+    /// wire input; [`Self::body`] is the post-verification accessor.
+    ///
+    /// # Errors
+    ///
+    /// [`RoutableTransactionVerifyError::UndecodableBody`] when the bytes
+    /// decode under neither variant's encoding.
+    pub fn try_body(&self) -> Result<&TransactionBody, RoutableTransactionVerifyError> {
+        if let Some(body) = self.body.get() {
+            return Ok(body);
+        }
+        let decoded = if self.is_vm() {
+            basic_decode::<VmTransaction>(&self.serialized_bytes[1..])
+                .map(TransactionBody::Vm)
+                .map_err(|_| RoutableTransactionVerifyError::UndecodableBody)?
+        } else {
+            manifest_decode::<UserTransaction>(&self.serialized_bytes)
+                .map(TransactionBody::Radix)
+                .map_err(|_| RoutableTransactionVerifyError::UndecodableBody)?
+        };
+        Ok(self.body.get_or_init(|| decoded))
+    }
+
+    /// The decoded body. Constructors pre-populate it; wire-decoded
+    /// transactions populate it at verification.
     ///
     /// # Panics
     ///
-    /// Same conditions as [`Self::transaction`].
-    pub fn into_transaction(self) -> UserTransaction {
-        // Force population, then take.
-        let _ = self.transaction();
-        self.transaction.into_inner().expect(
-            "transaction OnceLock populated by self.transaction() invocation immediately above",
-        )
+    /// Panics if `serialized_bytes` decode under neither variant.
+    /// Wire-decoded transactions are verified (which decodes fallibly)
+    /// before this is invoked.
+    pub fn body(&self) -> &TransactionBody {
+        self.try_body()
+            .expect("RoutableTransaction.serialized_bytes failed body decode")
+    }
+
+    /// Get a reference to the underlying Radix transaction.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::body`]; additionally if this is a VM-variant
+    /// transaction — callers on the Radix path gate by variant first.
+    pub fn transaction(&self) -> &UserTransaction {
+        match self.body() {
+            TransactionBody::Radix(transaction) => transaction,
+            TransactionBody::Vm(_) => {
+                panic!("transaction() called on a VM-variant RoutableTransaction")
+            }
+        }
+    }
+
+    /// The VM body, when this is a VM-variant transaction.
+    #[must_use]
+    pub fn vm(&self) -> Option<&VmTransaction> {
+        match self.body() {
+            TransactionBody::Vm(vm) => Some(vm),
+            TransactionBody::Radix(_) => None,
+        }
+    }
+
+    /// The VM variant's derived routing identity; `None` for the Radix
+    /// variant.
+    ///
+    /// Derives through the installed [`crate::VmStatics`] on first access
+    /// and caches per transaction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if derivation refuses the graph — unreachable for verified
+    /// or committed transactions, whose graphs already derived cleanly at
+    /// admission — or if no statics are installed.
+    #[must_use]
+    pub fn vm_routing(&self) -> Option<&VmRouting> {
+        match self.body() {
+            TransactionBody::Radix(_) => None,
+            TransactionBody::Vm(_) => Some(self.try_vm_routing().unwrap_or_else(|error| {
+                panic!("VM routing derivation failed on an admitted transaction: {error}")
+            })),
+        }
+    }
+
+    /// Derive (or fetch the cached) VM routing identity, fallibly — the
+    /// verification path.
+    ///
+    /// # Errors
+    ///
+    /// [`VmStaticsError`] from the installed derivation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on the Radix variant.
+    pub fn try_vm_routing(&self) -> Result<&VmRouting, VmStaticsError> {
+        if let Some(routing) = self.vm_routing.get() {
+            return Ok(routing);
+        }
+        let vm = self.vm().expect("try_vm_routing on a Radix transaction");
+        let routing = vm_statics().derive(&vm.graph)?;
+        Ok(self.vm_routing.get_or_init(|| routing))
     }
 
     /// Get or create a validated transaction.
@@ -308,6 +473,17 @@ impl RoutableTransaction {
     /// [`TopologySnapshot::is_cross_shard_transaction`], which routes against the
     /// active [`ShardTrie`]; this by-count form is for genesis and offline tooling.
     pub fn is_cross_shard(&self, num_shards: u64) -> bool {
+        if let Some(routing) = self.vm_routing() {
+            let trie = ShardTrie::uniform_from_count(num_shards);
+            let mut shards = routing
+                .write_prefixes
+                .iter()
+                .map(|prefix| trie.shard_for_prefix(*prefix));
+            let Some(first) = shards.next() else {
+                return false;
+            };
+            return shards.any(|shard| shard != first);
+        }
         if self.declared_writes.is_empty() {
             return false;
         }
@@ -346,18 +522,31 @@ pub enum RoutableTransactionVerifyError {
     /// mismatch).
     #[error("transaction failed Radix prepare_and_validate")]
     InvalidUserTransaction,
+    /// The body bytes decode under neither variant's encoding.
+    #[error("transaction body bytes are undecodable")]
+    UndecodableBody,
+    /// The VM body's ed25519 signature does not cover its graph.
+    #[error("vm transaction signature is invalid")]
+    InvalidVmSignature,
+    /// VM static derivation refused the graph.
+    #[error(transparent)]
+    VmDerivation(#[from] VmStaticsError),
 }
 
-/// Construction asserts: the underlying `UserTransaction` passes Radix's
-/// [`TransactionValidator::prepare_and_validate`], i.e. its sender
-/// signature is valid and the transaction is well-formed for the active
-/// protocol version.
+/// Construction asserts the variant's own predicate:
+///
+/// - **Radix**: the `UserTransaction` passes Radix's
+///   [`TransactionValidator::prepare_and_validate`] — sender signature
+///   valid, well-formed for the active protocol version.
+/// - **Vm**: the body decodes, its ed25519 signature covers the graph,
+///   and the graph admits and routes under the installed
+///   [`crate::VmStatics`] (which caches the derived identity on the
+///   transaction).
 ///
 /// Construction goes through one of two gates:
 ///
 /// - [`<RoutableTransaction as Verify>::verify`](Verify::verify) — runs
-///   Radix `prepare_and_validate` against the supplied
-///   [`TransactionValidator`].
+///   the variant's predicate.
 /// - [`Verified::<RoutableTransaction>::new_unchecked`] — re-wraps a
 ///   transaction whose predicate already held via an out-of-band trust
 ///   source (storage-recovery, where the value was validated before
@@ -367,8 +556,18 @@ impl Verify<&RoutableTransactionContext<'_>> for RoutableTransaction {
     type Error = RoutableTransactionVerifyError;
 
     fn verify(&self, ctx: &RoutableTransactionContext<'_>) -> Result<Verified<Self>, Self::Error> {
-        if self.get_or_validate(ctx.validator).is_none() {
-            return Err(RoutableTransactionVerifyError::InvalidUserTransaction);
+        match self.try_body()? {
+            TransactionBody::Radix(_) => {
+                if self.get_or_validate(ctx.validator).is_none() {
+                    return Err(RoutableTransactionVerifyError::InvalidUserTransaction);
+                }
+            }
+            TransactionBody::Vm(vm) => {
+                if !vm.signature_is_valid() {
+                    return Err(RoutableTransactionVerifyError::InvalidVmSignature);
+                }
+                self.try_vm_routing()?;
+            }
         }
         Ok(Verified::new_unchecked(self.clone()))
     }
@@ -405,7 +604,108 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_utils::{test_node, test_transaction_with_nodes};
+    use crate::test_utils::{test_node, test_transaction_with_nodes, test_validity_range};
+    use crate::{Ed25519PrivateKey, VmStatics, install_vm_statics};
+
+    struct StubStatics;
+
+    impl VmStatics for StubStatics {
+        fn derive(&self, graph: &[u8]) -> Result<VmRouting, VmStaticsError> {
+            if graph == b"inadmissible" {
+                return Err(VmStaticsError("stub refusal".into()));
+            }
+            Ok(VmRouting {
+                read_keys: vec![DeclaredKey::prefix([0x11; 16])],
+                write_keys: vec![DeclaredKey::substate([0x22; 16], [0x01; 16])],
+                read_prefixes: vec![[0x11; 16]],
+                write_prefixes: vec![[0x22; 16]],
+            })
+        }
+    }
+
+    fn vm_fixture(graph: &[u8]) -> RoutableTransaction {
+        install_vm_statics(Box::new(StubStatics));
+        let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
+        let vm = VmTransaction::new_signed(graph.to_vec(), &key);
+        RoutableTransaction::new_vm(vm, test_validity_range())
+    }
+
+    #[test]
+    fn vm_roundtrip_preserves_hash_and_variant() {
+        let tx = vm_fixture(b"graph bytes");
+        assert!(tx.is_vm());
+        let bytes = basic_encode(&tx).unwrap();
+        let decoded: RoutableTransaction = basic_decode(&bytes).unwrap();
+        assert_eq!(decoded.hash(), tx.hash());
+        assert!(decoded.is_vm());
+        assert!(matches!(decoded.try_body(), Ok(TransactionBody::Vm(_))));
+    }
+
+    #[test]
+    fn vm_admission_keys_derive_through_the_installed_statics() {
+        let tx = vm_fixture(b"graph bytes");
+        assert_eq!(
+            tx.admission_read_keys(),
+            vec![DeclaredKey::prefix([0x11; 16])]
+        );
+        assert_eq!(
+            tx.admission_write_keys(),
+            vec![DeclaredKey::substate([0x22; 16], [0x01; 16])]
+        );
+        assert!(!tx.is_cross_shard(1));
+    }
+
+    #[test]
+    fn vm_verification_checks_signature_and_derivation() {
+        use radix_transactions::validation::TransactionValidator;
+        let validator = TransactionValidator::new_for_latest_simulator();
+        let ctx = RoutableTransactionContext {
+            validator: &validator,
+        };
+
+        let good = vm_fixture(b"graph bytes");
+        assert!(good.verify(&ctx).is_ok());
+
+        // A tampered signature refuses.
+        let mut vm = good.vm().unwrap().clone();
+        vm.signature[0] ^= 1;
+        let bad_signature = RoutableTransaction::new_vm(vm, test_validity_range());
+        assert_eq!(
+            bad_signature.verify(&ctx).unwrap_err(),
+            RoutableTransactionVerifyError::InvalidVmSignature
+        );
+
+        // A refused graph surfaces the derivation error.
+        let inadmissible = vm_fixture(b"inadmissible");
+        assert!(matches!(
+            inadmissible.verify(&ctx).unwrap_err(),
+            RoutableTransactionVerifyError::VmDerivation(_)
+        ));
+
+        // Garbage after the tag is an undecodable body, not a panic.
+        let mut wire = basic_encode(&vm_fixture(b"graph bytes")).unwrap();
+        let decoded: RoutableTransaction = basic_decode(&wire).unwrap();
+        drop(decoded);
+        let tx = vm_fixture(b"graph bytes");
+        let mut bytes = tx.serialized_bytes().to_vec();
+        bytes.truncate(3);
+        wire.clear();
+        let garbage = RoutableTransaction {
+            serialized_bytes: bytes.into(),
+            declared_reads: Vec::new().into(),
+            declared_writes: Vec::new().into(),
+            validity_range: test_validity_range(),
+            body: OnceLock::new(),
+            vm_routing: OnceLock::new(),
+            hash: OnceLock::new(),
+            validated: OnceLock::new(),
+            cached_sbor: OnceLock::new(),
+        };
+        assert_eq!(
+            garbage.verify(&ctx).unwrap_err(),
+            RoutableTransactionVerifyError::UndecodableBody
+        );
+    }
 
     #[test]
     fn roundtrip_preserves_content_hash() {
