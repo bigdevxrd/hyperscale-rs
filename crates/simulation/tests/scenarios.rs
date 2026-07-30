@@ -33,9 +33,9 @@ use hyperscale_scenarios::{
     partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
-    single_shard_tx, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
-    stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees,
+    shared_read_payments, single_shard_tx, split_lifecycle, split_straddler_atomic,
+    split_straddler_ec_partition_atomic, stake_deposit_folds_into_beacon_state,
+    stake_withdraw_drops_effective_stake, surviving_sibling_split_seats_full_committees,
     withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_storage::ShardChainReader;
@@ -169,6 +169,76 @@ fn cross_shard_fraction_sim() {
     let report = cluster.run_faultable(|c| cross_shard_fraction(c, 16, 500));
     let executed = cluster.metric("transactions_executed", None);
     println!("cross_shard_fraction total=16 cross=50% executed={executed}: {report:?}");
+}
+
+/// The read-share A/B, probe side: a batch whose only overlap is a shared
+/// declared read serializes under exclusive admission (every deferral
+/// read-read) and admits whole under read-share.
+#[test]
+fn read_share_admits_shared_reads_sim() {
+    let run = |share: bool| {
+        let mut cluster = if share {
+            SimCluster::with_read_share(&liveness_config(), 42, &[])
+        } else {
+            SimCluster::with_balances(&liveness_config(), 42, &[])
+        };
+        let report = cluster.run_faultable(|c| shared_read_payments(c, 8));
+        println!("shared_read_payments share={share}: {report:?}");
+        report.deferral.expect("sim exposes deferral stats")
+    };
+    let exclusive = run(false);
+    let shared = run(true);
+
+    assert!(
+        exclusive.read_read_deferrals > 0,
+        "exclusive admission must defer the shared-read batch",
+    );
+    assert_eq!(
+        exclusive.write_involved_deferrals, 0,
+        "the probe's only overlap is the shared read",
+    );
+    assert_eq!(
+        shared.deferral_events, 0,
+        "read-share admission must admit the whole shared-read batch",
+    );
+}
+
+/// The read-share A/B, write-traffic side: the payment mix has no
+/// read-read overlap to admit (every `CallMethod` target declares
+/// read+write), so the discipline flip changes no admission decision —
+/// deferral counts, causes, promotions, and queue depths agree exactly.
+/// Waits may only lengthen: counted locks hold a node the commit pipeline
+/// double-locked until its last holder completes, where the exclusive set
+/// releases at the first.
+#[test]
+fn read_share_leaves_write_traffic_decisions_unchanged_sim() {
+    let run = |share: bool| {
+        let balances = contention_genesis_balances(24, 6);
+        let mut cluster = if share {
+            SimCluster::with_read_share(&liveness_config(), 42, &balances)
+        } else {
+            SimCluster::with_balances(&liveness_config(), 42, &balances)
+        };
+        cluster
+            .run_faultable(|c| zipf_payments(c, 24, 6, 1.0))
+            .deferral
+            .expect("sim exposes deferral stats")
+    };
+    let (exclusive, shared) = (run(false), run(true));
+    println!("zipf exclusive: {exclusive:?}");
+    println!("zipf shared:    {shared:?}");
+    assert_eq!(exclusive.deferral_events, shared.deferral_events);
+    assert_eq!(exclusive.read_read_deferrals, shared.read_read_deferrals);
+    assert_eq!(
+        exclusive.write_involved_deferrals,
+        shared.write_involved_deferrals
+    );
+    assert_eq!(exclusive.promotions, shared.promotions);
+    assert_eq!(
+        exclusive.peak_deferred_queue_depth,
+        shared.peak_deferred_queue_depth
+    );
+    assert!(shared.total_deferral_wait >= exclusive.total_deferral_wait);
 }
 
 #[test]

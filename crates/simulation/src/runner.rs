@@ -130,6 +130,10 @@ pub struct SimConfig {
     pub packet_loss_rate: f64,
     /// Consensus crypto scheme every simulated validator runs.
     pub crypto_scheme: CryptoScheme,
+    /// Whether every mempool admits under the read-share discipline
+    /// (`MempoolConfig::share_declared_reads`). Off by default; the
+    /// read-share A/B constructs one cluster per setting.
+    pub share_declared_reads: bool,
 }
 
 impl Default for SimConfig {
@@ -145,6 +149,7 @@ impl Default for SimConfig {
             jitter_fraction: 0.1,
             packet_loss_rate: 0.0,
             crypto_scheme: CryptoScheme::default(),
+            share_declared_reads: false,
         }
     }
 }
@@ -197,6 +202,10 @@ pub struct SimulationRunner {
     /// derive additional signers (e.g. registration scenarios) under
     /// the same scheme.
     crypto_scheme: CryptoScheme,
+
+    /// [`SimConfig::share_declared_reads`], retained so runtime-seated
+    /// vnodes admit under the same discipline as genesis-seated ones.
+    share_declared_reads: bool,
 
     /// Beacon genesis config hash, retained for runtime-built
     /// `BeaconCoordinator`s.
@@ -447,6 +456,7 @@ impl SimulationRunner {
                     // simulation; prod stays off unless configured.
                     mempool_config: MempoolConfig {
                         routing_overlay: true,
+                        share_declared_reads: network_config.share_declared_reads,
                         ..MempoolConfig::default()
                     },
                     provision_config: ProvisionConfig::default(),
@@ -553,6 +563,7 @@ impl SimulationRunner {
             signers,
             verifier,
             crypto_scheme,
+            share_declared_reads: network_config.share_declared_reads,
             beacon_config_hash,
             beacon_network,
             pending_participation_changes: Vec::new(),

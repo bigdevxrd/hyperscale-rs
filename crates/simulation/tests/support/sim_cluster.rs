@@ -70,7 +70,18 @@ impl SimCluster {
         seed: u64,
         balances: &[(ComponentAddress, Decimal)],
     ) -> Self {
-        Self::build(config, seed, balances, false)
+        Self::build(config, seed, balances, false, false)
+    }
+
+    /// Build a genesis cluster whose mempools admit under the read-share
+    /// discipline — the flag-on side of the read-share A/B.
+    #[must_use]
+    pub fn with_read_share(
+        config: &ScenarioConfig,
+        seed: u64,
+        balances: &[(ComponentAddress, Decimal)],
+    ) -> Self {
+        Self::build(config, seed, balances, false, true)
     }
 
     /// Build a genesis cluster giving each pool extra its own shard-less
@@ -86,7 +97,7 @@ impl SimCluster {
         seed: u64,
         balances: &[(ComponentAddress, Decimal)],
     ) -> Self {
-        Self::build(config, seed, balances, true)
+        Self::build(config, seed, balances, true, false)
     }
 
     fn build(
@@ -94,6 +105,7 @@ impl SimCluster {
         seed: u64,
         balances: &[(ComponentAddress, Decimal)],
         dedicated_pool_hosts: bool,
+        share_declared_reads: bool,
     ) -> Self {
         let beacon_chain_config = BeaconChainConfig {
             epoch_duration_ms: EPOCH_MS,
@@ -111,6 +123,7 @@ impl SimCluster {
             beacon_chain_config: Some(beacon_chain_config),
             intra_shard_latency: config.latency,
             cross_shard_latency: config.latency,
+            share_declared_reads,
             ..SimConfig::default()
         };
         let mut runner = SimulationRunner::new(&sim_config, seed);

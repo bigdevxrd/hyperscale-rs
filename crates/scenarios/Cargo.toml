@@ -8,7 +8,7 @@ description = "Portable node-behavioral scenarios run on both the simulation and
 hyperscale-crypto-bls.workspace = true
 hyperscale-mempool.workspace = true
 hyperscale-storage = { workspace = true }
-hyperscale-types = { workspace = true }
+hyperscale-types = { workspace = true, features = ["test-utils"] }
 radix-common = { workspace = true }
 radix-transactions = { workspace = true }
 

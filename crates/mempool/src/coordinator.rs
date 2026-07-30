@@ -120,6 +120,14 @@ pub struct MempoolConfig {
     /// it. Off by default; the test harnesses turn it on.
     #[serde(default)]
     pub routing_overlay: bool,
+
+    /// Whether admission shares declared reads: readers stack on a node
+    /// while writers exclude everyone, instead of every declared node
+    /// being exclusive. Mempool admission policy only — the track layer's
+    /// lock discipline is unchanged. Off by default; off is bit-identical
+    /// to the exclusive discipline.
+    #[serde(default)]
+    pub share_declared_reads: bool,
 }
 
 const fn default_max_pending() -> usize {
@@ -146,6 +154,7 @@ impl Default for MempoolConfig {
             quiesce_cross_shard_margin: Duration::ZERO,
             quiesce_single_shard_margin: Duration::ZERO,
             routing_overlay: false,
+            share_declared_reads: false,
         }
     }
 }
@@ -356,8 +365,8 @@ impl MempoolCoordinator {
             pool: BTreeMap::new(),
             tx_store,
             tombstones: TombstoneStore::new(),
-            locks: LockTracker::new(),
-            ready: ReadySet::new(),
+            locks: LockTracker::with_read_share(config.share_declared_reads),
+            ready: ReadySet::with_read_share(config.share_declared_reads),
             current_height: BlockHeight::new(0),
             current_ts: WeightedTimestamp::ZERO,
             expected_txs: ExpectedTxs::new(),
@@ -667,10 +676,11 @@ impl MempoolCoordinator {
     fn abort_one(&mut self, tx_hash: TxHash) -> Option<Action> {
         let entry = self.pool.remove(&tx_hash)?;
         if matches!(entry.status, TransactionStatus::Committed(_)) {
-            let newly_unlocked = self
-                .locks
-                .unlock_nodes(entry.tx.all_declared_nodes().copied());
-            for node in newly_unlocked {
+            let promotable = self.locks.unlock_declared(
+                entry.tx.declared_reads().iter().copied(),
+                entry.tx.declared_writes().iter().copied(),
+            );
+            for node in promotable {
                 self.promote_transactions_for_node(node);
             }
             self.locks.dec_in_flight();
@@ -978,20 +988,14 @@ impl MempoolCoordinator {
     /// share those remote nodes, cascading the stall.
     fn add_locked_nodes(&mut self, topology_snapshot: &TopologySnapshot, tx: &RoutableTransaction) {
         let local_shard = self.local_shard;
-        let newly_locked = self.locks.lock_nodes(
-            tx.all_declared_nodes()
-                .filter(|node| topology_snapshot.shard_for_node_id(node) == local_shard)
-                .copied(),
+        let local = |node: &&NodeId| topology_snapshot.shard_for_node_id(node) == local_shard;
+        let blocking = self.locks.lock_declared(
+            tx.declared_reads().iter().filter(local).copied(),
+            tx.declared_writes().iter().filter(local).copied(),
         );
-        self.locks.mark_write_locked(
-            tx.declared_writes()
-                .iter()
-                .filter(|node| topology_snapshot.shard_for_node_id(node) == local_shard)
-                .copied(),
-        );
-        for node in newly_locked {
+        for (node, scope) in blocking {
             let write_locked = self.locks.is_write_locked(&node);
-            self.ready.block_node(node, write_locked, self.now);
+            self.ready.block_node(node, scope, write_locked, self.now);
         }
     }
 
@@ -1006,12 +1010,12 @@ impl MempoolCoordinator {
         tx: &RoutableTransaction,
     ) {
         let local_shard = self.local_shard;
-        let newly_unlocked = self.locks.unlock_nodes(
-            tx.all_declared_nodes()
-                .filter(|node| topology_snapshot.shard_for_node_id(node) == local_shard)
-                .copied(),
+        let local = |node: &&NodeId| topology_snapshot.shard_for_node_id(node) == local_shard;
+        let promotable = self.locks.unlock_declared(
+            tx.declared_reads().iter().filter(local).copied(),
+            tx.declared_writes().iter().filter(local).copied(),
         );
-        for node in newly_unlocked {
+        for node in promotable {
             self.promote_transactions_for_node(node);
         }
     }

@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use hyperscale_types::{LocalTimestamp, NodeId, RoutableTransaction, TxHash, Verified};
 
-use crate::lock_tracker::LockTracker;
+use crate::lock_tracker::{BlockScope, LockTracker};
 
 struct ReadyEntry {
     tx: Arc<Verified<RoutableTransaction>>,
@@ -75,6 +75,7 @@ impl DeferralStats {
 }
 
 pub struct ReadySet {
+    share_reads: bool,
     ready: BTreeMap<TxHash, ReadyEntry>,
     deferred_by_nodes: HashMap<TxHash, HashSet<NodeId>>,
     txs_deferred_by_node: HashMap<NodeId, HashSet<TxHash>>,
@@ -86,8 +87,10 @@ pub struct ReadySet {
 }
 
 impl ReadySet {
-    pub fn new() -> Self {
+    /// A ready set under the admission rule the mempool flag selects.
+    pub fn with_read_share(share_reads: bool) -> Self {
         Self {
+            share_reads,
             ready: BTreeMap::new(),
             deferred_by_nodes: HashMap::new(),
             txs_deferred_by_node: HashMap::new(),
@@ -154,9 +157,19 @@ impl ReadySet {
             return;
         }
 
+        // Exclusive admission: any lock or claim on a declared node
+        // defers. Read-share admission: a declared write defers on any
+        // lock or claim; a declared read defers only on a write lock or a
+        // write claim — read-read overlap admits.
         let blocking_nodes: HashSet<NodeId> = tx
             .all_declared_nodes()
-            .filter(|node| locks.is_locked(node) || self.ready_txs_by_node.contains_key(node))
+            .filter(|node| {
+                if self.share_reads && !Self::declares_write(&tx, node) {
+                    locks.is_write_locked(node) || self.ready_claim_is_write(node)
+                } else {
+                    locks.is_locked(node) || self.ready_txs_by_node.contains_key(node)
+                }
+            })
             .copied()
             .collect();
 
@@ -226,23 +239,40 @@ impl ReadySet {
         freed_nodes
     }
 
-    /// Move every ready-set tx touching `node` into the deferred set. Called
-    /// when `node` becomes locked; `write_locked` is the new holder's mode
-    /// on `node` and `now` this event's clock reading, both consumed by the
-    /// deferral statistics only.
-    pub fn block_node(&mut self, node: NodeId, write_locked: bool, now: LocalTimestamp) {
-        let Some(tx_hashes) = self.ready_txs_by_node.remove(&node) else {
+    /// Move ready-set txs touching `node` into the deferred set: every one
+    /// under [`BlockScope::All`], only those declaring `node` as a write
+    /// under [`BlockScope::WritersOnly`]. Called when `node` becomes
+    /// locked; `write_locked` is the new holder's mode on `node` and `now`
+    /// this event's clock reading, both consumed by the deferral
+    /// statistics only.
+    pub fn block_node(
+        &mut self,
+        node: NodeId,
+        scope: BlockScope,
+        write_locked: bool,
+        now: LocalTimestamp,
+    ) {
+        let Some(tx_hashes) = self.ready_txs_by_node.get(&node) else {
             return;
         };
+        let to_block: Vec<TxHash> = tx_hashes
+            .iter()
+            .filter(|hash| match scope {
+                BlockScope::All => true,
+                BlockScope::WritersOnly => self
+                    .ready
+                    .get(hash)
+                    .is_some_and(|entry| Self::declares_write(&entry.tx, &node)),
+            })
+            .copied()
+            .collect();
 
-        for hash in tx_hashes {
+        for hash in to_block {
             let Some(entry) = self.ready.remove(&hash) else {
                 continue;
             };
             for other_node in entry.tx.all_declared_nodes() {
-                if *other_node != node
-                    && let Some(txs) = self.ready_txs_by_node.get_mut(other_node)
-                {
+                if let Some(txs) = self.ready_txs_by_node.get_mut(other_node) {
                     txs.remove(&hash);
                     if txs.is_empty() {
                         self.ready_txs_by_node.remove(other_node);
@@ -323,6 +353,118 @@ mod tests {
         let tx = test_transaction_with_nodes(&[seed], nodes.clone(), nodes);
         let hash = tx.hash();
         (hash, Arc::new(Verified::new_unchecked_for_test(tx)))
+    }
+
+    fn tx_rw(
+        seed: u8,
+        reads: &[u8],
+        writes: &[u8],
+    ) -> (TxHash, Arc<Verified<RoutableTransaction>>) {
+        let tx = test_transaction_with_nodes(
+            &[seed],
+            reads.iter().map(|n| test_node(*n)).collect(),
+            writes.iter().map(|n| test_node(*n)).collect(),
+        );
+        let hash = tx.hash();
+        (hash, Arc::new(Verified::new_unchecked_for_test(tx)))
+    }
+
+    #[test]
+    fn read_share_admits_read_read_overlap_and_defers_the_writer() {
+        let mut rs = ReadySet::with_read_share(true);
+        let locks = LockTracker::with_read_share(true);
+
+        // Two readers of node 10 (each writing its own node) share the claim.
+        let (h1, tx1) = tx_rw(1, &[10], &[1]);
+        let (h2, tx2) = tx_rw(2, &[10], &[2]);
+        rs.add(h1, tx1, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
+        rs.add(h2, tx2, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
+        assert_eq!(rs.ready_count(), 2);
+        assert_eq!(rs.deferral_stats().deferral_events, 0);
+
+        // A writer of node 10 defers on the read claims, classified
+        // write-involved.
+        let (h3, tx3) = tx_rw(3, &[], &[10]);
+        rs.add(h3, tx3, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
+        assert_eq!(rs.ready_count(), 2);
+        assert_eq!(rs.deferred_count(), 1);
+        assert_eq!(rs.deferral_stats().write_involved_deferrals, 1);
+        check_invariants(&rs).unwrap();
+    }
+
+    #[test]
+    fn read_share_defers_readers_on_a_write_lock_and_promotes_on_release() {
+        let mut rs = ReadySet::with_read_share(true);
+        let mut locks = LockTracker::with_read_share(true);
+        locks.lock_declared([], [test_node(10)]);
+
+        let (h, tx) = tx_rw(1, &[10], &[1]);
+        rs.add(
+            h,
+            Arc::clone(&tx),
+            LocalTimestamp::ZERO,
+            LocalTimestamp::ZERO,
+            &locks,
+        );
+        assert_eq!(rs.deferred_count(), 1);
+        assert_eq!(rs.deferral_stats().write_involved_deferrals, 1);
+
+        let promotable_nodes = locks.unlock_declared([], [test_node(10)]);
+        assert_eq!(promotable_nodes, vec![test_node(10)]);
+        for node in promotable_nodes {
+            for hash in rs.promotable_for_node(node) {
+                assert_eq!(hash, h);
+                rs.add(
+                    hash,
+                    Arc::clone(&tx),
+                    LocalTimestamp::ZERO,
+                    LocalTimestamp::from_millis(70),
+                    &locks,
+                );
+            }
+        }
+        assert_eq!(rs.ready_count(), 1);
+        assert_eq!(rs.deferral_stats().promotions, 1);
+        assert_eq!(
+            rs.deferral_stats().total_deferral_wait,
+            Duration::from_millis(70)
+        );
+        check_invariants(&rs).unwrap();
+    }
+
+    #[test]
+    fn read_share_block_scope_writers_only_leaves_readers_ready() {
+        let mut rs = ReadySet::with_read_share(true);
+        let locks = LockTracker::with_read_share(true);
+
+        let (h_reader, tx_reader) = tx_rw(1, &[10], &[1]);
+        let (h_writer, tx_writer) = tx_rw(2, &[], &[10]);
+        rs.add(
+            h_reader,
+            tx_reader,
+            LocalTimestamp::ZERO,
+            LocalTimestamp::ZERO,
+            &locks,
+        );
+        // The writer defers on the reader's claim already; block the node
+        // for writers when another reader's lock lands.
+        rs.add(
+            h_writer,
+            tx_writer,
+            LocalTimestamp::ZERO,
+            LocalTimestamp::ZERO,
+            &locks,
+        );
+        rs.block_node(
+            test_node(10),
+            BlockScope::WritersOnly,
+            false,
+            LocalTimestamp::ZERO,
+        );
+        // The reader keeps its ready seat; only writers are held back.
+        assert_eq!(rs.ready_count(), 1);
+        assert_eq!(rs.deferred_count(), 1);
+        check_invariants(&rs).unwrap();
     }
 
     // ─── Invariant helpers ──────────────────────────────────────────────
@@ -414,7 +556,7 @@ mod tests {
 
     #[test]
     fn fresh_set_is_empty() {
-        let rs = ReadySet::new();
+        let rs = ReadySet::with_read_share(false);
         assert_eq!(rs.ready_count(), 0);
         assert_eq!(rs.deferred_count(), 0);
         assert_eq!(rs.ready_txs_by_node_len(), 0);
@@ -424,8 +566,8 @@ mod tests {
 
     #[test]
     fn add_with_no_locks_lands_in_ready_set() {
-        let mut rs = ReadySet::new();
-        let locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let locks = LockTracker::with_read_share(false);
         let (hash, tx) = tx_with(1, &[10]);
 
         rs.add(hash, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
@@ -436,8 +578,8 @@ mod tests {
 
     #[test]
     fn add_with_locked_node_lands_in_deferred() {
-        let mut rs = ReadySet::new();
-        let mut locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let mut locks = LockTracker::with_read_share(false);
         locks.lock_nodes([test_node(10)]);
 
         let (hash, tx) = tx_with(1, &[10]);
@@ -449,8 +591,8 @@ mod tests {
 
     #[test]
     fn second_tx_touching_same_node_as_ready_tx_is_deferred() {
-        let mut rs = ReadySet::new();
-        let locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let locks = LockTracker::with_read_share(false);
         let (h1, tx1) = tx_with(1, &[10]);
         let (h2, tx2) = tx_with(2, &[10]);
 
@@ -463,8 +605,8 @@ mod tests {
 
     #[test]
     fn remove_ready_tx_frees_its_nodes() {
-        let mut rs = ReadySet::new();
-        let locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let locks = LockTracker::with_read_share(false);
         let (h, tx) = tx_with(1, &[10, 20]);
 
         rs.add(h, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
@@ -480,8 +622,8 @@ mod tests {
 
     #[test]
     fn remove_deferred_tx_returns_no_freed_nodes() {
-        let mut rs = ReadySet::new();
-        let mut locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let mut locks = LockTracker::with_read_share(false);
         locks.lock_nodes([test_node(10)]);
         let (h, tx) = tx_with(1, &[10]);
 
@@ -493,12 +635,12 @@ mod tests {
 
     #[test]
     fn block_node_moves_ready_tx_to_deferred() {
-        let mut rs = ReadySet::new();
-        let locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let locks = LockTracker::with_read_share(false);
         let (h, tx) = tx_with(1, &[10]);
         rs.add(h, tx, LocalTimestamp::ZERO, LocalTimestamp::ZERO, &locks);
 
-        rs.block_node(test_node(10), false, LocalTimestamp::ZERO);
+        rs.block_node(test_node(10), BlockScope::All, false, LocalTimestamp::ZERO);
         assert_eq!(rs.ready_count(), 0);
         assert_eq!(rs.deferred_count(), 1);
         check_invariants(&rs).unwrap();
@@ -506,8 +648,8 @@ mod tests {
 
     #[test]
     fn promotable_for_node_lists_only_last_blocker_txs() {
-        let mut rs = ReadySet::new();
-        let mut locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let mut locks = LockTracker::with_read_share(false);
         locks.lock_nodes([test_node(10), test_node(20)]);
 
         // Single-blocker tx: only blocked by node 10.
@@ -539,8 +681,8 @@ mod tests {
 
     #[test]
     fn iter_ready_filters_below_dwell() {
-        let mut rs = ReadySet::new();
-        let locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let locks = LockTracker::with_read_share(false);
         let (h, tx) = tx_with(1, &[10]);
         rs.add(
             h,
@@ -565,8 +707,8 @@ mod tests {
 
     #[test]
     fn iter_ready_yields_hash_order() {
-        let mut rs = ReadySet::new();
-        let locks = LockTracker::new();
+        let mut rs = ReadySet::with_read_share(false);
+        let locks = LockTracker::with_read_share(false);
         // Two non-conflicting txs on different nodes.
         let (h1, tx1) = tx_with(1, &[10]);
         let (h2, tx2) = tx_with(2, &[20]);
@@ -635,7 +777,7 @@ mod tests {
             Op::BlockNode(n) => {
                 let node = test_node(*n);
                 if !locks.lock_nodes([node]).is_empty() {
-                    rs.block_node(node, false, LocalTimestamp::ZERO);
+                    rs.block_node(node, BlockScope::All, false, LocalTimestamp::ZERO);
                 }
             }
             Op::UnlockNode(n) => {
@@ -681,8 +823,8 @@ mod tests {
                 .map(|seed| tx_with(seed, &[0, 1, 2, 3][..=((seed as usize) % 4)]))
                 .collect();
 
-            let mut rs = ReadySet::new();
-            let mut locks = LockTracker::new();
+            let mut rs = ReadySet::with_read_share(false);
+            let mut locks = LockTracker::with_read_share(false);
 
             for op in &ops {
                 apply(op, &mut rs, &mut locks, &fixture);
