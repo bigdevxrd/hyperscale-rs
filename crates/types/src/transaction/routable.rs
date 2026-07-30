@@ -15,8 +15,8 @@ use sbor::prelude::*;
 use thiserror::Error;
 
 use crate::{
-    BoundedBytes, BoundedVec, Hash, MAX_DECLARED_NODES_PER_TX, MAX_TX_BYTES_LEN, NodeId,
-    TimestampRange, TxHash, Verified, Verify, uniform_shard_for_node,
+    BoundedBytes, BoundedVec, DeclaredKey, Hash, MAX_DECLARED_NODES_PER_TX, MAX_TX_BYTES_LEN,
+    NodeId, TimestampRange, TxHash, Verified, Verify, uniform_shard_for_node,
 };
 
 /// A transaction with routing information.
@@ -133,6 +133,27 @@ impl RoutableTransaction {
     #[must_use]
     pub const fn declared_writes(&self) -> &BoundedVec<NodeId, MAX_DECLARED_NODES_PER_TX> {
         &self.declared_writes
+    }
+
+    /// The admission conflict keys for this transaction's reads: the
+    /// node-granular projection of `declared_reads`, derived at the call
+    /// site. Nothing key-granular is carried on the wire — the key domain
+    /// exists so finer-than-node derivations (effect metadata) slot into
+    /// admission without a wire change.
+    pub fn admission_read_keys(&self) -> impl Iterator<Item = DeclaredKey> + '_ {
+        self.declared_reads.iter().copied().map(DeclaredKey::node)
+    }
+
+    /// The admission conflict keys for this transaction's writes; see
+    /// [`Self::admission_read_keys`].
+    pub fn admission_write_keys(&self) -> impl Iterator<Item = DeclaredKey> + '_ {
+        self.declared_writes.iter().copied().map(DeclaredKey::node)
+    }
+
+    /// Every admission conflict key, reads then writes.
+    pub fn admission_keys(&self) -> impl Iterator<Item = DeclaredKey> + '_ {
+        self.admission_read_keys()
+            .chain(self.admission_write_keys())
     }
 
     /// Half-open `WeightedTimestamp` range during which this tx may be

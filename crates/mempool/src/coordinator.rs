@@ -36,8 +36,8 @@ use std::time::Duration;
 use hyperscale_core::{Action, FetchAbandon, FetchRequest, ProtocolEvent};
 use hyperscale_metrics::{record_expected_tx_dropped, record_transaction_aborted};
 use hyperscale_types::{
-    BlockHeight, CertifiedBlock, CompletedRecovery, ForkFence, LocalTimestamp, MAX_TX_IN_FLIGHT,
-    MessageClass, NodeId, QuiesceCut, RETENTION_HORIZON, RoutableTransaction, ShardId,
+    BlockHeight, CertifiedBlock, CompletedRecovery, DeclaredKey, ForkFence, LocalTimestamp,
+    MAX_TX_IN_FLIGHT, MessageClass, QuiesceCut, RETENTION_HORIZON, RoutableTransaction, ShardId,
     TopologySnapshot, TransactionDecision, TransactionStatus, TxHash, Verified, WAVE_TIMEOUT,
     WeightedTimestamp,
 };
@@ -677,11 +677,11 @@ impl MempoolCoordinator {
         let entry = self.pool.remove(&tx_hash)?;
         if matches!(entry.status, TransactionStatus::Committed(_)) {
             let promotable = self.locks.unlock_declared(
-                entry.tx.declared_reads().iter().copied(),
-                entry.tx.declared_writes().iter().copied(),
+                entry.tx.admission_read_keys(),
+                entry.tx.admission_write_keys(),
             );
-            for node in promotable {
-                self.promote_transactions_for_node(node);
+            for key in promotable {
+                self.promote_transactions_for_key(key);
             }
             self.locks.dec_in_flight();
         }
@@ -988,14 +988,15 @@ impl MempoolCoordinator {
     /// share those remote nodes, cascading the stall.
     fn add_locked_nodes(&mut self, topology_snapshot: &TopologySnapshot, tx: &RoutableTransaction) {
         let local_shard = self.local_shard;
-        let local = |node: &&NodeId| topology_snapshot.shard_for_node_id(node) == local_shard;
+        let local =
+            |key: &DeclaredKey| topology_snapshot.shard_for_node_id(&key.node) == local_shard;
         let blocking = self.locks.lock_declared(
-            tx.declared_reads().iter().filter(local).copied(),
-            tx.declared_writes().iter().filter(local).copied(),
+            tx.admission_read_keys().filter(local),
+            tx.admission_write_keys().filter(local),
         );
-        for (node, scope) in blocking {
-            let write_locked = self.locks.is_write_locked(&node);
-            self.ready.block_node(node, scope, write_locked, self.now);
+        for (key, scope) in blocking {
+            let write_locked = self.locks.is_write_locked(&key);
+            self.ready.block_key(key, scope, write_locked, self.now);
         }
     }
 
@@ -1010,13 +1011,14 @@ impl MempoolCoordinator {
         tx: &RoutableTransaction,
     ) {
         let local_shard = self.local_shard;
-        let local = |node: &&NodeId| topology_snapshot.shard_for_node_id(node) == local_shard;
+        let local =
+            |key: &DeclaredKey| topology_snapshot.shard_for_node_id(&key.node) == local_shard;
         let promotable = self.locks.unlock_declared(
-            tx.declared_reads().iter().filter(local).copied(),
-            tx.declared_writes().iter().filter(local).copied(),
+            tx.admission_read_keys().filter(local),
+            tx.admission_write_keys().filter(local),
         );
-        for node in promotable {
-            self.promote_transactions_for_node(node);
+        for key in promotable {
+            self.promote_transactions_for_key(key);
         }
     }
 
@@ -1037,17 +1039,17 @@ impl MempoolCoordinator {
     /// set, cascade-promote any deferred tx whose only blocker was the
     /// ready-set claim.
     fn remove_from_ready_tracking(&mut self, hash: &TxHash) {
-        let freed_nodes = self.ready.remove(hash);
-        for node in freed_nodes {
-            self.promote_transactions_for_node(node);
+        let freed_keys = self.ready.remove(hash);
+        for key in freed_keys {
+            self.promote_transactions_for_key(key);
         }
     }
 
-    /// Remove `node` from the blocker set of every deferred tx, re-adding
-    /// any tx whose last blocker was this node back through the store so it
+    /// Remove `key` from the blocker set of every deferred tx, re-adding
+    /// any tx whose last blocker was this key back through the store so it
     /// gets re-checked against remaining locks and ready-set claims.
-    fn promote_transactions_for_node(&mut self, node: NodeId) {
-        let mut promotable = self.ready.promotable_for_node(node);
+    fn promote_transactions_for_key(&mut self, key: DeclaredKey) {
+        let mut promotable = self.ready.promotable_for_key(key);
         promotable.sort();
         let mut to_readd: Vec<(TxHash, Arc<Verified<RoutableTransaction>>, LocalTimestamp)> =
             Vec::new();
@@ -1166,7 +1168,7 @@ impl MempoolCoordinator {
     /// All stats are `O(1)` via cached counters and ready sets.
     #[must_use]
     pub fn lock_contention_stats(&self) -> LockContentionStats {
-        let locked_nodes = self.locks.locked_nodes_count() as u64;
+        let locked_nodes = self.locks.locked_count() as u64;
 
         // Pending counts are O(1) from ready set
         let ready_count = self.ready.ready_count();
@@ -1272,10 +1274,10 @@ impl MempoolCoordinator {
             pool: self.pool.len(),
             ready: self.ready.ready_count(),
             tombstones: self.tombstones.len_tombstones(),
-            locked_nodes: self.locks.locked_nodes_count(),
+            locked_nodes: self.locks.locked_count(),
             deferred_by_nodes: self.ready.deferred_count(),
-            txs_deferred_by_node: self.ready.txs_deferred_by_node_len(),
-            ready_txs_by_node: self.ready.ready_txs_by_node_len(),
+            txs_deferred_by_node: self.ready.txs_deferred_by_key_len(),
+            ready_txs_by_node: self.ready.ready_txs_by_key_len(),
         }
     }
 
@@ -1374,7 +1376,7 @@ mod tests {
         TestCommittee, certify, make_finalized_wave, make_live_block, test_node, test_transaction,
         test_transaction_with_nodes,
     };
-    use hyperscale_types::{Verified, WitnessSources};
+    use hyperscale_types::{NodeId, Verified, WitnessSources};
 
     /// Test-only convenience: wrap any `RoutableTransaction` in a
     /// `Verified` witness via the test-only gate.

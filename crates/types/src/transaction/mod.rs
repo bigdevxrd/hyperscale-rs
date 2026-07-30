@@ -13,6 +13,7 @@
 //! - [`transfer`]: the XRD transfer manifest every client sends.
 
 pub mod constructors;
+pub mod declared_key;
 pub mod limits;
 mod manifest_analysis;
 pub mod notarize;

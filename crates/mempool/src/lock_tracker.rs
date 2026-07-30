@@ -1,6 +1,8 @@
-//! Node-level state locks + in-flight transaction counter.
+//! Declared-key state locks + in-flight transaction counter.
 //!
-//! A node is locked while any transaction that declares it is `Committed`.
+//! A key — a whole node, or one substate slot under it when key-granular
+//! admission is on — is locked while any transaction that declares it is
+//! `Committed`.
 //! Two acquisition disciplines, chosen at construction by the
 //! `share_declared_reads` mempool flag:
 //!
@@ -22,14 +24,14 @@
 
 use std::collections::HashMap;
 
-use hyperscale_types::NodeId;
+use hyperscale_types::DeclaredKey;
 
-/// Whom a newly blocking node blocks in the ready set.
+/// Whom a newly blocking key blocks in the ready set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockScope {
-    /// Every ready transaction touching the node.
+    /// Every ready transaction touching the key.
     All,
-    /// Only ready transactions declaring the node as a write — the node
+    /// Only ready transactions declaring the key as a write — the key
     /// became read-locked, and readers keep sharing it.
     WritersOnly,
 }
@@ -42,7 +44,7 @@ struct LockCounts {
 
 pub struct LockTracker {
     share_reads: bool,
-    locked: HashMap<NodeId, LockCounts>,
+    locked: HashMap<DeclaredKey, LockCounts>,
     in_flight_count: usize,
 }
 
@@ -57,100 +59,96 @@ impl LockTracker {
     }
 
     /// Acquire locks for one committed transaction's declared sets.
-    /// Returns the nodes that newly block, each with the scope of whom it
-    /// blocks — the coordinator's ready-set cascade input.
+    /// Returns the keys that newly block, each with the scope of whom
+    /// each blocks — the coordinator's ready-set cascade input.
     pub fn lock_declared(
         &mut self,
-        reads: impl IntoIterator<Item = NodeId>,
-        writes: impl IntoIterator<Item = NodeId>,
-    ) -> Vec<(NodeId, BlockScope)> {
+        reads: impl IntoIterator<Item = DeclaredKey>,
+        writes: impl IntoIterator<Item = DeclaredKey>,
+    ) -> Vec<(DeclaredKey, BlockScope)> {
         if self.share_reads {
             let mut blocking = Vec::new();
-            for node in reads {
-                let counts = self.locked.entry(node).or_default();
+            for key in reads {
+                let counts = self.locked.entry(key).or_default();
                 counts.reads += 1;
                 if counts.reads == 1 && counts.writes == 0 {
-                    blocking.push((node, BlockScope::WritersOnly));
+                    blocking.push((key, BlockScope::WritersOnly));
                 }
             }
-            for node in writes {
-                let counts = self.locked.entry(node).or_default();
+            for key in writes {
+                let counts = self.locked.entry(key).or_default();
                 counts.writes += 1;
                 if counts.writes == 1 {
-                    blocking.push((node, BlockScope::All));
+                    blocking.push((key, BlockScope::All));
                 }
             }
             blocking
         } else {
             // Exclusive: idempotent set-insert over the union; every newly
-            // locked node blocks everyone. Writes marked for
+            // locked key blocks everyone. Writes marked for
             // classification.
-            let mut blocking: Vec<(NodeId, BlockScope)> = self
-                .lock_nodes(reads)
+            let mut blocking: Vec<(DeclaredKey, BlockScope)> = self
+                .lock_keys(reads)
                 .into_iter()
-                .map(|node| (node, BlockScope::All))
+                .map(|key| (key, BlockScope::All))
                 .collect();
-            let mut write_nodes = Vec::new();
-            for node in writes {
-                write_nodes.push(node);
-            }
+            let write_keys: Vec<DeclaredKey> = writes.into_iter().collect();
             blocking.extend(
-                self.lock_nodes(write_nodes.iter().copied())
+                self.lock_keys(write_keys.iter().copied())
                     .into_iter()
-                    .map(|node| (node, BlockScope::All)),
+                    .map(|key| (key, BlockScope::All)),
             );
-            self.mark_write_locked(write_nodes);
+            self.mark_write_locked(write_keys);
             blocking
         }
     }
 
-    /// Release one transaction's declared locks. Returns the nodes worth a
+    /// Release one transaction's declared locks. Returns the keys worth a
     /// promotion sweep: those whose write lock cleared or that unlocked
     /// entirely. Absent or drained entries are ignored, so an unlock for
-    /// nodes never locked here (a remote shard's, or a double release) is
+    /// keys never locked here (a remote shard's, or a double release) is
     /// harmless.
     pub fn unlock_declared(
         &mut self,
-        reads: impl IntoIterator<Item = NodeId>,
-        writes: impl IntoIterator<Item = NodeId>,
-    ) -> Vec<NodeId> {
+        reads: impl IntoIterator<Item = DeclaredKey>,
+        writes: impl IntoIterator<Item = DeclaredKey>,
+    ) -> Vec<DeclaredKey> {
         if self.share_reads {
             let mut promotable = Vec::new();
-            for node in reads {
-                if let Some(counts) = self.locked.get_mut(&node) {
+            for key in reads {
+                if let Some(counts) = self.locked.get_mut(&key) {
                     counts.reads = counts.reads.saturating_sub(1);
                     if counts.reads == 0 && counts.writes == 0 {
-                        self.locked.remove(&node);
-                        promotable.push(node);
+                        self.locked.remove(&key);
+                        promotable.push(key);
                     }
                 }
             }
-            for node in writes {
-                if let Some(counts) = self.locked.get_mut(&node) {
+            for key in writes {
+                if let Some(counts) = self.locked.get_mut(&key) {
                     counts.writes = counts.writes.saturating_sub(1);
                     if counts.writes == 0 {
                         if counts.reads == 0 {
-                            self.locked.remove(&node);
+                            self.locked.remove(&key);
                         }
-                        promotable.push(node);
+                        promotable.push(key);
                     }
                 }
             }
             promotable
         } else {
-            let mut nodes: Vec<NodeId> = reads.into_iter().collect();
-            nodes.extend(writes);
-            self.unlock_nodes(nodes)
+            let mut keys: Vec<DeclaredKey> = reads.into_iter().collect();
+            keys.extend(writes);
+            self.unlock_keys(keys)
         }
     }
 
-    /// Mark each node in `nodes` as locked, exclusive-style. Returns the
+    /// Mark each key in `keys` as locked, exclusive-style. Returns the
     /// subset that was not already locked — the coordinator uses this to
-    /// block deferred txs that touch those nodes.
-    pub fn lock_nodes(&mut self, nodes: impl IntoIterator<Item = NodeId>) -> Vec<NodeId> {
-        nodes
-            .into_iter()
-            .filter(|node| match self.locked.entry(*node) {
+    /// block deferred txs that touch those keys.
+    pub fn lock_keys(&mut self, keys: impl IntoIterator<Item = DeclaredKey>) -> Vec<DeclaredKey> {
+        keys.into_iter()
+            .filter(|key| match self.locked.entry(*key) {
                 std::collections::hash_map::Entry::Occupied(_) => false,
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(LockCounts::default());
@@ -160,39 +158,36 @@ impl LockTracker {
             .collect()
     }
 
-    /// Mark each node in `nodes` as unlocked, unconditionally. Returns the
+    /// Mark each key in `keys` as unlocked, unconditionally. Returns the
     /// subset that was actually locked before this call — the coordinator
-    /// uses this to promote deferred txs waiting on those nodes.
-    pub fn unlock_nodes(&mut self, nodes: impl IntoIterator<Item = NodeId>) -> Vec<NodeId> {
-        nodes
-            .into_iter()
-            .filter(|node| self.locked.remove(node).is_some())
+    /// uses this to promote deferred txs waiting on those keys.
+    pub fn unlock_keys(&mut self, keys: impl IntoIterator<Item = DeclaredKey>) -> Vec<DeclaredKey> {
+        keys.into_iter()
+            .filter(|key| self.locked.remove(key).is_some())
             .collect()
     }
 
-    /// Record that the holder of each (already locked) node declared it as
+    /// Record that the holder of each (already locked) key declared it as
     /// a write. Exclusive-discipline classification bookkeeping; no effect
     /// on lock state.
-    pub fn mark_write_locked(&mut self, nodes: impl IntoIterator<Item = NodeId>) {
-        for node in nodes {
-            if let Some(counts) = self.locked.get_mut(&node) {
+    pub fn mark_write_locked(&mut self, keys: impl IntoIterator<Item = DeclaredKey>) {
+        for key in keys {
+            if let Some(counts) = self.locked.get_mut(&key) {
                 counts.writes = counts.writes.max(1);
             }
         }
     }
 
-    /// Whether some holder of `node` declared it as a write.
-    pub fn is_write_locked(&self, node: &NodeId) -> bool {
-        self.locked
-            .get(node)
-            .is_some_and(|counts| counts.writes > 0)
+    /// Whether some holder of `key` declared it as a write.
+    pub fn is_write_locked(&self, key: &DeclaredKey) -> bool {
+        self.locked.get(key).is_some_and(|counts| counts.writes > 0)
     }
 
-    pub fn is_locked(&self, node: &NodeId) -> bool {
-        self.locked.contains_key(node)
+    pub fn is_locked(&self, key: &DeclaredKey) -> bool {
+        self.locked.contains_key(key)
     }
 
-    pub fn locked_nodes_count(&self) -> usize {
+    pub fn locked_count(&self) -> usize {
         self.locked.len()
     }
 
@@ -216,70 +211,74 @@ mod tests {
 
     use super::*;
 
+    fn key(seed: u8) -> DeclaredKey {
+        DeclaredKey::node(test_node(seed))
+    }
+
     #[test]
     fn fresh_tracker_is_empty() {
         let tracker = LockTracker::with_read_share(false);
-        assert_eq!(tracker.locked_nodes_count(), 0);
+        assert_eq!(tracker.locked_count(), 0);
         assert_eq!(tracker.in_flight(), 0);
-        assert!(!tracker.is_locked(&test_node(1)));
+        assert!(!tracker.is_locked(&key(1)));
     }
 
     #[test]
     fn lock_nodes_returns_only_newly_locked() {
         let mut tracker = LockTracker::with_read_share(false);
-        let a = test_node(1);
-        let b = test_node(2);
+        let a = key(1);
+        let b = key(2);
 
-        let newly_locked = tracker.lock_nodes([a, b]);
+        let newly_locked = tracker.lock_keys([a, b]);
         assert_eq!(newly_locked.len(), 2);
         assert!(tracker.is_locked(&a));
         assert!(tracker.is_locked(&b));
 
         // Locking the same nodes again yields no newly-locked entries.
-        let newly_locked = tracker.lock_nodes([a, b]);
+        let newly_locked = tracker.lock_keys([a, b]);
         assert!(newly_locked.is_empty());
-        assert_eq!(tracker.locked_nodes_count(), 2);
+        assert_eq!(tracker.locked_count(), 2);
     }
 
     #[test]
     fn lock_nodes_handles_partial_overlap() {
         let mut tracker = LockTracker::with_read_share(false);
-        let a = test_node(1);
-        let b = test_node(2);
-        let c = test_node(3);
+        let a = key(1);
+        let b = key(2);
+        let c = key(3);
 
-        tracker.lock_nodes([a, b]);
+        tracker.lock_keys([a, b]);
         // Locking [b, c] should only report c as newly locked.
-        let newly_locked = tracker.lock_nodes([b, c]);
+        let newly_locked = tracker.lock_keys([b, c]);
         assert_eq!(newly_locked, vec![c]);
-        assert_eq!(tracker.locked_nodes_count(), 3);
+        assert_eq!(tracker.locked_count(), 3);
     }
 
     #[test]
     fn unlock_nodes_returns_only_newly_unlocked() {
         let mut tracker = LockTracker::with_read_share(false);
-        let a = test_node(1);
-        let b = test_node(2);
-        tracker.lock_nodes([a, b]);
+        let a = key(1);
+        let b = key(2);
+        tracker.lock_keys([a, b]);
 
-        let newly_unlocked = tracker.unlock_nodes([a, b]);
+        let newly_unlocked = tracker.unlock_keys([a, b]);
         assert_eq!(newly_unlocked.len(), 2);
         assert!(!tracker.is_locked(&a));
         assert!(!tracker.is_locked(&b));
 
         // Unlocking again yields nothing.
-        let newly_unlocked = tracker.unlock_nodes([a, b]);
+        let newly_unlocked = tracker.unlock_keys([a, b]);
         assert!(newly_unlocked.is_empty());
     }
 
     #[test]
     fn unlock_ignores_never_locked_nodes() {
         let mut tracker = LockTracker::with_read_share(false);
-        let locked = test_node(1);
-        let unlocked = test_node(2);
-        tracker.lock_nodes([locked]);
+        let locked = key(1);
+        let unlocked = key(2);
+        tracker.lock_keys([locked]);
 
-        let newly_unlocked = tracker.unlock_nodes([locked, unlocked]);
+        let newly_unlocked = tracker.unlock_keys([locked, unlocked]);
         assert_eq!(newly_unlocked, vec![locked]);
     }
 
@@ -304,8 +303,8 @@ mod tests {
     #[test]
     fn exclusive_lock_declared_blocks_everyone_and_marks_writes() {
         let mut tracker = LockTracker::with_read_share(false);
-        let read = test_node(1);
-        let write = test_node(2);
+        let read = key(1);
+        let write = key(2);
 
         let blocking = tracker.lock_declared([read], [write]);
         assert_eq!(
@@ -324,7 +323,7 @@ mod tests {
     #[test]
     fn shared_readers_stack_and_release_without_promotion_until_drained() {
         let mut tracker = LockTracker::with_read_share(true);
-        let node = test_node(1);
+        let node = key(1);
 
         // First reader blocks writers; the second adds no new blocking.
         assert_eq!(
@@ -344,7 +343,7 @@ mod tests {
     #[test]
     fn shared_write_excludes_and_its_release_promotes_even_over_readers() {
         let mut tracker = LockTracker::with_read_share(true);
-        let node = test_node(1);
+        let node = key(1);
 
         tracker.lock_declared([node], []);
         // A write on a read-locked node (the commit pipeline admits this)
@@ -366,10 +365,6 @@ mod tests {
     #[test]
     fn shared_unlock_ignores_never_locked_nodes() {
         let mut tracker = LockTracker::with_read_share(true);
-        assert!(
-            tracker
-                .unlock_declared([test_node(9)], [test_node(8)])
-                .is_empty()
-        );
+        assert!(tracker.unlock_declared([key(9)], [key(8)]).is_empty());
     }
 }

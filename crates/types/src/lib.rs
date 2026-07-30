@@ -193,6 +193,7 @@ pub use topology::validator::{ValidatorInfo, ValidatorSet};
 pub use transaction::constructors::{
     routable_from_notarized_v1, routable_from_notarized_v2, routable_from_user_transaction,
 };
+pub use transaction::declared_key::DeclaredKey;
 pub use transaction::limits::{MAX_DECLARED_NODES_PER_TX, MAX_TX_BYTES_LEN};
 pub use transaction::notarize::{
     NotarizeOptions, sign_and_notarize, sign_and_notarize_with_options,
