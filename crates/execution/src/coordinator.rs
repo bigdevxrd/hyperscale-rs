@@ -475,16 +475,46 @@ impl ExecutionCoordinator {
             if !is_single_shard {
                 for (tx, participating) in &txs {
                     let tx_hash = tx.hash();
-                    let remote_shards: BTreeSet<ShardId> = participating
-                        .iter()
-                        .filter(|&&s| s != local_shard)
-                        .copied()
-                        .collect();
-                    if remote_shards.is_empty() {
+                    // The dependency set is what execution waits for. The
+                    // Radix engine needs every remote participant's full
+                    // declared state; a VM leg needs only the shards
+                    // owning its read set (D23) — deltas and reserves
+                    // provision nothing, so a commutative-only leg
+                    // records an empty requirement and dispatches
+                    // without waiting.
+                    let remote_shards: BTreeSet<ShardId> = tx.vm_routing().map_or_else(
+                        || {
+                            participating
+                                .iter()
+                                .filter(|&&s| s != local_shard)
+                                .copied()
+                                .collect()
+                        },
+                        |routing| {
+                            let trie = classification.shard_trie();
+                            routing
+                                .provision_prefixes
+                                .iter()
+                                .map(|prefix| trie.shard_for_prefix(*prefix))
+                                .filter(|&s| s != local_shard)
+                                .collect()
+                        },
+                    );
+                    if remote_shards.is_empty() && !tx.is_vm() {
                         continue;
                     }
                     self.provisioning.record_required(tx_hash, remote_shards);
 
+                    if tx.is_vm() {
+                        // The detector is NodeId-shaped and VM provision
+                        // entries carry no target or owned nodes, so it
+                        // cannot track VM legs. Commutative legs have
+                        // empty dependency sets and nothing to wait on;
+                        // a fresh-read/RMW circular wait falls back to
+                        // wave expiry until a substate-keyed resolver
+                        // exists.
+                        continue;
+                    }
                     let conflicts = self.provisioning.register_tx(
                         tx_hash,
                         self.local_shard,

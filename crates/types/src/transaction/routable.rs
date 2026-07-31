@@ -672,6 +672,8 @@ mod tests {
                     write_keys: vec![DeclaredKey::substate([0x22; 16], [0x01; 16])],
                     read_prefixes: vec![[0x11; 16]],
                     write_prefixes: vec![[0x22; 16]],
+                    provision_keys: vec![DeclaredKey::prefix([0x11; 16])],
+                    provision_prefixes: vec![[0x11; 16]],
                 },
                 subintent_hashes,
             })

@@ -386,17 +386,29 @@ impl VmStatics for BridgeStatics {
         )
         .map_err(|error| VmStaticsError(format!("routing: {error}")))?;
 
+        // Fresh reads share, mutations exclude, and snapshot reads are
+        // lock-free and client-proven — they take no admission key and
+        // make no participant. The provision set is D23's: fresh reads
+        // plus read-modify-write priors, the values a counterpart shard
+        // cannot execute without.
         let mut read_keys = BTreeSet::new();
         let mut write_keys = BTreeSet::new();
+        let mut provision_keys = BTreeSet::new();
         for effect in routing.per_shard.values().flat_map(EffectSet::iter) {
             let key = admission_key(&effect.target);
             match effect.mode {
-                Mode::Read | Mode::Snapshot { .. } => {
+                Mode::Read => {
                     read_keys.insert(key);
+                    provision_keys.insert(key);
                 }
-                Mode::Delta | Mode::Reserve { .. } | Mode::Write => {
+                Mode::Write => {
+                    write_keys.insert(key);
+                    provision_keys.insert(key);
+                }
+                Mode::Delta | Mode::Reserve { .. } => {
                     write_keys.insert(key);
                 }
+                Mode::Snapshot { .. } => {}
             }
         }
         let prefixes = |keys: &BTreeSet<DeclaredKey>| -> Vec<[u8; 16]> {
@@ -410,8 +422,10 @@ impl VmStatics for BridgeStatics {
             routing: VmRouting {
                 read_prefixes: prefixes(&read_keys),
                 write_prefixes: prefixes(&write_keys),
+                provision_prefixes: prefixes(&provision_keys),
                 read_keys: read_keys.into_iter().collect(),
                 write_keys: write_keys.into_iter().collect(),
+                provision_keys: provision_keys.into_iter().collect(),
             },
             subintent_hashes: admitted
                 .subintents
@@ -614,6 +628,9 @@ mod tests {
             sender_vault.local.0
         )));
         assert!(derived.routing.read_keys.is_empty());
+        // A commutative-only transfer provisions nothing at all (D23).
+        assert!(derived.routing.provision_keys.is_empty());
+        assert!(derived.routing.provision_prefixes.is_empty());
         assert!(derived.subintent_hashes.is_empty());
         let mut owners = vec![composer_addr().0, bob_addr().0];
         owners.sort_unstable();

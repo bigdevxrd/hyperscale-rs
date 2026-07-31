@@ -152,16 +152,25 @@ impl VmTransaction {
 /// (INV-VM-2) — derived locally at every node, never carried on the
 /// wire. Nullifier creation writes are in the write keys: committing a
 /// subintent is an exclusive write at its canonical nullifier address.
+/// Snapshot reads appear nowhere here: they are lock-free and
+/// client-proven, so a snapshot-only shard is not a participant at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmRouting {
-    /// Conflict keys for the shared-access modes (reads, snapshots).
+    /// Conflict keys for fresh reads — the shared admission class.
     pub read_keys: Vec<DeclaredKey>,
-    /// Conflict keys for every other mode (writes, deltas, reserves).
+    /// Conflict keys for every mutation (writes, deltas, reserves).
     pub write_keys: Vec<DeclaredKey>,
     /// Owner prefixes behind `read_keys`, deduplicated ascending.
     pub read_prefixes: Vec<[u8; 16]>,
     /// Owner prefixes behind `write_keys`, deduplicated ascending.
     pub write_prefixes: Vec<[u8; 16]>,
+    /// The keys whose committed values counterpart shards must carry:
+    /// fresh reads plus read-modify-write priors. Deltas, blind writes,
+    /// and reserves provision nothing (D23).
+    pub provision_keys: Vec<DeclaredKey>,
+    /// Owner prefixes behind `provision_keys`, deduplicated ascending —
+    /// the wave's provision dependency set routes on these.
+    pub provision_prefixes: Vec<[u8; 16]>,
 }
 
 impl VmRouting {

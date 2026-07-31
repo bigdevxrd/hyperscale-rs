@@ -122,14 +122,18 @@ impl ProvisioningTracker {
         self.stamp_deadline(tx_hash);
     }
 
-    /// Whether every remote shard's provision for `tx_hash` has been
-    /// received. Returns `false` for txs with no recorded requirements
-    /// (single-shard txs or txs we aren't tracking).
+    /// Whether every required provision for `tx_hash` has been received.
+    /// Returns `false` for txs with no recorded requirements (single-shard
+    /// txs or txs we aren't tracking). A recorded empty requirement is
+    /// immediately satisfied — the dependency-free cross-shard leg that
+    /// dispatches without waiting.
     pub fn is_fully_provisioned(&self, tx_hash: TxHash) -> bool {
         self.required.get(&tx_hash).is_some_and(|required| {
-            self.received
-                .get(&tx_hash)
-                .is_some_and(|received| required.is_subset(received))
+            required.is_empty()
+                || self
+                    .received
+                    .get(&tx_hash)
+                    .is_some_and(|received| required.is_subset(received))
         })
     }
 
@@ -345,6 +349,16 @@ mod tests {
         // Shard 2 lands → fully provisioned.
         let batch2 = make_provisions(shard(2), BlockHeight::new(5), vec![tx]);
         t.absorb_provisions(&batch2);
+        assert!(t.is_fully_provisioned(tx));
+    }
+
+    #[test]
+    fn an_empty_requirement_is_immediately_satisfied() {
+        // The dependency-free cross-shard leg: requirements recorded as
+        // the empty set dispatch without any provision landing.
+        let mut t = ProvisioningTracker::new();
+        let tx = TxHash::from_raw(Hash::from_bytes(b"delta-only"));
+        t.record_required(tx, BTreeSet::new());
         assert!(t.is_fully_provisioned(tx));
     }
 
