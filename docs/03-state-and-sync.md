@@ -34,6 +34,15 @@ where `routing_node` is the substate's *owner* — its global ancestor, the acco
 
 This keying is why the central identity of [02-dynamic-sharding.md](02-dynamic-sharding.md), `hash_internal(left_child_root, right_child_root) == parent_root`, is a complete description of resharding state: split and merge move subtree *roots*, never leaves.
 
+**The VM keyspace is the native leaf-key form.** VM-engine substates share the store under their own flat-key namespace (`state_key` in `crates/types`):
+
+```
+flat key:  VM_BODY_TAG || owner(16) || partition || local(16)
+leaf key:  [ owner | local ]
+```
+
+The leaf is read directly off the key — no hashing, no ownership map — because a VM substate key *is* an owner prefix and a local half by construction: the effect DSL computes placement, so the storage keying has nothing left to derive (INV-VM-4 holds structurally). Routing is the same prefix walk as everything else (`shard_for_prefix`), so a VM owner's footprint is a contiguous subtree under the shard its own bits name. VM flat keys are fixed-width and shorter than any `db_node_key`-prefixed Radix key, so the two namespaces are disjoint by length alone and every key-classifying path fails closed on malformed shapes.
+
 ## 3. The storage stack
 
 Storage is trait-abstracted (`crates/storage`) with two full backends: RocksDB for production (`storage-rocksdb`) and an in-memory persistent-structure implementation for deterministic simulation (`storage-memory`). Both implement one umbrella bound; consensus code cannot tell them apart. The design is its capability seams (the trait names track the code):

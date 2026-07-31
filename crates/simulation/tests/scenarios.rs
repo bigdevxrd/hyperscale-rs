@@ -170,16 +170,20 @@ fn vm_snapshot_reads_committed_baseline_sim() {
 fn vm_zipf_payments_sim() {
     let mut cluster =
         SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(24, 6));
-    let report = vm_zipf_payments(&mut cluster, 24, 6, 1.0);
-    println!("vm_zipf_payments s=1.0 senders=24 recipients=6: {report:?}");
+    let report = cluster.run_faultable(|c| vm_zipf_payments(c, 24, 6, 1.0));
+    let executed = cluster.metric("transactions_executed", None);
+    println!("vm_zipf_payments s=1.0 senders=24 recipients=6 executed={executed}: {report:?}");
 }
 
 #[test]
 fn vm_hot_recipient_sim() {
     let mut cluster =
         SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(12, 1));
-    let (report, height_span) = vm_hot_recipient(&mut cluster, 12);
-    println!("vm_hot_recipient senders=12 height_span={height_span}: {report:?}");
+    let (report, height_span) = cluster.run_faultable(|c| vm_hot_recipient(c, 12));
+    let executed = cluster.metric("transactions_executed", None);
+    println!(
+        "vm_hot_recipient senders=12 height_span={height_span} executed={executed}: {report:?}"
+    );
 }
 
 #[test]
