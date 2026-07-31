@@ -3,9 +3,12 @@
 // commit-proof-gated counterpart engagement, engagement-echo-gated payer
 // voting with the validity-window deadline abort at the floor, and the
 // successor sweep under payer-shard termination. Checked for INV-VM-9
-// (no counterpart engages without an engaged reservation) and INV-VM-10
+// (no counterpart engages without an engaged reservation), INV-VM-10
 // (every engaged reservation resolves exactly once, burn classes by
-// verdict, conservation).
+// verdict, conservation), INV-VM-11 (the payer speaks once, on its own
+// chain content), and INV-VM-7's fee-side clause (a bond is posted only
+// against substates that committed, and a balance that cannot cover one
+// records debt rather than forgiving it).
 //
 // Shard P is the payer's (fee_payer's prefix routes there); shard Q is a
 // non-payer counterpart. One cross-shard VM transaction whose legs are
@@ -36,8 +39,11 @@
 //     abort, never a verdict split. The deadline threshold needs no skew
 //     bound for safety; a margin above the window end only tunes how
 //     often a could-have-succeeded transaction pays the floor.
-//   - Resolution at P: success burns ACTUAL and releases the surplus;
-//     any abort burns FLOOR and releases the remainder.
+//   - Resolution at P: success burns ACTUAL, releases the surplus, and
+//     posts the committed substates' bond — out of balance where it
+//     reaches, as recorded debt where it does not. Any abort burns FLOOR
+//     and releases the remainder, and posts no bond at all: it wrote no
+//     substates, which is the same fact that makes it atomic.
 //   - P terminating mid-flight (reshape) stamps abort-by-omission for an
 //     unfinalized wave (Model D's rule) and the successor sweep resolves
 //     the reservation it inherited; the sweep is modeled atomic with the
@@ -99,6 +105,10 @@
 //   quint test   --main=fee_ok        --match=echoRace specs/vm_fee_assurance.qnt
 //     (scripted: Q engages at the window edge, its success EC in flight,
 //      while P's deadline vote fires — both sides abort, consistently)
+//   quint verify --main=fee_indebted  --invariant=invAll --max-steps=10 specs/vm_fee_assurance.qnt
+//     (the bond outruns the balance: the shortfall is recorded as debt)
+//   quint verify --main=fee_bonded_abort --invariant=invNoBondOnAbort --max-steps=12 specs/vm_fee_assurance.qnt
+//     (broken twin: an abort bonds substates it never wrote)
 //   quint verify --main=fee_ungated   --invariant=invEngageGated --max-steps=8 specs/vm_fee_assurance.qnt
 //     (pre-D21 twin: an optimistic counterpart engages locks for an
 //      insolvent payer that never commits)
@@ -123,6 +133,13 @@ module vm_fee_assurance {
   const ACTUAL: int
   // The abort-class floor.
   const FLOOR: int
+  // The storage bond a committed transaction's substates carry. Posted
+  // out of the payer's balance at settlement, refundable to whoever
+  // later deletes them — burned value and bonded value are different
+  // things, and INV-VM-7 conserves the second.
+  const BOND: int
+  // Broken twin: an abort posts a bond for substates it never wrote.
+  const BOND_ON_ABORT: bool
   // The payer's liquid balance at genesis.
   const BALANCE: int
   // The validity window's end on each shard's attested clock: engagement
@@ -190,6 +207,10 @@ module vm_fee_assurance {
   var balance: int
   var held: int
   var burned: int
+  // INV-VM-7's quantities: bonds posted against committed substates, and
+  // the debt a payer whose balance could not cover one still owes.
+  var bonded: int
+  var debt: int
 
   action init = all {
     clock' = SHARDS.mapBy(s => 0),
@@ -205,6 +226,8 @@ module vm_fee_assurance {
     balance' = BALANCE,
     held' = 0,
     burned' = 0,
+    bonded' = 0,
+    debt' = 0,
   }
 
   // Frame groups: every action updates some groups and frames the rest
@@ -217,7 +240,10 @@ module vm_fee_assurance {
   }
   action frameEc = all { emitted' = emitted, admitted' = admitted }
   action frameTerm = all { terminal' = terminal, pTerminal' = pTerminal }
-  action frameFees = all { balance' = balance, held' = held, burned' = burned }
+  action frameFees = all {
+    balance' = balance, held' = held, burned' = burned,
+    bonded' = bonded, debt' = debt,
+  }
 
   action tick = {
     nondet s = SHARDS.oneOf()
@@ -254,6 +280,8 @@ module vm_fee_assurance {
     balance' = balance - MAX_FEE,
     held' = held + MAX_FEE,
     burned' = burned,
+    bonded' = bonded,
+    debt' = debt,
     frameClock, frameCert, frameSignals, frameEc, frameTerm,
   }
 
@@ -378,11 +406,21 @@ module vm_fee_assurance {
       row.get(other(s)) == SUCC,
       terminal' = terminal.put(s, SUCC),
       if (s == P) all {
-        balance' = balance + (MAX_FEE - ACTUAL),
-        held' = held - MAX_FEE,
-        burned' = burned + ACTUAL,
+        // The surplus refunds, the actual burns, and the committed
+        // substates post their bond — out of balance where it reaches,
+        // as recorded debt where it does not.
+        val available = balance + (MAX_FEE - ACTUAL)
+        val posted = if (available >= BOND) BOND else available
+        all {
+          balance' = available - posted,
+          held' = held - MAX_FEE,
+          burned' = burned + ACTUAL,
+          bonded' = bonded + BOND,
+          debt' = debt + (BOND - posted),
+        }
       } else all {
         balance' = balance, held' = held, burned' = burned,
+        bonded' = bonded, debt' = debt,
       },
       pTerminal' = pTerminal,
       frameClock, frameCert, frameCommitted, frameSignals, frameEc,
@@ -403,11 +441,14 @@ module vm_fee_assurance {
       },
       terminal' = terminal.put(s, ABORT),
       if (s == P) all {
-        balance' = balance + (MAX_FEE - FLOOR),
+        balance' = balance + (MAX_FEE - FLOOR) - (if (BOND_ON_ABORT) BOND else 0),
         held' = held - MAX_FEE,
         burned' = burned + FLOOR,
+        bonded' = bonded + (if (BOND_ON_ABORT) BOND else 0),
+        debt' = debt,
       } else all {
         balance' = balance, held' = held, burned' = burned,
+        bonded' = bonded, debt' = debt,
       },
       pTerminal' = pTerminal,
       frameClock, frameCert, frameCommitted, frameSignals, frameEc,
@@ -437,6 +478,8 @@ module vm_fee_assurance {
     balance' = balance + (MAX_FEE - FLOOR),
     held' = held - MAX_FEE,
     burned' = burned + FLOOR,
+    bonded' = bonded,
+    debt' = debt,
     frameClock, frameCert, frameCommitted, frameSignals, frameEc,
   }
 
@@ -456,8 +499,11 @@ module vm_fee_assurance {
       balance' = balance + (MAX_FEE - FLOOR),
       held' = held - MAX_FEE,
       burned' = burned + FLOOR,
+      bonded' = bonded,
+      debt' = debt,
     } else all {
       balance' = balance, held' = held, burned' = burned,
+      bonded' = bonded, debt' = debt,
     },
     frameClock, frameCert, frameCommitted, frameSignals, frameEc,
   }
@@ -475,7 +521,17 @@ module vm_fee_assurance {
 
   // INV-VM-10: the conserved quantities. Fees never move cross-shard —
   // Q has no fee state to conserve, structurally.
-  val invConserve = balance + held + burned == BALANCE
+  val invConserve = balance + held + burned + bonded == BALANCE + debt
+
+  // INV-VM-7: a bond is posted only against substates that committed.
+  // An aborted transaction wrote none, so it carries no bond — the same
+  // fact that makes the abort atomic, read on the storage side.
+  val invNoBondOnAbort = terminal.get(P) != ABORT or bonded == 0
+
+  // INV-VM-7: what a payer's balance could not cover is recorded as
+  // debt, never silently forgiven — and debt exists only against a
+  // posted bond.
+  val invDebtBacked = debt >= 0 and debt <= bonded
 
   // The reservation is all-or-nothing while held.
   val invHeldShape = held == 0 or held == MAX_FEE
@@ -507,6 +563,7 @@ module vm_fee_assurance {
   val invAll = and {
     invEngageGated, invConserve, invHeldShape, invBurnClass,
     invResolvedAtTerminal, invVoteGated, invAtomicScoped,
+    invNoBondOnAbort, invDebtBacked,
   }
 
   // The insolvent payer's world: nothing certifies, commits, engages,
@@ -517,6 +574,8 @@ module vm_fee_assurance {
     held == 0,
     burned == 0,
     balance == BALANCE,
+    bonded == 0,
+    debt == 0,
   }
 
   val invAllIdle = and { invAll, invIdle }
@@ -620,7 +679,7 @@ module fee_ok {
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
     VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
-    SWEEP_ON_TERMINATION = true
+    SWEEP_ON_TERMINATION = true, BOND = 2, BOND_ON_ABORT = false
   ).*
 }
 
@@ -631,7 +690,7 @@ module fee_insolvent {
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 3,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
     VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
-    SWEEP_ON_TERMINATION = true
+    SWEEP_ON_TERMINATION = true, BOND = 2, BOND_ON_ABORT = false
   ).*
 }
 
@@ -642,7 +701,7 @@ module fee_ungated {
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 3,
     WINDOW = 4, ENGAGE_UNGATED = true, ENGAGE_ON_CERTIFIED = false,
     VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
-    SWEEP_ON_TERMINATION = true
+    SWEEP_ON_TERMINATION = true, BOND = 2, BOND_ON_ABORT = false
   ).*
 }
 
@@ -654,7 +713,7 @@ module fee_certified {
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = true,
     VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
-    SWEEP_ON_TERMINATION = true
+    SWEEP_ON_TERMINATION = true, BOND = 2, BOND_ON_ABORT = false
   ).*
 }
 
@@ -665,7 +724,7 @@ module fee_unswept {
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
     VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
-    SWEEP_ON_TERMINATION = false
+    SWEEP_ON_TERMINATION = false, BOND = 2, BOND_ON_ABORT = false
   ).*
 }
 
@@ -677,6 +736,29 @@ module fee_timer {
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
     VOTE_ON_ECHO = false, LOCAL_TIMER_ABORT = true,
-    SWEEP_ON_TERMINATION = true
+    SWEEP_ON_TERMINATION = true, BOND = 2, BOND_ON_ABORT = false
+  ).*
+}
+
+// The indebted payer: its balance covers the fee ceiling but not the
+// bond its committed substates carry, so the shortfall is recorded as
+// debt rather than forgiven.
+module fee_indebted {
+  import vm_fee_assurance(
+    MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
+    WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
+    VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
+    SWEEP_ON_TERMINATION = true, BOND = 9, BOND_ON_ABORT = false
+  ).*
+}
+
+// Broken twin: an abort posts a bond for substates it never wrote —
+// storage accounting drifting from what actually committed.
+module fee_bonded_abort {
+  import vm_fee_assurance(
+    MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
+    WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
+    VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
+    SWEEP_ON_TERMINATION = true, BOND = 2, BOND_ON_ABORT = true
   ).*
 }
