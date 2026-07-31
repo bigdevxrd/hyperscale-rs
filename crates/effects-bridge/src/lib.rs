@@ -24,7 +24,7 @@ use hyperscale_vm_effects::{
     Address, Effect, EffectSet, EffectTarget, Hash32, Hasher, LocalKey, Mode, SubstateKey, Window,
 };
 pub use vm_statics::{
-    BridgeStatics, VM_XRD, decode_tree, encode_tree, envelope_identity, vault_key,
+    BridgeStatics, VM_XRD, decode_tree, encode_tree, entropy_key, envelope_identity, vault_key,
     vm_account_address,
 };
 

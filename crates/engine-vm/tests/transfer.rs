@@ -9,7 +9,7 @@ use hyperscale_effects_bridge::{encode_tree, vm_account_address};
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
 };
-use hyperscale_engine_vm::genesis::vault_key;
+use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
 use hyperscale_engine_vm::{ExecutionMode, VM_XRD, VmExecutor, vm_genesis_updates};
 use hyperscale_storage::{
     DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,
@@ -149,6 +149,114 @@ fn execute(
     transactions: &[Arc<Verified<RoutableTransaction>>],
 ) -> Vec<ExecutedTx> {
     execute_on(&[(ALICE, 1_000), (BOB, 50)], executor, transactions)
+}
+
+/// A signed single-node stamp: the account records the transaction's
+/// randomness draw in its entropy leaf.
+fn signed_stamp(seed: u8, owner: [u8; 16]) -> RoutableTransaction {
+    let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph: ManifestGraph {
+                nodes: vec![GraphNode {
+                    target: Address(owner),
+                    method: "stamp-entropy".into(),
+                    args: vec![],
+                }],
+            },
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    let vm = VmTransaction {
+        tree: encode_tree(&tree).into(),
+        subintent_sigs: Vec::new(),
+        fee_payer: vm_account_address(&key.public_key().0),
+        max_fee: 1_000_000,
+        gas_limit: 1_000_000,
+        snapshot_pins: Vec::new(),
+        validity_start_ms: 0,
+        validity_end_ms: u64::MAX,
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(&key);
+    RoutableTransaction::new_vm(vm)
+}
+
+/// Execute `transactions` as a single-shard batch anchored on `reveal`.
+fn execute_anchored(
+    executor: &VmExecutor,
+    reveal: RevealChain,
+    transactions: &[Arc<Verified<RoutableTransaction>>],
+) -> Vec<ExecutedTx> {
+    let snapshot_store = MapDb::genesis(&[(ALICE, 1_000), (BOB, 50)]);
+    let snapshot = DynSnapshot(&snapshot_store);
+    let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
+    let trie = ShardTrie::single();
+    let ctx = WaveBatchContext {
+        par: Parallelism::Sequential,
+        cache: &cache,
+        local_shard: ShardId::ROOT,
+        shard_trie: &trie,
+        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
+        wave_start_ts: WeightedTimestamp::from_millis(1_000),
+        wave_start_reveal: reveal,
+    };
+    executor.execute_wave_batch(&ctx, &snapshot, transactions)
+}
+
+/// The entropy leaf a stamp wrote, if any.
+fn entropy_cell(executed: &ExecutedTx, owner: [u8; 16]) -> Option<Vec<u8>> {
+    let key = entropy_key(owner);
+    let updates = executed.consensus.database_updates()?;
+    let node = updates.node_updates.get(&vm_db_node_key(owner))?;
+    let PartitionDatabaseUpdates::Delta { substate_updates } =
+        node.partition_updates.get(&VM_PARTITION)?
+    else {
+        return None;
+    };
+    match substate_updates.get(&DbSortKey(key.local.0.to_vec()))? {
+        DatabaseUpdate::Set(value) => Some(value.clone()),
+        DatabaseUpdate::Delete => None,
+    }
+}
+
+/// The stamp writes a draw fixed by the anchor: the same anchor gives the
+/// same 32 bytes, a different anchor gives different ones — which is what
+/// makes the payer block, and not the executing block, decide a
+/// randomness-reading guest's receipt.
+#[test]
+fn a_stamp_writes_the_draw_its_anchor_fixes() {
+    let executor = VmExecutor::new(&[(ALICE, 1_000), (BOB, 50)], ExecutionMode::Serial);
+    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        signed_stamp(9, ALICE),
+    ));
+    let anchor = RevealChain::from_raw(Hash::from_bytes(b"payer block"));
+
+    let executed = execute_anchored(&executor, anchor, std::slice::from_ref(&tx));
+    let stamped = entropy_cell(&executed[0], ALICE).expect("the stamp wrote the entropy leaf");
+    assert_eq!(stamped.len(), 32);
+
+    let again = execute_anchored(&executor, anchor, std::slice::from_ref(&tx));
+    assert_eq!(
+        entropy_cell(&again[0], ALICE),
+        Some(stamped.clone()),
+        "one anchor, one draw"
+    );
+
+    let elsewhere = execute_anchored(
+        &executor,
+        RevealChain::from_raw(Hash::from_bytes(b"another block")),
+        std::slice::from_ref(&tx),
+    );
+    assert_ne!(
+        entropy_cell(&elsewhere[0], ALICE),
+        Some(stamped),
+        "a different anchor is a different draw"
+    );
 }
 
 fn execute_on(

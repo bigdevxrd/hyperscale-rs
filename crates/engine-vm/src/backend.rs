@@ -38,6 +38,11 @@ pub enum Invocation<'a> {
         /// The required minimum's encoded bytes.
         min: &'a [u8],
     },
+    /// `stamp-entropy(leaf: borrow<write-cell>)`.
+    StampEntropy {
+        /// Capability index of the entropy leaf's write handle.
+        leaf_rep: u32,
+    },
 }
 
 /// What one invocation produced: the session back from the engine, the
@@ -51,7 +56,8 @@ pub struct InvokeOutcome {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use hyperscale_vm_runtime::{
-        DeltaCell, ReserveCell, SnapCell, add_kernel_to_linker, blessed_engine, validate_component,
+        DeltaCell, ReserveCell, SnapCell, WriteCell, add_kernel_to_linker, blessed_engine,
+        validate_component,
     };
     use hyperscale_vm_stdlib::ACCOUNT_COMPONENT;
     use wasmtime::component::{Component, InstancePre, Linker, Resource};
@@ -126,6 +132,14 @@ mod native {
                             .map_err(|trap| format!("{trap:#}"))
                             .map(|()| None)
                     }),
+                Invocation::StampEntropy { leaf_rep } => instance
+                    .get_typed_func::<(Resource<WriteCell>,), ()>(&mut store, "stamp-entropy")
+                    .map_err(|error| format!("typed export: {error:#}"))
+                    .and_then(|func| {
+                        func.call(&mut store, (Resource::new_borrow(*leaf_rep),))
+                            .map_err(|trap| format!("{trap:#}"))
+                            .map(|()| None)
+                    }),
             };
             let fuel = FUEL - store.get_fuel().expect("fuel metering is enabled");
             InvokeOutcome {
@@ -190,6 +204,11 @@ mod reference {
                         CVal::Borrow(*vault_rep, ResourceKind::SnapCell),
                         CVal::Bytes(min.to_vec()),
                     ],
+                    false,
+                ),
+                Invocation::StampEntropy { leaf_rep } => (
+                    "stamp-entropy",
+                    vec![CVal::Borrow(*leaf_rep, ResourceKind::WriteCell)],
                     false,
                 ),
             };

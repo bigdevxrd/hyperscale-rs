@@ -12,15 +12,15 @@
 use std::sync::Arc;
 
 use hyperscale_engine_vm::VM_XRD;
-use hyperscale_engine_vm::genesis::vault_key;
+use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
 use hyperscale_types::{NetworkDefinition, ShardId, TransactionDecision, TransactionStatus};
 
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
-    VM_SNAPSHOT_GUARD_BALANCE, build_faucet_tx, build_vm_guarded_transfer_tx, build_vm_transfer_tx,
-    contention_recipient, signer_from_seed, validity_around, vm_cross_shard_cast, vm_recipient,
-    vm_sender, vm_snapshot_cast,
+    VM_SNAPSHOT_GUARD_BALANCE, build_faucet_tx, build_vm_guarded_transfer_tx, build_vm_stamp_tx,
+    build_vm_transfer_tx, contention_recipient, signer_from_seed, validity_around,
+    vm_cross_shard_cast, vm_recipient, vm_sender, vm_snapshot_cast,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -280,6 +280,68 @@ pub fn vm_cross_shard_transfer(c: &mut impl Cluster) {
     assert!(
         right.is_some(),
         "recipient shard never committed the transfer"
+    );
+}
+
+/// A randomness-reading transaction derives one draw on both shards.
+///
+/// Both accounts stamp the transaction's draw into their own entropy
+/// leaf, one leaf per shard, so the two stamps agree exactly when the two
+/// committees executed the transaction under one value. The draw is
+/// anchored on the payer block — the block that committed the
+/// transaction on the payer's shard, whose reveal chain rides the
+/// engagement bundle — so agreement holds by construction rather than by
+/// the two shards happening to commit in step. Each stamp is an
+/// exclusive write, so this is also the read-set-provisioned shape in
+/// both directions: each shard executes on the other's shipped prior.
+///
+/// # Panics
+///
+/// Panics if the stamp misses its budget, does not accept, either
+/// shard's chain never commits it, either leaf is unstamped, or the two
+/// stamps differ.
+pub fn vm_randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
+    let (payer, left_owner, right_owner) = vm_cross_shard_cast();
+    let tx = build_vm_stamp_tx(&payer, left_owner, right_owner, validity_around(c.now()));
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+
+    let status = await_tx_terminal(c, hash, epochs(16));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "cross-shard VM stamp did not accept; status = {status:?}"
+    );
+    let (left_fate, _) = c.chain_fate(ShardId::leaf(1, 0), hash);
+    let (right_fate, _) = c.chain_fate(ShardId::leaf(1, 1), hash);
+    assert!(left_fate.is_some(), "payer shard never committed the stamp");
+    assert!(
+        right_fate.is_some(),
+        "counterpart shard never committed the stamp"
+    );
+
+    // The stamps are read off each shard's own committed state, which
+    // trails the settling block by the persistence step.
+    let read = |c: &C, shard: ShardId, owner: [u8; 16]| -> Option<Vec<u8>> {
+        let key = entropy_key(owner);
+        c.vm_snapshot_pin(shard, key.owner.0, key.local.0)?
+            .value
+            .map(|bytes| bytes.to_vec())
+    };
+    assert!(
+        c.run_until(epochs(4), |c| read(c, ShardId::leaf(1, 0), left_owner)
+            .is_some()
+            && read(c, ShardId::leaf(1, 1), right_owner).is_some()),
+        "both entropy leaves must carry a stamp"
+    );
+    let left = read(c, ShardId::leaf(1, 0), left_owner).expect("stamped");
+    let right = read(c, ShardId::leaf(1, 1), right_owner).expect("stamped");
+    assert_eq!(left.len(), 32, "a stamp is the 32-byte draw");
+    assert_eq!(
+        left, right,
+        "the two shards executed the transaction under different draws"
     );
 }
 

@@ -634,6 +634,37 @@ pub fn vm_insolvent_genesis_accounts() -> Vec<([u8; 16], u128)> {
     vec![(from, 10), (to, 10)]
 }
 
+/// Build a cross-shard entropy stamp: both accounts record the
+/// transaction's randomness draw in their own entropy leaf, so the two
+/// shards' stamps are equal exactly when they executed under one draw.
+///
+/// Each stamp is an exclusive write, so each shard owes the other the
+/// prior value of the leaf it owns — the read-set-provisioned shape, in
+/// both directions.
+#[must_use]
+pub fn build_vm_stamp_tx(
+    payer: &Ed25519PrivateKey,
+    left: [u8; 16],
+    right: [u8; 16],
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let graph = ManifestGraph {
+        nodes: vec![
+            GraphNode {
+                target: Address(left),
+                method: "stamp-entropy".into(),
+                args: vec![],
+            },
+            GraphNode {
+                target: Address(right),
+                method: "stamp-entropy".into(),
+                args: vec![],
+            },
+        ],
+    };
+    RoutableTransaction::new_vm(vm_envelope(graph, payer, Vec::new(), validity))
+}
+
 /// Build a VM transfer: the account guest's withdraw+deposit graph over
 /// [`VM_XRD`], wrapped in a single-intent envelope signed by `payer`.
 ///

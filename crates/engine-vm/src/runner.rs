@@ -15,7 +15,7 @@ use hyperscale_vm_kernel::{
 };
 
 use crate::backend::{GuestBackend, Invocation};
-use crate::genesis::vault_key;
+use crate::genesis::{entropy_key, vault_key};
 
 /// One derived transaction, keyed for the runner by its kernel hash.
 pub struct PreparedVmTx {
@@ -150,6 +150,19 @@ impl ManifestRunner<'_> {
                         min: &encode_amount(*min),
                     },
                 );
+                match invoked.result {
+                    Ok(_) => Ok((invoked.session, Vec::new(), invoked.fuel)),
+                    Err(reason) => Err(fail(invoked.session, reason, invoked.fuel)),
+                }
+            }
+            "stamp-entropy" => {
+                let leaf = entropy_key(node.target.0);
+                let Some(rep) = rep_of(&session, &Capability::Write(leaf)) else {
+                    return Err(fail(session, "missing write capability", 0));
+                };
+                let invoked = self
+                    .backend
+                    .invoke(session, &Invocation::StampEntropy { leaf_rep: rep });
                 match invoked.result {
                     Ok(_) => Ok((invoked.session, Vec::new(), invoked.fuel)),
                     Err(reason) => Err(fail(invoked.session, reason, invoked.fuel)),

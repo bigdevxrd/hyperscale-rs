@@ -7,7 +7,7 @@
 //! bootstrap in one genesis batch.
 
 use hyperscale_effects_bridge::ProtocolHasher;
-pub use hyperscale_effects_bridge::{VM_XRD, vault_key};
+pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_vm_effects::{Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash};

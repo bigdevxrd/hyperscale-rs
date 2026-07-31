@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use hyperscale_types::{
     DeclaredKey, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction,
 };
-use hyperscale_vm_effects::stdlib::VAULT;
+use hyperscale_vm_effects::stdlib::{ENTROPY, VAULT};
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg, GraphNode,
     Hash32, InstanceRegistry, IntentDecl, LocalKey, ManifestGraph, ManifestHash, MetadataCache,
@@ -44,6 +44,14 @@ pub fn vault_key(owner: [u8; 16], resource: Address) -> SubstateKey {
         VAULT,
         &[Value::Address(resource).canonical_bytes()],
     )
+}
+
+/// An account's entropy leaf: where the stdlib's `stamp-entropy` records
+/// the transaction's randomness draw. Mirrors the effect signature the
+/// method declares.
+#[must_use]
+pub fn entropy_key(owner: [u8; 16]) -> SubstateKey {
+    child_key(&ProtocolHasher, Address(owner), ENTROPY, &[])
 }
 
 /// The VM account address owned by an ed25519 public key: the protocol
