@@ -11,8 +11,8 @@ use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_vm_effects::stdlib::VAULT;
 use hyperscale_vm_effects::{
-    Address, Hasher, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, SubstateKey,
-    Value, child_key,
+    Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, SubstateKey, Value,
+    child_key,
 };
 use hyperscale_vm_kernel::encode_amount;
 use hyperscale_vm_stdlib::{account_metadata, account_package_hash};
@@ -21,21 +21,6 @@ use radix_substate_store_interface::interface::DatabaseUpdates;
 
 /// The native fee/transfer resource of the VM namespace.
 pub const VM_XRD: Address = Address([0x58; 16]);
-
-const DOMAIN_VM_ACCOUNT: &[u8] = b"hyperscale/engine-vm/account-address";
-
-/// The VM account address owned by an ed25519 public key: the protocol
-/// hash of the key, truncated to the owner-prefix width.
-///
-/// Deterministic — genesis funding, transaction builders, and admission
-/// all derive the same address from the same key.
-#[must_use]
-pub fn vm_account_address(public_key: &[u8; 32]) -> [u8; 16] {
-    let digest = ProtocolHasher.hash(DOMAIN_VM_ACCOUNT, &[public_key]);
-    let mut address = [0u8; 16];
-    address.copy_from_slice(&digest.0[..16]);
-    address
-}
 
 /// The vault cell for `resource` under `owner` — the same child key the
 /// stdlib account metadata's effect clauses compute.
@@ -116,6 +101,7 @@ mod tests {
     use hyperscale_types::state_key::{VM_FLAT_KEY_LEN, vm_flat_key_parts};
 
     use super::*;
+    use crate::vm_account_address;
 
     #[test]
     fn genesis_updates_are_identity_keyed_vault_cells() {

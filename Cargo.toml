@@ -120,18 +120,18 @@ tracing-subscriber = "0.3.23"
 tracing-test = "0.2.6"
 wasm-bindgen = "0.2.126"
 
-# VM dependencies (github.com/hyperscalers/hyperscale-vm @ f91e030c3a).
+# VM dependencies (github.com/hyperscalers/hyperscale-vm @ 94684e1f15).
 # `vm-effects` (types and the routing vocabulary) feeds admission through the
 # effects bridge; the kernel, runtimes, and stdlib blob are consumed only by
 # `crates/engine-vm`. Bumps are deliberate rev-pin commits, never
 # `cargo update` drift. The wasmtime pin mirrors the VM repo's blessed engine
 # exactly (latest stable ahead of the 48 LTS, expected 2026-08-20); upgrades
 # are protocol events.
-hyperscale-vm-effects = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "f91e030c3a" }
-hyperscale-vm-kernel = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "f91e030c3a" }
-hyperscale-vm-ref = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "f91e030c3a" }
-hyperscale-vm-runtime = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "f91e030c3a" }
-hyperscale-vm-stdlib = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "f91e030c3a" }
+hyperscale-vm-effects = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "94684e1f15" }
+hyperscale-vm-kernel = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "94684e1f15" }
+hyperscale-vm-ref = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "94684e1f15" }
+hyperscale-vm-runtime = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "94684e1f15" }
+hyperscale-vm-stdlib = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "94684e1f15" }
 wasmtime = { version = "=47.0.2", features = ["component-model", "winch", "pulley"] }
 
 # Radix dependencies (github.com/hyperscalers/radixdlt-scrypto @ f7fcb1f62f)

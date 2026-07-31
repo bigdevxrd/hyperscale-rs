@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use hyperscale_effects_bridge::encode_graph;
+use hyperscale_effects_bridge::encode_tree;
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
@@ -18,7 +18,8 @@ use hyperscale_types::{
     sign_and_notarize_with_options, uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
-    Address, Constraint, EdgeRef, GraphArg, GraphNode, ManifestGraph, Value,
+    Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
+    Value,
 };
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
@@ -571,12 +572,12 @@ pub fn vm_genesis_accounts(senders: u8, recipients: u8) -> Vec<([u8; 16], u128)>
 }
 
 /// Build a VM transfer: the account guest's withdraw+deposit graph over
-/// [`VM_XRD`], signed by `payer`.
+/// [`VM_XRD`], wrapped in a single-intent envelope signed by `payer`.
 ///
-/// The transaction hash covers the signed graph alone (no nonce until the
-/// phase 5 envelope), so two transfers identical in `(payer, from, to,
-/// amount)` are one transaction — scenarios vary a field when they need
-/// distinct submissions from one payer.
+/// The transaction hash covers the whole signed envelope — validity
+/// window included — so distinct submissions differ in signed content;
+/// byte-identical envelopes are one transaction, which is the hash-dedup
+/// replay protection working as designed.
 #[must_use]
 pub fn build_vm_transfer_tx(
     payer: &Ed25519PrivateKey,
@@ -608,8 +609,38 @@ pub fn build_vm_transfer_tx(
             },
         ],
     };
-    let vm = VmTransaction::new_signed(encode_graph(&graph), payer);
-    RoutableTransaction::new_vm(vm, validity)
+    RoutableTransaction::new_vm(vm_envelope(graph, payer, validity))
+}
+
+/// Wrap a single-intent graph in a signed envelope with placeholder fee
+/// terms (the constants are phase 6 scope; the structure is signed now).
+fn vm_envelope(
+    graph: ManifestGraph,
+    payer: &Ed25519PrivateKey,
+    validity: TimestampRange,
+) -> VmTransaction {
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph,
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    VmTransaction {
+        tree: encode_tree(&tree).into(),
+        subintent_sigs: Vec::new(),
+        fee_payer: vm_account_address(&payer.public_key().0),
+        max_fee: 1_000_000,
+        gas_limit: 1_000_000,
+        snapshot_pins: Vec::new(),
+        validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
+        validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(payer)
 }
 
 /// Build a withdraw-from-`from`, deposit-to-`to` XRD transfer, signed and

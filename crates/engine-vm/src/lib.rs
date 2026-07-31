@@ -24,5 +24,6 @@ mod runner;
 pub mod genesis;
 
 pub use executor::VmExecutor;
-pub use genesis::{VM_XRD, VmWorld, genesis_world, vm_account_address, vm_genesis_updates};
+pub use genesis::{VM_XRD, VmWorld, genesis_world, vm_genesis_updates};
+pub use hyperscale_effects_bridge::vm_account_address;
 pub use hyperscale_vm_kernel::ExecutionMode;

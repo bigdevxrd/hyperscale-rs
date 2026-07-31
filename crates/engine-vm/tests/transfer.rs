@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use hyperscale_effects_bridge::encode_graph;
+use hyperscale_effects_bridge::{encode_tree, vm_account_address};
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
 };
@@ -17,10 +17,11 @@ use hyperscale_storage::{
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RoutableTransaction, ShardId, ShardTrie,
-    TimestampRange, Verified, VmTransaction, WeightedTimestamp,
+    Verified, VmTransaction,
 };
 use hyperscale_vm_effects::{
-    Address, Constraint, EdgeRef, GraphArg, GraphNode, ManifestGraph, Value,
+    Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
+    Value,
 };
 use hyperscale_vm_kernel::encode_amount;
 use radix_common::prelude::DbSubstateValue;
@@ -108,14 +109,29 @@ fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGraph {
 
 fn signed_transfer(seed: u8, from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
-    let vm = VmTransaction::new_signed(encode_graph(&transfer_graph(from, to, amount)), &key);
-    RoutableTransaction::new_vm(
-        vm,
-        TimestampRange::new(
-            WeightedTimestamp::ZERO,
-            WeightedTimestamp::from_millis(u64::MAX),
-        ),
-    )
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph: transfer_graph(from, to, amount),
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    let vm = VmTransaction {
+        tree: encode_tree(&tree).into(),
+        subintent_sigs: Vec::new(),
+        fee_payer: vm_account_address(&key.public_key().0),
+        max_fee: 1_000_000,
+        gas_limit: 1_000_000,
+        snapshot_pins: Vec::new(),
+        validity_start_ms: 0,
+        validity_end_ms: u64::MAX,
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(&key);
+    RoutableTransaction::new_vm(vm)
 }
 
 fn execute(

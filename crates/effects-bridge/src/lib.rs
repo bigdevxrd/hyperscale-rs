@@ -23,7 +23,9 @@ use hyperscale_types::{NodeId, RoutableTransaction, ShardId, TopologySnapshot};
 use hyperscale_vm_effects::{
     Address, Effect, EffectSet, EffectTarget, Hash32, Hasher, LocalKey, Mode, SubstateKey, Window,
 };
-pub use vm_statics::{BridgeStatics, decode_graph, encode_graph};
+pub use vm_statics::{
+    BridgeStatics, decode_tree, encode_tree, envelope_identity, vm_account_address,
+};
 
 const DOMAIN_NODE_ADDRESS: &[u8] = b"hyperscale/effects-bridge/node-address";
 const DOMAIN_ROUTING_DIGEST: &[u8] = b"hyperscale/effects-bridge/routing-digest";

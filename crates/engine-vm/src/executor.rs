@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use blake3::hash as blake3_hash;
-use hyperscale_effects_bridge::{BridgeStatics, ProtocolHasher, decode_graph};
+use hyperscale_effects_bridge::{BridgeStatics, ProtocolHasher, decode_tree, envelope_identity};
 use hyperscale_engine::sharding::{compute_writes_root, sort_database_updates};
 use hyperscale_engine::{
     CachedVmOutput, DynSnapshot, ExecutedTx, Executor, WaveBatchContext, project_to_shard,
@@ -32,8 +32,8 @@ use hyperscale_types::{
     OwnershipRoot, RoutableTransaction, TxHash, Verified, install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, EffectSet, EffectTarget, Hash32, Manifest, ManifestGraph, ManifestHash,
-    PrefixShardResolver, RoleId, SubstateKey, admit, route,
+    Address, EffectSet, EffectTarget, Hash32, Manifest, ManifestHash, PrefixShardResolver, RoleId,
+    SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
     Base, BatchTx, EnvInputs, ExecutionMode, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
@@ -127,27 +127,28 @@ impl VmExecutor {
         }
     }
 
-    /// Derive one transaction's manifest and effect set — the same
-    /// `decode → admit → route` admission ran; refusal here means the
-    /// transaction bypassed admission and fails deterministically.
+    /// Derive one transaction's manifest, effect set, and nullifiers —
+    /// the same `decode → admit → route` admission ran; refusal here
+    /// means the transaction bypassed admission and fails
+    /// deterministically.
     fn prepare(
         &self,
         tx: &RoutableTransaction,
-    ) -> Result<(ManifestGraph, Manifest, ManifestHash, EffectSet), String> {
+    ) -> Result<(Manifest, ManifestHash, EffectSet, Vec<SubstateKey>), String> {
         let vm = tx
             .vm()
             .ok_or_else(|| "Radix body in a VM sub-batch".to_string())?;
-        let graph = decode_graph(&vm.graph).map_err(|error| error.to_string())?;
-        let admitted = admit(
-            &graph,
+        let tree = decode_tree(&vm.tree).map_err(|error| error.to_string())?;
+        let admitted = admit_tree(
+            &tree,
+            envelope_identity(vm),
             &self.world.cache,
             &self.world.instances,
             &ProtocolHasher,
         )
         .map_err(|error| format!("admission: {error}"))?;
-        let routing = route(
-            &admitted.manifest,
-            admitted.identity,
+        let routing = route_tree(
+            &admitted,
             &self.world.cache,
             &self.world.instances,
             &ProtocolHasher,
@@ -162,7 +163,17 @@ impl VmExecutor {
                 .insert(effect)
                 .map_err(|error| format!("effect set: {error:?}"))?;
         }
-        Ok((graph, admitted.manifest, admitted.identity, declared))
+        let nullifiers = admitted
+            .subintents
+            .iter()
+            .map(|record| record.nullifier)
+            .collect();
+        Ok((
+            admitted.admitted.manifest,
+            admitted.admitted.identity,
+            declared,
+            nullifiers,
+        ))
     }
 }
 
@@ -338,15 +349,15 @@ impl Executor for VmExecutor {
         for tx in transactions {
             let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
             match self.prepare(tx) {
-                Ok((graph, manifest, identity, declared)) => {
+                Ok((manifest, identity, declared, nullifiers)) => {
                     record_transaction_executed();
                     prepared.insert(
                         vm_tx,
                         PreparedVmTx {
-                            graph,
                             manifest,
                             identity,
                             declared,
+                            nullifiers,
                         },
                     );
                 }
@@ -376,6 +387,7 @@ impl Executor for VmExecutor {
             .map(|(vm_tx, entry)| BatchTx {
                 tx: *vm_tx,
                 declared: entry.declared.clone(),
+                nullifiers: entry.nullifiers.clone(),
             })
             .collect();
         let runner = ManifestRunner {

@@ -9,9 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use hyperscale_vm_effects::{
-    EffectSet, GraphArg, Manifest, ManifestGraph, ManifestHash, NodeInput, Value,
-};
+use hyperscale_vm_effects::{EffectSet, Manifest, ManifestHash, NodeInput, SubstateKey, Value};
 use hyperscale_vm_kernel::{
     Capability, GuestRunner, KernelSession, Outcome, RunResult, TxHash as VmTxHash, encode_amount,
 };
@@ -21,10 +19,9 @@ use crate::genesis::vault_key;
 
 /// One derived transaction, keyed for the runner by its kernel hash.
 pub struct PreparedVmTx {
-    /// The signed graph, whose nodes the runner walks.
-    pub graph: ManifestGraph,
-    /// The admitted manifest — carries each edge input's resolved
-    /// resource type.
+    /// The flattened manifest the runner walks — envelope trees lower
+    /// into it, so the runner never sees intent structure; each edge
+    /// input carries its resolved resource type and flattened source.
     pub manifest: Manifest,
     /// The admitted identity (fresh-ID root); unused by the account
     /// surface but part of the derivation the executor caches.
@@ -32,6 +29,8 @@ pub struct PreparedVmTx {
     pub identity: ManifestHash,
     /// The routed effect set — the batch entry's declaration.
     pub declared: EffectSet,
+    /// The subintent nullifier keys the batch entry enforces.
+    pub nullifiers: Vec<SubstateKey>,
 }
 
 pub struct ManifestRunner<'a> {
@@ -71,13 +70,13 @@ impl ManifestRunner<'_> {
         outputs: &[Vec<Vec<u8>>],
         session: KernelSession,
     ) -> Result<NodeSuccess, NodeFailure> {
-        let node = &entry.graph.nodes[index];
+        let node = &entry.manifest.nodes[index];
         match node.method.as_str() {
             "withdraw" => {
                 let (
-                    GraphArg::Literal(Value::Address(resource)),
-                    GraphArg::Literal(Value::U128(amount)),
-                ) = (&node.args[0], &node.args[1])
+                    NodeInput::Literal(Value::Address(resource)),
+                    NodeInput::Literal(Value::U128(amount)),
+                ) = (&node.inputs[0], &node.inputs[1])
                 else {
                     return Err(fail(session, "withdraw argument shape", 0));
                 };
@@ -103,19 +102,17 @@ impl ManifestRunner<'_> {
                 }
             }
             "deposit" => {
-                let GraphArg::Edge { edge, .. } = &node.args[0] else {
+                let NodeInput::Edge { source, resource } = &node.inputs[0] else {
                     return Err(fail(session, "deposit argument shape", 0));
                 };
+                // The lowered edge names only its producer; the account
+                // surface's producers are single-output.
                 let Some(bucket) = outputs
-                    .get(edge.producer as usize)
-                    .and_then(|node_outputs| node_outputs.get(edge.output as usize))
+                    .get(*source as usize)
+                    .and_then(|node_outputs| node_outputs.first())
                     .cloned()
                 else {
                     return Err(fail(session, "dangling edge", 0));
-                };
-                let NodeInput::Edge { resource, .. } = &entry.manifest.nodes[index].inputs[0]
-                else {
-                    return Err(fail(session, "deposit input shape", 0));
                 };
                 let vault = vault_key(node.target.0, *resource);
                 let Some(rep) = rep_of(&session, &Capability::Delta(vault)) else {
@@ -149,9 +146,9 @@ impl GuestRunner for ManifestRunner<'_> {
                 fuel: 0,
             };
         };
-        let mut outputs: Vec<Vec<Vec<u8>>> = Vec::with_capacity(entry.graph.nodes.len());
+        let mut outputs: Vec<Vec<Vec<u8>>> = Vec::with_capacity(entry.manifest.nodes.len());
         let mut fuel = 0u64;
-        for index in 0..entry.graph.nodes.len() {
+        for index in 0..entry.manifest.nodes.len() {
             match self.invoke_node(entry, index, &outputs, session) {
                 Ok((returned, node_outputs, consumed)) => {
                     session = returned;

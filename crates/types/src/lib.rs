@@ -211,7 +211,8 @@ pub use transaction::system_action::{
 };
 pub use transaction::transfer::{build_fan_out_transfer_tx, build_transfer_tx};
 pub use transaction::vm::{
-    VmRouting, VmStatics, VmStaticsError, VmTransaction, install_vm_statics, vm_statics_installed,
+    MAX_VM_MESSAGE_LEN, VmDerived, VmRouting, VmSnapshotPin, VmStatics, VmStaticsError,
+    VmSubintentSig, VmTransaction, install_vm_statics, vm_statics_installed,
 };
 pub use verifiable::{Verifiable, Verified, Verify};
 pub use wave::certificate::{

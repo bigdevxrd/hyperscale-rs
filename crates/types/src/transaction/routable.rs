@@ -8,6 +8,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::OnceLock;
 
 use blake3::Hasher;
+use radix_common::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use radix_common::data::manifest::{manifest_decode, manifest_encode};
 use radix_transactions::model::{UserTransaction, ValidatedUserTransaction};
 use radix_transactions::validation::TransactionValidator;
@@ -17,8 +18,8 @@ use thiserror::Error;
 use crate::transaction::vm::vm_statics;
 use crate::{
     BoundedBytes, BoundedVec, DeclaredKey, Hash, MAX_DECLARED_NODES_PER_TX, MAX_TX_BYTES_LEN,
-    NodeId, ShardTrie, TimestampRange, TxHash, Verified, Verify, VmRouting, VmStaticsError,
-    VmTransaction, uniform_shard_for_node,
+    NodeId, ShardTrie, TimestampRange, TxHash, Verified, Verify, VmDerived, VmRouting,
+    VmStaticsError, VmTransaction, uniform_shard_for_node,
 };
 
 /// First byte of a VM-variant body.
@@ -64,12 +65,12 @@ pub struct RoutableTransaction {
     #[sbor(skip)]
     body: OnceLock<TransactionBody>,
 
-    /// The VM variant's derived routing identity, populated at
-    /// verification (or lazily for committed transactions). Never
-    /// populated for the Radix variant. Not on the wire — derivation is
-    /// local by construction.
+    /// The VM variant's derived routing identity and subintent claims,
+    /// populated at verification (or lazily for committed transactions).
+    /// Never populated for the Radix variant. Not on the wire —
+    /// derivation is local by construction.
     #[sbor(skip)]
-    vm_routing: OnceLock<VmRouting>,
+    vm_derived: OnceLock<VmDerived>,
 
     /// Content hash, populated on first call to `hash()` via
     /// `blake3(&serialized_bytes)`. `::new` pre-populates. Not on the
@@ -112,9 +113,9 @@ impl Clone for RoutableTransaction {
         if let Some(t) = self.body.get() {
             let _ = body.set(t.clone());
         }
-        let vm_routing = OnceLock::new();
-        if let Some(r) = self.vm_routing.get() {
-            let _ = vm_routing.set(r.clone());
+        let vm_derived = OnceLock::new();
+        if let Some(r) = self.vm_derived.get() {
+            let _ = vm_derived.set(r.clone());
         }
         let hash = OnceLock::new();
         if let Some(h) = self.hash.get() {
@@ -134,7 +135,7 @@ impl Clone for RoutableTransaction {
             declared_writes: self.declared_writes.clone(),
             validity_range: self.validity_range,
             body,
-            vm_routing,
+            vm_derived,
             hash,
             validated,
             cached_sbor,
@@ -251,29 +252,32 @@ impl RoutableTransaction {
             declared_writes: declared_writes.into(),
             validity_range,
             body: body_lock,
-            vm_routing: OnceLock::new(),
+            vm_derived: OnceLock::new(),
             hash: hash_lock,
             validated: OnceLock::new(),
             cached_sbor: OnceLock::new(),
         }
     }
 
-    /// Create a routable transaction from a VM transaction. The declared
+    /// Create a routable transaction from a VM envelope. The declared
     /// node fields stay empty — the VM variant's admission keys and shard
-    /// sets are derived from its effect sets, never carried.
+    /// sets are derived from its effect sets, never carried — and the
+    /// wire validity range is the envelope's signed window, so the
+    /// mirror verification checks holds by construction here.
     ///
     /// # Panics
     ///
     /// Panics if the `VmTransaction` cannot be SBOR-encoded; it is a
     /// closed basic-SBOR type, so encoding is infallible in practice.
     #[must_use]
-    pub fn new_vm(vm: VmTransaction, validity_range: TimestampRange) -> Self {
+    pub fn new_vm(vm: VmTransaction) -> Self {
         let mut payload = vec![VM_BODY_TAG];
         payload.extend(basic_encode(&vm).expect("VmTransaction SBOR encode is infallible"));
         let mut hasher = Hasher::new();
         hasher.update(&payload);
         let hash = Hash::from_hash_bytes(hasher.finalize().as_bytes());
 
+        let validity_range = vm.validity_window();
         let body_lock = OnceLock::new();
         let _ = body_lock.set(TransactionBody::Vm(vm));
         let hash_lock = OnceLock::new();
@@ -285,7 +289,7 @@ impl RoutableTransaction {
             declared_writes: Vec::new().into(),
             validity_range,
             body: body_lock,
-            vm_routing: OnceLock::new(),
+            vm_derived: OnceLock::new(),
             hash: hash_lock,
             validated: OnceLock::new(),
             cached_sbor: OnceLock::new(),
@@ -379,20 +383,25 @@ impl RoutableTransaction {
     ///
     /// # Panics
     ///
-    /// Panics if derivation refuses the graph — unreachable for verified
-    /// or committed transactions, whose graphs already derived cleanly at
-    /// admission — or if no statics are installed.
+    /// Panics if derivation refuses the envelope — unreachable for
+    /// verified or committed transactions, whose envelopes already
+    /// derived cleanly at admission — or if no statics are installed.
     #[must_use]
     pub fn vm_routing(&self) -> Option<&VmRouting> {
         match self.body() {
             TransactionBody::Radix(_) => None,
-            TransactionBody::Vm(_) => Some(self.try_vm_routing().unwrap_or_else(|error| {
-                panic!("VM routing derivation failed on an admitted transaction: {error}")
-            })),
+            TransactionBody::Vm(_) => Some(
+                &self
+                    .try_vm_derived()
+                    .unwrap_or_else(|error| {
+                        panic!("VM derivation failed on an admitted transaction: {error}")
+                    })
+                    .routing,
+            ),
         }
     }
 
-    /// Derive (or fetch the cached) VM routing identity, fallibly — the
+    /// Derive (or fetch the cached) VM derivation, fallibly — the
     /// verification path.
     ///
     /// # Errors
@@ -402,13 +411,13 @@ impl RoutableTransaction {
     /// # Panics
     ///
     /// Panics if called on the Radix variant.
-    pub fn try_vm_routing(&self) -> Result<&VmRouting, VmStaticsError> {
-        if let Some(routing) = self.vm_routing.get() {
-            return Ok(routing);
+    pub fn try_vm_derived(&self) -> Result<&VmDerived, VmStaticsError> {
+        if let Some(derived) = self.vm_derived.get() {
+            return Ok(derived);
         }
-        let vm = self.vm().expect("try_vm_routing on a Radix transaction");
-        let routing = vm_statics().derive(&vm.graph)?;
-        Ok(self.vm_routing.get_or_init(|| routing))
+        let vm = self.vm().expect("try_vm_derived on a Radix transaction");
+        let derived = vm_statics().derive(vm)?;
+        Ok(self.vm_derived.get_or_init(|| derived))
     }
 
     /// Get or create a validated transaction.
@@ -525,10 +534,17 @@ pub enum RoutableTransactionVerifyError {
     /// The body bytes decode under neither variant's encoding.
     #[error("transaction body bytes are undecodable")]
     UndecodableBody,
-    /// The VM body's ed25519 signature does not cover its graph.
+    /// The VM envelope's composer signature does not cover its content.
     #[error("vm transaction signature is invalid")]
     InvalidVmSignature,
-    /// VM static derivation refused the graph.
+    /// The wire validity range does not mirror the envelope's signed
+    /// window.
+    #[error("vm validity range does not mirror the signed window")]
+    VmValidityMirror,
+    /// A subintent signature does not cover its declaration hash.
+    #[error("vm subintent {0} signature is invalid")]
+    InvalidSubintentSignature(u32),
+    /// VM static derivation refused the envelope.
     #[error(transparent)]
     VmDerivation(#[from] VmStaticsError),
 }
@@ -538,10 +554,12 @@ pub enum RoutableTransactionVerifyError {
 /// - **Radix**: the `UserTransaction` passes Radix's
 ///   [`TransactionValidator::prepare_and_validate`] — sender signature
 ///   valid, well-formed for the active protocol version.
-/// - **Vm**: the body decodes, its ed25519 signature covers the graph,
-///   and the graph admits and routes under the installed
+/// - **Vm**: the body decodes, the composer's ed25519 signature covers
+///   the envelope content, the wire validity range mirrors the signed
+///   window, the tree admits and routes under the installed
 ///   [`crate::VmStatics`] (which caches the derived identity on the
-///   transaction).
+///   transaction and binds every subintent signer address to its public
+///   key), and every subintent signature covers its declaration hash.
 ///
 /// Construction goes through one of two gates:
 ///
@@ -566,7 +584,30 @@ impl Verify<&RoutableTransactionContext<'_>> for RoutableTransaction {
                 if !vm.signature_is_valid() {
                     return Err(RoutableTransactionVerifyError::InvalidVmSignature);
                 }
-                self.try_vm_routing()?;
+                if vm.validity_window() != self.validity_range {
+                    return Err(RoutableTransactionVerifyError::VmValidityMirror);
+                }
+                // Derivation checks the tree, the signature arity, and
+                // the signer-address binding; the signatures themselves
+                // verify here, over the derived declaration hashes.
+                let derived = self.try_vm_derived()?;
+                for (index, (sig, subintent)) in vm
+                    .subintent_sigs
+                    .iter()
+                    .zip(&derived.subintent_hashes)
+                    .enumerate()
+                {
+                    let valid = verify_ed25519(
+                        subintent,
+                        &Ed25519PublicKey(sig.public_key),
+                        &Ed25519Signature(sig.signature),
+                    );
+                    if !valid {
+                        return Err(RoutableTransactionVerifyError::InvalidSubintentSignature(
+                            u32::try_from(index).unwrap_or(u32::MAX),
+                        ));
+                    }
+                }
             }
         }
         Ok(Verified::new_unchecked(self.clone()))
@@ -605,29 +646,60 @@ mod tests {
 
     use super::*;
     use crate::test_utils::{test_node, test_transaction_with_nodes, test_validity_range};
-    use crate::{Ed25519PrivateKey, VmStatics, install_vm_statics};
+    use crate::{
+        Ed25519PrivateKey, VmStatics, VmSubintentSig, WeightedTimestamp, install_vm_statics,
+    };
 
     struct StubStatics;
 
+    /// The declaration hash the stub claims for `b"with-subintent"`
+    /// trees; the fixture's subintent signature covers it.
+    const STUB_SUBINTENT_HASH: [u8; 32] = [0x5A; 32];
+
     impl VmStatics for StubStatics {
-        fn derive(&self, graph: &[u8]) -> Result<VmRouting, VmStaticsError> {
-            if graph == b"inadmissible" {
+        fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
+            if vm.tree.as_slice() == b"inadmissible" {
                 return Err(VmStaticsError("stub refusal".into()));
             }
-            Ok(VmRouting {
-                read_keys: vec![DeclaredKey::prefix([0x11; 16])],
-                write_keys: vec![DeclaredKey::substate([0x22; 16], [0x01; 16])],
-                read_prefixes: vec![[0x11; 16]],
-                write_prefixes: vec![[0x22; 16]],
+            let subintent_hashes = if vm.tree.as_slice() == b"with-subintent" {
+                vec![STUB_SUBINTENT_HASH]
+            } else {
+                Vec::new()
+            };
+            Ok(VmDerived {
+                routing: VmRouting {
+                    read_keys: vec![DeclaredKey::prefix([0x11; 16])],
+                    write_keys: vec![DeclaredKey::substate([0x22; 16], [0x01; 16])],
+                    read_prefixes: vec![[0x11; 16]],
+                    write_prefixes: vec![[0x22; 16]],
+                },
+                subintent_hashes,
             })
         }
     }
 
-    fn vm_fixture(graph: &[u8]) -> RoutableTransaction {
-        install_vm_statics(Box::new(StubStatics));
+    fn test_envelope(tree: &[u8]) -> VmTransaction {
         let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
-        let vm = VmTransaction::new_signed(graph.to_vec(), &key);
-        RoutableTransaction::new_vm(vm, test_validity_range())
+        let range = test_validity_range();
+        VmTransaction {
+            tree: tree.to_vec().into(),
+            subintent_sigs: Vec::new(),
+            fee_payer: [0xAA; 16],
+            max_fee: 1_000,
+            gas_limit: 1_000_000,
+            snapshot_pins: Vec::new(),
+            validity_start_ms: range.start_timestamp_inclusive.as_millis(),
+            validity_end_ms: range.end_timestamp_exclusive.as_millis(),
+            message: Vec::new().into(),
+            signer: [0; 32],
+            signature: [0; 64],
+        }
+        .sign(&key)
+    }
+
+    fn vm_fixture(tree: &[u8]) -> RoutableTransaction {
+        install_vm_statics(Box::new(StubStatics));
+        RoutableTransaction::new_vm(test_envelope(tree))
     }
 
     #[test]
@@ -669,13 +741,13 @@ mod tests {
         // A tampered signature refuses.
         let mut vm = good.vm().unwrap().clone();
         vm.signature[0] ^= 1;
-        let bad_signature = RoutableTransaction::new_vm(vm, test_validity_range());
+        let bad_signature = RoutableTransaction::new_vm(vm);
         assert_eq!(
             bad_signature.verify(&ctx).unwrap_err(),
             RoutableTransactionVerifyError::InvalidVmSignature
         );
 
-        // A refused graph surfaces the derivation error.
+        // A refused tree surfaces the derivation error.
         let inadmissible = vm_fixture(b"inadmissible");
         assert!(matches!(
             inadmissible.verify(&ctx).unwrap_err(),
@@ -696,7 +768,7 @@ mod tests {
             declared_writes: Vec::new().into(),
             validity_range: test_validity_range(),
             body: OnceLock::new(),
-            vm_routing: OnceLock::new(),
+            vm_derived: OnceLock::new(),
             hash: OnceLock::new(),
             validated: OnceLock::new(),
             cached_sbor: OnceLock::new(),
@@ -704,6 +776,74 @@ mod tests {
         assert_eq!(
             garbage.verify(&ctx).unwrap_err(),
             RoutableTransactionVerifyError::UndecodableBody
+        );
+    }
+
+    #[test]
+    fn vm_verification_checks_the_window_mirror_and_subintent_signatures() {
+        use radix_transactions::validation::TransactionValidator;
+        install_vm_statics(Box::new(StubStatics));
+        let validator = TransactionValidator::new_for_latest_simulator();
+        let ctx = RoutableTransactionContext {
+            validator: &validator,
+        };
+
+        // A wire validity range that is not the signed window refuses.
+        let vm = test_envelope(b"graph bytes");
+        let mirrored = RoutableTransaction::new_vm(vm.clone());
+        let mut skewed = mirrored;
+        skewed.validity_range = TimestampRange::new(
+            WeightedTimestamp::from_millis(vm.validity_start_ms + 1),
+            WeightedTimestamp::from_millis(vm.validity_end_ms),
+        );
+        assert_eq!(
+            skewed.verify(&ctx).unwrap_err(),
+            RoutableTransactionVerifyError::VmValidityMirror
+        );
+
+        // A subintent signature must cover the derived declaration hash.
+        let subintent_key = Ed25519PrivateKey::from_bytes(&[9u8; 32]).unwrap();
+        let composer_key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
+        let mut envelope = test_envelope(b"with-subintent");
+        envelope.subintent_sigs = vec![VmSubintentSig {
+            public_key: subintent_key.public_key().0,
+            signature: subintent_key.sign(STUB_SUBINTENT_HASH).0,
+        }];
+        let composed = envelope.sign(&composer_key);
+        assert!(
+            RoutableTransaction::new_vm(composed.clone())
+                .verify(&ctx)
+                .is_ok()
+        );
+
+        let mut forged = composed;
+        forged.subintent_sigs[0].signature[0] ^= 1;
+        let forged = forged.sign(&Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap());
+        assert_eq!(
+            RoutableTransaction::new_vm(forged)
+                .verify(&ctx)
+                .unwrap_err(),
+            RoutableTransactionVerifyError::InvalidSubintentSignature(0)
+        );
+    }
+
+    #[test]
+    fn the_envelope_hash_covers_the_signed_window() {
+        // Identical content in different windows is two transactions —
+        // the signed window is the natural discriminator dedup keys on;
+        // byte-identical envelopes stay one transaction.
+        let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
+        let base = test_envelope(b"graph bytes");
+        let mut shifted = base.clone();
+        shifted.validity_start_ms += 1;
+        let shifted = shifted.sign(&key);
+        assert_ne!(
+            RoutableTransaction::new_vm(base.clone()).hash(),
+            RoutableTransaction::new_vm(shifted).hash()
+        );
+        assert_eq!(
+            RoutableTransaction::new_vm(base.clone()).hash(),
+            RoutableTransaction::new_vm(base).hash()
         );
     }
 
