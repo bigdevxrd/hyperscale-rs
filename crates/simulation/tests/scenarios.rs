@@ -37,9 +37,10 @@ use hyperscale_scenarios::{
     registered_validator_activates_onto_a_shard, shared_read_payments, single_shard_tx,
     split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees, vm_abort_converges, vm_cross_shard_transfer,
-    vm_hot_recipient, vm_insolvent_payer_engages_nothing, vm_single_transfer,
-    vm_snapshot_only_commits_nothing, vm_snapshot_reads_committed_baseline, vm_zipf_payments,
+    surviving_sibling_split_seats_full_committees, vm_abort_converges,
+    vm_abort_floor_settles_on_deadline, vm_cross_shard_transfer, vm_hot_recipient,
+    vm_insolvent_payer_engages_nothing, vm_single_transfer, vm_snapshot_only_commits_nothing,
+    vm_snapshot_reads_committed_baseline, vm_zipf_payments,
     withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_simulation::ExecutionMode;
@@ -198,6 +199,16 @@ fn vm_cross_shard_transfer_sim() {
         &vm_cross_shard_genesis_accounts(),
     );
     vm_cross_shard_transfer(&mut cluster);
+}
+
+#[test]
+fn vm_abort_floor_settles_on_deadline_sim() {
+    let mut cluster = SimCluster::with_grown_vm_accounts(
+        &vm_cross_shard_config(),
+        42,
+        &vm_cross_shard_genesis_accounts(),
+    );
+    cluster.run_faultable(vm_abort_floor_settles_on_deadline);
 }
 
 #[test]

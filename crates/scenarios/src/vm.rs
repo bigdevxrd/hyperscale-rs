@@ -16,6 +16,7 @@ use hyperscale_engine_vm::genesis::vault_key;
 use hyperscale_types::{NetworkDefinition, ShardId, TransactionDecision, TransactionStatus};
 
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
+use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
     VM_SNAPSHOT_GUARD_BALANCE, build_faucet_tx, build_vm_guarded_transfer_tx, build_vm_transfer_tx,
     contention_recipient, signer_from_seed, validity_around, vm_cross_shard_cast, vm_recipient,
@@ -439,4 +440,87 @@ pub fn mixed_engine_blocks(c: &mut impl Cluster, pairs: u8) {
             "mixed-engine transaction #{index} did not accept; status = {status:?}"
         );
     }
+}
+
+/// A payer whose counterpart never engages settles the abort floor and
+/// nothing else.
+///
+/// Cutting both channels the payer's bundle travels — the gossip
+/// broadcast and the fetch that backs it up — makes the counterpart's
+/// absence structural: engagement demands that evidence, so the
+/// transaction can never enter a block there. The payer's own leg is
+/// dependency-free, so it commits, reserves, and executes at once, then
+/// waits. It speaks once: with no engagement echo and the window closed,
+/// its single statement is the abort. The transaction's effects are
+/// discarded, so the recipient is never credited and the transferred
+/// amount never leaves; what leaves is the class floor, settled through
+/// the fee receipt the abort names.
+///
+/// # Panics
+///
+/// Panics if the harness cannot read the payer's vault, the payer never
+/// commits, the bundle is never suppressed, the transaction fails to
+/// reach a terminal abort, the counterpart engages, or the payer's
+/// balance moves by anything other than the floor.
+pub fn vm_abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
+    let payer_shard = ShardId::leaf(1, 0);
+    let counterpart = ShardId::leaf(1, 1);
+    let (payer, from, to) = vm_cross_shard_cast();
+    let before = vm_vault_balance(c, payer_shard, from);
+
+    // Both channels the bundle travels. The fetch rule names the
+    // *request* type: the fault engine tags a request and its response
+    // alike, so dropping the response id would never match.
+    let broadcast_dropped = c.drop_type("provisions.broadcast");
+    let fetch_dropped = c.drop_type("provision.request");
+
+    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+    let hash = tx.hash();
+    let floor = tx.vm().expect("a VM envelope").abort_floor();
+    c.submit(Arc::new(tx));
+
+    assert!(
+        c.run_until(epochs(8), |c| c.chain_fate(payer_shard, hash).0.is_some()),
+        "the payer shard must commit and reserve for the transaction"
+    );
+
+    let verdict = await_tx_terminal(c, hash, epochs(90));
+    assert!(
+        matches!(
+            verdict,
+            Some(TransactionStatus::Completed(TransactionDecision::Aborted))
+        ),
+        "an unechoed cross-shard VM transaction must abort at the deadline; \
+         verdict = {verdict:?}",
+    );
+    assert!(
+        broadcast_dropped.fired() > 0 && fetch_dropped.fired() > 0,
+        "both bundle channels must actually have been exercised and cut"
+    );
+    let (counterpart_inclusion, _) = c.chain_fate(counterpart, hash);
+    assert!(
+        counterpart_inclusion.is_none(),
+        "the counterpart must never have engaged the transaction",
+    );
+
+    // The floor left the payer's vault; the transfer did not.
+    let after = vm_vault_balance(c, payer_shard, from);
+    assert_eq!(
+        before.saturating_sub(after),
+        floor,
+        "the abort must burn exactly the class floor: before = {before}, after = {after}",
+    );
+}
+
+/// The committed balance of a VM account's native vault, read through the
+/// harness's client-proven snapshot seam.
+fn vm_vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {
+    let vault = vault_key(owner, VM_XRD);
+    let pin = c
+        .vm_snapshot_pin(shard, vault.owner.0, vault.local.0)
+        .expect("the harness serves client-proven reads");
+    pin.value.as_ref().map_or(0, |bytes| {
+        let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
+        u128::from_le_bytes(cell)
+    })
 }
