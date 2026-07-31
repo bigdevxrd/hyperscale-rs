@@ -1,10 +1,11 @@
 // Model J (register: specs/README.md) — VM cross-shard fee assurance:
 // payer-first commitment with the max_fee reservation as block validity,
-// commit-proof-gated counterpart engagement, the validity-window deadline
-// abort with floor settlement, and the successor sweep under payer-shard
-// termination. Checked for INV-VM-9 (no counterpart engages without an
-// engaged reservation) and INV-VM-10 (every engaged reservation resolves
-// exactly once, burn classes by verdict, conservation).
+// commit-proof-gated counterpart engagement, engagement-echo-gated payer
+// voting with the validity-window deadline abort at the floor, and the
+// successor sweep under payer-shard termination. Checked for INV-VM-9
+// (no counterpart engages without an engaged reservation) and INV-VM-10
+// (every engaged reservation resolves exactly once, burn classes by
+// verdict, conservation).
 //
 // Shard P is the payer's (fee_payer's prefix routes there); shard Q is a
 // non-payer counterpart. One cross-shard VM transaction whose legs are
@@ -20,35 +21,47 @@
 //     covers max_fee; commitment engages the reservation (held, not
 //     spent).
 //   - Q engages — its commit of the transaction, which in the
-//     implementation is proposal inclusion, lock acquisition, and the
-//     deadline clock starting — only holding the commit proof.
+//     implementation is proposal inclusion, lock acquisition, and its
+//     own execution — only holding the commit proof.
 //   - Engagement is barred outside the transaction's validity window on
-//     Q's attested clock; a window that closed on Q's chain without
-//     inclusion is a frozen fact P can consume (the barred signal — in
-//     the implementation, Q's remote header stream past the window with
-//     the transaction absent).
+//     Q's attested clock, and engagement emits an echo toward P: Q's
+//     committing block owes the payer a (possibly empty) bundle, the
+//     mirror of the payer bundle Q engaged on.
+//   - P executes at commit but votes once, on a condition that is a pure
+//     function of its own chain: success when every counterpart's
+//     engagement echo has committed into P's chain, or all-abort when
+//     its attested clock passes the window without one. Because P never
+//     speaks twice, the window-edge race — Q engaging late with its
+//     success EC in flight — resolves through worst-wins as a mutual
+//     abort, never a verdict split. The deadline threshold needs no skew
+//     bound for safety; a margin above the window end only tunes how
+//     often a could-have-succeeded transaction pays the floor.
 //   - Resolution at P: success burns ACTUAL and releases the surplus;
-//     any abort burns FLOOR and releases the remainder; the deadline
-//     abort fires only on the barred fact, after which no honest Q can
-//     ever emit an EC, so no success finalization is forgone.
+//     any abort burns FLOOR and releases the remainder.
 //   - P terminating mid-flight (reshape) stamps abort-by-omission for an
 //     unfinalized wave (Model D's rule) and the successor sweep resolves
 //     the reservation it inherited; the sweep is modeled atomic with the
 //     terminal stamp.
 //
-// Code anchors (intended seams — this model precedes the implementation;
-// anchors firm up as milestone 3 lands):
-//   - Reservation as block validity: `validate_block_for_vote`
-//     (crates/shard/src/validation.rs) gains the payer-side feasibility
-//     check over proposed VM transactions.
+// Code anchors (intended seams — the echo and vote-gating machinery is
+// milestone 3 unit 4b; anchors firm up as it lands):
+//   - Reservation as block validity: the `VerifyVmReservations`
+//     verification (crates/shard) demanded from chain content.
 //   - Engagement gate: the proposal seam consults the
 //     `ProvisioningTracker` (crates/execution/src/provisioning.rs) —
 //     the payer's bundle is absorbable only against a commit-proven
 //     header (`on_committed_remote_header`,
 //     crates/provisions/src/coordinator.rs), so "payer ∈ received"
 //     is the commit proof held.
-//   - Burn and release: wave finalization at the payer shard; abort
-//     floor on the deadline path.
+//   - Engagement echo: every VM participant's commit emits its bundle
+//     to the payer (`provision_tx_roots` fan-out + the emit/serve
+//     paths); absorption records it per (tx, source shard).
+//   - Payer vote gating: `WaveState::can_emit_vote`
+//     (crates/execution/src/wave_state.rs) gains the engagement-coverage
+//     requirement beside the dispatch requirement, with the same
+//     all-abort vote shape as the unprovisioned timeout.
+//   - Burn and release: wave finalization at the payer shard; the abort
+//     floor rides the fee record on the payer's EC outcomes.
 //   - Successor sweep: the straddler counterpart sweep
 //     (crates/execution/src/coordinator.rs), extended to resolve
 //     inherited reservations.
@@ -59,6 +72,12 @@
 //   - Execution outcomes are honest-success: a user-error abort at Q
 //     resolves through the same abort-dominant EC exchange and burns the
 //     same floor class, so it adds no new fee behavior.
+//   - Per-shard clocks advance independently with no skew bound: the
+//     deadline vote's safety must not depend on one, and doesn't.
+//   - When both vote conditions hold (the echo committed after the
+//     deadline passed but before P voted), the implementation picks by
+//     chain order deterministically; the model leaves both enabled so
+//     safety is checked under either choice.
 //   - Atomicity under P's termination is Model D's property (the
 //     straddler fence, INV-RESHAPE-5) and is taken as an oracle:
 //     invAtomic is scoped to runs where P has not terminated. This model
@@ -70,12 +89,16 @@
 // Run:
 //   quint typecheck specs/vm_fee_assurance.qnt
 //   quint verify --main=fee_ok        --invariant=invAll --max-steps=12 specs/vm_fee_assurance.qnt
-//     (the shipped gate: engagement only on commit proof, conservation,
-//      resolution at every terminal)
+//     (the shipped gate: engagement on commit proof, payer votes on echo
+//      or deadline, conservation, resolution at every terminal)
 //   quint verify --main=fee_insolvent --invariant=invAllIdle --max-steps=12 specs/vm_fee_assurance.qnt
 //     (an insolvent payer commits nowhere and engages nothing)
 //   quint test   --main=fee_ok        --match=deadlineFloor specs/vm_fee_assurance.qnt
-//     (scripted: the barred window resolves the reservation at the floor)
+//     (scripted: no engagement echo ever commits; P's deadline vote
+//      resolves the reservation at the floor)
+//   quint test   --main=fee_ok        --match=echoRace specs/vm_fee_assurance.qnt
+//     (scripted: Q engages at the window edge, its success EC in flight,
+//      while P's deadline vote fires — both sides abort, consistently)
 //   quint verify --main=fee_ungated   --invariant=invEngageGated --max-steps=8 specs/vm_fee_assurance.qnt
 //     (pre-D21 twin: an optimistic counterpart engages locks for an
 //      insolvent payer that never commits)
@@ -85,6 +108,11 @@
 //      abandoned on a fork after the counterpart engaged)
 //   quint verify --main=fee_unswept   --invariant=invResolvedAtTerminal --max-steps=12 specs/vm_fee_assurance.qnt
 //     (no-sweep twin: P terminates holding the reservation forever)
+//   quint test   --main=fee_timer     --match=timerSplit specs/vm_fee_assurance.qnt
+//   quint verify --main=fee_timer     --invariant=invAtomicScoped --max-steps=12 specs/vm_fee_assurance.qnt
+//     (local-timer twin: P votes success ungated and later expires on
+//      its own clock — a second statement; Q finalizes success while P
+//      aborts, the verdict split the echo gate exists to prevent)
 
 module vm_fee_assurance {
   // Max clock advance per step.
@@ -97,8 +125,9 @@ module vm_fee_assurance {
   const FLOOR: int
   // The payer's liquid balance at genesis.
   const BALANCE: int
-  // The validity window's end on Q's attested clock: engagement is
-  // barred strictly after it.
+  // The validity window's end on each shard's attested clock: engagement
+  // is barred strictly after it at Q; P's deadline vote arms strictly
+  // after it at P.
   const WINDOW: int
   // Broken twin: Q engages without the commit proof (the pre-D21
   // optimistic counterpart).
@@ -106,6 +135,13 @@ module vm_fee_assurance {
   // Broken twin: the payer's bundle is consumable against a certified
   // header, before the block commit-proves.
   const ENGAGE_ON_CERTIFIED: bool
+  // Healthy: P's success vote waits for the engagement echo to commit on
+  // its own chain. Twin: P votes success at commit, before knowing
+  // whether any counterpart will ever engage.
+  const VOTE_ON_ECHO: bool
+  // Broken twin: P, having already voted success, expires the
+  // reservation on its own clock — the two-statement local timer.
+  const LOCAL_TIMER_ABORT: bool
   // The successor sweep resolves an inherited reservation at P's
   // terminal; the twin drops it.
   const SWEEP_ON_TERMINATION: bool
@@ -130,19 +166,18 @@ module vm_fee_assurance {
   var pAbandoned: bool
   // Clock value at which each shard committed the transaction (NONE
   // before). At P this is the payer block engaging the reservation; at Q
-  // it is engagement — inclusion, locks, deadline clock.
+  // it is engagement — inclusion, locks, its own execution.
   var committedAt: int -> int
   // Q holds the transaction commit proof: the payer's bundle, verified
   // against a commit-proven header of P's committing block.
   var qHasProof: bool
-  // Frozen fact: the validity window closed on Q's chain without the
-  // transaction — no honest Q committee can ever engage it now.
-  var qBarred: bool
-  // P has consumed the barred fact (delivered asynchronously — in the
-  // implementation, by following Q's committed headers past the window).
-  var pSeesBarred: bool
-  // ECs each shard's committee emitted (honest: at most one, SUCC here —
-  // abort classes enter via the deadline and termination paths).
+  // Q's engagement echo — the bundle its committing block owes the payer
+  // — has committed into P's chain. Chain content at P, so P's vote
+  // condition over it is deterministic across P's committee.
+  var pEchoCommitted: bool
+  // ECs each shard's committee emitted (at most one per shard: the
+  // committee speaks once). Q emits SUCC on execution; P emits SUCC on
+  // echo coverage or ABORT on its deadline.
   var emitted: int -> Set[int]
   // First-wins EC admission rows, as Model C.
   var admitted: int -> (int -> int)
@@ -162,8 +197,7 @@ module vm_fee_assurance {
     pAbandoned' = false,
     committedAt' = SHARDS.mapBy(s => NONE),
     qHasProof' = false,
-    qBarred' = false,
-    pSeesBarred' = false,
+    pEchoCommitted' = false,
     emitted' = SHARDS.mapBy(s => Set()),
     admitted' = SHARDS.mapBy(dst => SHARDS.mapBy(src => NONE)),
     terminal' = SHARDS.mapBy(s => NONE),
@@ -179,7 +213,7 @@ module vm_fee_assurance {
   action frameCert = all { pCert' = pCert, pAbandoned' = pAbandoned }
   action frameCommitted = committedAt' = committedAt
   action frameSignals = all {
-    qHasProof' = qHasProof, qBarred' = qBarred, pSeesBarred' = pSeesBarred,
+    qHasProof' = qHasProof, pEchoCommitted' = pEchoCommitted,
   }
   action frameEc = all { emitted' = emitted, admitted' = admitted }
   action frameTerm = all { terminal' = terminal, pTerminal' = pTerminal }
@@ -197,10 +231,9 @@ module vm_fee_assurance {
   }
 
   // P's proposal carrying the transaction certifies. Block validity
-  // (validate_block_for_vote's payer-side check) already held at
-  // proposal: an insolvent payer's transaction is never in a valid
-  // block, so certification itself requires the balance to cover the
-  // reservation.
+  // (the reservation check) already held at proposal: an insolvent
+  // payer's transaction is never in a valid block, so certification
+  // itself requires the balance to cover the reservation.
   action pCertify = all {
     not(pCert),
     not(pTerminal),
@@ -245,14 +278,15 @@ module vm_fee_assurance {
     not(qHasProof),
     if (ENGAGE_ON_CERTIFIED) pCert else committedAt.get(P) != NONE,
     qHasProof' = true,
-    qBarred' = qBarred,
-    pSeesBarred' = pSeesBarred,
+    pEchoCommitted' = pEchoCommitted,
     frameClock, frameCert, frameCommitted, frameEc, frameTerm, frameFees,
   }
 
-  // Q engages: proposal inclusion, locks, the deadline clock — its
+  // Q engages: proposal inclusion, locks, its own execution — its
   // commit of the transaction. Gated on the proof (healthy) and on the
-  // validity window on Q's own attested clock.
+  // validity window on Q's own attested clock. Past its window no
+  // honest Q committee engages: the window closing without inclusion is
+  // frozen on Q's chain.
   action qEngage = all {
     committedAt.get(Q) == NONE,
     clock.get(Q) <= WINDOW,
@@ -261,49 +295,62 @@ module vm_fee_assurance {
     frameClock, frameCert, frameSignals, frameEc, frameTerm, frameFees,
   }
 
-  // The window closes on Q's chain without the transaction: a frozen
-  // fact — no honest Q committee engages past its window.
-  action qBar = all {
-    not(qBarred),
-    clock.get(Q) > WINDOW,
-    committedAt.get(Q) == NONE,
-    qBarred' = true,
+  // Q's engagement echo commits into P's chain: the bundle Q's
+  // committing block owes the payer, absorbed and committed like any
+  // provisions. Only from here is P's success vote enabled.
+  action deliverEcho = all {
+    committedAt.get(Q) != NONE,
+    not(pEchoCommitted),
+    not(pTerminal),
+    pEchoCommitted' = true,
     qHasProof' = qHasProof,
-    pSeesBarred' = pSeesBarred,
     frameClock, frameCert, frameCommitted, frameEc, frameTerm, frameFees,
   }
 
-  // P consumes the barred fact (async delivery — Q's committed headers
-  // past the window with the transaction absent).
-  action deliverBarred = all {
-    qBarred,
-    not(pSeesBarred),
-    pSeesBarred' = true,
-    qHasProof' = qHasProof,
-    qBarred' = qBarred,
-    frameClock, frameCert, frameCommitted, frameEc, frameTerm, frameFees,
+  // A shard's committee emits its success EC — its single statement.
+  // Q speaks at engagement (it executed its leg there). P speaks only
+  // once the engagement echo is chain content (healthy), or immediately
+  // at commit (the ungated twin).
+  action emitEcAt(s: int): bool = all {
+    s == Q or not(pTerminal),
+    committedAt.get(s) != NONE,
+    s == Q or not(VOTE_ON_ECHO) or pEchoCommitted,
+    emitted.get(s).size() == 0,
+    emitted' = emitted.setBy(s, es => es.union(Set(SUCC))),
+    admitted' = admitted.setBy(s, row =>
+      if (row.get(s) == NONE) row.put(s, SUCC) else row),
+    frameClock, frameCert, frameCommitted, frameSignals, frameTerm, frameFees,
   }
 
-  // A shard's committee emits its success EC: the leg executed at its
-  // commit (both legs are dependency-free — D23). One EC per committee.
   action emitEc = {
     nondet s = SHARDS.oneOf()
-    all {
-      s == Q or not(pTerminal),
-      committedAt.get(s) != NONE,
-      emitted.get(s).size() == 0,
-      emitted' = emitted.setBy(s, es => es.union(Set(SUCC))),
-      admitted' = admitted.setBy(s, row =>
-        if (row.get(s) == NONE) row.put(s, SUCC) else row),
-      frameClock, frameCert, frameCommitted, frameSignals, frameTerm, frameFees,
-    }
+    emitEcAt(s)
+  }
+
+  // The deadline vote: P's attested clock passed the window with no
+  // engagement echo committed, so P's single statement is all-abort
+  // (with the fee record attached in the implementation). Safety does
+  // not depend on any skew bound between P's and Q's clocks: if Q
+  // engaged late, its success EC merely loses worst-wins to this abort,
+  // on both sides. Both conditions may hold at once (an echo committing
+  // after the deadline); the implementation picks by chain order, the
+  // model checks both choices.
+  action pDeadlineVote = all {
+    VOTE_ON_ECHO,
+    not(pTerminal),
+    committedAt.get(P) != NONE,
+    clock.get(P) > WINDOW,
+    emitted.get(P).size() == 0,
+    emitted' = emitted.setBy(P, es => es.union(Set(ABORT))),
+    admitted' = admitted.setBy(P, row =>
+      if (row.get(P) == NONE) row.put(P, ABORT) else row),
+    frameClock, frameCert, frameCommitted, frameSignals, frameTerm, frameFees,
   }
 
   // Network delivers an emitted EC; first-wins admission. An emitted EC
   // is a gossip-time artifact — deliverable even after P terminates
   // (Model D's H2 lesson).
-  action deliverEc = {
-    nondet dst = SHARDS.oneOf()
+  action deliverEcAt(dst: int): bool = {
     nondet o = emitted.get(other(dst)).oneOf()
     all {
       admitted.get(dst).get(other(dst)) == NONE,
@@ -311,6 +358,11 @@ module vm_fee_assurance {
       emitted' = emitted,
       frameClock, frameCert, frameCommitted, frameSignals, frameTerm, frameFees,
     }
+  }
+
+  action deliverEc = {
+    nondet dst = SHARDS.oneOf()
+    deliverEcAt(dst)
   }
 
   // Success finalization: unanimous EC coverage (Model C). At P this
@@ -337,14 +389,48 @@ module vm_fee_assurance {
     }
   }
 
-  // The deadline abort with floor settlement: P resolves only on the
-  // barred fact — Q's window closed without engagement, so no EC from Q
-  // can ever exist and no success finalization is forgone anywhere.
-  action pExpireAbort = all {
+  // Abort finalization: worst-wins, and a shard's own abort EC needs no
+  // counterpart coverage — the wave completes on it (the tracker-abort
+  // rule). At P this resolves the reservation at the floor.
+  action finalizeAbortAt(s: int): bool = {
+    val row = admitted.get(s)
+    all {
+      s == Q or not(pTerminal),
+      terminal.get(s) == NONE,
+      or {
+        row.get(s) == ABORT,
+        row.get(s) != NONE and row.get(other(s)) == ABORT,
+      },
+      terminal' = terminal.put(s, ABORT),
+      if (s == P) all {
+        balance' = balance + (MAX_FEE - FLOOR),
+        held' = held - MAX_FEE,
+        burned' = burned + FLOOR,
+      } else all {
+        balance' = balance, held' = held, burned' = burned,
+      },
+      pTerminal' = pTerminal,
+      frameClock, frameCert, frameCommitted, frameSignals, frameEc,
+    }
+  }
+
+  action finalizeAbort = {
+    nondet s = SHARDS.oneOf()
+    finalizeAbortAt(s)
+  }
+
+  // The local-timer twin: P already voted success, then expires the
+  // reservation on its own clock anyway — a second statement its
+  // broadcast success EC contradicts. Q can finalize success on that
+  // EC while P records an abort: the verdict split the echo gate makes
+  // structurally impossible.
+  action pLocalTimerAbort = all {
+    LOCAL_TIMER_ABORT,
     not(pTerminal),
     terminal.get(P) == NONE,
     committedAt.get(P) != NONE,
-    pSeesBarred,
+    emitted.get(P) == Set(SUCC),
+    clock.get(P) > WINDOW,
     admitted.get(P).get(Q) == NONE,
     terminal' = terminal.put(P, ABORT),
     pTerminal' = pTerminal,
@@ -377,9 +463,9 @@ module vm_fee_assurance {
   }
 
   action step = any {
-    tick, pCertify, pCommit, pAbandon, deliverProof, qEngage, qBar,
-    deliverBarred, emitEc, deliverEc, finalizeSucc, pExpireAbort,
-    pTerminate,
+    tick, pCertify, pCommit, pAbandon, deliverProof, qEngage, deliverEcho,
+    emitEc, pDeadlineVote, deliverEc, finalizeSucc, finalizeAbort,
+    pLocalTimerAbort, pTerminate,
   }
 
   // INV-VM-9: engagement is evidence-gated. Q committed implies P
@@ -407,6 +493,11 @@ module vm_fee_assurance {
   // terminal P never still holds it.
   val invResolvedAtTerminal = terminal.get(P) == NONE or held == 0
 
+  // The payer speaks once: its success vote exists only with the
+  // engagement echo committed on its own chain (healthy gate only).
+  val invVoteGated =
+    not(VOTE_ON_ECHO) or not(emitted.get(P).contains(SUCC)) or pEchoCommitted
+
   // Model C's atomicity, scoped away from P's termination (Model D's
   // fence owns that corner).
   val invAtomicScoped =
@@ -415,7 +506,7 @@ module vm_fee_assurance {
 
   val invAll = and {
     invEngageGated, invConserve, invHeldShape, invBurnClass,
-    invResolvedAtTerminal, invAtomicScoped,
+    invResolvedAtTerminal, invVoteGated, invAtomicScoped,
   }
 
   // The insolvent payer's world: nothing certifies, commits, engages,
@@ -430,26 +521,54 @@ module vm_fee_assurance {
 
   val invAllIdle = and { invAll, invIdle }
 
-  // Scripted: the deadline abort settles the floor. P commits and
-  // reserves; Q's window closes without engagement (the proof is lost in
-  // flight); P consumes the barred fact and resolves at the floor.
+  // Scripted: the deadline vote settles the floor. P commits and
+  // reserves; no engagement echo ever commits (the bundle is lost or Q
+  // never engages); P's clock passes the window; its single all-abort
+  // statement completes its own wave and resolves the reservation.
   run deadlineFloor =
     init
       .then(pCertify)
       .then(pCommit)
       .then(all {
-        clock' = clock.setBy(Q, c => c + WINDOW + 1),
+        clock' = clock.setBy(P, c => c + WINDOW + 1),
         frameCert, frameCommitted, frameSignals, frameEc, frameTerm, frameFees,
       })
-      .then(qBar)
-      .then(deliverBarred)
-      .then(pExpireAbort)
+      .then(pDeadlineVote)
+      .then(finalizeAbortAt(P))
       .expect(and {
         invAll,
         terminal.get(P) == ABORT,
         burned == FLOOR,
         held == 0,
         balance == BALANCE - FLOOR,
+      })
+
+  // Scripted: the window-edge race resolves as a mutual abort. Q engages
+  // in its window and emits its success EC; P's deadline fires before
+  // the echo commits; P's abort EC reaches Q and worst-wins aborts both
+  // sides — consistency, at the price of a forgone success.
+  run echoRace =
+    init
+      .then(pCertify)
+      .then(pCommit)
+      .then(deliverProof)
+      .then(qEngage)
+      .then(emitEcAt(Q))
+      .then(all {
+        clock' = clock.setBy(P, c => c + WINDOW + 1),
+        frameCert, frameCommitted, frameSignals, frameEc, frameTerm, frameFees,
+      })
+      .then(pDeadlineVote)
+      .then(deliverEcAt(P))
+      .then(finalizeAbortAt(P))
+      .then(deliverEcAt(Q))
+      .then(finalizeAbortAt(Q))
+      .expect(and {
+        invAll,
+        terminal.get(P) == ABORT,
+        terminal.get(Q) == ABORT,
+        burned == FLOOR,
+        held == 0,
       })
 
   // Scripted (certified twin): the bundle joins a merely-certified
@@ -467,15 +586,40 @@ module vm_fee_assurance {
         committedAt.get(P) == NONE,
         held == 0,
       })
+
+  // Scripted (local-timer twin): P votes success ungated, Q engages and
+  // finalizes success on it, and P then expires on its own clock — the
+  // verdict splits.
+  run timerSplit =
+    init
+      .then(pCertify)
+      .then(pCommit)
+      .then(emitEcAt(P))
+      .then(deliverProof)
+      .then(qEngage)
+      .then(emitEcAt(Q))
+      .then(deliverEcAt(Q))
+      .then(finalizeSucc)
+      .then(all {
+        clock' = clock.setBy(P, c => c + WINDOW + 1),
+        frameCert, frameCommitted, frameSignals, frameEc, frameTerm, frameFees,
+      })
+      .then(pLocalTimerAbort)
+      .expect(and {
+        terminal.get(P) == ABORT,
+        terminal.get(Q) == SUCC,
+        not(invAtomicScoped),
+      })
 }
 
 // Healthy configuration: the shipped gate. Engagement demands the commit
-// proof, the deadline abort fires only on the barred fact, the successor
+// proof, the payer votes on committed echo or deadline, the successor
 // sweep resolves inherited reservations.
 module fee_ok {
   import vm_fee_assurance(
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
+    VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
     SWEEP_ON_TERMINATION = true
   ).*
 }
@@ -486,6 +630,7 @@ module fee_insolvent {
   import vm_fee_assurance(
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 3,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
+    VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
     SWEEP_ON_TERMINATION = true
   ).*
 }
@@ -496,6 +641,7 @@ module fee_ungated {
   import vm_fee_assurance(
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 3,
     WINDOW = 4, ENGAGE_UNGATED = true, ENGAGE_ON_CERTIFIED = false,
+    VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
     SWEEP_ON_TERMINATION = true
   ).*
 }
@@ -507,6 +653,7 @@ module fee_certified {
   import vm_fee_assurance(
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = true,
+    VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
     SWEEP_ON_TERMINATION = true
   ).*
 }
@@ -517,6 +664,19 @@ module fee_unswept {
   import vm_fee_assurance(
     MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
     WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
+    VOTE_ON_ECHO = true, LOCAL_TIMER_ABORT = false,
     SWEEP_ON_TERMINATION = false
+  ).*
+}
+
+// Broken twin: the ungated payer vote plus a local-timer expiry — the
+// pre-echo world. P's success EC is out while its timer aborts locally;
+// the verdict splits between the shards.
+module fee_timer {
+  import vm_fee_assurance(
+    MAX_TICK = 3, MAX_FEE = 4, ACTUAL = 2, FLOOR = 1, BALANCE = 6,
+    WINDOW = 4, ENGAGE_UNGATED = false, ENGAGE_ON_CERTIFIED = false,
+    VOTE_ON_ECHO = false, LOCAL_TIMER_ABORT = true,
+    SWEEP_ON_TERMINATION = true
   ).*
 }
