@@ -84,6 +84,18 @@ pub struct WaveState {
     /// The weighted timestamp at which every tx in the wave became
     /// ready. `None` until `provisioned_txs` is full.
     all_provisioned_at: Option<WeightedTimestamp>,
+
+    // ── Engagement coverage (payer-shard VM legs) ───────────────────────
+    /// Per-tx, the counterpart shards whose engagement echo this shard —
+    /// the transaction's fee payer — still waits for before voting.
+    /// Recorded at wave creation and drained as echoes commit; empty for
+    /// every other wave, which votes on execution alone.
+    engagement_pending: HashMap<TxHash, BTreeSet<ShardId>>,
+    /// The weighted timestamp past which the wave votes without full
+    /// engagement coverage, aborting whatever is still uncovered: the
+    /// latest member's validity end plus the echo margin. `None` when
+    /// nothing in the wave is engagement-gated.
+    engagement_deadline: Option<WeightedTimestamp>,
     /// Whether execution has been dispatched (single `ExecuteTransactions` /
     /// `ExecuteCrossShardTransactions` emitted). Set true once execution fires.
     dispatched: bool,
@@ -206,6 +218,8 @@ impl WaveState {
             provisioned_txs,
             provisioned_tx_ts,
             all_provisioned_at,
+            engagement_pending: HashMap::new(),
+            engagement_deadline: None,
             dispatched: false,
             execution_results: HashMap::new(),
             execution_receipts: HashMap::new(),
@@ -262,6 +276,49 @@ impl WaveState {
     #[must_use]
     pub const fn dispatched(&self) -> bool {
         self.dispatched
+    }
+
+    // ── Engagement coverage ─────────────────────────────────────────────
+
+    /// Record that this shard, as `tx_hash`'s fee payer, waits for
+    /// `counterparts` to echo their engagement before voting. Called at
+    /// wave creation for each payer-local cross-shard VM transaction;
+    /// `validity_end` is the transaction's signed window end, which sets
+    /// the wave's deadline for voting without full coverage.
+    pub fn record_engagement_wait(
+        &mut self,
+        tx_hash: TxHash,
+        counterparts: BTreeSet<ShardId>,
+        validity_end: WeightedTimestamp,
+    ) {
+        if counterparts.is_empty() {
+            return;
+        }
+        self.engagement_pending.insert(tx_hash, counterparts);
+        let deadline = validity_end.plus(WAVE_TIMEOUT);
+        self.engagement_deadline = Some(
+            self.engagement_deadline
+                .map_or(deadline, |current| current.max(deadline)),
+        );
+    }
+
+    /// Drain engagement coverage from committed provisions: a bundle from
+    /// a counterpart names the transaction only because that shard's
+    /// block committed it, so absorption is the engagement evidence.
+    ///
+    /// Runs regardless of dispatch — the payer's leg dispatches on its own
+    /// requirement long before the echoes it votes on arrive.
+    pub fn absorb_engagement_evidence(&mut self, provisioning: &ProvisioningTracker) {
+        self.engagement_pending.retain(|tx_hash, pending| {
+            pending.retain(|shard| !provisioning.has_received_from(*tx_hash, *shard));
+            !pending.is_empty()
+        });
+    }
+
+    /// Whether every engagement echo the wave waits for has committed.
+    #[must_use]
+    pub fn engagement_covered(&self) -> bool {
+        self.engagement_pending.is_empty()
     }
 
     /// Whether the local EC has been fed into this wave (via
@@ -550,21 +607,40 @@ impl WaveState {
 
     /// Whether the local vote can be emitted at the given committed timestamp.
     ///
-    /// Two branches:
+    /// Three conditions, all read off committed chain content so every
+    /// member of the committee evaluates them identically:
     /// - Fully provisioned: need `committed_ts >= all_provisioned_at`
     ///   AND every tx has an execution result or explicit abort.
     /// - Not provisioned: wait until `committed_ts >= wave_start_ts +
     ///   WAVE_TIMEOUT`. Upon timeout, every tx in the wave is implicitly
     ///   aborted.
+    /// - Engagement-gated (the payer shard's cross-shard VM legs): every
+    ///   counterpart's engagement echo has committed, or the wave's
+    ///   deadline passed — whichever comes first. The wave speaks once,
+    ///   so a counterpart engaging at the edge of its window cannot
+    ///   contradict this shard's verdict: its success EC loses worst-wins
+    ///   to the abort, on every participant.
     #[must_use]
     pub fn can_emit_vote(&self, committed_ts: WeightedTimestamp) -> bool {
         if self.voted {
+            return false;
+        }
+        if !self.engagement_settled(committed_ts) {
             return false;
         }
         self.all_provisioned_at.map_or_else(
             || committed_ts >= self.wave_start_ts.plus(WAVE_TIMEOUT),
             |provisioned_at| committed_ts >= provisioned_at && self.has_outcome_for_every_tx(),
         )
+    }
+
+    /// Whether engagement no longer blocks the vote: fully covered, or
+    /// past the deadline for waiting.
+    fn engagement_settled(&self, committed_ts: WeightedTimestamp) -> bool {
+        self.engagement_pending.is_empty()
+            || self
+                .engagement_deadline
+                .is_some_and(|deadline| committed_ts >= deadline)
     }
 
     /// Build vote payload at the target anchor, consuming the one-shot vote.
@@ -574,7 +650,10 @@ impl WaveState {
     ///
     /// In the timeout-abort branch (`all_provisioned_at = None`), every
     /// tx gets an `ExecutionOutcome::Aborted`. In the provisioned branch,
-    /// each tx's outcome is its explicit abort (if any) or execution result.
+    /// each tx's outcome is its explicit abort (if any) or execution
+    /// result — except a transaction whose counterparts never echoed
+    /// their engagement before the deadline, which aborts here however
+    /// its own execution went.
     ///
     /// # Panics
     ///
@@ -596,7 +675,10 @@ impl WaveState {
             .tx_hashes
             .iter()
             .map(|tx_hash| {
-                let outcome = if timed_out || self.explicit_aborts.contains(tx_hash) {
+                let outcome = if timed_out
+                    || self.explicit_aborts.contains(tx_hash)
+                    || self.engagement_pending.contains_key(tx_hash)
+                {
                     ExecutionOutcome::Aborted
                 } else {
                     // Safe: has_outcome_for_every_tx() ensured presence
@@ -976,8 +1058,8 @@ impl WaveState {
 mod tests {
     use hyperscale_types::test_utils::{test_node, test_transaction_with_nodes};
     use hyperscale_types::{
-        AggregateSignature, BoundedVec, ConsensusReceipt, GlobalReceiptHash, Hash, SignerBitfield,
-        SubstateEntry,
+        AggregateSignature, BoundedVec, ConsensusReceipt, GlobalReceiptHash, Hash,
+        MerkleInclusionProof, ProvisionEntry, Provisions, SignerBitfield, SubstateEntry,
     };
 
     use super::*;
@@ -1662,10 +1744,88 @@ mod tests {
         assert!(w.dispatched());
     }
 
+    // ─── engagement coverage ────────────────────────────────────────────
+
+    /// A committed bundle from `source` naming `tx` — the engagement echo
+    /// a counterpart's committing block owes the payer.
+    fn echo_from(source: ShardId, tx: TxHash) -> Verified<Provisions> {
+        Verified::new_unchecked_for_test(Provisions::new(
+            source,
+            ShardId::leaf(1, 0),
+            BlockHeight::new(3),
+            ts_for(WAVE_START + 1),
+            MerkleInclusionProof::dummy(),
+            vec![ProvisionEntry::new(tx, vec![], vec![], vec![])],
+        ))
+    }
+
+    /// A cross-shard wave whose single transaction this shard pays for,
+    /// executed and provisioned, waiting only on the counterpart's echo.
+    fn payer_wave_awaiting_echo(validity_end: WeightedTimestamp) -> (WaveState, TxHash) {
+        let mut w = make_cross_shard_wave(1);
+        let tx = w.tx_hashes()[0];
+        w.record_engagement_wait(tx, BTreeSet::from([ShardId::leaf(1, 1)]), validity_end);
+        w.mark_tx_provisioned(tx, ts_for(WAVE_START + 1));
+        record_executed(&mut w, tx, true);
+        (w, tx)
+    }
+
+    #[test]
+    fn the_payer_vote_waits_for_the_counterparts_echo() {
+        let validity_end = ts_for(WAVE_START + 20);
+        let (mut w, tx) = payer_wave_awaiting_echo(validity_end);
+        let now = ts_for(WAVE_START + 2);
+
+        // Executed and provisioned, but nothing has echoed: no vote.
+        assert!(!w.can_emit_vote(now));
+
+        // A bundle from the counterpart is its commitment of the
+        // transaction — engagement, and the coverage the vote waits for.
+        let mut provisioning = ProvisioningTracker::new();
+        provisioning.absorb_provisions(&echo_from(ShardId::leaf(1, 1), tx));
+        w.absorb_engagement_evidence(&provisioning);
+
+        assert!(w.engagement_covered());
+        assert!(w.can_emit_vote(now));
+        let (_, _, outcomes) = w.build_vote_data(now).expect("vote");
+        assert!(matches!(
+            outcomes[0].outcome(),
+            ExecutionOutcome::Succeeded { .. }
+        ));
+    }
+
+    #[test]
+    fn an_unechoed_engagement_aborts_at_the_deadline() {
+        let validity_end = ts_for(WAVE_START + 20);
+        let (mut w, _) = payer_wave_awaiting_echo(validity_end);
+
+        // The window has closed but the echo margin has not elapsed: the
+        // wave still waits rather than forgoing a late engagement.
+        assert!(!w.can_emit_vote(validity_end));
+
+        // Past the margin the wave votes anyway, aborting the transaction
+        // no counterpart ever engaged — however its own execution went.
+        let deadline = validity_end.plus(WAVE_TIMEOUT);
+        assert!(w.can_emit_vote(deadline));
+        let (_, _, outcomes) = w.build_vote_data(deadline).expect("vote");
+        assert_eq!(outcomes[0].outcome(), &ExecutionOutcome::Aborted);
+    }
+
+    #[test]
+    fn a_wave_without_payer_legs_is_never_engagement_gated() {
+        // The counterpart's own wave votes on execution alone: it waits
+        // for nobody's echo, or the two shards would wait on each other.
+        let mut w = make_cross_shard_wave(1);
+        let tx = w.tx_hashes()[0];
+        w.mark_tx_provisioned(tx, ts_for(WAVE_START + 1));
+        record_executed(&mut w, tx, true);
+
+        assert!(w.engagement_covered());
+        assert!(w.can_emit_vote(ts_for(WAVE_START + 2)));
+    }
+
     #[test]
     fn dispatch_clock_prefers_the_payer_bundles_anchor() {
-        use hyperscale_types::{MerkleInclusionProof, ProvisionEntry, Provisions};
-
         // A remote-payer VM leg executes under the clock its payer bundle
         // carried; every other leg anchors on this wave's own committing
         // block.
