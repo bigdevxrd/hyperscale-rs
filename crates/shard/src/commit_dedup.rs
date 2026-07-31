@@ -30,8 +30,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_types::{
-    FinalizedWave, ProvisionHash, RETENTION_HORIZON, RoutableTransaction, TxHash, Verifiable,
-    WaveId, WeightedTimestamp,
+    FinalizedWave, ProvisionHash, Provisions, RETENTION_HORIZON, RoutableTransaction, ShardId,
+    TxHash, Verifiable, WaveId, WeightedTimestamp,
 };
 
 #[allow(clippy::struct_field_names)] // shared `_retention` postfix is the artifact-tier convention
@@ -50,6 +50,16 @@ pub struct CommitDedupIndex {
     /// everywhere, so no future block can legitimately reference the same
     /// content-addressed batch.
     provision_retention: HashMap<ProvisionHash, WeightedTimestamp>,
+    /// `(source_shard, tx_hash) → deadline`, from committed bundle
+    /// *content* — the engagement-mirror evidence that a payer shard's
+    /// bundle naming a transaction committed locally. Same deadline tier
+    /// as `provision_retention`. Fed from `Block::Live` bodies only: a
+    /// sealed (synced) manifest carries bundle hashes without content,
+    /// so a freshly synced validator lacks this window's pairs and votes
+    /// conservatively until it refills — the designed pairing puts the
+    /// bundle in the same block as its transactions, so the
+    /// committed-earlier arm is the rare mis-pairing remnant.
+    provision_tx_retention: HashMap<(ShardId, TxHash), WeightedTimestamp>,
 }
 
 impl CommitDedupIndex {
@@ -58,6 +68,7 @@ impl CommitDedupIndex {
             tx_retention: HashMap::new(),
             cert_retention: HashMap::new(),
             provision_retention: HashMap::new(),
+            provision_tx_retention: HashMap::new(),
         }
     }
 
@@ -102,6 +113,25 @@ impl CommitDedupIndex {
         }
     }
 
+    /// Record a committed block's bundle content in the engagement-mirror
+    /// lookup: every `(source_shard, tx_hash)` pair a committed bundle
+    /// names, under the provisions deadline tier.
+    pub fn register_committed_provision_txs(
+        &mut self,
+        batches: &[Arc<Verifiable<Provisions>>],
+        local_committed_ts: WeightedTimestamp,
+    ) {
+        let deadline = local_committed_ts.plus(RETENTION_HORIZON);
+        for batch in batches {
+            let source = batch.source_shard();
+            for entry in batch.transactions().iter() {
+                self.provision_tx_retention
+                    .entry((source, entry.tx_hash))
+                    .or_insert(deadline);
+            }
+        }
+    }
+
     /// Drop retention-lookup entries past their deadline. `now` is the
     /// `weighted_timestamp` of the latest committed block. Past expiry,
     /// independent rules (tx validity check; wave-timeout) reject any
@@ -110,6 +140,8 @@ impl CommitDedupIndex {
         self.tx_retention.retain(|_, end| *end > now);
         self.cert_retention.retain(|_, deadline| *deadline > now);
         self.provision_retention
+            .retain(|_, deadline| *deadline > now);
+        self.provision_tx_retention
             .retain(|_, deadline| *deadline > now);
     }
 
@@ -123,6 +155,12 @@ impl CommitDedupIndex {
 
     pub fn contains_provision(&self, provision_hash: &ProvisionHash) -> bool {
         self.provision_retention.contains_key(provision_hash)
+    }
+
+    /// Whether a committed bundle from `source` named `tx_hash` within
+    /// the retention window — the engagement mirror's committed arm.
+    pub fn contains_provision_tx(&self, source: ShardId, tx_hash: TxHash) -> bool {
+        self.provision_tx_retention.contains_key(&(source, tx_hash))
     }
 
     pub fn tx_retention_len(&self) -> usize {

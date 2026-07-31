@@ -20,13 +20,15 @@ use radix_transactions::prelude::PreparationSettings;
 use crate::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
-    CommitProof, ConsensusPublicKey, ConsensusSignature, ExecutionCertificate, ExecutionOutcome,
-    FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot,
-    NetworkDefinition, NodeId, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain,
-    Round, RoutableTransaction, ShardForkProof, ShardId, SignerBitfield, StateRoot, TimestampRange,
-    TopologySnapshot, TransactionDecision, TransactionRoot, TxHash, TxOutcome, ValidatorId,
-    ValidatorInfo, ValidatorSet, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
-    WitnessSources, block_vote_message,
+    CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, ExecutionCertificate,
+    ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
+    LocalReceiptRoot, NetworkDefinition, NodeId, ProposerTimestamp, ProvisionsRoot,
+    QuorumCertificate, RevealChain, Round, RoutableTransaction, ShardForkProof, ShardId,
+    SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, TransactionDecision,
+    TransactionRoot, TxHash, TxOutcome, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
+    Verified, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction, WaveCertificate,
+    WaveId, WeightedTimestamp, WitnessSources, block_vote_message, install_vm_statics,
+    vm_statics_installed,
 };
 
 /// Create a test `NodeId` from a seed byte.
@@ -938,6 +940,94 @@ pub fn make_finalized_wave(
         Arc::new(WaveCertificate::new(wave_id, vec![Arc::new(ec)])),
         vec![],
     )
+}
+
+/// A deterministic [`VmStatics`](crate::VmStatics) stub for consensus-crate
+/// tests.
+///
+/// The envelope's tree bytes are read as concatenated 16-byte owner
+/// prefixes, each contributing an exclusive admission key and a
+/// participant prefix. Routing is thus fully controlled per transaction by
+/// [`stub_vm_transaction`], with no effects-bridge dependency.
+struct StubVmStatics;
+
+impl VmStatics for StubVmStatics {
+    fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
+        if !vm.tree.len().is_multiple_of(16) {
+            return Err(VmStaticsError(
+                "stub tree must be concatenated 16-byte owner prefixes".into(),
+            ));
+        }
+        let mut write_prefixes: Vec<[u8; 16]> = vm
+            .tree
+            .chunks_exact(16)
+            .map(|chunk| {
+                let mut owner = [0u8; 16];
+                owner.copy_from_slice(chunk);
+                owner
+            })
+            .collect();
+        write_prefixes.sort_unstable();
+        write_prefixes.dedup();
+        Ok(VmDerived {
+            routing: VmRouting {
+                read_keys: Vec::new(),
+                write_keys: write_prefixes
+                    .iter()
+                    .map(|&owner| DeclaredKey::prefix(owner))
+                    .collect(),
+                read_prefixes: Vec::new(),
+                write_prefixes,
+                provision_keys: Vec::new(),
+                provision_prefixes: Vec::new(),
+            },
+            subintent_hashes: Vec::new(),
+            snapshot_targets: Vec::new(),
+        })
+    }
+}
+
+/// Install [`StubVmStatics`] for this process. First-install-wins, like
+/// the production install — a test binary uses either the stub or the
+/// effects-bridge derivation, never both.
+pub fn install_stub_vm_statics() {
+    if !vm_statics_installed() {
+        install_vm_statics(Box::new(StubVmStatics));
+    }
+}
+
+/// Build a signed VM transaction the [`StubVmStatics`] derivation routes
+/// to exactly `owner_prefixes`, paying from `fee_payer`.
+///
+/// The envelope's tree is the concatenated prefixes; `max_fee` is the
+/// signed ceiling.
+///
+/// # Panics
+///
+/// Panics if the fixture signing key fails to construct.
+#[must_use]
+pub fn stub_vm_transaction(
+    fee_payer: [u8; 16],
+    owner_prefixes: &[[u8; 16]],
+    max_fee: u128,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let key = Ed25519PrivateKey::from_bytes(&[0x5A; 32]).expect("fixture key");
+    let vm = VmTransaction {
+        tree: owner_prefixes.concat().into(),
+        subintent_sigs: Vec::new(),
+        fee_payer,
+        max_fee,
+        gas_limit: 1_000_000,
+        snapshot_pins: Vec::new(),
+        validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
+        validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(&key);
+    RoutableTransaction::new_vm(vm)
 }
 
 #[cfg(test)]

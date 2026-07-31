@@ -237,6 +237,46 @@ pub fn select_finalized_waves(
     (waves_to_propose, finalized_tx_count)
 }
 
+/// Drop cross-shard VM transactions whose payer bundle is neither among
+/// the block's selected provisions nor committed within the retention
+/// window — the proposer-side form of `validate_vm_engagement`, applied
+/// after provision selection so a capped-out bundle can never strand its
+/// transaction in a self-rejecting proposal.
+pub fn filter_engaged_vm_transactions(
+    topology_snapshot: &TopologySnapshot,
+    local_shard: ShardId,
+    transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+    provisions: &[Arc<Verifiable<Provisions>>],
+    dedup_index: &CommitDedupIndex,
+) -> Vec<Arc<Verified<RoutableTransaction>>> {
+    transactions
+        .into_iter()
+        .filter(|tx| {
+            let Some(vm) = tx.vm() else {
+                return true;
+            };
+            if topology_snapshot.is_single_shard_transaction(tx.as_ref()) {
+                return true;
+            }
+            let payer_shard = topology_snapshot
+                .shard_trie()
+                .shard_for_prefix(vm.fee_payer);
+            if payer_shard == local_shard {
+                return true;
+            }
+            let tx_hash = tx.hash();
+            dedup_index.contains_provision_tx(payer_shard, tx_hash)
+                || provisions.iter().any(|batch| {
+                    batch.source_shard() == payer_shard
+                        && batch
+                            .transactions()
+                            .iter()
+                            .any(|entry| entry.tx_hash == tx_hash)
+                })
+        })
+        .collect()
+}
+
 /// Select provisions for inclusion: drop those already in the QC
 /// chain or committed within the retention window, then take from the FIFO
 /// queue until the running tx-count total would exceed `max_provision_txs`.

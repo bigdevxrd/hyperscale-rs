@@ -108,7 +108,7 @@ use crate::lookups::{committee_public_keys, vote_recipients};
 use crate::pending::{OrphanedFetches, PendingBlock, PendingBlocks};
 use crate::proposal::{
     ProposalKind, ProposalTracker, TakeResult, assemble_build_action, dispatch_or_defer,
-    select_finalized_waves, select_provisions, select_transactions,
+    filter_engaged_vm_transactions, select_finalized_waves, select_provisions, select_transactions,
 };
 use crate::ready_signal_pool::{MIN_READY_SIGNAL_DWELL, ReadySignalPool};
 use crate::timeout_keeper::TimeoutKeeper;
@@ -1539,6 +1539,16 @@ impl ShardCoordinator {
             &qc_chain_provision_hashes,
             &self.dedup_index,
             MAX_TXS_PER_BLOCK,
+        );
+        // Applied after provision selection: a cross-shard VM transaction
+        // rides only beside (or after) its payer bundle, the engagement
+        // evidence the voters' `validate_vm_engagement` demands.
+        let transactions = filter_engaged_vm_transactions(
+            topology_schedule.head(),
+            self.local_shard,
+            transactions,
+            &provisions,
+            &self.dedup_index,
         );
 
         self.build_and_dispatch_proposal(
@@ -4279,6 +4289,11 @@ impl ShardCoordinator {
             .register_committed_certs(block.certificates());
         self.dedup_index
             .register_committed_provisions(manifest.provision_hashes(), commit_ts);
+        // Bundle content feeds the engagement mirror — live bodies only;
+        // a sealed manifest has no content and the mirror votes
+        // conservatively across that gap.
+        self.dedup_index
+            .register_committed_provision_txs(block.provisions(), commit_ts);
 
         // Derive this block's beacon-witness leaves from the same
         // canonical sources the proposer used (receipts from finalized
