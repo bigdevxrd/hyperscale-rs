@@ -37,8 +37,8 @@ use hyperscale_vm_effects::{
     PrefixShardResolver, RoleId, SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
-    Base, BatchTx, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
-    encode_amount, execute_batch,
+    Base, BatchTx, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash, amount_cell,
+    decode_amount, encode_amount, execute_batch,
 };
 use indexmap::IndexMap;
 use radix_common::math::Decimal;
@@ -342,7 +342,10 @@ fn apply_fee_burn(
             continue;
         };
         let debited = u128::from_le_bytes(cell).saturating_sub(*fees);
-        writes.insert(*vault, Some(debited.to_le_bytes().to_vec()));
+        // The burn folds outside the kernel store, so it applies the
+        // store's own rule itself: a zero balance is an absent cell, and
+        // the leaf goes with the bond it carried.
+        writes.insert(*vault, amount_cell(debited).map(|cell| cell.to_vec()));
     }
 }
 

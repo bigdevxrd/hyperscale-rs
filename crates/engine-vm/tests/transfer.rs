@@ -171,7 +171,8 @@ fn execute_on(
     executor.execute_wave_batch(&ctx, &snapshot, transactions)
 }
 
-fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
+/// The raw update a batch made to an account's native vault, if any.
+fn vault_update(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<DatabaseUpdate> {
     let key = vault_key(owner, VM_XRD);
     let node = updates.node_updates.get(&vm_db_node_key(owner))?;
     let PartitionDatabaseUpdates::Delta { substate_updates } =
@@ -179,8 +180,14 @@ fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
     else {
         return None;
     };
-    match substate_updates.get(&DbSortKey(key.local.0.to_vec()))? {
-        DatabaseUpdate::Set(value) => Some(value.clone()),
+    substate_updates
+        .get(&DbSortKey(key.local.0.to_vec()))
+        .cloned()
+}
+
+fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
+    match vault_update(updates, owner)? {
+        DatabaseUpdate::Set(value) => Some(value),
         DatabaseUpdate::Delete => None,
     }
 }
@@ -293,6 +300,40 @@ fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
         vault_cell(database_updates, payer),
         Some(encode_amount(1_000 - 100 - 10).to_vec())
     );
+    assert_eq!(
+        vault_cell(database_updates, BOB),
+        Some(encode_amount(150).to_vec())
+    );
+}
+
+#[test]
+fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
+    // The burn folds outside the kernel store, so it has to apply the
+    // store's delete-on-zero rule itself — otherwise the commonest way a
+    // vault empties leaves sixteen zero bytes behind, and a storage bond
+    // that can never be refunded.
+    let key = Ed25519PrivateKey::from_bytes(&[11u8; 32]).unwrap();
+    let payer = vm_account_address(&key.public_key().0);
+    // Exactly the transfer plus the ceiling: nothing survives the burn.
+    let accounts = [(payer, 110), (BOB, 50)];
+    let executor = VmExecutor::new(&accounts, ExecutionMode::Serial);
+    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        signed_transfer_with_fee(11, payer, BOB, 100, 10),
+    ));
+    let executed = execute_on(&accounts, &executor, &[tx]);
+    let ConsensusReceipt::Succeeded {
+        database_updates, ..
+    } = &executed[0].consensus
+    else {
+        panic!("transfer must succeed: {:?}", executed[0].consensus);
+    };
+
+    assert_eq!(
+        vault_update(database_updates, payer),
+        Some(DatabaseUpdate::Delete),
+        "a drained payer vault is deleted, not zeroed"
+    );
+    // The recipient is untouched by the rule.
     assert_eq!(
         vault_cell(database_updates, BOB),
         Some(encode_amount(150).to_vec())
