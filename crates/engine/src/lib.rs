@@ -28,8 +28,8 @@ pub mod sharding;
 
 pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 pub use executor::{
-    DynSnapshot, Executor, RadixExecutor, WaveBatchContext, batch_compute_cached,
-    fetch_state_entries, participating_shards,
+    CrossShardTxInput, DynSnapshot, Executor, RadixExecutor, WaveBatchContext,
+    batch_compute_cached, fetch_state_entries, participating_shards,
 };
 pub use genesis::GenesisConfig;
 pub use genesis_cache::prepared_genesis;

@@ -22,18 +22,19 @@ use blake3::hash as blake3_hash;
 use hyperscale_effects_bridge::{BridgeStatics, ProtocolHasher, decode_tree, envelope_identity};
 use hyperscale_engine::sharding::{compute_writes_root, sort_database_updates};
 use hyperscale_engine::{
-    CachedVmOutput, DynSnapshot, ExecutedTx, Executor, WaveBatchContext, project_to_shard,
+    CachedVmOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, Executor, WaveBatchContext,
+    project_to_shard,
 };
 use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
-use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
     BeaconWitnessRoot, EventRoot, ExecutionMetadata, FeeSummary, GlobalReceipt, Hash,
-    OwnershipRoot, RoutableTransaction, TxHash, Verified, install_vm_statics,
+    OwnershipRoot, RoutableTransaction, SubstateEntry, TxHash, Verified, install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, EffectSet, EffectTarget, Hash32, Manifest, ManifestHash, PrefixShardResolver, RoleId,
-    SubstateKey, admit_tree, route_tree,
+    Address, EffectSet, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
+    PrefixShardResolver, RoleId, SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
     Base, BatchTx, EnvInputs, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash,
@@ -202,6 +203,7 @@ fn fold_delta(
     base: &VmBase,
     running: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
     tx: VmTxHash,
+    is_local: &dyn Fn(Address) -> bool,
 ) -> BTreeMap<SubstateKey, Option<Vec<u8>>> {
     assert!(
         receipt.delta.entries.is_empty(),
@@ -218,9 +220,17 @@ fn fold_delta(
             .unwrap_or_else(|| base.cells.get(&key).cloned())
     };
     for (key, change) in &receipt.delta.cells {
+        if !is_local(key.owner) {
+            continue;
+        }
         writes.insert(*key, change.clone());
     }
     for (key, movement) in &receipt.delta.movements {
+        if !is_local(key.owner) {
+            // The owning shard folds its own cells; here the movement is
+            // the outbound record and never becomes an absolute write.
+            continue;
+        }
         let before = current(&writes, running, *key)
             .map_or(Ok(0), |bytes| decode_amount(&bytes))
             .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
@@ -231,6 +241,9 @@ fn fold_delta(
         writes.insert(*key, Some(encode_amount(after).to_vec()));
     }
     for (key, settled) in &receipt.delta.settles {
+        if !is_local(key.owner) {
+            continue;
+        }
         let before = current(&writes, running, *key)
             .map_or(Ok(0), |bytes| decode_amount(&bytes))
             .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
@@ -296,10 +309,11 @@ fn assemble_executed_tx(
     running: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
     vm_tx: VmTxHash,
     receipt: &Receipt,
+    is_local: &dyn Fn(Address) -> bool,
 ) -> ExecutedTx {
     let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
     let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
-        let writes = fold_delta(receipt, base, running, vm_tx);
+        let writes = fold_delta(receipt, base, running, vm_tx, is_local);
         let mut updates = writes_to_updates(&writes);
         sort_database_updates(&mut updates);
         let writes_root = compute_writes_root(&updates);
@@ -331,16 +345,37 @@ fn assemble_executed_tx(
     )
 }
 
-impl Executor for VmExecutor {
-    fn execute_wave_batch(
+impl VmExecutor {
+    /// The batch pipeline both dispatch arms share: derive, pre-read the
+    /// local baseline, layer provisioned remote cells, execute under the
+    /// shard's locality, fold local keys, and project. `provisions` is
+    /// empty and locality is total for the single-shard arm.
+    #[allow(clippy::too_many_lines)] // one pipeline, stages in order
+    fn run_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
         transactions: &[Arc<Verified<RoutableTransaction>>],
+        provisions_by_tx: &BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>>,
+        cross_shard: bool,
     ) -> Vec<ExecutedTx> {
         if transactions.is_empty() {
             return Vec::new();
         }
+        let locality = if cross_shard {
+            let trie = ctx.shard_trie.clone();
+            let local_shard = ctx.local_shard;
+            Locality::Owned(Arc::new(move |owner: Address| {
+                trie.shard_for_prefix(owner.0) == local_shard
+            }))
+        } else {
+            Locality::All
+        };
+        let is_local = {
+            let trie = ctx.shard_trie.clone();
+            let local_shard = ctx.local_shard;
+            move |owner: Address| !cross_shard || trie.shard_for_prefix(owner.0) == local_shard
+        };
 
         // Derive every transaction; refusals become deterministic
         // failures without touching the batch.
@@ -368,12 +403,32 @@ impl Executor for VmExecutor {
             }
         }
 
-        // Pre-read the batch's declared cells from the wave snapshot —
-        // the committed baseline every snapshot and judge read pins to.
+        // The committed baseline: provisioned remote cells first — a
+        // key's owner prefix routes it to exactly one source, so nothing
+        // arbitrates — then the locally owned declared cells from the
+        // wave snapshot.
         let mut cells: BTreeMap<SubstateKey, Vec<u8>> = BTreeMap::new();
+        for lists in provisions_by_tx.values() {
+            for entries in lists {
+                for entry in entries.iter() {
+                    if let Some((owner, local)) = vm_flat_key_parts(&entry.storage_key)
+                        && let Some(value) = entry.value.as_ref()
+                    {
+                        cells.insert(
+                            SubstateKey {
+                                owner: Address(owner),
+                                local: LocalKey(local),
+                            },
+                            value.to_vec(),
+                        );
+                    }
+                }
+            }
+        }
         for entry in prepared.values() {
             for effect in entry.declared.iter() {
                 if let EffectTarget::Point(key) = effect.target
+                    && is_local(key.owner)
                     && let Some(value) = read_cell(snapshot, key)
                 {
                     cells.insert(key, value);
@@ -405,7 +460,7 @@ impl Executor for VmExecutor {
             env,
             protocol_hash,
             self.mode,
-            &Locality::All,
+            &locality,
         )
         .unwrap_or_else(|error| panic!("BFT CRITICAL: VM batch execution failed: {error}"));
 
@@ -415,7 +470,8 @@ impl Executor for VmExecutor {
         let mut running: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
         let mut folded: BTreeMap<VmTxHash, ExecutedTx> = BTreeMap::new();
         for (vm_tx, receipt) in &outcome.receipts {
-            let executed = assemble_executed_tx(ctx, &base, &mut running, *vm_tx, receipt);
+            let executed =
+                assemble_executed_tx(ctx, &base, &mut running, *vm_tx, receipt, &is_local);
             folded.insert(*vm_tx, executed);
         }
 
@@ -452,5 +508,36 @@ impl Executor for VmExecutor {
                 })
             })
             .collect()
+    }
+}
+
+impl Executor for VmExecutor {
+    fn execute_wave_batch(
+        &self,
+        ctx: &WaveBatchContext<'_>,
+        snapshot: &DynSnapshot<'_>,
+        transactions: &[Arc<Verified<RoutableTransaction>>],
+    ) -> Vec<ExecutedTx> {
+        self.run_batch(ctx, snapshot, transactions, &BTreeMap::new(), false)
+    }
+
+    fn execute_cross_shard_batch(
+        &self,
+        ctx: &WaveBatchContext<'_>,
+        snapshot: &DynSnapshot<'_>,
+        requests: &[CrossShardTxInput<'_>],
+    ) -> Vec<ExecutedTx> {
+        let transactions: Vec<Arc<Verified<RoutableTransaction>>> =
+            requests.iter().map(|r| Arc::clone(r.transaction)).collect();
+        let provisions_by_tx: BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>> = requests
+            .iter()
+            .map(|r| {
+                (
+                    VmTxHash(Hash32(*r.transaction.hash().as_bytes())),
+                    r.provisions.to_vec(),
+                )
+            })
+            .collect();
+        self.run_batch(ctx, snapshot, &transactions, &provisions_by_tx, true)
     }
 }

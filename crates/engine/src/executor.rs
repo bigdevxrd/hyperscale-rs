@@ -40,7 +40,7 @@ use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 use crate::output::ExecutedTx;
 use crate::provisioned_snapshot::ProvisionedSnapshot;
 use crate::receipt::{CachedVmOutput, compute_vm_output, project_to_shard};
-use crate::sharding::resolve_owned_nodes;
+use crate::sharding::{build_cross_shard_ownership, resolve_owned_nodes};
 
 /// Fetch state entries for the given nodes from storage at a specific block height.
 ///
@@ -205,12 +205,6 @@ impl RadixExecutor {
         ownership: &HashMap<NodeId, NodeId>,
     ) -> CachedVmOutput {
         let start = Stopwatch::start();
-        if tx.is_vm() {
-            // Cross-shard VM execution does not exist yet: every replica
-            // reaches the same deterministic failure, so committees agree.
-            tracing::warn!(tx_hash = ?tx.hash(), "cross-shard VM execution is unsupported — failing deterministically");
-            return CachedVmOutput::validation_failed(tx.hash());
-        }
         let Some(validated) = tx.get_or_validate(&self.caches.validator) else {
             return CachedVmOutput::validation_failed(tx.hash());
         };
@@ -280,6 +274,18 @@ pub struct WaveBatchContext<'a> {
     pub block_hash: BlockHash,
 }
 
+/// One cross-shard transaction as an engine consumes it: the
+/// transaction plus what its remote counterparts shipped.
+pub struct CrossShardTxInput<'a> {
+    /// The transaction to execute.
+    pub transaction: &'a Arc<Verified<RoutableTransaction>>,
+    /// Verified provision entry lists, one per source shard contribution.
+    pub provisions: &'a [Arc<Vec<SubstateEntry>>],
+    /// The merged `vault → owning_account` map for the Radix variant;
+    /// structurally empty for VM transactions.
+    pub ownership: &'a HashMap<NodeId, NodeId>,
+}
+
 /// One engine's execution of a wave's same-variant sub-batch.
 ///
 /// The unit is the batch: the Radix implementation runs its
@@ -294,6 +300,16 @@ pub trait Executor: Send + Sync {
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
         transactions: &[Arc<Verified<RoutableTransaction>>],
+    ) -> Vec<ExecutedTx>;
+
+    /// Execute a cross-shard sub-batch: `snapshot` carries local state,
+    /// each request its remote provisions. One [`ExecutedTx`] per input,
+    /// in input order, projected to the context's local shard.
+    fn execute_cross_shard_batch(
+        &self,
+        ctx: &WaveBatchContext<'_>,
+        snapshot: &DynSnapshot<'_>,
+        requests: &[CrossShardTxInput<'_>],
     ) -> Vec<ExecutedTx>;
 }
 
@@ -394,6 +410,70 @@ impl Executor for RadixExecutor {
                     ctx.local_shard,
                     ctx.shard_trie,
                     &ownership,
+                )
+            })
+            .collect()
+    }
+
+    fn execute_cross_shard_batch(
+        &self,
+        ctx: &WaveBatchContext<'_>,
+        snapshot: &DynSnapshot<'_>,
+        requests: &[CrossShardTxInput<'_>],
+    ) -> Vec<ExecutedTx> {
+        let txs: Vec<Arc<Verified<RoutableTransaction>>> =
+            requests.iter().map(|r| Arc::clone(r.transaction)).collect();
+        // Per-request merged ownership: provisions for remote-shard
+        // owners, local-snapshot resolve for local ones. `Err` means the
+        // transaction touches a vault claimed by accounts on both shards
+        // — fast-abort so every committee produces the same `Failed`
+        // outcome instead of executing a divergent VM view.
+        let ownerships: Vec<Result<HashMap<NodeId, NodeId>, Vec<NodeId>>> = requests
+            .iter()
+            .map(|req| {
+                let declared: Vec<NodeId> = req
+                    .transaction
+                    .declared_reads()
+                    .iter()
+                    .chain(req.transaction.declared_writes().iter())
+                    .copied()
+                    .collect();
+                build_cross_shard_ownership(
+                    snapshot,
+                    &declared,
+                    req.ownership,
+                    ctx.local_shard,
+                    ctx.shard_trie,
+                )
+            })
+            .collect();
+        let cached = batch_compute_cached(ctx.par, ctx.cache, &txs, ctx.shard_trie, |i| {
+            let req = &requests[i];
+            ownerships[i].as_ref().map_or_else(
+                |_| CachedVmOutput::ownership_conflict_aborted(req.transaction.hash()),
+                |ownership| {
+                    self.compute_vm_output_cross_shard(
+                        snapshot,
+                        req.transaction,
+                        req.provisions,
+                        ownership,
+                    )
+                },
+            )
+        });
+        let empty_ownership: HashMap<NodeId, NodeId> = HashMap::new();
+        requests
+            .iter()
+            .zip(cached)
+            .zip(ownerships.iter())
+            .map(|((req, cached), ownership)| {
+                let ownership = ownership.as_ref().unwrap_or(&empty_ownership);
+                project_to_shard(
+                    &cached,
+                    req.transaction.hash(),
+                    ctx.local_shard,
+                    ctx.shard_trie,
+                    ownership,
                 )
             })
             .collect()

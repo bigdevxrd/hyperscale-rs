@@ -8,14 +8,10 @@
 //! event plumbing — sharing the handlers between production and
 //! simulation keeps execution behavior identical across both backends.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use hyperscale_core::{Action, ActionContext, ProtocolEvent};
-use hyperscale_engine::{
-    CachedVmOutput, DynSnapshot, Executor as _, WaveBatchContext, batch_compute_cached,
-    build_cross_shard_ownership, project_to_shard,
-};
+use hyperscale_core::{Action, ActionContext, CrossShardExecutionRequest, ProtocolEvent};
+use hyperscale_engine::{CrossShardTxInput, DynSnapshot, Executor as _, WaveBatchContext};
 use hyperscale_metrics::record_execution_latency;
 use hyperscale_network::Network;
 use hyperscale_storage::{ShardStorage, SubstateStore, SubstateView};
@@ -23,8 +19,8 @@ use hyperscale_types::network::notification::{
     ExecutionCertificatesNotification, ExecutionVotesNotification,
 };
 use hyperscale_types::{
-    ExecutionCertificate, ExecutionCertificateContext, ExecutionVote, FinalizedWaveContext, NodeId,
-    RoutableTransaction, Stopwatch, StoredReceipt, Verifiable, Verified, exec_cert_batch_message,
+    ExecutionCertificate, ExecutionCertificateContext, ExecutionVote, FinalizedWaveContext,
+    Stopwatch, StoredReceipt, Verifiable, Verified, exec_cert_batch_message,
     exec_vote_batch_message,
 };
 
@@ -162,77 +158,47 @@ where
             block_height,
             requests,
         } => {
+            fn inputs<'a>(reqs: &[&'a CrossShardExecutionRequest]) -> Vec<CrossShardTxInput<'a>> {
+                reqs.iter()
+                    .map(|r| CrossShardTxInput {
+                        transaction: &r.transaction,
+                        provisions: &r.provisions,
+                        ownership: &r.ownership,
+                    })
+                    .collect()
+            }
             let start = Stopwatch::start();
-            let local_shard = ctx.shard;
             let shard_trie = ctx.topology_snapshot.shard_trie();
             let view = ctx.pending_chain.view_at(block_hash, block_height);
             let view_snap = <SubstateView<_> as SubstateStore>::snapshot(&*view);
-            let txs: Vec<Arc<Verified<RoutableTransaction>>> = requests
-                .iter()
-                .map(|r| Arc::clone(&r.transaction))
-                .collect();
-
-            // Build the per-vnode merged ownership map once per request, then
-            // thread the same map through the executor (for `receipt_hash`)
-            // and `project_to_shard` (for the shard filter). The map is not
-            // cached: cross-shard packed vnodes share a process cache but see
-            // different remote provisions, so caching one vnode's map under
-            // `tx_hash` would corrupt the shard filter on the other. `Err`
-            // means the transaction touches a vault claimed by accounts on
-            // both shards — fast-abort below so every committee produces the
-            // same `Failed` outcome instead of executing a divergent VM view.
-            let ownerships: Vec<Result<HashMap<NodeId, NodeId>, Vec<NodeId>>> = requests
-                .iter()
-                .map(|req| {
-                    let declared: Vec<NodeId> = req
-                        .transaction
-                        .declared_reads()
-                        .iter()
-                        .chain(req.transaction.declared_writes().iter())
-                        .copied()
-                        .collect();
-                    build_cross_shard_ownership(
-                        &view_snap,
-                        &declared,
-                        &req.ownership,
-                        local_shard,
-                        shard_trie,
-                    )
-                })
-                .collect();
-
-            let cached = batch_compute_cached(
-                ctx.par,
-                ctx.execution_cache.as_ref(),
-                &txs,
+            let snapshot = DynSnapshot(&view_snap);
+            let wave_ctx = WaveBatchContext {
+                par: ctx.par,
+                cache: ctx.execution_cache.as_ref(),
+                local_shard: ctx.shard,
                 shard_trie,
-                |i| {
-                    let req = &requests[i];
-                    ownerships[i].as_ref().map_or_else(
-                        |_| CachedVmOutput::ownership_conflict_aborted(req.transaction.hash()),
-                        |ownership| {
-                            ctx.executor.compute_vm_output_cross_shard(
-                                &view_snap,
-                                &req.transaction,
-                                &req.provisions,
-                                ownership,
-                            )
-                        },
-                    )
-                },
-            );
-            let empty_ownership: HashMap<NodeId, NodeId> = HashMap::new();
-            let (tx_outcomes, results): (Vec<_>, Vec<_>) = requests
+                block_hash,
+            };
+            // Engine dispatch is typed, exactly like the single-shard arm:
+            // per-variant sub-batches, receipts merged back in canonical
+            // transaction-hash order.
+            let (vm_requests, radix_requests): (Vec<_>, Vec<_>) = requests
                 .iter()
-                .zip(cached)
-                .zip(ownerships.iter())
-                .map(|((req, cached), ownership)| {
-                    let tx_hash = req.transaction.hash();
-                    let ownership = ownership.as_ref().unwrap_or(&empty_ownership);
-                    let executed =
-                        project_to_shard(&cached, tx_hash, local_shard, shard_trie, ownership);
-                    (executed.outcome(), StoredReceipt::from(executed))
-                })
+                .partition::<Vec<_>, _>(|r| r.transaction.is_vm());
+            let mut executed = ctx.executor.execute_cross_shard_batch(
+                &wave_ctx,
+                &snapshot,
+                &inputs(&radix_requests),
+            );
+            executed.extend(ctx.vm_executor.execute_cross_shard_batch(
+                &wave_ctx,
+                &snapshot,
+                &inputs(&vm_requests),
+            ));
+            executed.sort_by_key(|tx| tx.tx_hash);
+            let (tx_outcomes, results): (Vec<_>, Vec<_>) = executed
+                .into_iter()
+                .map(|executed| (executed.outcome(), StoredReceipt::from(executed)))
                 .unzip();
             record_execution_latency(start.elapsed().as_secs_f64());
             ctx.notify_protocol(ProtocolEvent::ExecutionBatchCompleted {
