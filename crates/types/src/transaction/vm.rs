@@ -251,6 +251,11 @@ pub struct VmDerived {
     /// Every bounded-window snapshot target, as `(owner, local)` halves —
     /// each must be covered by a verified pin in the envelope.
     pub snapshot_targets: Vec<([u8; 16], [u8; 16])>,
+    /// The local half of the fee payer's native-resource vault cell —
+    /// the substate the payer shard's reservation check reads and the
+    /// fee settlement debits. The owner half is the envelope's
+    /// `fee_payer`.
+    pub fee_vault_local: [u8; 16],
 }
 
 /// Why VM static derivation refused an envelope. Deterministic: every

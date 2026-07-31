@@ -162,6 +162,9 @@ impl ShardParticipation {
             ProtocolEvent::ProvisionTxRootsVerified { block_hash, result } => self
                 .shard_coordinator
                 .on_provision_tx_roots_verified(topology_schedule, block_hash, result),
+            ProtocolEvent::VmReservationsVerified { block_hash, result } => self
+                .shard_coordinator
+                .on_vm_reservations_verified(topology_schedule, block_hash, &result),
             ProtocolEvent::BeaconWitnessRootVerified { block_hash, result } => self
                 .shard_coordinator
                 .on_beacon_witness_root_verified(topology_schedule, block_hash, result),

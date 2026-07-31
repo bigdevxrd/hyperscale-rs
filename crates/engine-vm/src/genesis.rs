@@ -7,32 +7,14 @@
 //! bootstrap in one genesis batch.
 
 use hyperscale_effects_bridge::ProtocolHasher;
+pub use hyperscale_effects_bridge::{VM_XRD, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
-use hyperscale_vm_effects::stdlib::VAULT;
-use hyperscale_vm_effects::{
-    Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, SubstateKey, Value,
-    child_key,
-};
+use hyperscale_vm_effects::{Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash};
 use hyperscale_vm_kernel::encode_amount;
 use hyperscale_vm_stdlib::{account_metadata, account_package_hash};
 use indexmap::IndexMap;
 use radix_substate_store_interface::interface::DatabaseUpdates;
-
-/// The native fee/transfer resource of the VM namespace.
-pub const VM_XRD: Address = Address([0x58; 16]);
-
-/// The vault cell for `resource` under `owner` — the same child key the
-/// stdlib account metadata's effect clauses compute.
-#[must_use]
-pub fn vault_key(owner: [u8; 16], resource: Address) -> SubstateKey {
-    child_key(
-        &ProtocolHasher,
-        Address(owner),
-        VAULT,
-        &[Value::Address(resource).canonical_bytes()],
-    )
-}
 
 /// The genesis-static VM world: published stdlib metadata and the funded
 /// accounts' instance registrations.

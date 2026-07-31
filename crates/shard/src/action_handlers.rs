@@ -9,7 +9,7 @@ use std::sync::Arc;
 use hyperscale_core::{Action, ActionContext, PreparedBlock, ProtocolEvent};
 use hyperscale_metrics::record_signature_verification_latency;
 use hyperscale_network::Network;
-use hyperscale_storage::{JmtSnapshot, ShardChainWriter, ShardStorage};
+use hyperscale_storage::{JmtSnapshot, ShardChainWriter, ShardStorage, SubstateStore};
 use hyperscale_types::network::gossip::{CertifiedBlockHeaderGossip, ShardForkProofGossip};
 use hyperscale_types::network::notification::{
     BlockHeaderNotification, BlockVoteNotification, ReadySignalNotification, TimeoutNotification,
@@ -552,6 +552,44 @@ where
             ctx.notify_protocol(ProtocolEvent::ProvisionTxRootsVerified { block_hash, result });
         }
 
+        Action::VerifyVmReservations {
+            block_hash,
+            demands,
+            committed_height,
+        } => {
+            // Balance reads anchor at the committed height the
+            // coordinator derived from the block's ancestry, so every
+            // replica reads identical state regardless of local commit
+            // or persistence progress.
+            let view = ctx.pending_chain.view_at_committed_tip();
+            let mut result: Result<(), String> = Ok(());
+            for demand in &demands {
+                let Some(cell) = view.get_vm_substate_at_height(
+                    demand.owner,
+                    demand.vault_local,
+                    committed_height,
+                ) else {
+                    result = Err(format!(
+                        "payer {:?}: balance history unavailable at height {}",
+                        demand.owner,
+                        committed_height.inner()
+                    ));
+                    break;
+                };
+                let balance = cell
+                    .and_then(|bytes| <[u8; 16]>::try_from(bytes.as_slice()).ok())
+                    .map_or(0u128, u128::from_le_bytes);
+                if balance < demand.demand {
+                    result = Err(format!(
+                        "payer {:?}: balance {balance} under reservation demand {}",
+                        demand.owner, demand.demand
+                    ));
+                    break;
+                }
+            }
+            ctx.notify_protocol(ProtocolEvent::VmReservationsVerified { block_hash, result });
+        }
+
         Action::VerifyProvisionRoot {
             block_hash,
             expected_root,
@@ -777,6 +815,8 @@ where
             transactions,
             finalized_waves,
             provisions,
+            vm_fee_checks,
+            fee_read_height,
             parent_in_flight,
             finalized_tx_count,
             ready_signals,
@@ -812,6 +852,62 @@ where
                 .pending_chain
                 .view_at(parent_block_hash, parent_block_height);
             let pending_snapshots = view.pending_snapshots().to_vec();
+            // Drop transactions whose payer cannot cover its cumulative
+            // reservation demand — the builder-side form of the voters'
+            // reservation verification, reading the same
+            // committed-height balances, so a proposal never
+            // self-rejects.
+            let transactions = if vm_fee_checks.is_empty() {
+                transactions
+            } else {
+                let mut running: std::collections::HashMap<[u8; 16], u128> = vm_fee_checks
+                    .iter()
+                    .map(|check| (check.owner, check.demand))
+                    .collect();
+                let balances: std::collections::HashMap<[u8; 16], u128> = vm_fee_checks
+                    .iter()
+                    .map(|check| {
+                        let balance = view
+                            .get_vm_substate_at_height(
+                                check.owner,
+                                check.vault_local,
+                                fee_read_height,
+                            )
+                            .flatten()
+                            .and_then(|bytes| <[u8; 16]>::try_from(bytes.as_slice()).ok())
+                            .map_or(0u128, u128::from_le_bytes);
+                        (check.owner, balance)
+                    })
+                    .collect();
+                let mut dropped = 0usize;
+                let kept: Vec<_> = transactions
+                    .into_iter()
+                    .filter(|tx| {
+                        let Some((owner, _)) = tx.vm_fee_vault() else {
+                            return true;
+                        };
+                        let Some(used) = running.get_mut(&owner) else {
+                            return true;
+                        };
+                        let max_fee = tx.vm().map_or(0, |vm| vm.max_fee);
+                        let wanted = used.saturating_add(max_fee);
+                        if wanted > balances.get(&owner).copied().unwrap_or(0) {
+                            dropped += 1;
+                            return false;
+                        }
+                        *used = wanted;
+                        true
+                    })
+                    .collect();
+                if dropped > 0 {
+                    tracing::debug!(
+                        dropped,
+                        height = height.inner(),
+                        "Dropped transactions whose payer cannot cover its fee reservation"
+                    );
+                }
+                kept
+            };
             // A terminating shard's boundary header carries the root over
             // the wave-ids it settled within the retention window —
             // whenever the shard terminates at the next boundary, split or

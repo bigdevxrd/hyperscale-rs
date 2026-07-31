@@ -157,6 +157,20 @@ pub struct ProvisionsRequest {
     pub vm: bool,
 }
 
+/// One payer's fee-reservation demand, verified against its vault
+/// balance at a deterministic committed height.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmFeeDemand {
+    /// The payer account's owner prefix — the vault cell's owner half.
+    pub owner: [u8; 16],
+    /// The vault cell's local half.
+    pub vault_local: [u8; 16],
+    /// The total reservation the payer must cover: this block's newly
+    /// engaged fee ceilings plus the in-flight holds derived from chain
+    /// content.
+    pub demand: u128,
+}
+
 /// Actions the state machine wants to perform.
 ///
 /// Actions are **commands** - they describe something to do.
@@ -805,6 +819,22 @@ pub enum Action {
         topology_snapshot: TopologySnapshot,
     },
 
+    /// Verify a block's payer-shard fee reservations.
+    ///
+    /// Reads each demanded payer's native vault at the deterministic
+    /// committed frontier and checks it covers the reservation demand
+    /// the coordinator derived from chain content. Storage-anchored at
+    /// `committed_height`, so every replica reads identical state.
+    /// Returns `ProtocolEvent::VmReservationsVerified`.
+    VerifyVmReservations {
+        /// Block whose reservations are being verified.
+        block_hash: BlockHash,
+        /// Per-payer demands; empty demands never dispatch.
+        demands: Vec<VmFeeDemand>,
+        /// The committed height every replica reads balances at.
+        committed_height: BlockHeight,
+    },
+
     /// Build a complete block proposal.
     ///
     /// Computes the new state root from certificates, builds the complete block,
@@ -841,6 +871,15 @@ pub enum Action {
         finalized_waves: Vec<Arc<Verifiable<FinalizedWave>>>,
         /// Provisions from remote shards, included in this block.
         provisions: Vec<Arc<Verifiable<Provisions>>>,
+        /// Prior fee-reservation demand per local payer among the
+        /// candidate transactions — in-flight holds plus the uncommitted
+        /// window, excluding the candidates themselves. The builder
+        /// accumulates candidate ceilings on top and drops transactions
+        /// their payer cannot cover, so a proposal never self-rejects
+        /// the voters' reservation verification.
+        vm_fee_checks: Vec<VmFeeDemand>,
+        /// The committed height the builder reads payer balances at.
+        fee_read_height: BlockHeight,
         /// Parent block's in-flight count (for deterministic computation).
         parent_in_flight: InFlightCount,
         /// Number of transactions finalized by wave certificates in this block.
@@ -1548,6 +1587,7 @@ impl Action {
             | Self::VerifyProvisionRoot { .. }
             | Self::VerifyCertificateRoot { .. }
             | Self::VerifyProvisionTxRoots { .. }
+            | Self::VerifyVmReservations { .. }
             | Self::VerifyStateRoot { .. }
             | Self::VerifyBeaconWitnessRoot { .. }
             | Self::BuildProposal { .. }
@@ -1653,6 +1693,7 @@ impl Action {
             | Self::VerifyProvisionRoot { .. }
             | Self::VerifyCertificateRoot { .. }
             | Self::VerifyProvisionTxRoots { .. }
+            | Self::VerifyVmReservations { .. }
             | Self::BuildProposal { .. }
             | Self::ExecuteTransactions { .. }
             | Self::ExecuteCrossShardTransactions { .. }
@@ -1736,6 +1777,7 @@ impl Action {
             | Self::VerifyProvisionRoot { .. }
             | Self::VerifyCertificateRoot { .. }
             | Self::VerifyProvisionTxRoots { .. }
+            | Self::VerifyVmReservations { .. }
             | Self::VerifyStateRoot { .. }
             | Self::VerifyBeaconWitnessRoot { .. }
             | Self::BuildProposal { .. }

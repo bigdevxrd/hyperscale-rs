@@ -18,17 +18,33 @@ use std::collections::BTreeSet;
 use hyperscale_types::{
     DeclaredKey, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction,
 };
+use hyperscale_vm_effects::stdlib::VAULT;
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg, GraphNode,
     Hash32, InstanceRegistry, IntentDecl, LocalKey, ManifestGraph, ManifestHash, MetadataCache,
     Mode, PrefixShardResolver, Subintent, SubstateKey, Value, YieldBinding, YieldParam, admit_tree,
-    route_tree,
+    child_key, route_tree,
 };
 use sbor::prelude::*;
 
 use crate::ProtocolHasher;
 
 const DOMAIN_VM_ACCOUNT: &[u8] = b"hyperscale/engine-vm/account-address";
+
+/// The native fee/transfer resource of the VM namespace.
+pub const VM_XRD: Address = Address([0x58; 16]);
+
+/// The vault cell for `resource` under `owner` — the same child key the
+/// stdlib account metadata's effect clauses compute.
+#[must_use]
+pub fn vault_key(owner: [u8; 16], resource: Address) -> SubstateKey {
+    child_key(
+        &ProtocolHasher,
+        Address(owner),
+        VAULT,
+        &[Value::Address(resource).canonical_bytes()],
+    )
+}
 
 /// The VM account address owned by an ed25519 public key: the protocol
 /// hash of the key, truncated to the owner-prefix width.
@@ -442,6 +458,7 @@ impl VmStatics for BridgeStatics {
                     )),
                 })
                 .collect::<Result<_, _>>()?,
+            fee_vault_local: vault_key(vm.fee_payer, VM_XRD).local.0,
         })
     }
 }

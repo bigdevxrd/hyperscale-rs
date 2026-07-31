@@ -388,6 +388,16 @@ pub enum ProtocolEvent {
         result: Result<Verified<ProvisionTxRootsMap>, ProvisionTxRootsVerifyError>,
     },
 
+    /// Payer-shard fee-reservation verification completed for a pending
+    /// block.
+    VmReservationsVerified {
+        /// Block whose reservations were verified.
+        block_hash: BlockHash,
+        /// `Ok` when every payer's balance covers its demand; the
+        /// failing diagnostic otherwise.
+        result: Result<(), String>,
+    },
+
     /// Beacon-witness-root verification completed for a pending block.
     BeaconWitnessRootVerified {
         /// Block whose root was verified.

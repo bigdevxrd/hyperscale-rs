@@ -983,6 +983,7 @@ impl VmStatics for StubVmStatics {
             },
             subintent_hashes: Vec::new(),
             snapshot_targets: Vec::new(),
+            fee_vault_local: [0xEE; 16],
         })
     }
 }

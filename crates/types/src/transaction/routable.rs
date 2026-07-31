@@ -401,6 +401,28 @@ impl RoutableTransaction {
         }
     }
 
+    /// The fee payer's native-resource vault cell as `(owner, local)`
+    /// halves — what the payer shard's reservation check reads and the
+    /// fee settlement debits. `None` for the Radix variant.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::vm_routing`].
+    #[must_use]
+    pub fn vm_fee_vault(&self) -> Option<([u8; 16], [u8; 16])> {
+        match self.body() {
+            TransactionBody::Radix(_) => None,
+            TransactionBody::Vm(vm) => Some((
+                vm.fee_payer,
+                self.try_vm_derived()
+                    .unwrap_or_else(|error| {
+                        panic!("VM derivation failed on an admitted transaction: {error}")
+                    })
+                    .fee_vault_local,
+            )),
+        }
+    }
+
     /// Derive (or fetch the cached) VM derivation, fallibly — the
     /// verification path.
     ///
@@ -701,6 +723,7 @@ mod tests {
             };
             Ok(VmDerived {
                 snapshot_targets,
+                fee_vault_local: [0xEE; 16],
                 routing: VmRouting {
                     read_keys: vec![DeclaredKey::prefix([0x11; 16])],
                     write_keys: vec![DeclaredKey::substate([0x22; 16], [0x01; 16])],

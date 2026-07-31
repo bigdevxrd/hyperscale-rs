@@ -41,7 +41,7 @@ mod traits;
 
 pub use action::{
     Action, ActionOwner, CrossShardExecutionRequest, KeepDelta, ObserveDelta, ParticipationChange,
-    ProvisionsRequest,
+    ProvisionsRequest, VmFeeDemand,
 };
 pub use action_context::{ActionContext, BeaconActionContext, PreparedBlock};
 pub use fetch_abandon::FetchAbandon;

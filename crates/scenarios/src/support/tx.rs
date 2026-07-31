@@ -625,6 +625,15 @@ pub fn vm_cross_shard_genesis_accounts() -> Vec<([u8; 16], u128)> {
     vec![(from, 10_000), (to, 10)]
 }
 
+/// Genesis funding for the insolvent-payer scenario: the same cast as
+/// [`vm_cross_shard_genesis_accounts`], but the payer holds dust — below
+/// any transfer's signed fee ceiling.
+#[must_use]
+pub fn vm_insolvent_genesis_accounts() -> Vec<([u8; 16], u128)> {
+    let (_payer, from, to) = vm_cross_shard_cast();
+    vec![(from, 10), (to, 10)]
+}
+
 /// Build a VM transfer: the account guest's withdraw+deposit graph over
 /// [`VM_XRD`], wrapped in a single-intent envelope signed by `payer`.
 ///
@@ -760,7 +769,10 @@ fn vm_envelope(
         tree: encode_tree(&tree).into(),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&payer.public_key().0),
-        max_fee: 1_000_000,
+        // Placeholder fee terms under the genesis funding: the payer
+        // shard's reservation check demands the ceiling be coverable,
+        // so it must sit below the funded balances.
+        max_fee: 1_000,
         gas_limit: 1_000_000,
         snapshot_pins,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),

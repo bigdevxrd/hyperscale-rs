@@ -352,6 +352,51 @@ pub fn vm_snapshot_only_commits_nothing(c: &mut impl Cluster) {
     );
 }
 
+/// An insolvent payer's transaction engages nothing anywhere.
+///
+/// The payer's balance cannot cover the signed fee ceiling, so the
+/// reservation is uncoverable: no payer-shard proposer selects the
+/// transaction, and the reservation verification refuses any block that
+/// carries it — it never commits at the payer shard, so no bundle ever
+/// flows and no counterpart engages a lock. The transaction expires in
+/// the mempool while both chains carry on.
+///
+/// # Panics
+///
+/// Panics if either chain stalls, the transaction completes, or either
+/// shard's chain ever includes it.
+pub fn vm_insolvent_payer_engages_nothing(c: &mut impl Cluster) {
+    let (payer, from, to) = vm_cross_shard_cast();
+    let tx = build_vm_transfer_tx(&payer, from, to, 5, validity_around(c.now()));
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+
+    // Both chains keep advancing while the transaction goes nowhere.
+    assert!(
+        await_height(c, ShardId::leaf(1, 0), 3, epochs(6)),
+        "payer shard chain must keep advancing"
+    );
+    assert!(
+        await_height(c, ShardId::leaf(1, 1), 3, epochs(6)),
+        "counterpart shard chain must keep advancing"
+    );
+    let status = c.tx_status(hash);
+    assert!(
+        !matches!(status, Some(TransactionStatus::Completed(_))),
+        "an uncoverable reservation must never complete; status = {status:?}"
+    );
+    let (payer_inclusion, _) = c.chain_fate(ShardId::leaf(1, 0), hash);
+    assert!(
+        payer_inclusion.is_none(),
+        "the insolvent payer's transaction must never commit at the payer shard"
+    );
+    let (counterpart_inclusion, _) = c.chain_fate(ShardId::leaf(1, 1), hash);
+    assert!(
+        counterpart_inclusion.is_none(),
+        "the counterpart must not engage an insolvent payer's transaction"
+    );
+}
+
 /// Radix and VM traffic interleaved on one chain: both engines' receipts
 /// merge through the per-variant wave dispatch and every transaction
 /// accepts.

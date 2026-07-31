@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use hyperscale_core::Action;
+use hyperscale_core::{Action, VmFeeDemand};
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, Epoch, FinalizedWave, Hash, LocalTimestamp,
     ProposerTimestamp, ProvisionHash, Provisions, ReadySignal, ReshapeTrigger, RevealChain, Round,
@@ -362,6 +362,8 @@ pub fn assemble_build_action(
     carry_settled_waves_root: bool,
     settled_waves_window_floor: Option<WeightedTimestamp>,
     classification_topology_snapshot: Arc<TopologySnapshot>,
+    vm_fee_checks: Vec<VmFeeDemand>,
+    fee_read_height: BlockHeight,
 ) -> BuildActionPlan {
     let (parent_block_hash, parent_qc) = chain.proposal_parent();
     let parent_block_height = parent_qc.height();
@@ -433,6 +435,8 @@ pub fn assemble_build_action(
         transactions,
         finalized_waves,
         provisions,
+        vm_fee_checks,
+        fee_read_height,
         parent_in_flight,
         finalized_tx_count,
         ready_signals,

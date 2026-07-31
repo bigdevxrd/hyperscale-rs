@@ -1402,6 +1402,8 @@ impl ShardCoordinatorSim {
                 transactions,
                 finalized_waves,
                 provisions,
+                vm_fee_checks: _,
+                fee_read_height: _,
                 parent_in_flight,
                 finalized_tx_count,
                 ready_signals,

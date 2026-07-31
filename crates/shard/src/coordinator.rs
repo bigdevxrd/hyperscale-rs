@@ -12,7 +12,7 @@
 //! This provides a strong DA guarantee: if a QC forms, at least 2f+1 validators have
 //! the complete block data, making it recoverable from any honest validator in that set.
 
-use hyperscale_core::{Action, CommitSource, ProtocolEvent, TimerId};
+use hyperscale_core::{Action, CommitSource, ProtocolEvent, TimerId, VmFeeDemand};
 use hyperscale_types::{
     BlockHash, Hash, InFlightCount, LocalTimestamp, MAX_FINALIZED_TX_PER_BLOCK, MAX_PROGRESS_WAIT,
     MAX_READY_SIGNALS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProposerTimestamp, ProvisionHash, QuiesceCut,
@@ -104,6 +104,7 @@ use crate::commit_dedup::CommitDedupIndex;
 use crate::commit_pipeline::CommitPipeline;
 use crate::config::ShardConsensusConfig;
 use crate::deferred_qc::DeferredQc;
+use crate::fee_ledger::FeeReservationLedger;
 use crate::lookups::{committee_public_keys, vote_recipients};
 use crate::pending::{OrphanedFetches, PendingBlock, PendingBlocks};
 use crate::proposal::{
@@ -277,6 +278,9 @@ pub struct ShardCoordinator {
     // ═══════════════════════════════════════════════════════════════════════════
     /// Pending blocks being assembled (hash -> pending block).
     pending_blocks: PendingBlocks,
+    /// In-flight fee reservations at this (payer) shard — committed VM
+    /// transactions whose waves have not yet finalized.
+    fee_ledger: FeeReservationLedger,
 
     /// Net substate delta per uncommitted block. Entries retire into
     /// the byte frontier at commit and are pruned with their blocks.
@@ -458,6 +462,7 @@ impl ShardCoordinator {
             anchor_qc: recovered.anchor_qc,
             deferred_qc: DeferredQc::new(),
             pending_blocks: PendingBlocks::new(),
+            fee_ledger: FeeReservationLedger::new(),
             votes: VoteKeeper::new(),
             timeouts: TimeoutKeeper::new(),
             last_timed_out_round: None,
@@ -1941,6 +1946,22 @@ impl ShardCoordinator {
             substate_bytes,
         );
 
+        // Prior demand per candidate payer: in-flight holds plus the
+        // uncommitted window. The builder adds candidate ceilings on
+        // top and drops what a payer cannot cover.
+        let vm_fee_checks = match &kind {
+            ProposalKind::Normal { transactions, .. } => {
+                let payer_seeds = self.local_payer_fees(
+                    committee,
+                    transactions.iter().filter_map(|tx| {
+                        let (owner, local) = tx.vm_fee_vault()?;
+                        Some((owner, local, 0u128))
+                    }),
+                );
+                self.vm_fee_demands(&payer_seeds, parent_block_hash)
+            }
+            ProposalKind::Fallback | ProposalKind::Sync => Vec::new(),
+        };
         let plan = assemble_build_action(
             self.me,
             self.local_shard,
@@ -1961,6 +1982,8 @@ impl ShardCoordinator {
             topology_schedule
                 .settled_window_floor(self.local_shard, parent_qc.weighted_timestamp()),
             Arc::clone(committee),
+            vm_fee_checks,
+            self.committed_height,
         );
 
         info!(
@@ -2902,6 +2925,15 @@ impl ShardCoordinator {
             if self.fence_blocks_vote(topology_schedule, block, block_hash) {
                 return vec![];
             }
+            let block_fees = self.local_payer_fees(
+                committee,
+                block.transactions().iter().filter_map(|tx| {
+                    let (owner, local) = tx.vm_fee_vault()?;
+                    Some((owner, local, tx.vm().map_or(0, |vm| vm.max_fee)))
+                }),
+            );
+            let vm_fee_demands =
+                self.vm_fee_demands(&block_fees, block.header().parent_block_hash());
             let verification_actions = self.verification.initiate_block_verifications(
                 committee,
                 topology_schedule,
@@ -2922,6 +2954,8 @@ impl ShardCoordinator {
                 },
                 split_child_roots_required,
                 settled_waves_root_required,
+                vm_fee_demands,
+                self.committed_height,
             );
 
             // Wait for initiated verifications, or exit early when we're
@@ -2940,6 +2974,72 @@ impl ShardCoordinator {
         }
 
         self.create_vote(topology_schedule, block_hash, height, round)
+    }
+
+    /// Per-payer fee-reservation demands for the transaction list
+    /// `fees`, given as `(owner, vault_local, max_fee)` triples of this
+    /// shard's payers: each listed ceiling, plus the still-held ceilings
+    /// in the complete uncommitted ancestor bodies behind
+    /// `parent_block_hash`, plus the committed in-flight ledger holds.
+    /// Empty when the list names no local payer. A rare manifest-only
+    /// ancestor under view changes contributes nothing — a bounded
+    /// optimism the fee settlement's saturating debit absorbs.
+    fn vm_fee_demands(
+        &self,
+        fees: &[([u8; 16], [u8; 16], u128)],
+        parent_block_hash: BlockHash,
+    ) -> Vec<VmFeeDemand> {
+        let mut demands: std::collections::BTreeMap<[u8; 16], ([u8; 16], u128)> =
+            std::collections::BTreeMap::new();
+        for (owner, vault_local, max_fee) in fees {
+            let entry = demands.entry(*owner).or_insert((*vault_local, 0));
+            entry.1 = entry.1.saturating_add(*max_fee);
+        }
+        if demands.is_empty() {
+            return Vec::new();
+        }
+        let mut cursor = parent_block_hash;
+        while let Some(pending) = self.pending_blocks.get(cursor) {
+            if pending.header().height() <= self.committed_height {
+                break;
+            }
+            if let Some(block) = pending.block() {
+                for tx in block.transactions().iter() {
+                    let Some((owner, _)) = tx.vm_fee_vault() else {
+                        continue;
+                    };
+                    if let Some(entry) = demands.get_mut(&owner) {
+                        let fee = tx.vm().map_or(0, |vm| vm.max_fee);
+                        entry.1 = entry.1.saturating_add(fee);
+                    }
+                }
+            }
+            cursor = pending.header().parent_block_hash();
+        }
+        for (owner, entry) in &mut demands {
+            entry.1 = entry.1.saturating_add(self.fee_ledger.held_for(*owner));
+        }
+        demands
+            .into_iter()
+            .map(|(owner, (vault_local, demand))| VmFeeDemand {
+                owner,
+                vault_local,
+                demand,
+            })
+            .collect()
+    }
+
+    /// The `(owner, vault_local, max_fee)` triples of `transactions`
+    /// whose fee payer routes to this shard.
+    fn local_payer_fees(
+        &self,
+        topology_snapshot: &TopologySnapshot,
+        transactions: impl Iterator<Item = ([u8; 16], [u8; 16], u128)>,
+    ) -> Vec<([u8; 16], [u8; 16], u128)> {
+        let trie = topology_snapshot.shard_trie();
+        transactions
+            .filter(|(owner, _, _)| trie.shard_for_prefix(*owner) == self.local_shard)
+            .collect()
     }
 
     /// Validate transaction ordering, waves, and cross-ancestor tx uniqueness
@@ -3485,6 +3585,28 @@ impl ShardCoordinator {
             VerificationKind::ProvisionTxRoots,
             block_hash,
             valid,
+        )
+    }
+
+    /// Handle a completed payer-shard fee-reservation verification.
+    pub fn on_vm_reservations_verified(
+        &mut self,
+        topology_schedule: &TopologySchedule,
+        block_hash: BlockHash,
+        result: &Result<(), String>,
+    ) -> Vec<Action> {
+        if let Err(reason) = result {
+            warn!(
+                block_hash = ?block_hash,
+                reason = %reason,
+                "VM fee-reservation verification FAILED"
+            );
+        }
+        self.on_root_verified_impl(
+            topology_schedule,
+            VerificationKind::VmReservations,
+            block_hash,
+            result.is_ok(),
         )
     }
 
@@ -4294,6 +4416,20 @@ impl ShardCoordinator {
         // conservatively across that gap.
         self.dedup_index
             .register_committed_provision_txs(block.provisions(), commit_ts);
+        // Fee reservations engage at commit and release when the
+        // resolving wave certificate commits; deadline pruning covers
+        // resolution paths that never produce one (a reshape terminal's
+        // abort by omission).
+        {
+            let trie = topology_schedule.head().shard_trie();
+            let local_shard = self.local_shard;
+            self.fee_ledger
+                .register_committed(block.transactions(), |payer| {
+                    trie.shard_for_prefix(payer) == local_shard
+                });
+        }
+        self.fee_ledger.release_finalized(block.certificates());
+        self.fee_ledger.prune(commit_ts);
 
         // Derive this block's beacon-witness leaves from the same
         // canonical sources the proposer used (receipts from finalized

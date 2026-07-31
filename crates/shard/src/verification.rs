@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use hyperscale_core::Action;
+use hyperscale_core::{Action, VmFeeDemand};
 use hyperscale_types::{
     BeaconWitnessRoot, Block, BlockHash, BlockHeader, BlockHeight, BlockManifest, CertificateRoot,
     CertifiedBlock, ChainOrigin, FinalizedWave, InFlightCount, LinkageError, LocalReceiptRoot,
@@ -48,6 +48,9 @@ pub enum VerificationKind {
     /// Merkle root over the per-shard beacon-witness accumulator after this
     /// block's appended leaves.
     BeaconWitnessRoot,
+    /// Payer-shard fee reservations against vault balances at the
+    /// committed frontier.
+    VmReservations,
 }
 
 /// Lifecycle position for a verification entry. `InFlight` covers the
@@ -429,6 +432,14 @@ impl VerificationPipeline {
     /// avoided until the result lands.
     fn mark_root_in_flight(&mut self, block_hash: BlockHash, kind: VerificationKind) {
         self.roots.insert((block_hash, kind), RootStage::InFlight);
+    }
+
+    /// Whether a verification of `kind` was ever dispatched for
+    /// `block_hash` — in flight or complete. [`Self::is_block_verified`]
+    /// keys demand-dependent kinds on this, since the requirement is
+    /// derived at dispatch time from inputs the pipeline does not hold.
+    fn is_root_tracked(&self, block_hash: BlockHash, kind: VerificationKind) -> bool {
+        self.roots.contains_key(&(block_hash, kind))
     }
 
     /// Record a merkle-root verification result for one of the per-kind
@@ -864,6 +875,10 @@ impl VerificationPipeline {
                 !h.provision_tx_roots().is_empty(),
             )
             && root_ok(VerificationKind::BeaconWitnessRoot, true)
+            && root_ok(
+                VerificationKind::VmReservations,
+                self.is_root_tracked(block_hash, VerificationKind::VmReservations),
+            )
             && self.verified_in_flight.contains(&block_hash)
     }
 
@@ -924,6 +939,11 @@ impl VerificationPipeline {
             "skipped(no_provision_targets)",
             !h.provision_tx_roots().is_empty(),
         );
+        let vm_reservations_status = root_status(
+            VerificationKind::VmReservations,
+            "skipped(no_local_payers)",
+            self.is_root_tracked(block_hash, VerificationKind::VmReservations),
+        );
         let beacon_witness_defer = self.beacon_witness_defer(block_hash);
         let beacon_witness_root_status = match beacon_witness_defer {
             Some((_, BeaconWitnessDefer::WitnessAncestor)) => "deferred(witness_ancestor)",
@@ -950,6 +970,7 @@ impl VerificationPipeline {
             local_receipt_root = local_receipt_root_status,
             provision_root = provision_root_status,
             provision_tx_root = provision_tx_root_status,
+            vm_reservations = vm_reservations_status,
             beacon_witness_root = beacon_witness_root_status,
             beacon_witness_blocker = ?beacon_witness_defer.map(|(blocker, _)| blocker),
             in_flight = in_flight_status,
@@ -1249,6 +1270,28 @@ impl VerificationPipeline {
             expected: block.header().provision_tx_roots().clone(),
             transactions: block.transactions().clone(),
             topology_snapshot: topology_snapshot.clone(),
+        }]
+    }
+
+    /// Initiate payer-shard fee-reservation verification for a block.
+    /// `demands` comes from the coordinator's chain-content derivation;
+    /// callers skip the dispatch entirely when it is empty.
+    pub fn initiate_vm_reservations_verification(
+        &mut self,
+        block_hash: BlockHash,
+        demands: Vec<VmFeeDemand>,
+        committed_height: BlockHeight,
+    ) -> Vec<Action> {
+        debug!(
+            ?block_hash,
+            payer_count = demands.len(),
+            "Initiating VM fee-reservation verification"
+        );
+        self.mark_root_in_flight(block_hash, VerificationKind::VmReservations);
+        vec![Action::VerifyVmReservations {
+            block_hash,
+            demands,
+            committed_height,
         }]
     }
 
@@ -1760,6 +1803,8 @@ impl VerificationPipeline {
         count_source: SubstateCountSource<'_>,
         split_child_roots_required: bool,
         settled_waves_root_required: bool,
+        vm_fee_demands: Vec<VmFeeDemand>,
+        committed_height: BlockHeight,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         let h = block.header();
@@ -1824,6 +1869,18 @@ impl VerificationPipeline {
                 block_hash,
                 block,
                 topology_snapshot,
+            ));
+        }
+
+        if self.needs_root(
+            block_hash,
+            VerificationKind::VmReservations,
+            !vm_fee_demands.is_empty(),
+        ) {
+            actions.extend(self.initiate_vm_reservations_verification(
+                block_hash,
+                vm_fee_demands,
+                committed_height,
             ));
         }
 
