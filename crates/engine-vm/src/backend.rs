@@ -101,11 +101,7 @@ mod native {
                     .and_then(|func| {
                         func.call(&mut store, (Resource::new_borrow(*vault_rep), amount))
                             .map_err(|trap| format!("{trap:#}"))
-                            .and_then(|(bucket,)| {
-                                func.post_return(&mut store)
-                                    .map_err(|error| format!("post-return: {error:#}"))
-                                    .map(|()| Some(bucket))
-                            })
+                            .map(|(bucket,)| Some(bucket))
                     }),
                 Invocation::Deposit { vault_rep, bucket } => instance
                     .get_typed_func::<(Resource<DeltaCell>, &[u8]), ()>(&mut store, "deposit")
@@ -113,11 +109,7 @@ mod native {
                     .and_then(|func| {
                         func.call(&mut store, (Resource::new_borrow(*vault_rep), bucket))
                             .map_err(|trap| format!("{trap:#}"))
-                            .and_then(|()| {
-                                func.post_return(&mut store)
-                                    .map_err(|error| format!("post-return: {error:#}"))
-                                    .map(|()| None)
-                            })
+                            .map(|()| None)
                     }),
             };
             let fuel = FUEL - store.get_fuel().expect("fuel metering is enabled");
