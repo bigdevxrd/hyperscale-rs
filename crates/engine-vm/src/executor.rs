@@ -36,8 +36,8 @@ use hyperscale_vm_effects::{
     SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
-    Base, BatchTx, EnvInputs, ExecutionMode, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
-    encode_amount, execute_batch,
+    Base, BatchTx, EnvInputs, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash,
+    decode_amount, encode_amount, execute_batch,
 };
 use indexmap::IndexMap;
 use radix_common::math::Decimal;
@@ -405,6 +405,7 @@ impl Executor for VmExecutor {
             env,
             protocol_hash,
             self.mode,
+            &Locality::All,
         )
         .unwrap_or_else(|error| panic!("BFT CRITICAL: VM batch execution failed: {error}"));
 
