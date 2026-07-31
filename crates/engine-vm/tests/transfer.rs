@@ -17,7 +17,7 @@ use hyperscale_storage::{
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RoutableTransaction, ShardId, ShardTrie,
-    Verified, VmTransaction,
+    Verified, VmTransaction, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -166,6 +166,7 @@ fn execute_on(
         local_shard: ShardId::ROOT,
         shard_trie: &trie,
         block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
+        wave_start_ts: WeightedTimestamp::from_millis(1_000),
     };
     executor.execute_wave_batch(&ctx, &snapshot, transactions)
 }

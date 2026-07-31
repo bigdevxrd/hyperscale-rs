@@ -127,6 +127,7 @@ mod tests {
             source_shard,
             target_shard,
             source_height,
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"tx")),

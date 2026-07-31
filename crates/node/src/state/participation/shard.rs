@@ -494,7 +494,7 @@ mod tests {
         CertifiedBlock, CertifiedBlockHeader, ChainOrigin, Hash, LocalTimestamp,
         MerkleInclusionProof, ProvisionEntry, ProvisionTxRoot, Provisions, QuorumCertificate,
         RETENTION_HORIZON, RevealChain, Round, ShardForkProof, ShardId, TransactionStatus, TxHash,
-        ValidatorId, Verified, WaveId, WitnessSources,
+        ValidatorId, Verified, WaveId, WeightedTimestamp, WitnessSources,
     };
 
     use crate::state::test_support::TestNode;
@@ -769,6 +769,7 @@ mod tests {
             ShardId::ROOT,
             ShardId::leaf(1, 1),
             BlockHeight::new(1),
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"outbound-tx")),

@@ -41,6 +41,12 @@ pub struct CrossShardExecutionRequest {
     /// whose coverage depends on which partitions each source shipped
     /// and is therefore not shard-invariant.
     pub ownership: HashMap<NodeId, NodeId>,
+    /// The transaction clock: the payer-shard committing block's
+    /// parent-QC weighted timestamp. On the payer's own shard this is
+    /// the wave-start anchor; elsewhere it is the value the payer's
+    /// bundle carried, so every participant executes the transaction
+    /// under one clock.
+    pub clock: WeightedTimestamp,
 }
 
 /// A change to the local vnode's reshape-observer duty, carried on
@@ -316,6 +322,10 @@ pub enum Action {
         source_shard: ShardId,
         /// Source-shard block height the provisions are anchored to.
         block_height: BlockHeight,
+        /// The source block's parent-QC weighted timestamp, carried on
+        /// the bundle wire form and checked against the commit-proven
+        /// header at verification.
+        source_block_ts: WeightedTimestamp,
         /// Per-shard recipients for provision broadcasts (excluding self).
         shard_recipients: HashMap<ShardId, Vec<ValidatorId>>,
     },
@@ -957,6 +967,9 @@ pub enum Action {
         block_height: BlockHeight,
         /// Transactions to execute (all members of the wave).
         transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+        /// The committing block's parent-QC weighted timestamp: the
+        /// transaction clock for every transaction the block commits.
+        wave_start_ts: WeightedTimestamp,
         /// State root to anchor reads against.
         state_root: StateRoot,
     },
@@ -982,6 +995,10 @@ pub enum Action {
         block_height: BlockHeight,
         /// The cross-shard execution requests to process (one per tx in the wave).
         requests: Vec<CrossShardExecutionRequest>,
+        /// The wave-starting block's parent-QC weighted timestamp. Each
+        /// request carries its own transaction clock; this is the local
+        /// anchor the batch context reports.
+        wave_start_ts: WeightedTimestamp,
     },
 
     // ═══════════════════════════════════════════════════════════════════════

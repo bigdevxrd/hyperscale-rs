@@ -132,6 +132,7 @@ mod tests {
             source_shard,
             ShardId::leaf(1, 0),
             height,
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(&[seed])),

@@ -37,8 +37,8 @@ use hyperscale_vm_effects::{
     PrefixShardResolver, RoleId, SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
-    Base, BatchTx, EnvInputs, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash,
-    decode_amount, encode_amount, execute_batch,
+    Base, BatchTx, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
+    encode_amount, execute_batch,
 };
 use indexmap::IndexMap;
 use radix_common::math::Decimal;
@@ -417,6 +417,7 @@ impl VmExecutor {
         snapshot: &DynSnapshot<'_>,
         transactions: &[Arc<Verified<RoutableTransaction>>],
         provisions_by_tx: &BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>>,
+        clock_by_tx: &BTreeMap<VmTxHash, u64>,
         cross_shard: bool,
     ) -> Vec<ExecutedTx> {
         if transactions.is_empty() {
@@ -524,21 +525,18 @@ impl VmExecutor {
                 tx: *vm_tx,
                 declared: entry.declared.clone(),
                 nullifiers: entry.nullifiers.clone(),
+                clock_ms: clock_by_tx.get(vm_tx).copied().unwrap_or_default(),
             })
             .collect();
         let runner = ManifestRunner {
             backend: &self.backend,
             prepared: &prepared,
         };
-        let env = EnvInputs {
-            clock_ms: 0,
-            randomness: *ctx.block_hash.as_bytes(),
-        };
         let outcome = execute_batch(
             Arc::clone(&base) as Arc<dyn Base>,
             &batch,
             &runner,
-            env,
+            *ctx.block_hash.as_bytes(),
             protocol_hash,
             self.mode,
             &locality,
@@ -633,7 +631,25 @@ impl Executor for VmExecutor {
         snapshot: &DynSnapshot<'_>,
         transactions: &[Arc<Verified<RoutableTransaction>>],
     ) -> Vec<ExecutedTx> {
-        self.run_batch(ctx, snapshot, transactions, &BTreeMap::new(), false)
+        // A single-shard batch commits in one block, so every member's
+        // transaction clock is the wave-start anchor.
+        let clock_by_tx: BTreeMap<VmTxHash, u64> = transactions
+            .iter()
+            .map(|tx| {
+                (
+                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    ctx.wave_start_ts.as_millis(),
+                )
+            })
+            .collect();
+        self.run_batch(
+            ctx,
+            snapshot,
+            transactions,
+            &BTreeMap::new(),
+            &clock_by_tx,
+            false,
+        )
     }
 
     fn execute_cross_shard_batch(
@@ -653,6 +669,22 @@ impl Executor for VmExecutor {
                 )
             })
             .collect();
-        self.run_batch(ctx, snapshot, &transactions, &provisions_by_tx, true)
+        let clock_by_tx: BTreeMap<VmTxHash, u64> = requests
+            .iter()
+            .map(|r| {
+                (
+                    VmTxHash(Hash32(*r.transaction.hash().as_bytes())),
+                    r.clock.as_millis(),
+                )
+            })
+            .collect();
+        self.run_batch(
+            ctx,
+            snapshot,
+            &transactions,
+            &provisions_by_tx,
+            &clock_by_tx,
+            true,
+        )
     }
 }

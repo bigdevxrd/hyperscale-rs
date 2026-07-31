@@ -18,7 +18,7 @@ use hyperscale_storage::{ShardStorage, SubstateStore, SubstateView, VersionedSto
 use hyperscale_types::network::notification::ProvisionsNotification;
 use hyperscale_types::{
     BlockHeight, Provisions, ProvisionsContext, ShardId, Stopwatch, ValidatorId, Verifiable,
-    Verified, Verify, state_provisions_message,
+    Verified, Verify, WeightedTimestamp, state_provisions_message,
 };
 use tracing::warn;
 
@@ -39,6 +39,7 @@ pub fn fetch_and_broadcast_provision<S, H>(
     view: &SubstateView<S>,
     source_shard: ShardId,
     block_height: BlockHeight,
+    source_block_ts: WeightedTimestamp,
     requests: &[ProvisionsRequest],
     shard_recipients: &HashMap<ShardId, Vec<ValidatorId>, H>,
 ) -> Vec<ProvisionBatch>
@@ -51,9 +52,14 @@ where
 
     let mut batches = Vec::with_capacity(sorted_recipients.len());
     for (target_shard, recipients) in sorted_recipients {
-        let Some(provisions) =
-            build_provisions(view, source_shard, *target_shard, block_height, requests)
-        else {
+        let Some(provisions) = build_provisions(
+            view,
+            source_shard,
+            *target_shard,
+            block_height,
+            source_block_ts,
+            requests,
+        ) else {
             continue;
         };
         if provisions.transactions().is_empty() {
@@ -111,6 +117,7 @@ where
             requests,
             source_shard,
             block_height,
+            source_block_ts,
             shard_recipients,
         } => {
             let view = ctx.pending_chain.view_at(block_hash, block_height);
@@ -118,6 +125,7 @@ where
                 &view,
                 source_shard,
                 block_height,
+                source_block_ts,
                 &requests,
                 &shard_recipients,
             );

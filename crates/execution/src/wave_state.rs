@@ -315,6 +315,7 @@ impl WaveState {
                 block_hash: self.block_hash,
                 block_height: self.block_height(),
                 transactions,
+                wave_start_ts: self.wave_start_ts,
                 state_root: StateRoot::ZERO,
             });
         }
@@ -337,11 +338,20 @@ impl WaveState {
                 .map(<[_]>::to_vec)
                 .unwrap_or_default();
             let ownership = provisioning.ownership_for(tx_hash);
+            // The transaction clock: a remote-payer VM leg executes under
+            // the anchor its payer bundle carried — the payer shard sits
+            // in `required`, so the fully-provisioned gate guarantees the
+            // bundle was absorbed. Every other leg (payer-local VM,
+            // Radix) anchors on this wave's own committing block.
+            let clock = provisioning
+                .payer_clock(tx_hash)
+                .unwrap_or(self.wave_start_ts);
             requests.push(CrossShardExecutionRequest {
                 tx_hash,
                 transaction: Arc::clone(tx),
                 provisions,
                 ownership,
+                clock,
             });
         }
         if requests.is_empty() {
@@ -352,6 +362,7 @@ impl WaveState {
             block_hash: self.block_hash,
             block_height: self.block_height(),
             requests,
+            wave_start_ts: self.wave_start_ts,
         })
     }
 
@@ -1649,6 +1660,53 @@ mod tests {
             other => panic!("expected ExecuteCrossShardTransactions, got {other:?}"),
         }
         assert!(w.dispatched());
+    }
+
+    #[test]
+    fn dispatch_clock_prefers_the_payer_bundles_anchor() {
+        use hyperscale_types::{MerkleInclusionProof, ProvisionEntry, Provisions};
+
+        // A remote-payer VM leg executes under the clock its payer bundle
+        // carried; every other leg anchors on this wave's own committing
+        // block.
+        let mut w = make_cross_shard_wave(2);
+        let remote_payer_tx = w.tx_hashes()[0];
+        let local_anchor_tx = w.tx_hashes()[1];
+        w.mark_tx_provisioned(remote_payer_tx, ts_for(WAVE_START + 1));
+        w.mark_tx_provisioned(local_anchor_tx, ts_for(WAVE_START + 1));
+
+        let payer_shard = ShardId::leaf(1, 1);
+        let payer_anchor = WeightedTimestamp::from_millis(77_777);
+        let mut provisioning = ProvisioningTracker::new();
+        provisioning.record_payer_shard(remote_payer_tx, payer_shard);
+        provisioning.absorb_provisions(&Verified::new_unchecked_for_test(Provisions::new(
+            payer_shard,
+            ShardId::leaf(1, 0),
+            BlockHeight::new(3),
+            payer_anchor,
+            MerkleInclusionProof::dummy(),
+            vec![ProvisionEntry::new(remote_payer_tx, vec![], vec![], vec![])],
+        )));
+
+        match w.dispatch_if_ready(&provisioning) {
+            Some(Action::ExecuteCrossShardTransactions {
+                requests,
+                wave_start_ts,
+                ..
+            }) => {
+                assert_eq!(wave_start_ts, ts_for(WAVE_START));
+                let clock_of = |hash: TxHash| {
+                    requests
+                        .iter()
+                        .find(|r| r.tx_hash == hash)
+                        .expect("request present")
+                        .clock
+                };
+                assert_eq!(clock_of(remote_payer_tx), payer_anchor);
+                assert_eq!(clock_of(local_anchor_tx), ts_for(WAVE_START));
+            }
+            other => panic!("expected ExecuteCrossShardTransactions, got {other:?}"),
+        }
     }
 
     #[test]

@@ -503,6 +503,10 @@ impl ExecutionCoordinator {
                                 let payer_shard = trie.shard_for_prefix(vm.fee_payer);
                                 if payer_shard != local_shard {
                                     shards.insert(payer_shard);
+                                    // The payer's bundle carries the
+                                    // transaction clock; remember whose
+                                    // entry to read it from at dispatch.
+                                    self.provisioning.record_payer_shard(tx_hash, payer_shard);
                                 }
                             }
                             shards
@@ -1954,6 +1958,7 @@ impl ExecutionCoordinator {
                     requests,
                     source_shard: local_shard,
                     block_height: height,
+                    source_block_ts: header.parent_qc().weighted_timestamp(),
                     shard_recipients,
                 });
             }

@@ -353,6 +353,7 @@ mod tests {
             source_shard,
             ShardId::leaf(1, 0),
             height,
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             txs.into_iter()
                 .map(|(hash, source_nodes, target_nodes)| {

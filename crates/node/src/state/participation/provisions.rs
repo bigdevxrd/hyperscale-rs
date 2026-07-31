@@ -95,6 +95,7 @@ mod tests {
                 ShardId::leaf(1, 1), // source
                 ShardId::ROOT,       // target (local)
                 BlockHeight::new(1),
+                WeightedTimestamp::ZERO,
                 MerkleInclusionProof::dummy(),
                 vec![],
             ))

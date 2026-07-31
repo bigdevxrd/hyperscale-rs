@@ -22,7 +22,7 @@
 //! registration (via [`register_tx`](ProvisioningTracker::register_tx))
 //! flow through the tracker.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use hyperscale_types::{
@@ -51,9 +51,17 @@ pub struct ProvisioningTracker {
     /// at wave creation.
     required: HashMap<TxHash, BTreeSet<ShardId>>,
 
-    /// Remote shards whose provisions have been received. Populated by
-    /// [`absorb_provisions`].
-    received: HashMap<TxHash, BTreeSet<ShardId>>,
+    /// Remote shards whose provisions have been received, each with the
+    /// source block's parent-QC weighted timestamp its bundle carried.
+    /// Populated by [`absorb_provisions`]. The payer shard's entry is
+    /// the transaction clock a non-payer participant executes under.
+    received: HashMap<TxHash, BTreeMap<ShardId, WeightedTimestamp>>,
+
+    /// The payer shard of each cross-shard VM transaction whose payer is
+    /// remote, recorded at wave creation beside `required`. Resolves
+    /// which `received` entry carries the transaction clock without
+    /// re-deriving topology at dispatch.
+    payer_shards: HashMap<TxHash, ShardId>,
 
     /// Per-tx retention deadline = the latest `now + RETENTION_HORIZON`
     /// observed at any insert point that touches the tx. Past the
@@ -82,6 +90,7 @@ impl ProvisioningTracker {
             verified_ownership: HashMap::new(),
             required: HashMap::new(),
             received: HashMap::new(),
+            payer_shards: HashMap::new(),
             deadlines: HashMap::new(),
             now: WeightedTimestamp::ZERO,
             conflict_detector: ConflictDetector::new(),
@@ -122,6 +131,12 @@ impl ProvisioningTracker {
         self.stamp_deadline(tx_hash);
     }
 
+    /// Record the remote payer shard of a cross-shard VM transaction, so
+    /// dispatch can read the transaction clock off the payer's bundle.
+    pub fn record_payer_shard(&mut self, tx_hash: TxHash, payer_shard: ShardId) {
+        self.payer_shards.insert(tx_hash, payer_shard);
+    }
+
     /// Whether provisions from `shard` have been absorbed for `tx_hash`.
     /// For a VM transaction's payer shard this is the transaction commit
     /// proof held: absorption admits a bundle only against a
@@ -130,7 +145,17 @@ impl ProvisioningTracker {
     pub fn has_received_from(&self, tx_hash: TxHash, shard: ShardId) -> bool {
         self.received
             .get(&tx_hash)
-            .is_some_and(|received| received.contains(&shard))
+            .is_some_and(|received| received.contains_key(&shard))
+    }
+
+    /// The transaction clock carried by the remote payer's bundle: the
+    /// payer-shard committing block's parent-QC weighted timestamp.
+    /// `None` when the payer is local (the wave-start anchor is the
+    /// clock) or the bundle has not been absorbed.
+    #[must_use]
+    pub fn payer_clock(&self, tx_hash: TxHash) -> Option<WeightedTimestamp> {
+        let payer = self.payer_shards.get(&tx_hash)?;
+        self.received.get(&tx_hash)?.get(payer).copied()
     }
 
     /// Whether every required provision for `tx_hash` has been received.
@@ -141,10 +166,9 @@ impl ProvisioningTracker {
     pub fn is_fully_provisioned(&self, tx_hash: TxHash) -> bool {
         self.required.get(&tx_hash).is_some_and(|required| {
             required.is_empty()
-                || self
-                    .received
-                    .get(&tx_hash)
-                    .is_some_and(|received| required.is_subset(received))
+                || self.received.get(&tx_hash).is_some_and(|received| {
+                    required.iter().all(|shard| received.contains_key(shard))
+                })
         })
     }
 
@@ -161,6 +185,7 @@ impl ProvisioningTracker {
     pub fn absorb_provisions(&mut self, provisions: &Verified<Provisions>) -> Vec<TxHash> {
         let mut touched = Vec::with_capacity(provisions.transactions().len());
         let source_shard = provisions.source_shard();
+        let source_block_ts = provisions.source_block_ts();
         for tx_entry in provisions.transactions().iter() {
             let tx_hash = tx_entry.tx_hash;
             let entries = Arc::new(tx_entry.entries.0.clone());
@@ -177,7 +202,7 @@ impl ProvisioningTracker {
             self.received
                 .entry(tx_hash)
                 .or_default()
-                .insert(source_shard);
+                .insert(source_shard, source_block_ts);
             self.stamp_deadline(tx_hash);
             touched.push(tx_hash);
         }
@@ -236,6 +261,7 @@ impl ProvisioningTracker {
         self.verified_ownership.remove(&tx_hash);
         self.required.remove(&tx_hash);
         self.received.remove(&tx_hash);
+        self.payer_shards.remove(&tx_hash);
         self.deadlines.remove(&tx_hash);
         self.conflict_detector.remove_tx(tx_hash);
     }
@@ -317,9 +343,10 @@ mod tests {
         ShardId::leaf(2, n)
     }
 
-    fn make_provisions(
+    fn make_provisions_at(
         source: ShardId,
         block_height: BlockHeight,
+        source_block_ts: WeightedTimestamp,
         tx_hashes: Vec<TxHash>,
     ) -> Verified<Provisions> {
         let transactions: Vec<ProvisionEntry> = tx_hashes
@@ -330,9 +357,18 @@ mod tests {
             source,
             ShardId::leaf(2, 0),
             block_height,
+            source_block_ts,
             MerkleInclusionProof::dummy(),
             transactions,
         ))
+    }
+
+    fn make_provisions(
+        source: ShardId,
+        block_height: BlockHeight,
+        tx_hashes: Vec<TxHash>,
+    ) -> Verified<Provisions> {
+        make_provisions_at(source, block_height, WeightedTimestamp::ZERO, tx_hashes)
     }
 
     #[test]
@@ -437,10 +473,42 @@ mod tests {
         // received entries.
         assert_eq!(t.verified.get(&tx).map_or(0, Vec::len), 2);
         assert_eq!(
-            t.received.get(&tx).map_or(0, BTreeSet::len),
+            t.received.get(&tx).map_or(0, BTreeMap::len),
             2,
             "received set contains both source shards"
         );
+    }
+
+    #[test]
+    fn payer_clock_reads_the_payer_bundles_source_anchor() {
+        let mut t = ProvisioningTracker::new();
+        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        t.record_required(tx, [shard(1), shard(2)].into_iter().collect());
+        t.record_payer_shard(tx, shard(2));
+
+        // A read-set owner's bundle lands first: no payer clock yet.
+        t.absorb_provisions(&make_provisions_at(
+            shard(1),
+            BlockHeight::new(5),
+            WeightedTimestamp::from_millis(7_000),
+            vec![tx],
+        ));
+        assert_eq!(t.payer_clock(tx), None);
+
+        // The payer's bundle carries the committing block's anchor.
+        t.absorb_provisions(&make_provisions_at(
+            shard(2),
+            BlockHeight::new(9),
+            WeightedTimestamp::from_millis(9_500),
+            vec![tx],
+        ));
+        assert_eq!(
+            t.payer_clock(tx),
+            Some(WeightedTimestamp::from_millis(9_500))
+        );
+
+        t.remove_tx(tx);
+        assert_eq!(t.payer_clock(tx), None);
     }
 
     #[test]

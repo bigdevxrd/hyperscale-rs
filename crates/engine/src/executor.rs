@@ -24,7 +24,7 @@ use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{SubstateDatabase, SubstateStore};
 use hyperscale_types::{
     BlockHash, BlockHeight, NodeId, RoutableTransaction, ShardId, ShardTrie, Stopwatch,
-    SubstateEntry, Verified,
+    SubstateEntry, Verified, WeightedTimestamp,
 };
 use radix_common::network::NetworkDefinition;
 use radix_common::prelude::DbSubstateValue;
@@ -272,6 +272,10 @@ pub struct WaveBatchContext<'a> {
     pub shard_trie: &'a ShardTrie,
     /// The block whose wave this batch executes.
     pub block_hash: BlockHash,
+    /// The wave-starting block's parent-QC weighted timestamp. For a
+    /// single-shard batch this is the transaction clock of every member;
+    /// cross-shard batches carry per-transaction clocks on their inputs.
+    pub wave_start_ts: WeightedTimestamp,
 }
 
 /// One cross-shard transaction as an engine consumes it: the
@@ -284,6 +288,9 @@ pub struct CrossShardTxInput<'a> {
     /// The merged `vault → owning_account` map for the Radix variant;
     /// structurally empty for VM transactions.
     pub ownership: &'a HashMap<NodeId, NodeId>,
+    /// The transaction clock: the payer-shard committing block's
+    /// parent-QC weighted timestamp, identical on every participant.
+    pub clock: WeightedTimestamp,
 }
 
 /// One engine's execution of a wave's same-variant sub-batch.

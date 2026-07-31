@@ -117,6 +117,7 @@ pub fn serve_provision_request<S: ShardStorage>(
         local_shard,
         req.target_shard,
         req.block_height,
+        block.header().parent_qc().weighted_timestamp(),
         &requests,
     );
 

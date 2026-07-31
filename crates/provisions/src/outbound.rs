@@ -257,6 +257,7 @@ mod tests {
             ShardId::leaf(2, 0),
             ShardId::leaf(2, 1),
             source_block,
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             transactions,
         )))

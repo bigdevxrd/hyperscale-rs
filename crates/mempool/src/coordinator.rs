@@ -1545,6 +1545,7 @@ mod tests {
             source_shard,
             ShardId::ROOT,
             height,
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             transactions,
         );

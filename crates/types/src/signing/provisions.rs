@@ -40,7 +40,9 @@ pub fn state_provisions_message(network: &NetworkDefinition, provisions: &Provis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, ShardId, TxHash};
+    use crate::{
+        BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, ShardId, TxHash, WeightedTimestamp,
+    };
 
     fn net() -> NetworkDefinition {
         NetworkDefinition::simulator()
@@ -52,6 +54,7 @@ mod tests {
             ShardId::leaf(1, 0),
             ShardId::leaf(1, 1),
             BlockHeight::new(10),
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"tx1")),

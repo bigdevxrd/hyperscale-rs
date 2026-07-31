@@ -217,6 +217,7 @@ mod tests {
             ShardId::leaf(1, 0),
             ShardId::leaf(1, 1),
             BlockHeight::new(u64::from(seed)),
+            WeightedTimestamp::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
         ))
