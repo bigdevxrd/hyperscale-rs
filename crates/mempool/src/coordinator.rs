@@ -29,7 +29,7 @@
 //! period it falls back to a BFT-weighted fetch from the source committee,
 //! and drops entries past `RETENTION_HORIZON`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -297,6 +297,20 @@ pub struct MempoolCoordinator {
     /// consulted to drive grace-window fetch fallback.
     expected_txs: ExpectedTxs,
 
+    /// Cross-shard VM transactions parked outside contention until their
+    /// engagement evidence — the payer shard's bundle — arrives. Value is
+    /// the payer shard the evidence must come from. A parked transaction
+    /// is pooled, fetchable, and reported `Pending`, but holds no ready
+    /// slot and no conflict keys, so a payer that never commits cannot
+    /// camp this shard's keys through the deferral set.
+    parked_engagement: HashMap<TxHash, ShardId>,
+
+    /// Engagement evidence observed before its transaction arrived —
+    /// `tx → (payer shard, deadline)`. Consulted at admission so the
+    /// bundle-before-transaction arrival order does not park an already
+    /// engaged transaction; entries expire on the retention tier.
+    engagement_seen: HashMap<TxHash, (ShardId, WeightedTimestamp)>,
+
     /// Configuration for mempool behavior.
     config: MempoolConfig,
 
@@ -370,6 +384,8 @@ impl MempoolCoordinator {
             current_height: BlockHeight::new(0),
             current_ts: WeightedTimestamp::ZERO,
             expected_txs: ExpectedTxs::new(),
+            parked_engagement: HashMap::new(),
+            engagement_seen: HashMap::new(),
             config,
             local_shard,
             fork_fence: ForkFence::new(),
@@ -451,7 +467,14 @@ impl MempoolCoordinator {
         }
 
         let cross_shard = topology_snapshot.is_cross_shard_transaction(tx);
-        self.add_to_ready_tracking(hash, tx, now);
+        // A cross-shard VM transaction at a non-payer shard enters
+        // contention only once its engagement evidence exists.
+        match self.engagement_park_target(topology_snapshot, tx, cross_shard) {
+            Some(payer_shard) => {
+                self.parked_engagement.insert(hash, payer_shard);
+            }
+            None => self.add_to_ready_tracking(hash, tx, now),
+        }
         self.tx_store.insert(Arc::clone(tx));
         self.pool.insert(
             hash,
@@ -942,6 +965,8 @@ impl MempoolCoordinator {
             }
         }
 
+        self.prune_engagement_state();
+
         actions
     }
 
@@ -1025,6 +1050,91 @@ impl MempoolCoordinator {
     /// Add a transaction to ready tracking when it becomes Pending. The
     /// store decides whether it lands in the ready or deferred set based on
     /// currently-locked and already-claimed nodes.
+    /// The payer shard a cross-shard VM transaction must show engagement
+    /// evidence from before entering contention, or `None` when the
+    /// transaction is immediately ready: not VM, not cross-shard, this
+    /// shard is the payer's, or the evidence already arrived.
+    fn engagement_park_target(
+        &mut self,
+        topology_snapshot: &TopologySnapshot,
+        tx: &Arc<Verified<RoutableTransaction>>,
+        cross_shard: bool,
+    ) -> Option<ShardId> {
+        if !cross_shard {
+            return None;
+        }
+        let vm = tx.vm()?;
+        let payer_shard = topology_snapshot
+            .shard_trie()
+            .shard_for_prefix(vm.fee_payer);
+        if payer_shard == self.local_shard {
+            return None;
+        }
+        let engaged = self
+            .engagement_seen
+            .get(&tx.hash())
+            .is_some_and(|(seen, _)| *seen == payer_shard);
+        if engaged {
+            self.engagement_seen.remove(&tx.hash());
+            return None;
+        }
+        Some(payer_shard)
+    }
+
+    /// Record engagement evidence: a verified or committed bundle from
+    /// `source` naming `tx_hashes`. Promotes matching parked transactions
+    /// into contention; evidence for transactions not yet admitted is
+    /// remembered until the retention tier expires it, covering the
+    /// bundle-before-transaction arrival order.
+    pub fn on_engagement_evidence(
+        &mut self,
+        source: ShardId,
+        tx_hashes: impl IntoIterator<Item = TxHash>,
+    ) {
+        let deadline = self.current_ts.plus(RETENTION_HORIZON);
+        for hash in tx_hashes {
+            match self.parked_engagement.get(&hash) {
+                Some(&payer_shard) if payer_shard == source => {
+                    self.parked_engagement.remove(&hash);
+                    if let Some(entry) = self.pool.get(&hash)
+                        && entry.status == TransactionStatus::Pending
+                    {
+                        let tx = Arc::clone(&entry.tx);
+                        let added_at = entry.admitted_at;
+                        self.ready.add(hash, tx, added_at, self.now, &self.locks);
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    if !self.pool.contains_key(&hash) && !self.is_tombstoned(&hash) {
+                        self.engagement_seen
+                            .entry(hash)
+                            .or_insert((source, deadline));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The number of transactions parked awaiting engagement evidence.
+    #[must_use]
+    pub fn parked_count(&self) -> usize {
+        self.parked_engagement.len()
+    }
+
+    /// Drop parked entries whose transaction left `Pending` and remembered
+    /// evidence past its deadline.
+    fn prune_engagement_state(&mut self) {
+        let pool = &self.pool;
+        self.parked_engagement.retain(|hash, _| {
+            pool.get(hash)
+                .is_some_and(|entry| entry.status == TransactionStatus::Pending)
+        });
+        let now = self.current_ts;
+        self.engagement_seen
+            .retain(|_, (_, deadline)| *deadline > now);
+    }
+
     fn add_to_ready_tracking(
         &mut self,
         hash: TxHash,
@@ -1358,6 +1468,7 @@ impl MempoolCoordinator {
         if !expired.is_empty() {
             self.tx_store.evict(expired.iter().copied());
         }
+        self.prune_engagement_state();
         expired.len()
     }
 
@@ -1373,8 +1484,9 @@ mod tests {
     use hyperscale_metrics::{MetricsRecorder, with_scoped_recorder};
     use hyperscale_metrics_memory::MemoryRecorder;
     use hyperscale_types::test_utils::{
-        TestCommittee, certify, make_finalized_wave, make_live_block, test_node, test_transaction,
-        test_transaction_with_nodes,
+        TestCommittee, certify, install_stub_vm_statics, make_finalized_wave, make_live_block,
+        stub_vm_transaction, test_node, test_transaction, test_transaction_with_nodes,
+        test_validity_range,
     };
     use hyperscale_types::{NodeId, Verified, WitnessSources};
 
@@ -2861,5 +2973,100 @@ mod tests {
             mempool.status(&after).is_some(),
             "a completed recovery reopens admission"
         );
+    }
+
+    // ─── Engagement parking ─────────────────────────────────────────────
+
+    /// A signed stub VM transaction whose derived owners are exactly
+    /// `owners`, paying from `payer`.
+    fn stub_vm(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verified<RoutableTransaction>> {
+        install_stub_vm_statics();
+        Arc::new(verified(stub_vm_transaction(
+            payer,
+            owners,
+            1_000,
+            test_validity_range(),
+        )))
+    }
+
+    #[test]
+    fn cross_shard_vm_tx_parks_until_engagement_evidence() {
+        let topology = TestCommittee::new(4, 42).topology_snapshot(2);
+        let local = ShardId::leaf(1, 0);
+        let payer_shard = ShardId::leaf(1, 1);
+        let mut mempool = MempoolCoordinator::new(local);
+
+        // A clear top bit routes to leaf(1, 0); a set one to leaf(1, 1).
+        let local_owner = [0x01; 16];
+        let payer_owner = [0x81; 16];
+        let parked = stub_vm(payer_owner, &[local_owner, payer_owner]);
+        let parked_hash = parked.hash();
+        mempool.on_transaction_gossip(&topology, Arc::clone(&parked), false, LocalTimestamp::ZERO);
+
+        // Pooled and reported Pending, but outside contention.
+        assert_eq!(mempool.parked_count(), 1);
+        assert!(
+            mempool
+                .ready_transactions(10, 0, 0, LocalTimestamp::from_millis(1_000), None)
+                .is_empty()
+        );
+
+        // A conflicting local leg is not deferred behind the parked one:
+        // the parked transaction holds no claim on their shared key.
+        let local_leg = stub_vm(local_owner, &[local_owner]);
+        let local_hash = local_leg.hash();
+        mempool.on_transaction_gossip(
+            &topology,
+            Arc::clone(&local_leg),
+            false,
+            LocalTimestamp::ZERO,
+        );
+        let ready: Vec<TxHash> = mempool
+            .ready_transactions(10, 0, 0, LocalTimestamp::from_millis(1_000), None)
+            .iter()
+            .map(|tx| tx.hash())
+            .collect();
+        assert_eq!(ready, vec![local_hash]);
+
+        // Evidence from the wrong shard promotes nothing.
+        mempool.on_engagement_evidence(local, [parked_hash]);
+        assert_eq!(mempool.parked_count(), 1);
+
+        // The payer's bundle promotes the parked transaction into
+        // contention — where it now correctly defers behind the ready
+        // local leg on their shared key.
+        mempool.on_engagement_evidence(payer_shard, [parked_hash]);
+        assert_eq!(mempool.parked_count(), 0);
+        let ready: Vec<TxHash> = mempool
+            .ready_transactions(10, 0, 0, LocalTimestamp::from_millis(1_000), None)
+            .iter()
+            .map(|tx| tx.hash())
+            .collect();
+        assert_eq!(ready, vec![local_hash]);
+        assert!(mempool.deferral_stats().deferral_events >= 1);
+    }
+
+    #[test]
+    fn engagement_evidence_before_arrival_admits_straight_to_ready() {
+        let topology = TestCommittee::new(4, 42).topology_snapshot(2);
+        let local = ShardId::leaf(1, 0);
+        let payer_shard = ShardId::leaf(1, 1);
+        let mut mempool = MempoolCoordinator::new(local);
+
+        let local_owner = [0x02; 16];
+        let payer_owner = [0x91; 16];
+        let tx = stub_vm(payer_owner, &[local_owner, payer_owner]);
+        let hash = tx.hash();
+
+        mempool.on_engagement_evidence(payer_shard, [hash]);
+        mempool.on_transaction_gossip(&topology, Arc::clone(&tx), false, LocalTimestamp::ZERO);
+
+        assert_eq!(mempool.parked_count(), 0);
+        let ready: Vec<TxHash> = mempool
+            .ready_transactions(10, 0, 0, LocalTimestamp::from_millis(1_000), None)
+            .iter()
+            .map(|tx| tx.hash())
+            .collect();
+        assert_eq!(ready, vec![hash]);
     }
 }

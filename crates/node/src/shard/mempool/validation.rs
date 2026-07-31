@@ -22,9 +22,9 @@ use std::sync::Arc;
 use hyperscale_core::ProtocolEvent;
 use hyperscale_dispatch::{Dispatch, DispatchPool, Parallelism};
 use hyperscale_network::Network;
-use hyperscale_storage::ShardStorage;
+use hyperscale_storage::{ShardStorage, SubstateStore};
 use hyperscale_types::network::gossip::TransactionGossip;
-use hyperscale_types::{RoutableTransaction, ShardId, TxHash, Verified};
+use hyperscale_types::{RoutableTransaction, ShardId, TopologySnapshot, TxHash, Verified};
 
 use super::TransactionBinding;
 use crate::batch_accumulator::BatchAccumulator;
@@ -284,13 +284,33 @@ where
         let event_tx = self.event_sender().clone();
         let local_shard = self.shard;
         let par: Parallelism = self.process.dispatch.parallelism();
+        // Admission solvency policy, not consensus: a VM transaction
+        // whose local payer cannot cover its signed fee ceiling at the
+        // current tip never enters the mempool — envelopes are free to
+        // mint, and an uncoverable one would otherwise occupy ready
+        // slots and camp its declared keys until its window expires.
+        // The builder and vote checks stay the deterministic
+        // authorities; the fetch path deliberately skips this filter,
+        // since fetched transactions are chain content a valid block
+        // already carries.
+        let topology = self.process.topology_snapshot.load_full();
+        let storage = self
+            .process
+            .dispatch_handles
+            .per_shard
+            .load()
+            .get(&self.shard)
+            .map(|handles| Arc::clone(&handles.storage));
         self.process
             .dispatch
             .spawn(DispatchPool::Throughput, move || {
                 let results: Vec<(TxHash, Option<Verified<RoutableTransaction>>)> =
                     par.map(batch, |tx| {
                         let hash = tx.hash();
-                        (hash, validator.verify_transaction(&tx).ok())
+                        let verified = validator.verify_transaction(&tx).ok().filter(|v| {
+                            payer_covers_fee_ceiling(v, &topology, local_shard, storage.as_deref())
+                        });
+                        (hash, verified)
                     });
 
                 let mut failed_hashes = Vec::new();
@@ -370,4 +390,46 @@ where
             }
         }
     }
+}
+
+/// Whether the payer of a VM transaction can cover its signed fee
+/// ceiling, read at the local committed tip. `true` for anything the
+/// policy does not judge: Radix transactions, remote payers (their
+/// balance is unreadable here — the payer shard's own admission judges
+/// them), an unwired store, or unavailable history.
+fn payer_covers_fee_ceiling<S: SubstateStore>(
+    tx: &Verified<RoutableTransaction>,
+    topology: &TopologySnapshot,
+    local_shard: ShardId,
+    storage: Option<&S>,
+) -> bool {
+    let Some(vm) = tx.vm() else {
+        return true;
+    };
+    let Some((owner, vault_local)) = tx.vm_fee_vault() else {
+        return true;
+    };
+    if topology.shard_trie().shard_for_prefix(owner) != local_shard {
+        return true;
+    }
+    let Some(storage) = storage else {
+        return true;
+    };
+    let Some(cell) = storage.get_vm_substate_at_height(owner, vault_local, storage.jmt_height())
+    else {
+        return true;
+    };
+    let balance = cell
+        .and_then(|bytes| <[u8; 16]>::try_from(bytes.as_slice()).ok())
+        .map_or(0u128, u128::from_le_bytes);
+    if balance < vm.max_fee {
+        tracing::debug!(
+            tx_hash = ?tx.hash(),
+            balance,
+            max_fee = vm.max_fee,
+            "Refusing admission: payer cannot cover the signed fee ceiling"
+        );
+        return false;
+    }
+    true
 }

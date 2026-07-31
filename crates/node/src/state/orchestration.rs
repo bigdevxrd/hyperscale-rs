@@ -61,6 +61,16 @@ impl NodeStateMachine {
             self.beacon_coordinator.current_topology_snapshot(),
             certified,
         ));
+        // Committed bundles are engagement evidence: promote any parked
+        // cross-shard VM transaction whose payer bundle just committed.
+        // Covers the case where another proposer paired the bundle
+        // before this node's provisions pipeline verified it.
+        for bundle in certified.block().provisions() {
+            s.mempool_coordinator.on_engagement_evidence(
+                bundle.source_shard(),
+                bundle.transactions().iter().map(|entry| entry.tx_hash),
+            );
+        }
 
         actions.extend(
             s.remote_headers_coordinator

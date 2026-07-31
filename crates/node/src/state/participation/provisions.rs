@@ -32,6 +32,14 @@ impl ShardParticipation {
                 self.now,
             ),
             ProtocolEvent::ProvisionsAdmitted { provisions, .. } => {
+                // A verified bundle is engagement evidence: promote any
+                // parked cross-shard VM transaction it names, before the
+                // proposal latch below gathers ready transactions — the
+                // bundle and its transactions then pair in one proposal.
+                self.mempool_coordinator.on_engagement_evidence(
+                    provisions.source_shard(),
+                    provisions.transactions().iter().map(|entry| entry.tx_hash),
+                );
                 let actions = self
                     .shard_coordinator
                     .on_provisions_admitted(sched, &[provisions]);
