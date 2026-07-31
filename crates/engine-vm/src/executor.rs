@@ -170,8 +170,8 @@ impl VmExecutor {
             .map(|record| record.nullifier)
             .collect();
         Ok((
-            admitted.admitted.manifest,
-            admitted.admitted.identity,
+            admitted.admitted.manifest().clone(),
+            admitted.admitted.identity(),
             declared,
             nullifiers,
         ))
@@ -595,6 +595,14 @@ impl VmExecutor {
                 declared: entry.declared.clone(),
                 nullifiers: entry.nullifiers.clone(),
                 clock_ms: clock_by_tx.get(vm_tx).copied().unwrap_or_default(),
+                // The executing block's draw. Every replica of this shard
+                // passes the same one, so single-shard receipts agree —
+                // but a counterpart shard executes the transaction under
+                // its own block, so a randomness-reading guest still
+                // derives a different receipt there. Anchoring the draw to
+                // the payer block, the way `clock_ms` is anchored through
+                // the bundle, is what closes that.
+                randomness: *ctx.block_hash.as_bytes(),
             })
             .collect();
         let runner = ManifestRunner {
@@ -605,7 +613,6 @@ impl VmExecutor {
             Arc::clone(&base) as Arc<dyn Base>,
             &batch,
             &runner,
-            *ctx.block_hash.as_bytes(),
             protocol_hash,
             self.mode,
             &locality,
