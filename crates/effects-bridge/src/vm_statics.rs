@@ -432,6 +432,16 @@ impl VmStatics for BridgeStatics {
                 .iter()
                 .map(|record| record.subintent.0.0)
                 .collect(),
+            snapshot_targets: routing
+                .snapshot_obligations
+                .iter()
+                .map(|obligation| match obligation.target {
+                    EffectTarget::Point(key) => Ok((key.owner.0, key.local.0)),
+                    EffectTarget::Entry { .. } | EffectTarget::Range { .. } => Err(VmStaticsError(
+                        "collection snapshot obligations are unsupported".into(),
+                    )),
+                })
+                .collect::<Result<_, _>>()?,
         })
     }
 }

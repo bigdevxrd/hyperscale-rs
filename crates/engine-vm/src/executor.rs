@@ -435,6 +435,27 @@ impl VmExecutor {
                 }
             }
         }
+        // Pinned snapshot values last: the read is version-pinned, so
+        // the envelope's proven value overrides whatever the local
+        // snapshot holds — every committee reads the same cell.
+        for tx in transactions {
+            if let Some(vm) = tx.vm() {
+                for pin in &vm.snapshot_pins {
+                    let key = SubstateKey {
+                        owner: Address(pin.owner),
+                        local: LocalKey(pin.local),
+                    };
+                    match &pin.value {
+                        Some(value) => {
+                            cells.insert(key, value.to_vec());
+                        }
+                        None => {
+                            cells.remove(&key);
+                        }
+                    }
+                }
+            }
+        }
         let base = Arc::new(VmBase { cells });
 
         let batch: Vec<BatchTx> = prepared
