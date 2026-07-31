@@ -22,8 +22,8 @@ use thiserror::Error;
 use crate::provisioning::proof::MerkleInclusionProof;
 use crate::state_key::{jmt_value_hash, vm_leaf_key};
 use crate::{
-    BoundedBytes, DeclaredKey, Hash, MAX_STATE_ENTRY_VALUE_LEN, MAX_TX_BYTES_LEN, TimestampRange,
-    WeightedTimestamp,
+    BoundedBytes, DeclaredKey, Hash, MAX_STATE_ENTRY_VALUE_LEN, MAX_TX_BYTES_LEN, ShardId,
+    TimestampRange, WeightedTimestamp,
 };
 
 /// Domain separator for the VM envelope signing hash.
@@ -55,7 +55,7 @@ pub struct VmSubintentSig {
 #[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
 pub struct VmSnapshotPin {
     /// The shard whose attested root the pin names.
-    pub shard: u16,
+    pub shard: ShardId,
     /// The pinned block height.
     pub height: u64,
     /// The pinned state version.
@@ -139,7 +139,8 @@ impl VmTransaction {
         hasher.update(&self.gas_limit.to_le_bytes());
         hasher.update(&(self.snapshot_pins.len() as u64).to_le_bytes());
         for pin in &self.snapshot_pins {
-            hasher.update(&pin.shard.to_le_bytes());
+            hasher.update(&pin.shard.depth().to_le_bytes());
+            hasher.update(&pin.shard.path().to_le_bytes());
             hasher.update(&pin.height.to_le_bytes());
             hasher.update(&pin.version.to_le_bytes());
             hasher.update(&pin.root);
@@ -331,7 +332,7 @@ mod tests {
         store.apply(&result);
         let proof = Jmt::prove(&store, &NodeKey::root(1), &[leaf]).unwrap();
         VmSnapshotPin {
-            shard: 1,
+            shard: ShardId::leaf(1, 1),
             height: 7,
             version: 7,
             root,

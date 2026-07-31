@@ -62,7 +62,8 @@ pub use support::{
 pub use transactions::{cross_shard_tx, livelock_resolves_promptly, single_shard_tx};
 pub use vm::{
     mixed_engine_blocks, vm_abort_converges, vm_cross_shard_transfer, vm_hot_recipient,
-    vm_single_transfer, vm_snapshot_reads_committed_baseline, vm_zipf_payments,
+    vm_single_transfer, vm_snapshot_only_commits_nothing, vm_snapshot_reads_committed_baseline,
+    vm_zipf_payments,
 };
 pub use witnesses::{
     pool_capacity_caps_registrations, re_registration_of_a_live_validator_is_a_no_op,

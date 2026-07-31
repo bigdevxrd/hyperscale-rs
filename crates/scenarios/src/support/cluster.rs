@@ -7,7 +7,7 @@ use hyperscale_crypto_bls::BlsSigner;
 use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
     BeaconState, BlockHeight, RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision,
-    TransactionStatus, TxHash,
+    TransactionStatus, TxHash, VmSnapshotPin,
 };
 
 use super::Budget;
@@ -82,6 +82,20 @@ pub trait Cluster {
     /// harness whose node state is not reachable from the driving thread;
     /// scenarios treat the readout as optional.
     fn deferral_stats(&self) -> Option<DeferralStats> {
+        None
+    }
+
+    /// The client-proven form of a bounded snapshot read: the cell's
+    /// value and its JMT inclusion proof under `shard`'s latest committed
+    /// root — what a wallet assembles before signing an envelope with a
+    /// snapshot leg. `None` when no hosted store can serve the read.
+    fn vm_snapshot_pin(
+        &self,
+        shard: ShardId,
+        owner: [u8; 16],
+        local: [u8; 16],
+    ) -> Option<VmSnapshotPin> {
+        let _ = (shard, owner, local);
         None
     }
 

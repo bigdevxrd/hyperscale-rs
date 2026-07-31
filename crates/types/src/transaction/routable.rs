@@ -674,7 +674,7 @@ mod tests {
     use super::*;
     use crate::test_utils::{test_node, test_transaction_with_nodes, test_validity_range};
     use crate::{
-        Ed25519PrivateKey, MerkleInclusionProof, VmSnapshotPin, VmStatics, VmSubintentSig,
+        Ed25519PrivateKey, MerkleInclusionProof, ShardId, VmSnapshotPin, VmStatics, VmSubintentSig,
         WeightedTimestamp, install_vm_statics,
     };
 
@@ -885,7 +885,7 @@ mod tests {
         // A covering pin with a garbage proof refuses.
         let mut forged = test_envelope(b"with-snapshot");
         forged.snapshot_pins = vec![VmSnapshotPin {
-            shard: 1,
+            shard: ShardId::leaf(1, 1),
             height: 7,
             version: 7,
             root: [0; 32],

@@ -11,12 +11,15 @@
 
 use std::sync::Arc;
 
+use hyperscale_engine_vm::VM_XRD;
+use hyperscale_engine_vm::genesis::vault_key;
 use hyperscale_types::{NetworkDefinition, ShardId, TransactionDecision, TransactionStatus};
 
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::tx::{
-    build_faucet_tx, build_vm_transfer_tx, contention_recipient, signer_from_seed, validity_around,
-    vm_cross_shard_cast, vm_recipient, vm_sender,
+    VM_SNAPSHOT_GUARD_BALANCE, build_faucet_tx, build_vm_guarded_transfer_tx, build_vm_transfer_tx,
+    contention_recipient, signer_from_seed, validity_around, vm_cross_shard_cast, vm_recipient,
+    vm_sender, vm_snapshot_cast,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -271,6 +274,76 @@ pub fn vm_cross_shard_transfer(c: &mut impl Cluster) {
     assert!(
         right.is_some(),
         "recipient shard never committed the transfer"
+    );
+}
+
+/// A transaction whose only remote touch is a bounded snapshot read
+/// settles its local leg while the guarded shard commits nothing.
+///
+/// With fresh reads the only shared admission class and snapshot targets
+/// taking no key at all, the guarded shard drops out of participation
+/// structurally: no lock, no wave slot, nothing to commit. The envelope
+/// carries the guarded cell's client-proven pin — key, value, and JMT
+/// inclusion proof under the guarded shard's committed root — so every
+/// replica of the executing committee reads the signed cell.
+///
+/// # Panics
+///
+/// Panics if the harness cannot serve the pin, the transfer does not
+/// accept, the local shard never commits it, the guarded shard's chain
+/// carries it, or the guarded shard's state root moves.
+pub fn vm_snapshot_only_commits_nothing(c: &mut impl Cluster) {
+    let (payer, from, to, guard) = vm_snapshot_cast();
+    let remote = ShardId::leaf(1, 1);
+    let vault = vault_key(guard, VM_XRD);
+    let pin = c
+        .vm_snapshot_pin(remote, vault.owner.0, vault.local.0)
+        .expect("the harness serves client-proven snapshot reads");
+    assert_eq!(
+        pin.value.as_deref().map(Vec::as_slice),
+        Some(VM_SNAPSHOT_GUARD_BALANCE.to_le_bytes().as_slice()),
+        "the pin must carry the guarded vault's genesis balance"
+    );
+    let root_before = c.committed_state_root(remote);
+
+    let tx = build_vm_guarded_transfer_tx(
+        &payer,
+        from,
+        to,
+        100,
+        guard,
+        VM_SNAPSHOT_GUARD_BALANCE - 100,
+        8,
+        pin,
+        validity_around(c.now()),
+    );
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+
+    let status = await_tx_terminal(c, hash, epochs(16));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "guarded VM transfer did not accept; status = {status:?}"
+    );
+    let (local, _) = c.chain_fate(ShardId::leaf(1, 0), hash);
+    assert!(
+        local.is_some(),
+        "the local shard never committed the guarded transfer"
+    );
+    // The guarded shard is structurally not a participant: its chain
+    // never carries the transaction and its state never moves.
+    let (remote_inclusion, _) = c.chain_fate(remote, hash);
+    assert!(
+        remote_inclusion.is_none(),
+        "the guarded shard must not carry the transaction"
+    );
+    let root_after = c.committed_state_root(remote);
+    assert_eq!(
+        root_before, root_after,
+        "the guarded shard must commit nothing"
     );
 }
 

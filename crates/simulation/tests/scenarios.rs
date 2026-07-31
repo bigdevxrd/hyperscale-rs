@@ -14,7 +14,7 @@ use hyperscale_scenarios::tx::{
     contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
     halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
     split_straddler_setup, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
-    witness_genesis_balances,
+    vm_snapshot_genesis_accounts, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, ScenarioConfig, beacon_lag_drops_skipped_epochs_reveal_chains,
@@ -38,7 +38,8 @@ use hyperscale_scenarios::{
     split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
     surviving_sibling_split_seats_full_committees, vm_abort_converges, vm_cross_shard_transfer,
-    vm_hot_recipient, vm_single_transfer, vm_snapshot_reads_committed_baseline, vm_zipf_payments,
+    vm_hot_recipient, vm_single_transfer, vm_snapshot_only_commits_nothing,
+    vm_snapshot_reads_committed_baseline, vm_zipf_payments,
     withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_simulation::ExecutionMode;
@@ -197,6 +198,16 @@ fn vm_cross_shard_transfer_sim() {
         &vm_cross_shard_genesis_accounts(),
     );
     vm_cross_shard_transfer(&mut cluster);
+}
+
+#[test]
+fn vm_snapshot_only_commits_nothing_sim() {
+    let mut cluster = SimCluster::with_grown_vm_accounts(
+        &vm_cross_shard_config(),
+        42,
+        &vm_snapshot_genesis_accounts(),
+    );
+    vm_snapshot_only_commits_nothing(&mut cluster);
 }
 
 #[test]

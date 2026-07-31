@@ -31,6 +31,13 @@ pub enum Invocation<'a> {
         /// The bucket bytes flowing in.
         bucket: &'a [u8],
     },
+    /// `assert-balance(vault: borrow<snap-cell>, min: list<u8>)`.
+    AssertBalance {
+        /// Capability index of the vault's snapshot handle.
+        vault_rep: u32,
+        /// The required minimum's encoded bytes.
+        min: &'a [u8],
+    },
 }
 
 /// What one invocation produced: the session back from the engine, the
@@ -44,7 +51,7 @@ pub struct InvokeOutcome {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use hyperscale_vm_runtime::{
-        DeltaCell, ReserveCell, add_kernel_to_linker, blessed_engine, validate_component,
+        DeltaCell, ReserveCell, SnapCell, add_kernel_to_linker, blessed_engine, validate_component,
     };
     use hyperscale_vm_stdlib::ACCOUNT_COMPONENT;
     use wasmtime::component::{Component, InstancePre, Linker, Resource};
@@ -111,6 +118,14 @@ mod native {
                             .map_err(|trap| format!("{trap:#}"))
                             .map(|()| None)
                     }),
+                Invocation::AssertBalance { vault_rep, min } => instance
+                    .get_typed_func::<(Resource<SnapCell>, &[u8]), ()>(&mut store, "assert-balance")
+                    .map_err(|error| format!("typed export: {error:#}"))
+                    .and_then(|func| {
+                        func.call(&mut store, (Resource::new_borrow(*vault_rep), min))
+                            .map_err(|trap| format!("{trap:#}"))
+                            .map(|()| None)
+                    }),
             };
             let fuel = FUEL - store.get_fuel().expect("fuel metering is enabled");
             InvokeOutcome {
@@ -166,6 +181,14 @@ mod reference {
                     vec![
                         CVal::Borrow(*vault_rep, ResourceKind::DeltaCell),
                         CVal::Bytes(bucket.to_vec()),
+                    ],
+                    false,
+                ),
+                Invocation::AssertBalance { vault_rep, min } => (
+                    "assert-balance",
+                    vec![
+                        CVal::Borrow(*vault_rep, ResourceKind::SnapCell),
+                        CVal::Bytes(min.to_vec()),
                     ],
                     false,
                 ),

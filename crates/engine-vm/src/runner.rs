@@ -2,10 +2,10 @@
 //! node by node, each node invoking its guest export with the session's
 //! capability handles and the edge cells produced upstream.
 //!
-//! The genesis stdlib surface is the account guest; its two exports are
-//! the invocation shapes wired here. Anything else fails as a
-//! deterministic user error — admission over the genesis-static metadata
-//! cannot produce it.
+//! The genesis stdlib surface is the account guest; its exports are the
+//! invocation shapes wired here. Anything else fails as a deterministic
+//! user error — admission over the genesis-static metadata cannot
+//! produce it.
 
 use std::collections::BTreeMap;
 
@@ -123,6 +123,31 @@ impl ManifestRunner<'_> {
                     &Invocation::Deposit {
                         vault_rep: rep,
                         bucket: &bucket,
+                    },
+                );
+                match invoked.result {
+                    Ok(_) => Ok((invoked.session, Vec::new(), invoked.fuel)),
+                    Err(reason) => Err(fail(invoked.session, reason, invoked.fuel)),
+                }
+            }
+            "assert-balance" => {
+                let (
+                    NodeInput::Literal(Value::Address(resource)),
+                    NodeInput::Literal(Value::U128(min)),
+                    NodeInput::Literal(Value::U64(_window)),
+                ) = (&node.inputs[0], &node.inputs[1], &node.inputs[2])
+                else {
+                    return Err(fail(session, "assert-balance argument shape", 0));
+                };
+                let vault = vault_key(node.target.0, *resource);
+                let Some(rep) = rep_of(&session, &Capability::Snapshot(vault)) else {
+                    return Err(fail(session, "missing snapshot capability", 0));
+                };
+                let invoked = self.backend.invoke(
+                    session,
+                    &Invocation::AssertBalance {
+                        vault_rep: rep,
+                        min: &encode_amount(*min),
                     },
                 );
                 match invoked.result {
