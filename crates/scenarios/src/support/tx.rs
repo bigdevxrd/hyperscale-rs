@@ -114,6 +114,13 @@ pub fn merge_vote_payer() -> Ed25519PrivateKey {
     signer_from_seed(MERGE_VOTE_PAYER_SEED)
 }
 
+/// The merge-vote payer's account, for genesis funding by cluster
+/// builders that re-vote the reshape threshold after growing.
+#[must_use]
+pub fn merge_vote_payer_account() -> ComponentAddress {
+    account_from_seed(MERGE_VOTE_PAYER_SEED)
+}
+
 /// Seed of the witness scenarios' fee payer.
 ///
 /// The beacon-witness scenarios (staking, validator registration, governance
@@ -569,6 +576,52 @@ pub fn vm_genesis_accounts(senders: u8, recipients: u8) -> Vec<([u8; 16], u128)>
         .map(|index| (vm_sender(index).1, 10_000u128))
         .chain((0..recipients).map(|index| (vm_recipient(index), 10)))
         .collect()
+}
+
+/// Grind a signing key whose VM account routes to `shard` under the
+/// depth-1 partition — the address's top bit picks the child. Seeds in
+/// `taken` are skipped, so successive calls yield distinct accounts.
+///
+/// # Panics
+///
+/// Panics on a shard that is not a depth-1 leaf.
+#[must_use]
+pub fn vm_account_routing_to(shard: ShardId, taken: &mut Vec<u8>) -> (Ed25519PrivateKey, [u8; 16]) {
+    assert!(
+        shard == ShardId::leaf(1, 0) || shard == ShardId::leaf(1, 1),
+        "depth-1 grinding only"
+    );
+    let want_top = shard == ShardId::leaf(1, 1);
+    for seed in 1..=u8::MAX {
+        if taken.contains(&seed) {
+            continue;
+        }
+        let address = vm_account_from_seed(seed);
+        if ((address[0] & 0x80) != 0) == want_top {
+            taken.push(seed);
+            return (signer_from_seed(seed), address);
+        }
+    }
+    unreachable!("a routable seed exists within the u8 seed space")
+}
+
+/// The cross-shard VM cast: the payer's key and account on `leaf(1, 0)`
+/// and the recipient's account on `leaf(1, 1)`.
+#[must_use]
+pub fn vm_cross_shard_cast() -> (Ed25519PrivateKey, [u8; 16], [u8; 16]) {
+    let mut taken = Vec::new();
+    let (payer, from) = vm_account_routing_to(ShardId::leaf(1, 0), &mut taken);
+    let (_key, to) = vm_account_routing_to(ShardId::leaf(1, 1), &mut taken);
+    (payer, from, to)
+}
+
+/// Genesis funding for the cross-shard VM cast: the payer funded, the
+/// recipient registered with dust (deposit targets must exist at
+/// genesis — no instantiate-on-deposit path exists).
+#[must_use]
+pub fn vm_cross_shard_genesis_accounts() -> Vec<([u8; 16], u128)> {
+    let (_payer, from, to) = vm_cross_shard_cast();
+    vec![(from, 10_000), (to, 10)]
 }
 
 /// Build a VM transfer: the account guest's withdraw+deposit graph over

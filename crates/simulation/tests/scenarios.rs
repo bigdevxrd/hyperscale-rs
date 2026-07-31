@@ -13,7 +13,8 @@ use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
     contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
     halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
-    split_straddler_setup, vm_genesis_accounts, witness_genesis_balances,
+    split_straddler_setup, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
+    witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, ScenarioConfig, beacon_lag_drops_skipped_epochs_reveal_chains,
@@ -36,8 +37,8 @@ use hyperscale_scenarios::{
     registered_validator_activates_onto_a_shard, shared_read_payments, single_shard_tx,
     split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees, vm_abort_converges, vm_hot_recipient,
-    vm_single_transfer, vm_snapshot_reads_committed_baseline, vm_zipf_payments,
+    surviving_sibling_split_seats_full_committees, vm_abort_converges, vm_cross_shard_transfer,
+    vm_hot_recipient, vm_single_transfer, vm_snapshot_reads_committed_baseline, vm_zipf_payments,
     withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_simulation::ExecutionMode;
@@ -173,6 +174,29 @@ fn vm_zipf_payments_sim() {
     let report = cluster.run_faultable(|c| vm_zipf_payments(c, 24, 6, 1.0));
     let executed = cluster.metric("transactions_executed", None);
     println!("vm_zipf_payments s=1.0 senders=24 recipients=6 executed={executed}: {report:?}");
+}
+
+/// Two shards, no reshape pressure: one split generation seats the
+/// second committee from the pool surplus, then the threshold disarms.
+const fn vm_cross_shard_config() -> ScenarioConfig {
+    ScenarioConfig {
+        shard_size: 4,
+        vnodes_per_host: 1,
+        pool_surplus: 4,
+        num_shards: 2,
+        split_bytes: u64::MAX,
+        latency: Duration::from_millis(150),
+    }
+}
+
+#[test]
+fn vm_cross_shard_transfer_sim() {
+    let mut cluster = SimCluster::with_grown_vm_accounts(
+        &vm_cross_shard_config(),
+        42,
+        &vm_cross_shard_genesis_accounts(),
+    );
+    vm_cross_shard_transfer(&mut cluster);
 }
 
 #[test]

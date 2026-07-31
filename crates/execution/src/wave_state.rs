@@ -327,7 +327,15 @@ impl WaveState {
                 continue;
             }
             let tx = self.transactions.get(&tx_hash)?;
-            let provisions = provisioning.provisions_for(tx_hash)?.to_vec();
+            // An absent entry is the dependency-free leg: the tx recorded
+            // an empty requirement, so nothing ever arrived to store. A
+            // tx with real requirements always has entries here — the
+            // fully-provisioned gate holds required ⊆ received, and
+            // absorption populates both together.
+            let provisions = provisioning
+                .provisions_for(tx_hash)
+                .map(<[_]>::to_vec)
+                .unwrap_or_default();
             let ownership = provisioning.ownership_for(tx_hash);
             requests.push(CrossShardExecutionRequest {
                 tx_hash,
@@ -1605,14 +1613,23 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_if_ready_cross_shard_returns_none_when_provisions_missing() {
+    fn dispatch_if_ready_cross_shard_dispatches_the_dependency_free_leg() {
+        // A provisioned tx with no stored entries is the leg that never
+        // needed any (an empty requirement): it dispatches with empty
+        // provisions rather than waiting forever.
         let mut w = make_cross_shard_wave(1);
         let h0 = w.tx_hashes()[0];
         w.mark_tx_provisioned(h0, ts_for(WAVE_START + 1));
 
         let provisioning = ProvisioningTracker::new();
-        assert!(w.dispatch_if_ready(&provisioning).is_none());
-        assert!(!w.dispatched());
+        match w.dispatch_if_ready(&provisioning) {
+            Some(Action::ExecuteCrossShardTransactions { requests, .. }) => {
+                assert_eq!(requests.len(), 1);
+                assert!(requests[0].provisions.is_empty());
+            }
+            other => panic!("expected ExecuteCrossShardTransactions, got {other:?}"),
+        }
+        assert!(w.dispatched());
     }
 
     #[test]

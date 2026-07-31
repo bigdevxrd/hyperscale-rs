@@ -16,7 +16,7 @@ use hyperscale_types::{NetworkDefinition, ShardId, TransactionDecision, Transact
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::tx::{
     build_faucet_tx, build_vm_transfer_tx, contention_recipient, signer_from_seed, validity_around,
-    vm_recipient, vm_sender,
+    vm_cross_shard_cast, vm_recipient, vm_sender,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -237,6 +237,41 @@ pub fn vm_hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport,
         "two hot VM payments committed at one height — the serialization bound is broken",
     );
     (report, span)
+}
+
+/// A cross-shard VM transfer settles.
+///
+/// The reserve leg lives on the payer's shard and the delta leg on the
+/// recipient's; neither leg provisions anything (D23 — both are
+/// commutative), so each shard's wave records an empty dependency set
+/// and dispatches without waiting. Settlement is the EC exchange alone.
+///
+/// # Panics
+///
+/// Panics if the transfer misses its budget, does not accept, or either
+/// shard's chain never commits it.
+pub fn vm_cross_shard_transfer(c: &mut impl Cluster) {
+    let (payer, from, to) = vm_cross_shard_cast();
+    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+
+    let status = await_tx_terminal(c, hash, epochs(16));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "cross-shard VM transfer did not accept; status = {status:?}"
+    );
+    // Atomic settlement: both legs' chains carry the transaction.
+    let (left, _) = c.chain_fate(ShardId::leaf(1, 0), hash);
+    let (right, _) = c.chain_fate(ShardId::leaf(1, 1), hash);
+    assert!(left.is_some(), "payer shard never committed the transfer");
+    assert!(
+        right.is_some(),
+        "recipient shard never committed the transfer"
+    );
 }
 
 /// Radix and VM traffic interleaved on one chain: both engines' receipts

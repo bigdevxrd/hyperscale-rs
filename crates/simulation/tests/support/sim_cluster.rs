@@ -16,7 +16,9 @@ use hyperscale_network::fault::{HostId, RuleHandle};
 use hyperscale_network_memory::NodeIndex;
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::query::{chain_fate, status_rank};
-use hyperscale_scenarios::tx::{merge_vote_payer, straddler_genesis_balances};
+use hyperscale_scenarios::tx::{
+    merge_vote_payer, merge_vote_payer_account, straddler_genesis_balances,
+};
 use hyperscale_scenarios::{
     Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
     vote_reshape_threshold,
@@ -210,6 +212,41 @@ impl SimCluster {
             runner,
             recorder: MemoryRecorder::new(),
         }
+    }
+
+    /// [`Self::with_grown_balances`] with funded VM accounts: genesis
+    /// seeds the accounts on the single ROOT shard and the grow splits
+    /// their cells to their prefix shards — the cross-shard VM
+    /// scenarios' entry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the grow or the threshold activation misses its budget.
+    #[must_use]
+    pub fn with_grown_vm_accounts(
+        config: &ScenarioConfig,
+        seed: u64,
+        vm_accounts: &[([u8; 16], u128)],
+    ) -> Self {
+        let grow_config = ScenarioConfig {
+            split_bytes: 0,
+            ..*config
+        };
+        // The threshold re-vote after the grow pays from the merge-vote
+        // payer, so it must be genesis-funded beside the default
+        // straddler accounts.
+        let mut balances = straddler_genesis_balances();
+        balances.push((merge_vote_payer_account(), Decimal::from(100_000)));
+        let mut cluster = Self::with_vm_mode_and_balances(
+            &grow_config,
+            seed,
+            &balances,
+            vm_accounts,
+            ExecutionMode::Serial,
+        );
+        grow_to(&mut cluster, config.num_shards);
+        vote_reshape_threshold(&mut cluster, &merge_vote_payer(), config.split_bytes);
+        cluster
     }
 
     /// Build a cluster grown to `config.num_shards` with `config.split_bytes` as
