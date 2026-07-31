@@ -15,6 +15,7 @@ use hyperscale_beacon::genesis::build_genesis_beacon_state;
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch_sync::SyncDispatch;
 use hyperscale_engine::{RadixExecutor, TransactionValidation};
+use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_execution::{ExecCertStore, FinalizedWaveStore};
 use hyperscale_mempool::{MempoolConfig, TxStore};
 use hyperscale_network::HandlerRegistry;
@@ -188,6 +189,7 @@ fn add_and_remove_shard_at_runtime() {
         Arc::clone(&beacon_storage),
         NetworkDefinition::simulator(),
         RadixExecutor::new(NetworkDefinition::simulator()),
+        Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
         std::iter::once((SHARD_A, event_tx.clone())).collect(),
@@ -293,6 +295,7 @@ fn pooled_vnode_follows_the_beacon_via_the_network_path() {
         Arc::clone(&beacon_storage),
         NetworkDefinition::simulator(),
         RadixExecutor::new(NetworkDefinition::simulator()),
+        Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
         BTreeMap::new(),
@@ -355,6 +358,7 @@ fn runtime_built_pool_is_fed_beacon_blocks() {
         Arc::clone(&beacon_storage),
         NetworkDefinition::simulator(),
         RadixExecutor::new(NetworkDefinition::simulator()),
+        Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
         std::iter::once((SHARD_A, event_tx.clone())).collect(),
@@ -435,6 +439,7 @@ fn remove_unknown_shard_is_none() {
         beacon_storage,
         NetworkDefinition::simulator(),
         RadixExecutor::new(NetworkDefinition::simulator()),
+        Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
         std::iter::once((SHARD_A, event_tx.clone())).collect(),

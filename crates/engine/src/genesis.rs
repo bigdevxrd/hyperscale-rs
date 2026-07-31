@@ -56,6 +56,13 @@ pub struct GenesisConfig {
 
     /// Initial XRD balances.
     pub xrd_balances: Vec<(ComponentAddress, Decimal)>,
+
+    /// Funded VM accounts: owner prefix and initial balance. Seeded as
+    /// identity-keyed vault cells beside the Radix bootstrap and
+    /// registered as account-package instances in the process's VM
+    /// statics; the raw prefix keeps this crate free of the VM
+    /// vocabulary.
+    pub vm_accounts: Vec<([u8; 16], u128)>,
 }
 
 impl GenesisConfig {
@@ -77,6 +84,7 @@ impl GenesisConfig {
             stake_allocations: Vec::new(),
             staker_accounts: Vec::new(),
             xrd_balances: Vec::new(),
+            vm_accounts: Vec::new(),
         }
     }
 
@@ -93,6 +101,7 @@ impl GenesisConfig {
             stake_allocations: Vec::new(),
             staker_accounts: Vec::new(),
             xrd_balances: Vec::new(),
+            vm_accounts: Vec::new(),
         }
     }
 
@@ -114,6 +123,7 @@ impl GenesisConfig {
         scrypto_encode(&settings)
             .expect("BabylonSettings is encodable")
             .hash(hasher);
+        self.vm_accounts.hash(hasher);
     }
 
     fn to_babylon_settings(&self) -> BabylonSettings {

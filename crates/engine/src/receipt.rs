@@ -95,6 +95,39 @@ impl CachedVmOutput {
         }
     }
 
+    /// VM-engine success output: the folded absolute updates and the
+    /// receipt hash over their canonical encoding. VM keys carry their
+    /// shard placement in the owner prefix, so no declared node set,
+    /// ownership map, or system witness exists; events wait for the
+    /// VM event surface.
+    #[must_use]
+    pub fn vm_succeeded(
+        raw_updates: DatabaseUpdates,
+        receipt_hash: GlobalReceiptHash,
+        metadata: ExecutionMetadata,
+    ) -> Self {
+        Self {
+            metadata,
+            body: CachedVmOutputBody::Succeeded {
+                raw_updates,
+                declared_set: HashSet::new(),
+                application_events: Vec::new(),
+                receipt_hash,
+                system_witness: None,
+            },
+        }
+    }
+
+    /// VM-engine failure output — a per-transaction abort whose
+    /// diagnostics ride the node-local metadata.
+    #[must_use]
+    pub const fn vm_failed(metadata: ExecutionMetadata) -> Self {
+        Self {
+            metadata,
+            body: CachedVmOutputBody::Failed,
+        }
+    }
+
     /// Synthesize the failure output for a cross-shard transaction we
     /// refused to run because
     /// [`crate::sharding::build_cross_shard_ownership`] flagged an

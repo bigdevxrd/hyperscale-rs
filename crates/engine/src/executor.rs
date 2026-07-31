@@ -19,19 +19,27 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use hyperscale_dispatch::Parallelism;
 use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{SubstateDatabase, SubstateStore};
-use hyperscale_types::{BlockHeight, NodeId, RoutableTransaction, Stopwatch, SubstateEntry};
+use hyperscale_types::{
+    BlockHash, BlockHeight, NodeId, RoutableTransaction, ShardId, ShardTrie, Stopwatch,
+    SubstateEntry, Verified,
+};
 use radix_common::network::NetworkDefinition;
+use radix_common::prelude::DbSubstateValue;
 use radix_common::types::NodeId as RadixNodeId;
 use radix_engine::transaction::{ExecutionConfig, execute_transaction};
 use radix_engine::vm::DefaultVmModules;
+use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey, PartitionEntry};
 use radix_transactions::validation::TransactionValidator;
 use tracing::field::Empty;
 use tracing::{Level, Span, instrument};
 
+use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
+use crate::output::ExecutedTx;
 use crate::provisioned_snapshot::ProvisionedSnapshot;
-use crate::receipt::{CachedVmOutput, compute_vm_output};
+use crate::receipt::{CachedVmOutput, compute_vm_output, project_to_shard};
 use crate::sharding::resolve_owned_nodes;
 
 /// Fetch state entries for the given nodes from storage at a specific block height.
@@ -139,6 +147,12 @@ impl RadixExecutor {
         tx: &RoutableTransaction,
     ) -> CachedVmOutput {
         let start = Stopwatch::start();
+        if tx.is_vm() {
+            // The wave dispatch routes VM sub-batches to the VM engine;
+            // a VM body reaching the Radix engine fails deterministically
+            // rather than panicking on the body accessor.
+            return CachedVmOutput::validation_failed(tx.hash());
+        }
         let Some(validated) = tx.get_or_validate(&self.caches.validator) else {
             return CachedVmOutput::validation_failed(tx.hash());
         };
@@ -191,6 +205,12 @@ impl RadixExecutor {
         ownership: &HashMap<NodeId, NodeId>,
     ) -> CachedVmOutput {
         let start = Stopwatch::start();
+        if tx.is_vm() {
+            // Cross-shard VM execution does not exist yet: every replica
+            // reaches the same deterministic failure, so committees agree.
+            tracing::warn!(tx_hash = ?tx.hash(), "cross-shard VM execution is unsupported — failing deterministically");
+            return CachedVmOutput::validation_failed(tx.hash());
+        }
         let Some(validated) = tx.get_or_validate(&self.caches.validator) else {
             return CachedVmOutput::validation_failed(tx.hash());
         };
@@ -218,5 +238,164 @@ impl Clone for RadixExecutor {
             network: self.network.clone(),
             caches: Arc::clone(&self.caches),
         }
+    }
+}
+
+/// Object-safe borrow of the wave's state snapshot, so the batch seam
+/// stays dyn-dispatchable while the concrete snapshot type remains
+/// generic at the call site.
+pub struct DynSnapshot<'a>(pub &'a (dyn SubstateDatabase + Sync));
+
+impl SubstateDatabase for DynSnapshot<'_> {
+    fn get_raw_substate_by_db_key(
+        &self,
+        partition_key: &DbPartitionKey,
+        sort_key: &DbSortKey,
+    ) -> Option<DbSubstateValue> {
+        self.0.get_raw_substate_by_db_key(partition_key, sort_key)
+    }
+
+    fn list_raw_values_from_db_key(
+        &self,
+        partition_key: &DbPartitionKey,
+        from_sort_key: Option<&DbSortKey>,
+    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
+        self.0
+            .list_raw_values_from_db_key(partition_key, from_sort_key)
+    }
+}
+
+/// Per-wave inputs an engine's batch execution reads besides the
+/// transactions themselves.
+pub struct WaveBatchContext<'a> {
+    /// Batch fan-out strategy, sourced from the dispatch backend.
+    pub par: Parallelism,
+    /// Process-scope cache of shard-invariant execution outputs.
+    pub cache: &'a ProcessExecutionCache,
+    /// The executing vnode's shard — the projection target.
+    pub local_shard: ShardId,
+    /// The active shard partition.
+    pub shard_trie: &'a ShardTrie,
+    /// The block whose wave this batch executes.
+    pub block_hash: BlockHash,
+}
+
+/// One engine's execution of a wave's same-variant sub-batch.
+///
+/// The unit is the batch: the Radix implementation runs its
+/// per-transaction loop over it, the VM implementation hands the whole
+/// batch to its deterministic-parallel executor. Both return one
+/// [`ExecutedTx`] per input transaction, in input order.
+pub trait Executor: Send + Sync {
+    /// Execute `transactions` against `snapshot` and project each result
+    /// to the context's local shard.
+    fn execute_wave_batch(
+        &self,
+        ctx: &WaveBatchContext<'_>,
+        snapshot: &DynSnapshot<'_>,
+        transactions: &[Arc<Verified<RoutableTransaction>>],
+    ) -> Vec<ExecutedTx>;
+}
+
+/// Shards this transaction reads or writes, routed via the active
+/// `ShardTrie`.
+///
+/// Drives the execution cache's per-entry pending-shards set: the cache
+/// narrows this to the host's hosted shards and decrements per-shard as
+/// finalised waves arrive.
+pub fn participating_shards<'a>(
+    tx: &'a RoutableTransaction,
+    shard_trie: &'a ShardTrie,
+) -> impl Iterator<Item = ShardId> + 'a {
+    tx.declared_reads()
+        .iter()
+        .chain(tx.declared_writes().iter())
+        .map(move |n| shard_trie.shard_for(n))
+}
+
+/// Plan derived for each position in a batch by classifying its
+/// `ProcessExecutionCache` slot up-front. `Done` skips work; `Claimed`
+/// runs `compute` and fills the slot; `Pending` blocks on another
+/// worker's slot via `get_or_init` (the closure only fires if the
+/// claimant abandoned the slot without setting a value).
+enum Plan {
+    Done(Arc<CachedVmOutput>),
+    Claimed(CachedSlot),
+    Pending(CachedSlot),
+}
+
+/// Two-phase cache acquisition for a batch of transactions.
+///
+/// Phase 1 classifies every position sequentially via `try_acquire` —
+/// cheap `DashMap` lookups that publish all Claimed slots to other
+/// concurrent batches before any compute starts. Phase 2 fans out via
+/// `par.map`: `Done` returns the cached value, `Claimed` runs `compute`
+/// and fills the slot, `Pending` blocks via `OnceLock::get_or_init`
+/// (each blocked worker waits only on its own slot, so the wait
+/// parallelises across the pool).
+pub fn batch_compute_cached(
+    par: Parallelism,
+    cache: &ProcessExecutionCache,
+    txs: &[Arc<Verified<RoutableTransaction>>],
+    shard_trie: &ShardTrie,
+    compute: impl Fn(usize) -> CachedVmOutput + Send + Sync,
+) -> Vec<Arc<CachedVmOutput>> {
+    let plans: Vec<(usize, Plan)> = txs
+        .iter()
+        .enumerate()
+        .map(
+            |(i, tx)| match cache.try_acquire(tx.hash(), participating_shards(tx, shard_trie)) {
+                SlotStatus::Completed(v) => (i, Plan::Done(v)),
+                SlotStatus::Claimed(slot) => (i, Plan::Claimed(slot)),
+                SlotStatus::Pending(slot) => (i, Plan::Pending(slot)),
+            },
+        )
+        .collect();
+
+    par.map(plans, |(i, plan)| match plan {
+        Plan::Done(v) => v,
+        Plan::Claimed(slot) => {
+            let value = Arc::new(compute(i));
+            let _ = slot.set(Arc::clone(&value));
+            value
+        }
+        Plan::Pending(slot) => Arc::clone(slot.get_or_init(|| Arc::new(compute(i)))),
+    })
+}
+
+impl Executor for RadixExecutor {
+    fn execute_wave_batch(
+        &self,
+        ctx: &WaveBatchContext<'_>,
+        snapshot: &DynSnapshot<'_>,
+        transactions: &[Arc<Verified<RoutableTransaction>>],
+    ) -> Vec<ExecutedTx> {
+        let cached = batch_compute_cached(ctx.par, ctx.cache, transactions, ctx.shard_trie, |i| {
+            self.compute_vm_output_single_shard(snapshot, &transactions[i])
+        });
+        transactions
+            .iter()
+            .zip(cached)
+            .map(|(tx, cached)| {
+                // Single-shard ownership is purely local: every declared
+                // account lives on this shard. Computed per-call rather
+                // than cached so the cache stays shard-invariant (matches
+                // the cross-shard path).
+                let declared: Vec<NodeId> = tx
+                    .declared_reads()
+                    .iter()
+                    .chain(tx.declared_writes().iter())
+                    .copied()
+                    .collect();
+                let ownership = resolve_owned_nodes(snapshot, &declared);
+                project_to_shard(
+                    &cached,
+                    tx.hash(),
+                    ctx.local_shard,
+                    ctx.shard_trie,
+                    &ownership,
+                )
+            })
+            .collect()
     }
 }

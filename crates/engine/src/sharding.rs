@@ -72,6 +72,7 @@ use hyperscale_storage::{
     DatabaseUpdates, DbPartitionKey, PartitionDatabaseUpdates, SubstateDatabase, SubstateStore,
 };
 pub use hyperscale_types::state_key::db_node_key_to_node_id;
+use hyperscale_types::state_key::vm_db_node_key_owner;
 use hyperscale_types::{BlockHeight, NodeId, OwnershipRoot, ShardId, ShardTrie, WritesRoot};
 use radix_common::prelude::{DatabaseUpdate, basic_encode};
 use radix_common::types::NodeId as RadixNodeId;
@@ -366,6 +367,14 @@ pub fn filter_genesis_updates_for_shard(
 ) -> DatabaseUpdates {
     let mut filtered = DatabaseUpdates::default();
     for (db_node_key, node_updates) in &merged.node_updates {
+        if let Some(owner) = vm_db_node_key_owner(db_node_key) {
+            if shard_trie.shard_for_prefix(owner) == local_shard {
+                filtered
+                    .node_updates
+                    .insert(db_node_key.clone(), node_updates.clone());
+            }
+            continue;
+        }
         let Some(node_id) = db_node_key_to_node_id(db_node_key) else {
             continue;
         };
@@ -409,6 +418,17 @@ pub fn filter_updates_for_shard<H1: BuildHasher, H2: BuildHasher>(
     let mut filtered = DatabaseUpdates::default();
 
     for (db_node_key, node_updates) in &updates.node_updates {
+        // A VM entity key carries its owner prefix — the identity
+        // leaves' routing half — so shard assignment is a prefix walk;
+        // the declared set and ownership map are Radix-only inputs.
+        if let Some(owner) = vm_db_node_key_owner(db_node_key) {
+            if shard_trie.shard_for_prefix(owner) == local_shard {
+                filtered
+                    .node_updates
+                    .insert(db_node_key.clone(), node_updates.clone());
+            }
+            continue;
+        }
         let Some(node_id) = db_node_key_to_node_id(db_node_key) else {
             continue;
         };
@@ -475,6 +495,14 @@ pub fn filter_updates_for_global_receipt<H1: BuildHasher, H2: BuildHasher>(
     let mut filtered = DatabaseUpdates::default();
 
     for (db_node_key, node_updates) in &updates.node_updates {
+        // A VM update only ever touches declared cells (handles exist
+        // for nothing else), so every VM entity key is kept.
+        if vm_db_node_key_owner(db_node_key).is_some() {
+            filtered
+                .node_updates
+                .insert(db_node_key.clone(), node_updates.clone());
+            continue;
+        }
         let Some(node_id) = db_node_key_to_node_id(db_node_key) else {
             continue;
         };
@@ -580,7 +608,7 @@ pub fn compute_ownership_root(owned: &[(NodeId, NodeId)]) -> OwnershipRoot {
 }
 
 /// Sort every `IndexMap` inside `updates` by key, in-place.
-pub(crate) fn sort_database_updates(updates: &mut DatabaseUpdates) {
+pub fn sort_database_updates(updates: &mut DatabaseUpdates) {
     updates.node_updates.sort_keys();
     for node_updates in updates.node_updates.values_mut() {
         node_updates.partition_updates.sort_keys();

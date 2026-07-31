@@ -31,7 +31,10 @@ use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch::{Dispatch, DispatchPool};
 use hyperscale_dispatch_pooled::{PooledDispatch, ThreadPoolConfig};
-use hyperscale_engine::{GenesisConfig, NetworkDefinition, RadixExecutor, TransactionValidation};
+use hyperscale_engine::{
+    Executor, GenesisConfig, NetworkDefinition, RadixExecutor, TransactionValidation,
+};
+use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_metrics::{set_libp2p_peers, set_pool_queue_depths};
 use hyperscale_metrics_prometheus::install;
@@ -531,6 +534,13 @@ impl ProductionRunnerBuilder {
                 .unwrap_or_else(GenesisConfig::production),
         };
         let executor = RadixExecutor::new(network_definition);
+        // The VM engine's world derives from the same genesis config the
+        // startup genesis path installs; construction installs the
+        // process VM statics.
+        let vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::new(
+            &engine_bootstrap.config.vm_accounts,
+            ExecutionMode::Serial,
+        ));
 
         // Each shard's `shard_event_senders` entry points at that
         // shard's own pinned-thread callback channel — callbacks,
@@ -551,6 +561,7 @@ impl ProductionRunnerBuilder {
             self.beacon_storage,
             beacon_network.clone(),
             executor,
+            vm_executor,
             libp2p_network,
             (*dispatch).clone(),
             shard_event_senders,

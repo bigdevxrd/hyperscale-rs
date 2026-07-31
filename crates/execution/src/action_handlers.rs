@@ -11,10 +11,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use hyperscale_core::{Action, ActionContext, Parallelism, ProtocolEvent};
+use hyperscale_core::{Action, ActionContext, ProtocolEvent};
 use hyperscale_engine::{
-    CachedSlot, CachedVmOutput, ProcessExecutionCache, SlotStatus, build_cross_shard_ownership,
-    project_to_shard, resolve_owned_nodes,
+    CachedVmOutput, DynSnapshot, Executor as _, WaveBatchContext, batch_compute_cached,
+    build_cross_shard_ownership, project_to_shard,
 };
 use hyperscale_metrics::record_execution_latency;
 use hyperscale_network::Network;
@@ -24,80 +24,13 @@ use hyperscale_types::network::notification::{
 };
 use hyperscale_types::{
     ExecutionCertificate, ExecutionCertificateContext, ExecutionVote, FinalizedWaveContext, NodeId,
-    RoutableTransaction, ShardId, ShardTrie, Stopwatch, StoredReceipt, Verifiable, Verified,
-    exec_cert_batch_message, exec_vote_batch_message,
+    RoutableTransaction, Stopwatch, StoredReceipt, Verifiable, Verified, exec_cert_batch_message,
+    exec_vote_batch_message,
 };
 
 // ============================================================================
 // Wave-based execution voting handlers
 // ============================================================================
-
-/// Handle the execution-owned delegated [`Action`] variants.
-///
-/// Shards this transaction reads or writes, routed via the active `ShardTrie`.
-///
-/// Drives the execution cache's per-entry pending-shards set: the cache
-/// narrows this to the host's hosted shards and decrements per-shard as
-/// finalised waves arrive.
-fn participating_shards<'a>(
-    tx: &'a RoutableTransaction,
-    shard_trie: &'a ShardTrie,
-) -> impl Iterator<Item = ShardId> + 'a {
-    tx.declared_reads()
-        .iter()
-        .chain(tx.declared_writes().iter())
-        .map(move |n| shard_trie.shard_for(n))
-}
-
-/// Plan derived for each position in a batch by classifying its
-/// `ProcessExecutionCache` slot up-front. `Done` skips work; `Claimed`
-/// runs `compute` and fills the slot; `Pending` blocks on another
-/// worker's slot via `get_or_init` (the closure only fires if the
-/// claimant abandoned the slot without setting a value).
-enum Plan {
-    Done(Arc<CachedVmOutput>),
-    Claimed(CachedSlot),
-    Pending(CachedSlot),
-}
-
-/// Two-phase cache acquisition for a batch of transactions.
-///
-/// Phase 1 classifies every position sequentially via `try_acquire` —
-/// cheap `DashMap` lookups that publish all Claimed slots to other
-/// concurrent batches before any compute starts. Phase 2 fans out via
-/// `par.map`: `Done` returns the cached value, `Claimed` runs `compute`
-/// and fills the slot, `Pending` blocks via `OnceLock::get_or_init`
-/// (each blocked worker waits only on its own slot, so the wait
-/// parallelises across the pool).
-fn batch_compute_cached(
-    par: Parallelism,
-    cache: &ProcessExecutionCache,
-    txs: &[Arc<Verified<RoutableTransaction>>],
-    shard_trie: &ShardTrie,
-    compute: impl Fn(usize) -> CachedVmOutput + Send + Sync,
-) -> Vec<Arc<CachedVmOutput>> {
-    let plans: Vec<(usize, Plan)> = txs
-        .iter()
-        .enumerate()
-        .map(
-            |(i, tx)| match cache.try_acquire(tx.hash(), participating_shards(tx, shard_trie)) {
-                SlotStatus::Completed(v) => (i, Plan::Done(v)),
-                SlotStatus::Claimed(slot) => (i, Plan::Claimed(slot)),
-                SlotStatus::Pending(slot) => (i, Plan::Pending(slot)),
-            },
-        )
-        .collect();
-
-    par.map(plans, |(i, plan)| match plan {
-        Plan::Done(v) => v,
-        Plan::Claimed(slot) => {
-            let value = Arc::new(compute(i));
-            let _ = slot.set(Arc::clone(&value));
-            value
-        }
-        Plan::Pending(slot) => Arc::clone(slot.get_or_init(|| Arc::new(compute(i)))),
-    })
-}
 
 /// Outcomes flow through `ctx.notify`. Variants owned by other coordinator
 /// crates hit `unreachable!()` — node's dispatcher routes by variant prefix.
@@ -186,39 +119,35 @@ where
             state_root: _,
         } => {
             let start = Stopwatch::start();
-            let local_shard = ctx.shard;
             let shard_trie = ctx.topology_snapshot.shard_trie();
             let view = ctx.pending_chain.view_at(block_hash, block_height);
             let view_snap = <SubstateView<_> as SubstateStore>::snapshot(&*view);
-            let cached = batch_compute_cached(
-                ctx.par,
-                ctx.execution_cache.as_ref(),
-                transactions.as_slice(),
+            let snapshot = DynSnapshot(&view_snap);
+            let wave_ctx = WaveBatchContext {
+                par: ctx.par,
+                cache: ctx.execution_cache.as_ref(),
+                local_shard: ctx.shard,
                 shard_trie,
-                |i| {
-                    ctx.executor
-                        .compute_vm_output_single_shard(&view_snap, &transactions[i])
-                },
-            );
-            let (tx_outcomes, results): (Vec<_>, Vec<_>) = transactions
+                block_hash,
+            };
+            // Engine dispatch is typed: the block splits into per-variant
+            // sub-batches, each engine executes its own, and the receipts
+            // merge back in canonical transaction-hash order.
+            let (vm_txs, radix_txs): (Vec<_>, Vec<_>) = transactions
                 .iter()
-                .zip(cached)
-                .map(|(tx, cached)| {
-                    // Single-shard ownership is purely local: every declared
-                    // account lives on this shard. Computed per-call rather
-                    // than cached so the cache stays shard-invariant (matches
-                    // the cross-shard path).
-                    let declared: Vec<NodeId> = tx
-                        .declared_reads()
-                        .iter()
-                        .chain(tx.declared_writes().iter())
-                        .copied()
-                        .collect();
-                    let ownership = resolve_owned_nodes(&view_snap, &declared);
-                    let executed =
-                        project_to_shard(&cached, tx.hash(), local_shard, shard_trie, &ownership);
-                    (executed.outcome(), StoredReceipt::from(executed))
-                })
+                .map(Arc::clone)
+                .partition(|tx| tx.is_vm());
+            let mut executed = ctx
+                .executor
+                .execute_wave_batch(&wave_ctx, &snapshot, &radix_txs);
+            executed.extend(
+                ctx.vm_executor
+                    .execute_wave_batch(&wave_ctx, &snapshot, &vm_txs),
+            );
+            executed.sort_by_key(|tx| tx.tx_hash);
+            let (tx_outcomes, results): (Vec<_>, Vec<_>) = executed
+                .into_iter()
+                .map(|executed| (executed.outcome(), StoredReceipt::from(executed)))
                 .unzip();
             record_execution_latency(start.elapsed().as_secs_f64());
             ctx.notify_protocol(ProtocolEvent::ExecutionBatchCompleted {

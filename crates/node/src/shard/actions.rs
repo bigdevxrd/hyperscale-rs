@@ -806,6 +806,7 @@ where
                 };
             let ctx = ActionContext {
                 executor: &handles.executor,
+                vm_executor: handles.vm_executor.as_ref(),
                 topology_snapshot: &topology_snapshot,
                 me,
                 shard,

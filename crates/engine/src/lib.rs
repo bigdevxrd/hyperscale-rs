@@ -27,9 +27,15 @@ mod validation;
 pub mod sharding;
 
 pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
-pub use executor::{RadixExecutor, fetch_state_entries};
+pub use executor::{
+    DynSnapshot, Executor, RadixExecutor, WaveBatchContext, batch_compute_cached,
+    fetch_state_entries, participating_shards,
+};
 pub use genesis::GenesisConfig;
 pub use genesis_cache::prepared_genesis;
+// Re-export the fan-out strategy `WaveBatchContext` carries, so seam
+// implementations and their tests need no separate dispatch dependency.
+pub use hyperscale_dispatch::Parallelism;
 pub use output::ExecutedTx;
 // Re-export Radix types needed by engine callers (not storage-related).
 pub use radix_common::network::NetworkDefinition;

@@ -20,6 +20,7 @@ use hyperscale_core::{ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch_sync::SyncDispatch;
 use hyperscale_engine::{RadixExecutor, TransactionValidation};
+use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network::HandlerRegistry;
 use hyperscale_network_memory::SimNetworkAdapter;
@@ -164,6 +165,7 @@ impl Fixture {
             Arc::clone(&self.beacon_storage),
             NetworkDefinition::simulator(),
             RadixExecutor::new(NetworkDefinition::simulator()),
+            Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
             network,
             SyncDispatch,
             BTreeMap::new(),

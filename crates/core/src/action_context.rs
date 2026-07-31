@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use hyperscale_dispatch::Parallelism;
-use hyperscale_engine::{ProcessExecutionCache, RadixExecutor};
+use hyperscale_engine::{Executor, ProcessExecutionCache, RadixExecutor};
 use hyperscale_network::Network;
 use hyperscale_storage::{
     JmtSnapshot, PendingChain, RatifyRegisterStore, SafeVoteRegisterStore, ShardStorage,
@@ -29,6 +29,11 @@ use crate::ProtocolEvent;
 #[allow(missing_docs)] // bag of references; field names match the borrowed types
 pub struct ActionContext<'a, S: ShardStorage, N: Network> {
     pub executor: &'a RadixExecutor,
+    /// The VM engine's batch seam. The `ExecuteTransactions` handler
+    /// splits a mixed block by body variant and routes the VM sub-batch
+    /// here; `executor` keeps the Radix sub-batch and the cross-shard
+    /// arm.
+    pub vm_executor: &'a dyn Executor,
     pub topology_snapshot: &'a TopologySnapshot,
     /// Dispatching vnode's validator identity. The shard dispatch site
     /// reads this off the `Vnode` that emitted the action; handlers use

@@ -14,7 +14,8 @@ use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_crypto_mock::{MockSigner, MockVerifier};
 use hyperscale_dispatch_sync::SyncDispatch;
-use hyperscale_engine::{GenesisConfig, RadixExecutor, TransactionValidation};
+use hyperscale_engine::{Executor, GenesisConfig, RadixExecutor, TransactionValidation};
+use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network_memory::{
     BandwidthReport, DeliveryDrain, HostLayout, NetworkConfig, NetworkTrafficAnalyzer, NodeIndex,
@@ -134,6 +135,14 @@ pub struct SimConfig {
     /// (`MempoolConfig::share_declared_reads`). Off by default; the
     /// read-share A/B constructs one cluster per setting.
     pub share_declared_reads: bool,
+    /// Genesis-funded VM accounts (owner prefix, balance). Builds the
+    /// process VM statics and the executor world, and seeds the funded
+    /// vault cells at genesis. Empty runs no VM traffic.
+    pub vm_accounts: Vec<([u8; 16], u128)>,
+    /// The VM batch executor's group scheduling. Receipts are
+    /// schedule-invariant, so this cannot change any outcome — the D16
+    /// A/B constructs one cluster per mode and asserts exactly that.
+    pub vm_execution_mode: ExecutionMode,
 }
 
 impl Default for SimConfig {
@@ -150,6 +159,8 @@ impl Default for SimConfig {
             packet_loss_rate: 0.0,
             crypto_scheme: CryptoScheme::default(),
             share_declared_reads: false,
+            vm_accounts: Vec::new(),
+            vm_execution_mode: ExecutionMode::Serial,
         }
     }
 }
@@ -206,6 +217,10 @@ pub struct SimulationRunner {
     /// [`SimConfig::share_declared_reads`], retained so runtime-seated
     /// vnodes admit under the same discipline as genesis-seated ones.
     share_declared_reads: bool,
+
+    /// [`SimConfig::vm_accounts`], retained so genesis seeds the same
+    /// world the executor and statics were built with.
+    vm_accounts: Vec<([u8; 16], u128)>,
 
     /// Beacon genesis config hash, retained for runtime-built
     /// `BeaconCoordinator`s.
@@ -349,6 +364,13 @@ impl SimulationRunner {
         );
         let rng = ChaCha8Rng::seed_from_u64(seed);
 
+        // One VM engine per cluster: the genesis-static world is shared by
+        // every host, and construction installs the process VM statics.
+        let shared_vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::new(
+            &network_config.vm_accounts,
+            network_config.vm_execution_mode,
+        ));
+
         // Generate keys for all registered validators using deterministic
         // seeding. Pool extras are registered in beacon genesis (landing
         // `Pooled`, giving the shuffle refill stock) but run no host.
@@ -482,6 +504,7 @@ impl SimulationRunner {
             let network_def = NetworkDefinition::simulator();
             let tx_validator = Arc::new(TransactionValidation::new(network_def.clone()));
             let executor = RadixExecutor::new(network_def);
+            let vm_executor = Arc::clone(&shared_vm_executor);
 
             // One `SimShardStorage` per hosted shard on this host.
             let storages: HashMap<ShardId, SimShardStorage> = by_shard
@@ -499,6 +522,7 @@ impl SimulationRunner {
                 beacon_storage,
                 beacon_network.clone(),
                 executor,
+                vm_executor,
                 network.create_adapter(
                     NodeIndex::try_from(host_index).expect("host_index fits NodeIndex"),
                 ),
@@ -564,6 +588,7 @@ impl SimulationRunner {
             verifier,
             crypto_scheme,
             share_declared_reads: network_config.share_declared_reads,
+            vm_accounts: network_config.vm_accounts.clone(),
             beacon_config_hash,
             beacon_network,
             pending_participation_changes: Vec::new(),
@@ -829,7 +854,10 @@ impl SimulationRunner {
 
     /// Initialize all nodes with genesis blocks and start consensus.
     pub fn initialize_genesis(&mut self) {
-        self.run_genesis(&GenesisConfig::test_default());
+        self.run_genesis(&GenesisConfig {
+            vm_accounts: self.vm_accounts.clone(),
+            ..GenesisConfig::test_default()
+        });
     }
 
     /// Initialize genesis with pre-funded accounts.
@@ -844,6 +872,7 @@ impl SimulationRunner {
         // host is cheap.
         let config = GenesisConfig {
             xrd_balances: balances.to_vec(),
+            vm_accounts: self.vm_accounts.clone(),
             ..GenesisConfig::test_default()
         };
         self.run_genesis(&config);

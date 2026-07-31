@@ -12,6 +12,7 @@ members = [
     "crates/dispatch-sync",
     "crates/effects-bridge",
     "crates/engine",
+    "crates/engine-vm",
     "crates/execution",
     "crates/jmt",
     "crates/mempool",
@@ -53,6 +54,7 @@ hyperscale-dispatch-pooled = { path = "crates/dispatch-pooled" }
 hyperscale-dispatch-sync = { path = "crates/dispatch-sync" }
 hyperscale-effects-bridge = { path = "crates/effects-bridge" }
 hyperscale-engine = { path = "crates/engine" }
+hyperscale-engine-vm = { path = "crates/engine-vm" }
 hyperscale-execution = { path = "crates/execution" }
 hyperscale-jmt = { path = "crates/jmt", features = ["parallel"] }
 hyperscale-mempool = { path = "crates/mempool" }
@@ -118,11 +120,18 @@ tracing-subscriber = "0.3.23"
 tracing-test = "0.2.6"
 wasm-bindgen = "0.2.126"
 
-# VM dependency (github.com/hyperscalers/hyperscale-vm @ 64b53a3c5a). The
-# workspace consumes exactly this one crate from the VM repo — types and the
-# routing vocabulary, dependency closure `thiserror`. Bumps are deliberate
-# rev-pin commits, never `cargo update` drift.
+# VM dependencies (github.com/hyperscalers/hyperscale-vm @ 64b53a3c5a).
+# `vm-effects` (types and the routing vocabulary) feeds admission through the
+# effects bridge; the kernel, runtimes, and stdlib blob are consumed only by
+# `crates/engine-vm`. Bumps are deliberate rev-pin commits, never
+# `cargo update` drift. The wasmtime pin mirrors the VM repo's blessed-engine
+# LTS exactly; upgrades are protocol events.
 hyperscale-vm-effects = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "64b53a3c5a" }
+hyperscale-vm-kernel = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "64b53a3c5a" }
+hyperscale-vm-ref = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "64b53a3c5a" }
+hyperscale-vm-runtime = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "64b53a3c5a" }
+hyperscale-vm-stdlib = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "64b53a3c5a" }
+wasmtime = { version = "=36.0.12", features = ["component-model", "winch", "pulley"] }
 
 # Radix dependencies (github.com/hyperscalers/radixdlt-scrypto @ f7fcb1f62f)
 radix-common = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }

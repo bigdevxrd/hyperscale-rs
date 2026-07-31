@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use crossbeam::channel::Sender;
 use hyperscale_dispatch::Dispatch;
-use hyperscale_engine::{ProcessExecutionCache, RadixExecutor, TransactionValidation};
+use hyperscale_engine::{Executor, ProcessExecutionCache, RadixExecutor, TransactionValidation};
 use hyperscale_network::Network;
 use hyperscale_storage::{BeaconStorage, PendingChain, ShardStorage};
 use hyperscale_types::{
@@ -153,6 +153,7 @@ where
         beacon_storage: Arc<dyn BeaconStorage>,
         beacon_network: NetworkDefinition,
         executor: RadixExecutor,
+        vm_executor: Arc<dyn Executor>,
         network: N,
         dispatch: D,
         shard_event_senders: BTreeMap<ShardId, Sender<HostEvent>>,
@@ -202,6 +203,7 @@ where
         let execution_cache = Arc::new(ProcessExecutionCache::new(hosted_shards.clone()));
         let dispatch_handles = Arc::new(DispatchHandles {
             executor,
+            vm_executor,
             network: Arc::clone(&network),
             execution_cache,
             beacon_proposal_cache: Arc::new(BeaconProposalCache::new(beacon_network)),

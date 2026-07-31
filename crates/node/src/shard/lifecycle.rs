@@ -20,8 +20,9 @@ use hyperscale_engine::sharding::{
     filter_genesis_updates_for_shard, resolve_owned_nodes_from_updates,
 };
 use hyperscale_engine::{GenesisConfig, prepared_genesis};
+use hyperscale_engine_vm::vm_genesis_updates;
 use hyperscale_network::Network;
-use hyperscale_storage::{GenesisCommit, RecoveredState, ShardStorage};
+use hyperscale_storage::{GenesisCommit, RecoveredState, ShardStorage, merge_into};
 use hyperscale_types::{
     Block, CertifiedBlock, ChainOrigin, NodeId, ShardId, StateRoot, ValidatorId, Verified,
 };
@@ -132,14 +133,25 @@ where
         // A per-shard store holds only its own shard's accounts: prefix-rooting
         // (each store roots its JMT at the shard's prefix) requires it, since a
         // foreign-prefix key would be mis-bucketed beneath this shard's root.
-        // Drop xrd balances whose address routes to another shard.
+        // Drop xrd balances whose address routes to another shard, and VM
+        // accounts whose owner prefix does.
         let topology_snapshot = self.process.topology_snapshot.load();
         let mut config = config.clone();
         config.xrd_balances.retain(|(address, _)| {
             let det_node_id = NodeId::from_radix(address.into_node_id());
             topology_snapshot.shard_for_node_id(&det_node_id) == shard
         });
-        let merged = prepared_genesis(self.process.dispatch_handles.executor.network(), &config);
+        config
+            .vm_accounts
+            .retain(|(address, _)| topology_snapshot.shard_for_prefix(*address) == shard);
+        let prepared = prepared_genesis(self.process.dispatch_handles.executor.network(), &config);
+        let merged = if config.vm_accounts.is_empty() {
+            prepared
+        } else {
+            let mut merged = (*prepared).clone();
+            merge_into(&mut merged, &vm_genesis_updates(&config.vm_accounts));
+            Arc::new(merged)
+        };
         // Genesis writes the full initial state in one batch, so every owned
         // node's `Own(_)` ref is present in `merged` — resolve ownership from
         // it directly to owner-prefix vaults under their accounts.
