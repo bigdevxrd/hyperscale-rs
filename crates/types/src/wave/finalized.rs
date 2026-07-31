@@ -192,7 +192,8 @@ impl FinalizedWave {
                 Some(receipt) => {
                     receipts.push(StoredReceipt::synced(outcome.tx_hash(), receipt));
                 }
-                None if outcome.is_aborted() => {}
+                // An abort settling a fee still owes that receipt.
+                None if outcome.is_aborted() && outcome.fee_receipt().is_none() => {}
                 None => return None,
             }
         }
@@ -215,9 +216,10 @@ impl FinalizedWave {
     }
 
     /// Validate that `receipts` are consistent with the local EC's
-    /// `tx_outcomes`: exactly one receipt per non-aborted outcome, in
-    /// `tx_outcomes` canonical order, with matching `tx_hash` and matching
-    /// success/failure outcome.
+    /// `tx_outcomes`: exactly one receipt per outcome that carries one —
+    /// every non-aborted outcome, plus every abort settling a fee — in
+    /// `tx_outcomes` canonical order, with matching `tx_hash` and
+    /// matching receipt hash.
     ///
     /// This does **not** verify `database_updates` or `writes_root` —
     /// `ConsensusReceipt::Succeeded` carries only shard-filtered writes, so the global
@@ -239,9 +241,15 @@ impl FinalizedWave {
 
         let mut receipt_iter = self.receipts.iter();
         for outcome in local_ec.tx_outcomes() {
-            // Aborted outcomes carry no stored receipt; skip.
+            // An aborted outcome carries no receipt of the transaction's
+            // own effects — that is what makes the abort atomic. It may
+            // still settle the payer's fee through a receipt carrying
+            // only that debit, named by hash on the outcome.
             let ec_kind = match outcome.outcome() {
-                ExecutionOutcome::Aborted => continue,
+                ExecutionOutcome::Aborted => match outcome.fee_receipt() {
+                    Some(fee_receipt) => Some(fee_receipt),
+                    None => continue,
+                },
                 ExecutionOutcome::Succeeded { receipt_hash } => Some(*receipt_hash),
                 ExecutionOutcome::Failed => None,
             };

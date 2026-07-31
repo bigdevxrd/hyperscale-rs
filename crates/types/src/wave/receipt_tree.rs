@@ -12,15 +12,23 @@ use crate::{
 /// - `Aborted`:   `H(tx_hash || b"ABORTED:")`
 ///
 /// The domain tags ensure the three variants can never collide.
+///
+/// A settled fee receipt extends the leaf under its own domain tag. The
+/// vote signature covers only the receipt root, and decoding recomputes
+/// that root from the outcomes — so a hash outside the leaf would be an
+/// aggregator's to forge.
 #[must_use]
 pub fn tx_outcome_leaf(outcome: &TxOutcome) -> Hash {
-    match outcome.outcome() {
+    let base = match outcome.outcome() {
         ExecutionOutcome::Succeeded { receipt_hash } => {
             Hash::from_parts(&[outcome.tx_hash().as_bytes(), receipt_hash.as_bytes()])
         }
         ExecutionOutcome::Failed => Hash::from_parts(&[outcome.tx_hash().as_bytes(), b"FAILED:"]),
         ExecutionOutcome::Aborted => Hash::from_parts(&[outcome.tx_hash().as_bytes(), b"ABORTED:"]),
-    }
+    };
+    outcome.fee_receipt().map_or(base, |fee_receipt| {
+        Hash::from_parts(&[base.as_bytes(), b"FEE:", fee_receipt.as_bytes()])
+    })
 }
 
 /// Compute the receipt root from a list of transaction outcomes.

@@ -13,13 +13,44 @@ use crate::{GlobalReceiptHash, TxHash};
 pub struct TxOutcome {
     tx_hash: TxHash,
     outcome: ExecutionOutcome,
+    /// Set when this shard aborts a transaction it pays for: the hash of
+    /// the fee receipt the abort settles.
+    ///
+    /// An aborted transaction's own effects never apply — that is what
+    /// makes a cross-shard abort atomic — but the payer still owes the
+    /// class floor, and state moves only through receipts. The fee
+    /// receipt is the reconciliation: it carries the floor debit and
+    /// nothing else, and naming its hash here puts it under the signed
+    /// receipt root like any other receipt's content.
+    fee_receipt: Option<GlobalReceiptHash>,
 }
 
 impl TxOutcome {
-    /// Create a new `TxOutcome`.
+    /// Create a new `TxOutcome` settling no fee receipt.
     #[must_use]
     pub const fn new(tx_hash: TxHash, outcome: ExecutionOutcome) -> Self {
-        Self { tx_hash, outcome }
+        Self {
+            tx_hash,
+            outcome,
+            fee_receipt: None,
+        }
+    }
+
+    /// Create an aborted `TxOutcome` that settles the payer's floor
+    /// through the named fee receipt.
+    #[must_use]
+    pub const fn aborted_with_fee(tx_hash: TxHash, fee_receipt: GlobalReceiptHash) -> Self {
+        Self {
+            tx_hash,
+            outcome: ExecutionOutcome::Aborted,
+            fee_receipt: Some(fee_receipt),
+        }
+    }
+
+    /// The fee receipt this outcome settles, if any.
+    #[must_use]
+    pub const fn fee_receipt(&self) -> Option<GlobalReceiptHash> {
+        self.fee_receipt
     }
 
     /// Transaction hash.

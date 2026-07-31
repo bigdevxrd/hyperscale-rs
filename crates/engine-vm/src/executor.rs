@@ -29,8 +29,8 @@ use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
-    BeaconWitnessRoot, EventRoot, ExecutionMetadata, FeeSummary, GlobalReceipt, Hash,
-    OwnershipRoot, RoutableTransaction, SubstateEntry, TxHash, Verified, install_vm_statics,
+    BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata, FeeSummary, GlobalReceipt,
+    Hash, OwnershipRoot, RoutableTransaction, SubstateEntry, TxHash, Verified, install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, EffectSet, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
@@ -314,15 +314,15 @@ fn apply_fee_burn(
     running: &BTreeMap<SubstateKey, Option<Vec<u8>>>,
     base: &VmBase,
     fees_applied: &mut BTreeMap<SubstateKey, u128>,
-    fee: Option<(SubstateKey, u128)>,
+    fee: Option<PayerFee>,
     fuel: u64,
 ) {
     // The transaction's own burn first: the attested actual — fuel, until
     // real pricing lands — capped at the signed ceiling.
-    if let Some((vault, max_fee)) = fee {
-        let burn = u128::from(fuel).min(max_fee);
+    if let Some(payer) = fee {
+        let burn = u128::from(fuel).min(payer.max_fee);
         if burn > 0 {
-            *fees_applied.entry(vault).or_insert(0) += burn;
+            *fees_applied.entry(payer.vault).or_insert(0) += burn;
         }
     }
     // Re-derive every fee-bearing cell this transaction's update set
@@ -346,6 +346,16 @@ fn apply_fee_burn(
     }
 }
 
+/// What this shard, as a transaction's fee payer, charges it: the vault,
+/// the signed ceiling a success burns up to, and — for the cross-shard
+/// legs a wave can abort after executing — the floor an abort settles.
+#[derive(Clone, Copy)]
+struct PayerFee {
+    vault: SubstateKey,
+    max_fee: u128,
+    abort_floor: Option<u128>,
+}
+
 /// The fold's mutable state across a batch: the pre-fee kernel-mirror
 /// map (the differential's source) and the cumulative fee burns layered
 /// on top of it.
@@ -354,16 +364,73 @@ struct FoldState {
     fees_applied: BTreeMap<SubstateKey, u128>,
 }
 
+/// Build the receipt an abort of this transaction settles: the payer's
+/// vault debited by the class floor, and nothing else.
+///
+/// The value is read as of every canonically earlier transaction's
+/// applied effect and fee, but without this transaction's own — an abort
+/// discards those, so the burn must not be layered on top of them.
+fn build_fee_receipt(
+    ctx: &WaveBatchContext<'_>,
+    base: &VmBase,
+    fold: &FoldState,
+    tx_hash: TxHash,
+    vault: SubstateKey,
+    floor: u128,
+) -> Option<ConsensusReceipt> {
+    let prefee = fold
+        .running
+        .get(&vault)
+        .cloned()
+        .unwrap_or_else(|| base.cells.get(&vault).cloned())?;
+    let cell: [u8; 16] = prefee.as_slice().try_into().ok()?;
+    let applied = u128::from_le_bytes(cell)
+        .saturating_sub(fold.fees_applied.get(&vault).copied().unwrap_or(0));
+    let debited = applied.saturating_sub(floor);
+
+    let writes: BTreeMap<SubstateKey, Option<Vec<u8>>> =
+        BTreeMap::from([(vault, Some(debited.to_le_bytes().to_vec()))]);
+    let mut updates = writes_to_updates(&writes);
+    sort_database_updates(&mut updates);
+    let writes_root = compute_writes_root(&updates);
+    let receipt_hash = GlobalReceipt::new(
+        true,
+        EventRoot::ZERO,
+        BeaconWitnessRoot::ZERO,
+        writes_root,
+        OwnershipRoot::ZERO,
+    )
+    .receipt_hash();
+    let cached = CachedVmOutput::vm_succeeded(updates, receipt_hash, vm_metadata(0, None));
+    Some(
+        project_to_shard(
+            &cached,
+            tx_hash,
+            ctx.local_shard,
+            ctx.shard_trie,
+            &HashMap::new(),
+        )
+        .consensus,
+    )
+}
+
 fn assemble_executed_tx(
     ctx: &WaveBatchContext<'_>,
     base: &VmBase,
     fold: &mut FoldState,
     vm_tx: VmTxHash,
     receipt: &Receipt,
-    fee: Option<(SubstateKey, u128)>,
+    fee: Option<PayerFee>,
     is_local: &dyn Fn(Address) -> bool,
 ) -> ExecutedTx {
     let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
+    // Built before this transaction's own burn folds in: an abort settles
+    // the floor over the state its siblings left, not over its own.
+    let fee_receipt = fee.and_then(|payer| {
+        payer
+            .abort_floor
+            .and_then(|floor| build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, floor))
+    });
     let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
         let mut writes = fold_delta(receipt, base, &mut fold.running, vm_tx, is_local);
         apply_fee_burn(
@@ -396,13 +463,15 @@ fn assemble_executed_tx(
         };
         CachedVmOutput::vm_failed(vm_metadata(receipt.fuel, Some(reason)))
     };
-    project_to_shard(
+    let mut executed = project_to_shard(
         &cached,
         tx_hash,
         ctx.local_shard,
         ctx.shard_trie,
         &HashMap::new(),
-    )
+    );
+    executed.fee_receipt = fee_receipt;
+    executed
 }
 
 impl VmExecutor {
@@ -549,7 +618,7 @@ impl VmExecutor {
         // The fee payers this shard settles: a completed transaction
         // burns its attested actual from its payer's vault, on the
         // payer's shard only.
-        let fee_by_tx: BTreeMap<VmTxHash, (SubstateKey, u128)> = transactions
+        let fee_by_tx: BTreeMap<VmTxHash, PayerFee> = transactions
             .iter()
             .filter_map(|tx| {
                 let vm = tx.vm()?;
@@ -559,13 +628,17 @@ impl VmExecutor {
                 }
                 Some((
                     VmTxHash(Hash32(*tx.hash().as_bytes())),
-                    (
-                        SubstateKey {
+                    PayerFee {
+                        vault: SubstateKey {
                             owner: Address(owner),
                             local: LocalKey(local),
                         },
-                        vm.max_fee,
-                    ),
+                        max_fee: vm.max_fee,
+                        // Only a cross-shard leg can be aborted after it
+                        // executed, so only it needs the abort's receipt
+                        // built in reserve.
+                        abort_floor: cross_shard.then(|| vm.abort_floor()),
+                    },
                 ))
             })
             .collect();

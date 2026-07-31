@@ -25,6 +25,7 @@ impl ShardParticipation {
                 wave_id,
                 results,
                 tx_outcomes,
+                fee_receipts,
             } => {
                 // Results arriving can (a) finalize a wave whose local EC
                 // landed ahead of the engine, (b) unblock new vote emission.
@@ -33,6 +34,7 @@ impl ShardParticipation {
                     &wave_id,
                     results,
                     tx_outcomes,
+                    fee_receipts,
                 );
                 actions.extend(
                     self.execution_coordinator

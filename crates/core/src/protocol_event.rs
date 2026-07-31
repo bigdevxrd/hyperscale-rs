@@ -544,6 +544,11 @@ pub enum ProtocolEvent {
         results: Vec<StoredReceipt>,
         /// Per-tx outcomes extracted on the handler thread for vote signing.
         tx_outcomes: Vec<TxOutcome>,
+        /// Fee receipts built beside the execution receipts, for the
+        /// transactions this shard pays for and a wave can still abort.
+        /// Held in reserve: an abort settles one of these in place of the
+        /// discarded execution receipt.
+        fee_receipts: Vec<StoredReceipt>,
     },
 
     /// Received an execution vote whose signature has already been

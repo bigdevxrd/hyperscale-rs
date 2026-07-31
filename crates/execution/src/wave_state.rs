@@ -96,6 +96,11 @@ pub struct WaveState {
     /// latest member's validity end plus the echo margin. `None` when
     /// nothing in the wave is engagement-gated.
     engagement_deadline: Option<WeightedTimestamp>,
+    /// Per-tx fee receipts the engine built alongside the execution
+    /// receipt, for the cross-shard transactions this shard pays for.
+    /// An abort settles one of these: the transaction's own effects are
+    /// discarded, the payer's floor is not.
+    fee_receipts: HashMap<TxHash, StoredReceipt>,
     /// Whether execution has been dispatched (single `ExecuteTransactions` /
     /// `ExecuteCrossShardTransactions` emitted). Set true once execution fires.
     dispatched: bool,
@@ -220,6 +225,7 @@ impl WaveState {
             all_provisioned_at,
             engagement_pending: HashMap::new(),
             engagement_deadline: None,
+            fee_receipts: HashMap::new(),
             dispatched: false,
             execution_results: HashMap::new(),
             execution_receipts: HashMap::new(),
@@ -283,8 +289,7 @@ impl WaveState {
     /// Record that this shard, as `tx_hash`'s fee payer, waits for
     /// `counterparts` to echo their engagement before voting. Called at
     /// wave creation for each payer-local cross-shard VM transaction;
-    /// `validity_end` is the transaction's signed window end, which sets
-    /// the wave's deadline for voting without full coverage.
+    /// `validity_end` is the signed window end bounding the wait.
     pub fn record_engagement_wait(
         &mut self,
         tx_hash: TxHash,
@@ -499,6 +504,15 @@ impl WaveState {
             .or_insert(receipt);
     }
 
+    /// Record the fee receipt the engine built beside a transaction's
+    /// execution receipt: what the payer owes if the wave aborts it.
+    pub fn record_fee_receipt(&mut self, receipt: StoredReceipt) {
+        if !self.tx_hash_set.contains(&receipt.tx_hash) {
+            return;
+        }
+        self.fee_receipts.entry(receipt.tx_hash).or_insert(receipt);
+    }
+
     /// Number of receipts currently held by this wave. Exposed for memory
     /// stats; receipts drain at finalization.
     #[must_use]
@@ -687,7 +701,14 @@ impl WaveState {
                         .cloned()
                         .expect("execution result must be present under provisioned branch")
                 };
-                TxOutcome::new(*tx_hash, outcome)
+                // An abort still settles the payer's fee when the engine
+                // built one for this transaction.
+                match (&outcome, self.fee_receipts.get(tx_hash)) {
+                    (ExecutionOutcome::Aborted, Some(fee)) => {
+                        TxOutcome::aborted_with_fee(*tx_hash, fee.consensus.receipt_hash())
+                    }
+                    _ => TxOutcome::new(*tx_hash, outcome.clone()),
+                }
             })
             .collect();
 
@@ -1018,6 +1039,13 @@ impl WaveState {
         let mut receipts: Vec<StoredReceipt> = Vec::with_capacity(local_ec.tx_outcomes().len());
         for outcome in local_ec.tx_outcomes() {
             if outcome.is_aborted() {
+                // The transaction's own effects are discarded; a fee it
+                // settles is not.
+                if outcome.fee_receipt().is_some()
+                    && let Some(fee) = self.fee_receipts.remove(&outcome.tx_hash())
+                {
+                    receipts.push(fee);
+                }
                 continue;
             }
             if let Some(receipt) = self.take_receipt(outcome.tx_hash()) {
@@ -1058,8 +1086,9 @@ impl WaveState {
 mod tests {
     use hyperscale_types::test_utils::{test_node, test_transaction_with_nodes};
     use hyperscale_types::{
-        AggregateSignature, BoundedVec, ConsensusReceipt, GlobalReceiptHash, Hash,
+        AggregateSignature, BoundedVec, ConsensusReceipt, DatabaseUpdates, GlobalReceiptHash, Hash,
         MerkleInclusionProof, ProvisionEntry, Provisions, SignerBitfield, SubstateEntry,
+        tx_outcome_leaf,
     };
 
     use super::*;
@@ -1184,6 +1213,36 @@ mod tests {
             AggregateSignature::new([0u8; 96]),
             SignerBitfield::new(4),
         )))
+    }
+
+    /// An EC over exactly `outcomes`, as this shard's own local EC.
+    fn make_ec_from(
+        wave_id: &WaveId,
+        outcomes: Vec<TxOutcome>,
+    ) -> Arc<Verified<ExecutionCertificate>> {
+        Arc::new(Verified::new_unchecked_for_test(ExecutionCertificate::new(
+            wave_id.clone(),
+            WeightedTimestamp::from_millis(wave_id.block_height().inner() + 1),
+            compute_global_receipt_root(&outcomes),
+            outcomes,
+            AggregateSignature::new([0u8; 96]),
+            SignerBitfield::new(4),
+        )))
+    }
+
+    /// A fee receipt the engine would have built for `tx`: one debit and
+    /// nothing else.
+    fn fee_receipt_for(tx: TxHash) -> StoredReceipt {
+        StoredReceipt::synced(
+            tx,
+            Arc::new(ConsensusReceipt::Succeeded {
+                receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"fee-receipt")),
+                database_updates: DatabaseUpdates::default(),
+                application_events: Vec::new(),
+                beacon_witness_events: Vec::new(),
+                owned_nodes: Vec::new().into(),
+            }),
+        )
     }
 
     #[test]
@@ -1809,6 +1868,40 @@ mod tests {
         assert!(w.can_emit_vote(deadline));
         let (_, _, outcomes) = w.build_vote_data(deadline).expect("vote");
         assert_eq!(outcomes[0].outcome(), &ExecutionOutcome::Aborted);
+        assert_eq!(outcomes[0].fee_receipt(), None, "no fee receipt to settle");
+    }
+
+    #[test]
+    fn an_abort_settles_the_payers_fee_receipt_in_place_of_its_effects() {
+        // The engine builds a fee receipt beside the execution receipt for
+        // a leg this shard pays for. The deadline abort discards the
+        // transaction's effects and settles that fee instead — so the
+        // finalized wave carries the fee receipt, not the execution one.
+        let validity_end = ts_for(WAVE_START + 20);
+        let (mut w, tx) = payer_wave_awaiting_echo(validity_end);
+        let fee = fee_receipt_for(tx);
+        let fee_hash = fee.consensus.receipt_hash();
+        w.record_fee_receipt(fee);
+
+        let deadline = validity_end.plus(WAVE_TIMEOUT);
+        let (_, _, outcomes) = w.build_vote_data(deadline).expect("vote");
+        assert_eq!(outcomes[0].outcome(), &ExecutionOutcome::Aborted);
+        assert_eq!(outcomes[0].fee_receipt(), Some(fee_hash));
+
+        // The leaf covers the settled receipt: an aggregator swapping it
+        // for another would not reproduce the signed root.
+        let bare = TxOutcome::new(tx, ExecutionOutcome::Aborted);
+        assert_ne!(tx_outcome_leaf(&outcomes[0]), tx_outcome_leaf(&bare));
+
+        let wave_id = w.wave_id().clone();
+        w.add_execution_certificate(make_ec_from(&wave_id, outcomes));
+        let finalized = w.into_finalized();
+        assert_eq!(finalized.receipts().len(), 1);
+        assert_eq!(finalized.receipts()[0].tx_hash, tx);
+        assert_eq!(finalized.receipts()[0].consensus.receipt_hash(), fee_hash);
+        finalized
+            .validate_receipts_against_ec()
+            .expect("a settled fee receipt is what the EC named");
     }
 
     #[test]

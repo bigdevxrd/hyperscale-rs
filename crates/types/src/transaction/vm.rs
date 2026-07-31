@@ -115,7 +115,23 @@ pub struct VmTransaction {
     pub signature: [u8; 64],
 }
 
+/// The abort class floor as a fraction of the signed fee ceiling:
+/// aborting costs the payer a tenth of what it authorised. Placeholder
+/// pricing — the number is calibrated against measured baselines, the
+/// shape is that an abort is bounded strictly below the ceiling a
+/// success may burn.
+const ABORT_FLOOR_DIVISOR: u128 = 10;
+
 impl VmTransaction {
+    /// What an abort of this transaction burns from the payer's vault.
+    ///
+    /// Derived from signed content alone, so every payer-shard voter
+    /// attests the same figure without reading any state.
+    #[must_use]
+    pub const fn abort_floor(&self) -> u128 {
+        self.max_fee / ABORT_FLOOR_DIVISOR
+    }
+
     /// The domain-separated hash of the envelope's signed content —
     /// everything but the composer's own key and signature. This is
     /// also the identity fresh derivations root at: distinct signed
