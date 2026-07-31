@@ -21,7 +21,7 @@ use hyperscale_scenarios::{
     Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
     vote_reshape_threshold,
 };
-use hyperscale_simulation::{EPOCH_MS, SimConfig, SimulationRunner};
+use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner};
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
@@ -41,6 +41,18 @@ const SLICE: Duration = Duration::from_secs(1);
 /// partition holds roughly seven epochs, heal included); a genuine park
 /// runs unbounded and crosses this within a few extra slices.
 const MAX_BEACON_LAG_EPOCHS: u64 = 10;
+
+/// The full constructor input, so the VM knobs don't fan out across
+/// every legacy constructor's signature.
+struct BuildArgs<'a> {
+    config: &'a ScenarioConfig,
+    seed: u64,
+    balances: &'a [(ComponentAddress, Decimal)],
+    dedicated_pool_hosts: bool,
+    share_declared_reads: bool,
+    vm_accounts: &'a [([u8; 16], u128)],
+    vm_execution_mode: ExecutionMode,
+}
 
 /// The simulation adaptor: a [`Cluster`] over a [`SimulationRunner`].
 pub struct SimCluster {
@@ -84,6 +96,56 @@ impl SimCluster {
         Self::build(config, seed, balances, false, true)
     }
 
+    /// Build a genesis cluster with funded VM accounts beside the default
+    /// straddler balances, batch-scheduling VM waves serially.
+    #[must_use]
+    pub fn with_vm_accounts(
+        config: &ScenarioConfig,
+        seed: u64,
+        vm_accounts: &[([u8; 16], u128)],
+    ) -> Self {
+        Self::with_vm_mode(config, seed, vm_accounts, ExecutionMode::Serial)
+    }
+
+    /// [`Self::with_vm_accounts`] with an explicit VM batch scheduling
+    /// mode — one side of the D16 serial/parallel A/B.
+    #[must_use]
+    pub fn with_vm_mode(
+        config: &ScenarioConfig,
+        seed: u64,
+        vm_accounts: &[([u8; 16], u128)],
+        vm_execution_mode: ExecutionMode,
+    ) -> Self {
+        Self::with_vm_mode_and_balances(
+            config,
+            seed,
+            &straddler_genesis_balances(),
+            vm_accounts,
+            vm_execution_mode,
+        )
+    }
+
+    /// The mixed-engine constructor: funded Radix `balances` and funded
+    /// VM accounts on one chain.
+    #[must_use]
+    pub fn with_vm_mode_and_balances(
+        config: &ScenarioConfig,
+        seed: u64,
+        balances: &[(ComponentAddress, Decimal)],
+        vm_accounts: &[([u8; 16], u128)],
+        vm_execution_mode: ExecutionMode,
+    ) -> Self {
+        Self::build_full(&BuildArgs {
+            config,
+            seed,
+            balances,
+            dedicated_pool_hosts: false,
+            share_declared_reads: false,
+            vm_accounts,
+            vm_execution_mode,
+        })
+    }
+
     /// Build a genesis cluster giving each pool extra its own shard-less
     /// follower host rather than riding a committee host. This is a sim-only
     /// layout the shuffle-relocation tests (`vnode_relocation`, `pool_reseat`)
@@ -107,6 +169,19 @@ impl SimCluster {
         dedicated_pool_hosts: bool,
         share_declared_reads: bool,
     ) -> Self {
+        Self::build_full(&BuildArgs {
+            config,
+            seed,
+            balances,
+            dedicated_pool_hosts,
+            share_declared_reads,
+            vm_accounts: &[],
+            vm_execution_mode: ExecutionMode::Serial,
+        })
+    }
+
+    fn build_full(args: &BuildArgs<'_>) -> Self {
+        let config = args.config;
         let beacon_chain_config = BeaconChainConfig {
             epoch_duration_ms: EPOCH_MS,
             shard_size: config.shard_size,
@@ -119,15 +194,17 @@ impl SimCluster {
             shard_size: config.shard_size,
             vnodes_per_host: config.vnodes_per_host,
             pool_surplus: config.pool_surplus,
-            dedicated_pool_hosts,
+            dedicated_pool_hosts: args.dedicated_pool_hosts,
             beacon_chain_config: Some(beacon_chain_config),
             intra_shard_latency: config.latency,
             cross_shard_latency: config.latency,
-            share_declared_reads,
+            share_declared_reads: args.share_declared_reads,
+            vm_accounts: args.vm_accounts.to_vec(),
+            vm_execution_mode: args.vm_execution_mode,
             ..SimConfig::default()
         };
-        let mut runner = SimulationRunner::new(&sim_config, seed);
-        runner.initialize_genesis_with_balances(balances);
+        let mut runner = SimulationRunner::new(&sim_config, args.seed);
+        runner.initialize_genesis_with_balances(args.balances);
 
         Self {
             runner,
@@ -234,9 +311,9 @@ impl SimCluster {
     /// selection is refined when cross-shard scenarios land.
     fn host_for_tx(&self, tx: &RoutableTransaction) -> Option<NodeIndex> {
         let topology_snapshot = self.runner.host_topology(0)?;
-        let shards: BTreeSet<ShardId> = tx
-            .all_declared_nodes()
-            .map(|host| topology_snapshot.shard_for_node_id(host))
+        let shards: BTreeSet<ShardId> = topology_snapshot
+            .all_shards_for_transaction(tx)
+            .into_iter()
             .collect();
         (0..self.runner.num_hosts()).find(|&host| {
             self.runner

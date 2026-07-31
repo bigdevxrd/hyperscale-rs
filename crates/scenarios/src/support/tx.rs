@@ -8,12 +8,17 @@
 
 use std::time::Duration;
 
+use hyperscale_effects_bridge::encode_graph;
+use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
     ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId, StakePoolId,
-    TimestampRange, WeightedTimestamp, build_transfer_tx as build_transfer,
+    TimestampRange, VmTransaction, WeightedTimestamp, build_transfer_tx as build_transfer,
     ed25519_keypair_from_seed, encode_system_action, routable_from_notarized_v1, sign_and_notarize,
     sign_and_notarize_with_options, uniform_shard_for_node,
+};
+use hyperscale_vm_effects::{
+    Address, Constraint, EdgeRef, GraphArg, GraphNode, ManifestGraph, Value,
 };
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
@@ -527,6 +532,84 @@ pub fn validity_around(now: Duration) -> TimestampRange {
         WeightedTimestamp::ZERO.plus(now.saturating_sub(Duration::from_secs(5))),
         WeightedTimestamp::ZERO.plus(now + Duration::from_secs(150)),
     )
+}
+
+/// The VM account owned by [`signer_from_seed`]'s key for `seed`.
+#[must_use]
+pub fn vm_account_from_seed(seed: u8) -> [u8; 16] {
+    vm_account_address(&signer_from_seed(seed).public_key().0)
+}
+
+/// VM contention sender `index`: its signing key and account, on the same
+/// seed lane as [`contention_sender`] — the VM address space is disjoint
+/// from the Radix one, so the lanes never collide.
+#[must_use]
+pub fn vm_sender(index: u8) -> (Ed25519PrivateKey, [u8; 16]) {
+    let seed = CONTENTION_SENDER_BASE + index;
+    (signer_from_seed(seed), vm_account_from_seed(seed))
+}
+
+/// VM contention recipient `index`.
+#[must_use]
+pub fn vm_recipient(index: u8) -> [u8; 16] {
+    vm_account_from_seed(CONTENTION_RECIPIENT_BASE + index)
+}
+
+/// Genesis VM accounts for the VM scenarios: `senders` funded payers plus
+/// `recipients` payees.
+///
+/// Recipients must be genesis accounts too — an instance the registry
+/// does not know cannot be a deposit target, so there is no
+/// instantiate-on-deposit path to race (the account-creation flow is
+/// later-phase scope).
+#[must_use]
+pub fn vm_genesis_accounts(senders: u8, recipients: u8) -> Vec<([u8; 16], u128)> {
+    (0..senders)
+        .map(|index| (vm_sender(index).1, 10_000u128))
+        .chain((0..recipients).map(|index| (vm_recipient(index), 10)))
+        .collect()
+}
+
+/// Build a VM transfer: the account guest's withdraw+deposit graph over
+/// [`VM_XRD`], signed by `payer`.
+///
+/// The transaction hash covers the signed graph alone (no nonce until the
+/// phase 5 envelope), so two transfers identical in `(payer, from, to,
+/// amount)` are one transaction — scenarios vary a field when they need
+/// distinct submissions from one payer.
+#[must_use]
+pub fn build_vm_transfer_tx(
+    payer: &Ed25519PrivateKey,
+    from: [u8; 16],
+    to: [u8; 16],
+    amount: u128,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let graph = ManifestGraph {
+        nodes: vec![
+            GraphNode {
+                target: Address(from),
+                method: "withdraw".into(),
+                args: vec![
+                    GraphArg::Literal(Value::Address(VM_XRD)),
+                    GraphArg::Literal(Value::U128(amount)),
+                ],
+            },
+            GraphNode {
+                target: Address(to),
+                method: "deposit".into(),
+                args: vec![GraphArg::Edge {
+                    edge: EdgeRef {
+                        producer: 0,
+                        output: 0,
+                    },
+                    constraints: vec![Constraint::ResourceIs(VM_XRD)],
+                }],
+            },
+        ],
+    };
+    let vm = VmTransaction::new_signed(encode_graph(&graph), payer);
+    RoutableTransaction::new_vm(vm, validity)
 }
 
 /// Build a withdraw-from-`from`, deposit-to-`to` XRD transfer, signed and

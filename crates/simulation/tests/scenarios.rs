@@ -13,7 +13,7 @@ use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
     contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
     halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
-    split_straddler_setup, witness_genesis_balances,
+    split_straddler_setup, vm_genesis_accounts, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, ScenarioConfig, beacon_lag_drops_skipped_epochs_reveal_chains,
@@ -29,15 +29,18 @@ use hyperscale_scenarios::{
     inter_shard_partition_aborts_waves_at_deadline, isolated_validator_still_settles,
     livelock_resolves_promptly, liveness_baseline, merge_lifecycle,
     merge_seats_full_keeper_committee, merge_straddler_atomic,
-    minority_fragment_rejoins_after_partition, multi_vnode_progress, participant_count_sweep,
-    partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
-    re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
-    register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
-    shared_read_payments, single_shard_tx, split_lifecycle, split_straddler_atomic,
-    split_straddler_ec_partition_atomic, stake_deposit_folds_into_beacon_state,
-    stake_withdraw_drops_effective_stake, surviving_sibling_split_seats_full_committees,
+    minority_fragment_rejoins_after_partition, mixed_engine_blocks, multi_vnode_progress,
+    participant_count_sweep, partition_halts_and_heals, partition_heals_at_exact_quorum,
+    pool_capacity_caps_registrations, re_registration_of_a_live_validator_is_a_no_op,
+    register_validator_pools_a_node, register_without_capacity_is_rejected,
+    registered_validator_activates_onto_a_shard, shared_read_payments, single_shard_tx,
+    split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
+    stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
+    surviving_sibling_split_seats_full_committees, vm_abort_converges, vm_hot_recipient,
+    vm_single_transfer, vm_snapshot_reads_committed_baseline, vm_zipf_payments,
     withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
+use hyperscale_simulation::ExecutionMode;
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::test_utils::shard_fork_proof_signed_by;
 use hyperscale_types::{
@@ -136,6 +139,90 @@ fn split_lifecycle_sim() {
 fn cross_shard_tx_sim() {
     let mut cluster = SimCluster::new(&split_config(), 11);
     cross_shard_tx(&mut cluster);
+}
+
+// ─── VM engine scenarios ───────────────────────────────────────────────
+// The single-shard catalogue on the VM engine: signed manifest graphs
+// through the live pipeline, receipts from the batch executor.
+
+#[test]
+fn vm_single_transfer_sim() {
+    let mut cluster =
+        SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(1, 1));
+    vm_single_transfer(&mut cluster);
+}
+
+#[test]
+fn vm_abort_converges_sim() {
+    let mut cluster =
+        SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(1, 1));
+    vm_abort_converges(&mut cluster);
+}
+
+#[test]
+fn vm_snapshot_reads_committed_baseline_sim() {
+    let mut cluster =
+        SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(2, 1));
+    vm_snapshot_reads_committed_baseline(&mut cluster);
+}
+
+#[test]
+fn vm_zipf_payments_sim() {
+    let mut cluster =
+        SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(24, 6));
+    let report = vm_zipf_payments(&mut cluster, 24, 6, 1.0);
+    println!("vm_zipf_payments s=1.0 senders=24 recipients=6: {report:?}");
+}
+
+#[test]
+fn vm_hot_recipient_sim() {
+    let mut cluster =
+        SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(12, 1));
+    let (report, height_span) = vm_hot_recipient(&mut cluster, 12);
+    println!("vm_hot_recipient senders=12 height_span={height_span}: {report:?}");
+}
+
+#[test]
+fn mixed_engine_blocks_sim() {
+    // The Radix side reuses the contention recipients; the VM side its
+    // own funded lane — one chain carries both engines' receipts.
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &liveness_config(),
+        42,
+        &contention_genesis_balances(0, 6),
+        &vm_genesis_accounts(6, 1),
+        ExecutionMode::Serial,
+    );
+    mixed_engine_blocks(&mut cluster, 6);
+}
+
+/// D16 on committed blocks: one seed, serial vs parallel VM batch
+/// scheduling, identical committed state roots. Receipts are
+/// schedule-invariant by kernel construction; this pins that the
+/// property survives the whole pipeline — fold, receipt hashing, JMT
+/// build, commit.
+#[test]
+fn vm_serial_parallel_state_roots_agree_sim() {
+    let run = |mode| {
+        let mut cluster =
+            SimCluster::with_vm_mode(&liveness_config(), 42, &vm_genesis_accounts(8, 2), mode);
+        let report = vm_zipf_payments(&mut cluster, 8, 2, 1.0);
+        println!("vm d16 mode={mode:?}: {report:?}");
+        (
+            cluster.committed_height(ShardId::ROOT),
+            cluster.committed_state_root(ShardId::ROOT),
+        )
+    };
+    let serial = run(ExecutionMode::Serial);
+    let parallel = run(ExecutionMode::Parallel);
+    assert_eq!(
+        serial, parallel,
+        "serial and parallel VM scheduling must commit identical chains",
+    );
+    assert!(
+        serial.1.is_some(),
+        "the seeded run must commit a state root"
+    );
 }
 
 // ─── Contention scenarios ──────────────────────────────────────────────

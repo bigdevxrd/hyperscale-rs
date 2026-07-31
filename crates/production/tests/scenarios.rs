@@ -14,7 +14,8 @@ use std::time::Duration;
 use hyperscale_scenarios::tx::{
     contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
     halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
-    split_straddler_setup, witness_genesis_balances,
+    split_straddler_setup, straddler_genesis_balances, vm_genesis_accounts,
+    witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     ScenarioConfig, beacon_pool_partition_stalls_epoch_production,
@@ -34,8 +35,9 @@ use hyperscale_scenarios::{
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
     single_shard_tx, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
+    surviving_sibling_split_seats_full_committees, vm_abort_converges, vm_hot_recipient,
+    vm_single_transfer, vm_zipf_payments, withdrawal_ejects_a_validator_that_a_deposit_reactivates,
+    zipf_payments,
 };
 use serial_test::serial;
 use support::ProdCluster;
@@ -81,6 +83,40 @@ fn liveness_baseline_prod() {
 fn single_shard_tx_prod() {
     let mut cluster = ProdCluster::start(&liveness_config(), 7, EPOCH_MS);
     single_shard_tx(&mut cluster);
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn vm_single_transfer_prod() {
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &liveness_config(),
+        7,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        vm_genesis_accounts(1, 1),
+    );
+    vm_single_transfer(&mut cluster);
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn vm_abort_converges_prod() {
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &liveness_config(),
+        7,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        vm_genesis_accounts(1, 1),
+    );
+    vm_abort_converges(&mut cluster);
 }
 
 /// Fault-scenario config: four single-vnode hosts, so a `transaction.gossip`
@@ -234,6 +270,42 @@ fn hot_component_saturation_prod() {
     );
     let (report, height_span) = hot_component_saturation(&mut cluster, 12);
     println!("hot_component_saturation senders=12 height_span={height_span}: {report:?}");
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn vm_zipf_payments_prod() {
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &liveness_config(),
+        42,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        vm_genesis_accounts(24, 6),
+    );
+    let report = vm_zipf_payments(&mut cluster, 24, 6, 1.0);
+    println!("vm_zipf_payments s=1.0 senders=24 recipients=6: {report:?}");
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn vm_hot_recipient_prod() {
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &liveness_config(),
+        42,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        vm_genesis_accounts(12, 1),
+    );
+    let (report, height_span) = vm_hot_recipient(&mut cluster, 12);
+    println!("vm_hot_recipient senders=12 height_span={height_span}: {report:?}");
 }
 
 #[test]

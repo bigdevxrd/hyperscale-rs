@@ -6,6 +6,9 @@ description = "Portable node-behavioral scenarios run on both the simulation and
 
 [dependencies]
 hyperscale-crypto-bls.workspace = true
+hyperscale-effects-bridge.workspace = true
+hyperscale-engine-vm.workspace = true
+hyperscale-vm-effects.workspace = true
 hyperscale-mempool.workspace = true
 hyperscale-storage = { workspace = true }
 hyperscale-types = { workspace = true, features = ["test-utils"] }

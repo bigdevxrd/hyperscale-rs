@@ -12,7 +12,7 @@ mod canonical_txs;
 mod network_handlers;
 mod tx_status;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -425,14 +425,7 @@ where
     /// hosted shard, but no shard admits or takes ownership.
     pub(crate) fn compute_submit_fanout(&self, tx: &RoutableTransaction) -> SubmitFanout {
         let topology_snapshot = self.topology_snapshot.load();
-        let touched_shards: Vec<ShardId> = tx
-            .declared_reads()
-            .iter()
-            .chain(tx.declared_writes().iter())
-            .map(|node_id| topology_snapshot.shard_for_node_id(node_id))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let touched_shards: Vec<ShardId> = topology_snapshot.all_shards_for_transaction(tx);
 
         let senders = self.shard_event_senders.load();
         let mut hosted_touched = senders

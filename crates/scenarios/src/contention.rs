@@ -52,7 +52,7 @@ pub struct ContentionReport {
 }
 
 /// Deterministic 64-bit LCG (Knuth's MMIX constants) for seeded sampling.
-struct Lcg(u64);
+pub struct Lcg(pub u64);
 
 impl Lcg {
     const fn next(&mut self) -> u64 {
@@ -64,7 +64,7 @@ impl Lcg {
     }
 
     #[allow(clippy::cast_precision_loss)] // uniform draw; 53 bits is the point
-    fn unit(&mut self) -> f64 {
+    pub fn unit(&mut self) -> f64 {
         (self.next() >> 11) as f64 / (1u64 << 53) as f64
     }
 }
@@ -72,7 +72,7 @@ impl Lcg {
 /// The cumulative Zipf distribution over ranks `1..=n` at exponent
 /// `skew`.
 #[allow(clippy::cast_precision_loss)] // ranks are tiny
-fn zipf_cdf(n: usize, skew: f64) -> Vec<f64> {
+pub fn zipf_cdf(n: usize, skew: f64) -> Vec<f64> {
     let weights: Vec<f64> = (1..=n).map(|rank| 1.0 / (rank as f64).powf(skew)).collect();
     let total: f64 = weights.iter().sum();
     let mut acc = 0.0;
@@ -88,7 +88,7 @@ fn zipf_cdf(n: usize, skew: f64) -> Vec<f64> {
 /// Drive the cluster until every hash is terminal, recording each
 /// first-observed terminal time at the predicate's poll granularity, then
 /// assert every payment accepted and fold the observables into a report.
-fn settle_and_report(
+pub fn settle_and_report(
     c: &mut impl Cluster,
     submissions: &[(TxHash, Duration)],
     budget: Budget,

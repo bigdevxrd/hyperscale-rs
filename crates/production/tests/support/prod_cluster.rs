@@ -66,6 +66,20 @@ impl ProdCluster {
         epoch_ms: u64,
         balances: Vec<(ComponentAddress, Decimal)>,
     ) -> Self {
+        Self::start_with_vm_accounts(config, seed, epoch_ms, balances, Vec::new())
+    }
+
+    /// [`Self::start_with_balances`] with funded VM accounts beside the
+    /// Radix balances — the mirror of `SimCluster::with_vm_accounts`, so
+    /// the VM catalogue runs identically on both harnesses.
+    #[must_use]
+    pub fn start_with_vm_accounts(
+        config: &ScenarioConfig,
+        seed: u64,
+        epoch_ms: u64,
+        balances: Vec<(ComponentAddress, Decimal)>,
+        vm_accounts: Vec<([u8; 16], u128)>,
+    ) -> Self {
         // `RUST_LOG` steers per-crate levels when set (diagnosing a long
         // real-network run); the default stays plain info.
         let _ = fmt()
@@ -79,7 +93,7 @@ impl ProdCluster {
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let spec = Self::spec(config, seed, epoch_ms, balances);
+        let spec = Self::spec(config, seed, epoch_ms, balances, vm_accounts);
         // Claim the global recorder before the runner installs its Prometheus one
         // (`set_global_recorder` is first-wins), so `metric()` reads node counters.
         // Every `ProdCluster` claims it, so all prod scenario tests — fault or
@@ -129,6 +143,7 @@ impl ProdCluster {
         seed: u64,
         epoch_ms: u64,
         balances: Vec<(ComponentAddress, Decimal)>,
+        vm_accounts: Vec<([u8; 16], u128)>,
     ) -> ClusterSpec {
         let fixtures = TestFixtures::with_surplus(seed, config.shard_size, config.pool_surplus);
         let total = config.shard_size + config.pool_surplus;
@@ -161,6 +176,7 @@ impl ProdCluster {
             // faucet empty and seeds no accounts.
             genesis_config: Some(GenesisConfig {
                 xrd_balances: balances,
+                vm_accounts,
                 ..GenesisConfig::test_default()
             }),
             simulated_outbound_latency: config.latency,
@@ -181,8 +197,9 @@ impl ProdCluster {
             .inner
             .beacon_state()?
             .derive_topology_snapshot(NetworkDefinition::simulator());
-        tx.all_declared_nodes()
-            .map(|node| topology_snapshot.shard_for_node_id(node))
+        topology_snapshot
+            .all_shards_for_transaction(tx)
+            .into_iter()
             .find_map(|shard| self.inner.host_serving(shard))
     }
 }

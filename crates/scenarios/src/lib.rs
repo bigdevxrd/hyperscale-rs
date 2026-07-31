@@ -24,6 +24,7 @@ mod multi_vnode;
 mod reshape;
 mod straddler;
 mod transactions;
+mod vm;
 mod witnesses;
 
 pub use contention::{
@@ -59,6 +60,10 @@ pub use support::{
     vote_reshape_threshold, wait,
 };
 pub use transactions::{cross_shard_tx, livelock_resolves_promptly, single_shard_tx};
+pub use vm::{
+    mixed_engine_blocks, vm_abort_converges, vm_hot_recipient, vm_single_transfer,
+    vm_snapshot_reads_committed_baseline, vm_zipf_payments,
+};
 pub use witnesses::{
     pool_capacity_caps_registrations, re_registration_of_a_live_validator_is_a_no_op,
     register_validator_pools_a_node, register_without_capacity_is_rejected,
