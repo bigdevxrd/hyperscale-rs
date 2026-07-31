@@ -128,8 +128,9 @@ pub fn assign_waves(
 /// read-set keys (fresh reads and read-modify-write priors) toward every
 /// remote participant. Nothing node-granular travels. The payer shard's
 /// bundle flows even with nothing to serve — it is the engagement
-/// evidence a counterpart demands before proposing the transaction;
-/// other shards emit only what they own.
+/// evidence a counterpart demands before proposing the transaction — and
+/// a counterpart with nothing to serve emits an empty bundle to the
+/// payer alone: the engagement echo the payer's vote waits for.
 fn vm_provision_request(
     topology_snapshot: &TopologySnapshot,
     tx: &Arc<Verifiable<RoutableTransaction>>,
@@ -148,18 +149,22 @@ fn vm_provision_request(
             _ => None,
         })
         .collect();
-    let is_payer_shard = tx
-        .vm()
-        .is_some_and(|vm| trie.shard_for_prefix(vm.fee_payer) == local_shard);
-    if vm_local_keys.is_empty() && !is_payer_shard {
-        return None;
-    }
-    let target_nodes: Vec<(ShardId, Vec<NodeId>)> = topology_snapshot
-        .all_shards_for_transaction(tx)
-        .into_iter()
-        .filter(|&s| s != local_shard)
-        .map(|s| (s, Vec::new()))
-        .collect();
+    let payer_shard = tx.vm().map(|vm| trie.shard_for_prefix(vm.fee_payer))?;
+    let target_nodes: Vec<(ShardId, Vec<NodeId>)> =
+        if vm_local_keys.is_empty() && payer_shard != local_shard {
+            // The engagement echo: a counterpart with nothing to serve
+            // still owes the payer its commitment of the transaction —
+            // the evidence the payer's vote waits for — and owes nobody
+            // else anything.
+            vec![(payer_shard, Vec::new())]
+        } else {
+            topology_snapshot
+                .all_shards_for_transaction(tx)
+                .into_iter()
+                .filter(|&s| s != local_shard)
+                .map(|s| (s, Vec::new()))
+                .collect()
+        };
     if target_nodes.is_empty() {
         return None;
     }

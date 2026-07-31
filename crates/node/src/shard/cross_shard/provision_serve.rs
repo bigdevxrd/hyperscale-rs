@@ -66,11 +66,16 @@ pub fn serve_provision_request<S: ShardStorage>(
                 .iter()
                 .any(|prefix| shard_trie.shard_for_prefix(*prefix) == req.target_shard);
             // The payer shard serves its bundle even with nothing owned
-            // — the engagement evidence — mirroring the emit path.
-            let is_payer_shard = tx
-                .vm()
-                .is_some_and(|vm| shard_trie.shard_for_prefix(vm.fee_payer) == local_shard);
-            if (vm_local_keys.is_empty() && !is_payer_shard) || !targets_requester {
+            // — the engagement evidence — and a counterpart with
+            // nothing owned serves its empty bundle to the payer alone:
+            // the engagement echo. Both mirror the emit path.
+            let payer_shard = tx.vm().map(|vm| shard_trie.shard_for_prefix(vm.fee_payer));
+            let is_payer_shard = payer_shard == Some(local_shard);
+            if vm_local_keys.is_empty() && !is_payer_shard {
+                if payer_shard != Some(req.target_shard) {
+                    continue;
+                }
+            } else if !targets_requester {
                 continue;
             }
             requests.push(ProvisionsRequest {

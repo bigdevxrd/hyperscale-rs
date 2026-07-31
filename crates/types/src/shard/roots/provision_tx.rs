@@ -82,22 +82,30 @@ impl Verified<ProvisionTxRootsMap> {
             if topology_snapshot.is_single_shard_transaction(tx) {
                 continue;
             }
-            // A VM transaction fans out only from shards with something
-            // to attest: the payer shard — whose bundle is the
-            // engagement evidence and flows even with no state — and
-            // the shards owning part of its read set. Radix
-            // transactions fan out from every participant, which all
-            // hold declared state for each other.
+            // A VM transaction's fan-out is role-shaped. The payer shard
+            // and the shards owning part of its read set attest toward
+            // every participant: the payer's bundle is the engagement
+            // evidence and flows even with no state, an owner's carries
+            // its read-set values. Every other participant owes exactly
+            // one edge — the engagement echo toward the payer: its
+            // commitment of the transaction is what the payer's vote
+            // waits for, and nobody else consumes anything from it.
+            // Radix transactions fan out from every participant to every
+            // participant, which all hold declared state for each other.
             if let Some(vm) = tx.vm() {
                 let trie = topology_snapshot.shard_trie();
-                let is_payer = trie.shard_for_prefix(vm.fee_payer) == local_shard;
+                let payer_shard = trie.shard_for_prefix(vm.fee_payer);
                 let owns_read_set = tx.vm_routing().is_some_and(|routing| {
                     routing
                         .provision_prefixes
                         .iter()
                         .any(|prefix| trie.shard_for_prefix(*prefix) == local_shard)
                 });
-                if !is_payer && !owns_read_set {
+                if payer_shard != local_shard && !owns_read_set {
+                    per_target
+                        .entry(payer_shard)
+                        .or_default()
+                        .push(tx.hash().into_raw());
                     continue;
                 }
             }
@@ -144,5 +152,44 @@ impl Verify<&ProvisionTxRootsContext<'_>> for ProvisionTxRootsMap {
             return Err(ProvisionTxRootsVerifyError::Mismatch { expected, computed });
         }
         Ok(Verified::new_unchecked(self.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{TestCommittee, install_stub_vm_statics, stub_vm_transaction};
+    use crate::{TimestampRange, WeightedTimestamp};
+
+    fn cross_shard_vm_tx(payer: [u8; 16]) -> Arc<Verifiable<RoutableTransaction>> {
+        install_stub_vm_statics();
+        let validity = TimestampRange::new(
+            WeightedTimestamp::ZERO,
+            WeightedTimestamp::from_millis(100_000),
+        );
+        Arc::new(Verifiable::from(Verified::new_unchecked_for_test(
+            stub_vm_transaction(payer, &[[0x01; 16], [0x81; 16]], 1_000, validity),
+        )))
+    }
+
+    #[test]
+    fn a_pure_counterpart_fans_out_to_the_payer_alone() {
+        // The stub derivation carries no provision prefixes, so the
+        // non-payer shard owns nothing to attest: its only edge is the
+        // engagement echo toward the payer.
+        let topo = TestCommittee::new(4, 42).topology_snapshot(2);
+        let payer_shard = ShardId::leaf(1, 1);
+        let counterpart = ShardId::leaf(1, 0);
+        let txs = vec![cross_shard_vm_tx([0x81; 16])];
+
+        let at_counterpart = Verified::<ProvisionTxRootsMap>::compute(counterpart, &topo, &txs);
+        let targets: Vec<ShardId> = at_counterpart.as_ref().keys().copied().collect();
+        assert_eq!(targets, vec![payer_shard]);
+
+        // The payer still fans out to every participant: its bundle is
+        // the engagement evidence.
+        let at_payer = Verified::<ProvisionTxRootsMap>::compute(payer_shard, &topo, &txs);
+        let targets: Vec<ShardId> = at_payer.as_ref().keys().copied().collect();
+        assert_eq!(targets, vec![counterpart]);
     }
 }
