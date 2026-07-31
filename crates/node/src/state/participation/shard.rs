@@ -770,6 +770,7 @@ mod tests {
             ShardId::leaf(1, 1),
             BlockHeight::new(1),
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"outbound-tx")),

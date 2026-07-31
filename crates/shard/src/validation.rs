@@ -1287,6 +1287,7 @@ mod tests {
             ShardId::leaf(1, 1),
             BlockHeight::new(u64::from(seed)),
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
         ))
@@ -1544,6 +1545,7 @@ mod tests {
                 local,
                 BlockHeight::new(1),
                 WeightedTimestamp::ZERO,
+                RevealChain::ZERO,
                 MerkleInclusionProof::dummy(),
                 vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
             ))
@@ -1567,6 +1569,7 @@ mod tests {
                 ShardId::leaf(1, 1),
                 BlockHeight::new(1),
                 WeightedTimestamp::ZERO,
+                RevealChain::ZERO,
                 MerkleInclusionProof::dummy(),
                 vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
             ))

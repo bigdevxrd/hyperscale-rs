@@ -30,15 +30,16 @@ use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, Su
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
     BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata, FeeSummary, GlobalReceipt,
-    Hash, OwnershipRoot, RoutableTransaction, SubstateEntry, TxHash, Verified, install_vm_statics,
+    Hash, OwnershipRoot, RevealChain, RoutableTransaction, SubstateEntry, TxHash, Verified,
+    install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, EffectSet, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
     PrefixShardResolver, RoleId, SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
-    Base, BatchTx, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash, amount_cell,
-    decode_amount, encode_amount, execute_batch,
+    Base, BatchTx, EnvInputs, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash,
+    amount_cell, decode_amount, encode_amount, execute_batch,
 };
 use indexmap::IndexMap;
 use radix_common::math::Decimal;
@@ -53,6 +54,27 @@ use crate::runner::{ManifestRunner, PreparedVmTx};
 /// and fresh-ID derivation.
 pub fn protocol_hash(data: &[u8]) -> [u8; 32] {
     *blake3_hash(data).as_bytes()
+}
+
+/// Domain tag for the per-transaction randomness draw.
+const DOMAIN_TX_RANDOMNESS: &[u8] = b"hyperscale/vm/tx-randomness";
+
+/// The transaction's randomness draw: the payer block's reveal chain —
+/// its proposer's VRF reveal, attested by the committee that committed
+/// the transaction — domain-separated by the transaction hash.
+///
+/// Anchoring on the payer block is what makes the draw a property of the
+/// transaction rather than of whichever block a participant executes it
+/// in, so every participant of a cross-shard transaction derives one
+/// receipt. Mixing the hash keeps two transactions in one payer block
+/// from sharing a draw.
+fn tx_randomness(anchor: RevealChain, tx: TxHash) -> [u8; 32] {
+    *Hash::from_parts(&[
+        DOMAIN_TX_RANDOMNESS,
+        anchor.as_raw().as_bytes(),
+        tx.as_raw().as_bytes(),
+    ])
+    .as_bytes()
 }
 
 /// The batch's committed baseline: the declared cells pre-read from the
@@ -489,7 +511,7 @@ impl VmExecutor {
         snapshot: &DynSnapshot<'_>,
         transactions: &[Arc<Verified<RoutableTransaction>>],
         provisions_by_tx: &BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>>,
-        clock_by_tx: &BTreeMap<VmTxHash, u64>,
+        env_by_tx: &BTreeMap<VmTxHash, EnvInputs>,
         cross_shard: bool,
     ) -> Vec<ExecutedTx> {
         if transactions.is_empty() {
@@ -593,19 +615,21 @@ impl VmExecutor {
 
         let batch: Vec<BatchTx> = prepared
             .iter()
-            .map(|(vm_tx, entry)| BatchTx {
-                tx: *vm_tx,
-                declared: entry.declared.clone(),
-                nullifiers: entry.nullifiers.clone(),
-                clock_ms: clock_by_tx.get(vm_tx).copied().unwrap_or_default(),
-                // The executing block's draw. Every replica of this shard
-                // passes the same one, so single-shard receipts agree —
-                // but a counterpart shard executes the transaction under
-                // its own block, so a randomness-reading guest still
-                // derives a different receipt there. Anchoring the draw to
-                // the payer block, the way `clock_ms` is anchored through
-                // the bundle, is what closes that.
-                randomness: *ctx.block_hash.as_bytes(),
+            .map(|(vm_tx, entry)| {
+                // Total: both dispatch arms build the map from the same
+                // transactions the derivation ran over, and `prepared` is
+                // a subset of those.
+                let env = env_by_tx
+                    .get(vm_tx)
+                    .copied()
+                    .expect("every prepared transaction has an environment");
+                BatchTx {
+                    tx: *vm_tx,
+                    declared: entry.declared.clone(),
+                    nullifiers: entry.nullifiers.clone(),
+                    clock_ms: env.clock_ms,
+                    randomness: env.randomness,
+                }
             })
             .collect();
         let runner = ManifestRunner {
@@ -715,13 +739,16 @@ impl Executor for VmExecutor {
         transactions: &[Arc<Verified<RoutableTransaction>>],
     ) -> Vec<ExecutedTx> {
         // A single-shard batch commits in one block, so every member's
-        // transaction clock is the wave-start anchor.
-        let clock_by_tx: BTreeMap<VmTxHash, u64> = transactions
+        // environment is anchored on the wave-start block.
+        let env_by_tx: BTreeMap<VmTxHash, EnvInputs> = transactions
             .iter()
             .map(|tx| {
                 (
                     VmTxHash(Hash32(*tx.hash().as_bytes())),
-                    ctx.wave_start_ts.as_millis(),
+                    EnvInputs {
+                        clock_ms: ctx.wave_start_ts.as_millis(),
+                        randomness: tx_randomness(ctx.wave_start_reveal, tx.hash()),
+                    },
                 )
             })
             .collect();
@@ -730,7 +757,7 @@ impl Executor for VmExecutor {
             snapshot,
             transactions,
             &BTreeMap::new(),
-            &clock_by_tx,
+            &env_by_tx,
             false,
         )
     }
@@ -752,12 +779,18 @@ impl Executor for VmExecutor {
                 )
             })
             .collect();
-        let clock_by_tx: BTreeMap<VmTxHash, u64> = requests
+        // Each request carries the environment its payer block fixed:
+        // remote-payer legs the anchors off the payer's bundle, everything
+        // else the wave-start block's own.
+        let env_by_tx: BTreeMap<VmTxHash, EnvInputs> = requests
             .iter()
             .map(|r| {
                 (
                     VmTxHash(Hash32(*r.transaction.hash().as_bytes())),
-                    r.clock.as_millis(),
+                    EnvInputs {
+                        clock_ms: r.clock.as_millis(),
+                        randomness: tx_randomness(r.randomness, r.transaction.hash()),
+                    },
                 )
             })
             .collect();
@@ -766,8 +799,41 @@ impl Executor for VmExecutor {
             snapshot,
             &transactions,
             &provisions_by_tx,
-            &clock_by_tx,
+            &env_by_tx,
             true,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reveal(seed: &[u8]) -> RevealChain {
+        RevealChain::from_raw(Hash::from_bytes(seed))
+    }
+
+    fn tx(seed: &[u8]) -> TxHash {
+        TxHash::from_raw(Hash::from_bytes(seed))
+    }
+
+    /// The draw is a pure function of the payer block's reveal chain and
+    /// the transaction hash: participants agreeing on the anchor derive
+    /// one draw, and two transactions under one anchor derive two.
+    #[test]
+    fn a_draw_is_fixed_by_its_anchor_and_transaction() {
+        let anchor = reveal(b"payer block");
+        assert_eq!(
+            tx_randomness(anchor, tx(b"a")),
+            tx_randomness(anchor, tx(b"a"))
+        );
+        assert_ne!(
+            tx_randomness(anchor, tx(b"a")),
+            tx_randomness(anchor, tx(b"b"))
+        );
+        assert_ne!(
+            tx_randomness(anchor, tx(b"a")),
+            tx_randomness(reveal(b"another block"), tx(b"a"))
+        );
     }
 }

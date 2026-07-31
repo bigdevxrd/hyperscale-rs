@@ -73,8 +73,8 @@ mod tests {
 
     use hyperscale_core::{Action, ProtocolEvent, StateMachine};
     use hyperscale_types::{
-        BlockHeight, LocalTimestamp, MerkleInclusionProof, Provisions, ShardId, Verified,
-        WeightedTimestamp,
+        BlockHeight, LocalTimestamp, MerkleInclusionProof, Provisions, RevealChain, ShardId,
+        Verified, WeightedTimestamp,
     };
 
     use crate::state::test_support::TestNode;
@@ -96,6 +96,7 @@ mod tests {
                 ShardId::ROOT,       // target (local)
                 BlockHeight::new(1),
                 WeightedTimestamp::ZERO,
+                RevealChain::ZERO,
                 MerkleInclusionProof::dummy(),
                 vec![],
             ))

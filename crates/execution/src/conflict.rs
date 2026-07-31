@@ -287,8 +287,8 @@ mod tests {
     use hyperscale_crypto_bls::BlsSigner;
     use hyperscale_types::{
         BlockHeight, Hash, MerkleInclusionProof, NetworkDefinition, NodeId, ProvisionEntry,
-        ShardId, Signer, SubstateEntry, TopologySnapshot, ValidatorId, ValidatorInfo, ValidatorSet,
-        uniform_shard_for_node,
+        RevealChain, ShardId, Signer, SubstateEntry, TopologySnapshot, ValidatorId, ValidatorInfo,
+        ValidatorSet, uniform_shard_for_node,
     };
 
     use super::*;
@@ -354,6 +354,7 @@ mod tests {
             ShardId::leaf(1, 0),
             height,
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             txs.into_iter()
                 .map(|(hash, source_nodes, target_nodes)| {

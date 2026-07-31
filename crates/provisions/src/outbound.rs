@@ -235,7 +235,7 @@ mod tests {
 
     use hyperscale_types::{
         ExecutionOutcome, GlobalReceiptHash, Hash, MerkleInclusionProof, ProvisionEntry,
-        RETENTION_HORIZON,
+        RETENTION_HORIZON, RevealChain,
     };
 
     use super::*;
@@ -258,6 +258,7 @@ mod tests {
             ShardId::leaf(2, 1),
             source_block,
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             transactions,
         )))

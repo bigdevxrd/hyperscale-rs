@@ -31,9 +31,9 @@ use std::time::Duration;
 use hyperscale_core::{Action, CrossShardExecutionRequest};
 use hyperscale_types::{
     BlockHash, BlockHeight, ExecutionCertificate, ExecutionOutcome, FinalizedWave,
-    GlobalReceiptRoot, RoutableTransaction, ShardId, StateRoot, StoredReceipt, TransactionDecision,
-    TxHash, TxOutcome, Verifiable, Verified, WAVE_TIMEOUT, WaveCertificate, WaveId,
-    WeightedTimestamp, compute_global_receipt_root,
+    GlobalReceiptRoot, RevealChain, RoutableTransaction, ShardId, StateRoot, StoredReceipt,
+    TransactionDecision, TxHash, TxOutcome, Verifiable, Verified, WAVE_TIMEOUT, WaveCertificate,
+    WaveId, WeightedTimestamp, compute_global_receipt_root,
 };
 
 use crate::provisioning::ProvisioningTracker;
@@ -74,6 +74,9 @@ pub struct WaveState {
     /// Anchor for wave-level wall-clock timeouts (wave abort, vote anchor
     /// in the timeout path).
     wave_start_ts: WeightedTimestamp,
+    /// The wave-starting block's reveal chain — the randomness anchor for
+    /// every transaction this shard committed in that block.
+    wave_start_reveal: RevealChain,
 
     // ── Provisioning phase ──────────────────────────────────────────────
     /// Txs whose required remote-shard provisions have all arrived.
@@ -173,6 +176,7 @@ impl WaveState {
         wave_id: WaveId,
         block_hash: BlockHash,
         wave_start_ts: WeightedTimestamp,
+        wave_start_reveal: RevealChain,
         txs: Vec<(Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>)>,
         single_shard: bool,
     ) -> Self {
@@ -216,6 +220,7 @@ impl WaveState {
             wave_id,
             block_hash,
             wave_start_ts,
+            wave_start_reveal,
             tx_hashes,
             participating_shards,
             tx_hash_set,
@@ -378,6 +383,7 @@ impl WaveState {
                 block_height: self.block_height(),
                 transactions,
                 wave_start_ts: self.wave_start_ts,
+                wave_start_reveal: self.wave_start_reveal,
                 state_root: StateRoot::ZERO,
             });
         }
@@ -400,20 +406,19 @@ impl WaveState {
                 .map(<[_]>::to_vec)
                 .unwrap_or_default();
             let ownership = provisioning.ownership_for(tx_hash);
-            // The transaction clock: a remote-payer VM leg executes under
-            // the anchor its payer bundle carried — the payer shard sits
-            // in `required`, so the fully-provisioned gate guarantees the
-            // bundle was absorbed. Every other leg (payer-local VM,
+            // The transaction environment: a remote-payer VM leg executes
+            // under the anchor its payer bundle carried — the payer shard
+            // sits in `required`, so the fully-provisioned gate guarantees
+            // the bundle was absorbed. Every other leg (payer-local VM,
             // Radix) anchors on this wave's own committing block.
-            let clock = provisioning
-                .payer_clock(tx_hash)
-                .unwrap_or(self.wave_start_ts);
+            let anchor = provisioning.payer_anchor(tx_hash);
             requests.push(CrossShardExecutionRequest {
                 tx_hash,
                 transaction: Arc::clone(tx),
                 provisions,
                 ownership,
-                clock,
+                clock: anchor.map_or(self.wave_start_ts, |a| a.clock),
+                randomness: anchor.map_or(self.wave_start_reveal, |a| a.randomness),
             });
         }
         if requests.is_empty() {
@@ -425,6 +430,7 @@ impl WaveState {
             block_height: self.block_height(),
             requests,
             wave_start_ts: self.wave_start_ts,
+            wave_start_reveal: self.wave_start_reveal,
         })
     }
 
@@ -1087,8 +1093,8 @@ mod tests {
     use hyperscale_types::test_utils::{test_node, test_transaction_with_nodes};
     use hyperscale_types::{
         AggregateSignature, BoundedVec, ConsensusReceipt, DatabaseUpdates, GlobalReceiptHash, Hash,
-        MerkleInclusionProof, ProvisionEntry, Provisions, SignerBitfield, SubstateEntry,
-        tx_outcome_leaf,
+        MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, SignerBitfield,
+        SubstateEntry, tx_outcome_leaf,
     };
 
     use super::*;
@@ -1124,6 +1130,7 @@ mod tests {
             WaveId::new(ShardId::leaf(1, 0), WAVE_START, BTreeSet::new()),
             BlockHash::from_raw(Hash::from_bytes(b"block")),
             ts_for(WAVE_START),
+            RevealChain::ZERO,
             txs,
             true,
         )
@@ -1142,9 +1149,16 @@ mod tests {
             ),
             BlockHash::from_raw(Hash::from_bytes(b"block")),
             ts_for(WAVE_START),
+            wave_start_reveal(),
             txs,
             false,
         )
+    }
+
+    /// The wave-starting block's own reveal chain — the anchor every leg
+    /// falls back to when no payer bundle names another.
+    fn wave_start_reveal() -> RevealChain {
+        RevealChain::from_raw(Hash::from_bytes(b"wave start reveal"))
     }
 
     fn executed(success: bool) -> ExecutionOutcome {
@@ -1813,6 +1827,7 @@ mod tests {
             ShardId::leaf(1, 0),
             BlockHeight::new(3),
             ts_for(WAVE_START + 1),
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(tx, vec![], vec![], vec![])],
         ))
@@ -1918,10 +1933,10 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_clock_prefers_the_payer_bundles_anchor() {
-        // A remote-payer VM leg executes under the clock its payer bundle
-        // carried; every other leg anchors on this wave's own committing
-        // block.
+    fn dispatch_environment_prefers_the_payer_bundles_anchor() {
+        // A remote-payer VM leg executes under the clock and draw its
+        // payer bundle carried; every other leg anchors on this wave's
+        // own committing block.
         let mut w = make_cross_shard_wave(2);
         let remote_payer_tx = w.tx_hashes()[0];
         let local_anchor_tx = w.tx_hashes()[1];
@@ -1929,14 +1944,16 @@ mod tests {
         w.mark_tx_provisioned(local_anchor_tx, ts_for(WAVE_START + 1));
 
         let payer_shard = ShardId::leaf(1, 1);
-        let payer_anchor = WeightedTimestamp::from_millis(77_777);
+        let payer_clock = WeightedTimestamp::from_millis(77_777);
+        let payer_reveal = RevealChain::from_raw(Hash::from_bytes(b"payer block reveal"));
         let mut provisioning = ProvisioningTracker::new();
         provisioning.record_payer_shard(remote_payer_tx, payer_shard);
         provisioning.absorb_provisions(&Verified::new_unchecked_for_test(Provisions::new(
             payer_shard,
             ShardId::leaf(1, 0),
             BlockHeight::new(3),
-            payer_anchor,
+            payer_clock,
+            payer_reveal,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(remote_payer_tx, vec![], vec![], vec![])],
         )));
@@ -1945,18 +1962,21 @@ mod tests {
             Some(Action::ExecuteCrossShardTransactions {
                 requests,
                 wave_start_ts,
+                wave_start_reveal: local_reveal,
                 ..
             }) => {
                 assert_eq!(wave_start_ts, ts_for(WAVE_START));
-                let clock_of = |hash: TxHash| {
+                assert_eq!(local_reveal, wave_start_reveal());
+                let request_for = |hash: TxHash| {
                     requests
                         .iter()
                         .find(|r| r.tx_hash == hash)
                         .expect("request present")
-                        .clock
                 };
-                assert_eq!(clock_of(remote_payer_tx), payer_anchor);
-                assert_eq!(clock_of(local_anchor_tx), ts_for(WAVE_START));
+                assert_eq!(request_for(remote_payer_tx).clock, payer_clock);
+                assert_eq!(request_for(remote_payer_tx).randomness, payer_reveal);
+                assert_eq!(request_for(local_anchor_tx).clock, ts_for(WAVE_START));
+                assert_eq!(request_for(local_anchor_tx).randomness, wave_start_reveal());
             }
             other => panic!("expected ExecuteCrossShardTransactions, got {other:?}"),
         }

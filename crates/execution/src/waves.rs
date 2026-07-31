@@ -416,7 +416,7 @@ mod tests {
     use hyperscale_types::test_utils::test_transaction;
     use hyperscale_types::{
         AggregateSignature, BlockHash, BlockHeight, ExecutionOutcome, GlobalReceiptHash, Hash,
-        ShardId, SignerBitfield, Verifiable,
+        RevealChain, ShardId, SignerBitfield, Verifiable,
     };
     use proptest::collection::vec as prop_vec;
 
@@ -438,7 +438,14 @@ mod tests {
         let tx = Arc::new(Verifiable::from(test_transaction(tx_seed)));
         let mut participating = BTreeSet::new();
         participating.insert(shard());
-        WaveState::new(wave_id, block_hash, ms(0), vec![(tx, participating)], true)
+        WaveState::new(
+            wave_id,
+            block_hash,
+            ms(0),
+            RevealChain::ZERO,
+            vec![(tx, participating)],
+            true,
+        )
     }
 
     fn make_tracker(wave_id: WaveId, block_hash: BlockHash) -> VoteTracker {

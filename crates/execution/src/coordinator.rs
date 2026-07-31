@@ -45,9 +45,9 @@ use hyperscale_types::{
     Attempt, AwaitingTopologyBuffer, Block, BlockHash, BlockHeader, BlockHeight, BloomFilter,
     CertifiedBlock, ExecutionCertificate, ExecutionCertificateVerifyError, ExecutionVote,
     FinalizedWave, FinalizedWaveVerifyError, GlobalReceiptRoot, Hash, Provisions,
-    RETENTION_HORIZON, RoutableTransaction, ScheduleLookup, SettledSetVerdict, SettledWaveSet,
-    ShardId, StoredReceipt, TopologySchedule, TopologySnapshot, TxHash, TxOutcome, ValidatorId,
-    Verifiable, Verified, WAVE_TIMEOUT, WaveCertificate, WaveId, WeightedTimestamp,
+    RETENTION_HORIZON, RevealChain, RoutableTransaction, ScheduleLookup, SettledSetVerdict,
+    SettledWaveSet, ShardId, StoredReceipt, TopologySchedule, TopologySnapshot, TxHash, TxOutcome,
+    ValidatorId, Verifiable, Verified, WAVE_TIMEOUT, WaveCertificate, WaveId, WeightedTimestamp,
     settled_set_verdict, wave_leader, wave_leader_at,
 };
 use tracing::instrument;
@@ -71,6 +71,18 @@ use crate::waves::{PendingVoteRetry, RetryEffect, WaveRegistry};
 /// shards whose echo its vote waits on, and the signed window end that
 /// bounds the wait.
 type EngagementWait = (TxHash, BTreeSet<ShardId>, WeightedTimestamp);
+
+/// The committed block a wave is created against: its identity, and the
+/// environment anchors the transactions it commits execute under.
+#[derive(Clone, Copy, Debug)]
+struct CommittingBlock {
+    hash: BlockHash,
+    height: BlockHeight,
+    /// The block's parent-QC weighted timestamp.
+    ts: WeightedTimestamp,
+    /// The block's reveal chain.
+    reveal: RevealChain,
+}
 
 /// Data returned when a wave is ready for voting.
 ///
@@ -544,11 +556,15 @@ impl ExecutionCoordinator {
         &mut self,
         topology_schedule: &TopologySchedule,
         classification: &TopologySnapshot,
-        block_hash: BlockHash,
-        block_height: BlockHeight,
-        block_ts: WeightedTimestamp,
+        block: CommittingBlock,
         transactions: &[Arc<Verifiable<RoutableTransaction>>],
     ) -> (Vec<Action>, Vec<Verifiable<ExecutionVote>>) {
+        let CommittingBlock {
+            hash: block_hash,
+            height: block_height,
+            ts: block_ts,
+            reveal: block_reveal,
+        } = block;
         let waves = assign_waves(classification, self.local_shard, block_height, transactions);
         // Setup-time leader/quorum key on the wave-start timestamp — a
         // best-effort guess, since the wave's `vote_anchor_ts` isn't fixed
@@ -583,8 +599,14 @@ impl ExecutionCoordinator {
             // Create the WaveState. For single-shard waves,
             // `all_provisioned_at` is set to `wave_start_ts`
             // immediately by the constructor.
-            let mut wave_state =
-                WaveState::new(wave_id.clone(), block_hash, block_ts, txs, is_single_shard);
+            let mut wave_state = WaveState::new(
+                wave_id.clone(),
+                block_hash,
+                block_ts,
+                block_reveal,
+                txs,
+                is_single_shard,
+            );
 
             for (tx_hash, counterparts, validity_end) in engagement_waits {
                 wave_state.record_engagement_wait(tx_hash, counterparts, validity_end);
@@ -2014,6 +2036,7 @@ impl ExecutionCoordinator {
                     source_shard: local_shard,
                     block_height: height,
                     source_block_ts: header.parent_qc().weighted_timestamp(),
+                    source_block_reveal: header.reveal_chain(),
                     shard_recipients,
                 });
             }
@@ -2029,9 +2052,12 @@ impl ExecutionCoordinator {
             let (dispatch_actions, early_votes) = self.setup_waves_and_dispatch(
                 topology_schedule,
                 anchored,
-                block_hash,
-                height,
-                self.committed_ts,
+                CommittingBlock {
+                    hash: block_hash,
+                    height,
+                    ts: self.committed_ts,
+                    reveal: header.reveal_chain(),
+                },
                 transactions,
             );
             actions.extend(dispatch_actions);
@@ -4605,6 +4631,7 @@ mod tests {
                 local_wave.clone(),
                 BlockHash::from_raw(Hash::from_bytes(b"block")),
                 WeightedTimestamp::from_millis(5_000),
+                RevealChain::ZERO,
                 vec![(Arc::new(Verifiable::from((*tx).clone())), participating)],
                 false,
             ),
@@ -4669,6 +4696,7 @@ mod tests {
             wave_id.clone(),
             BlockHash::from_raw(Hash::from_bytes(b"block")),
             WeightedTimestamp::from_millis(1_000),
+            RevealChain::ZERO,
             txs,
             true,
         );
@@ -5222,6 +5250,7 @@ mod tests {
                 wave_id.clone(),
                 BlockHash::from_raw(Hash::from_bytes(b"block")),
                 WeightedTimestamp::from_millis(5_000),
+                RevealChain::ZERO,
                 vec![(Arc::new(Verifiable::from((*tx).clone())), participating)],
                 false,
             ),
@@ -5272,6 +5301,7 @@ mod tests {
                 wave_id.clone(),
                 BlockHash::from_raw(Hash::from_bytes(b"block")),
                 WeightedTimestamp::from_millis(5_000),
+                RevealChain::ZERO,
                 vec![(Arc::new(Verifiable::from((*tx).clone())), participating)],
                 false,
             ),
@@ -5389,6 +5419,7 @@ mod tests {
                 local_wave,
                 BlockHash::from_raw(Hash::from_bytes(b"block")),
                 WeightedTimestamp::from_millis(0),
+                RevealChain::ZERO,
                 vec![(Arc::new(Verifiable::from((*tx).clone())), participating)],
                 false,
             ),

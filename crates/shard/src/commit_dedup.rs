@@ -180,7 +180,7 @@ impl CommitDedupIndex {
 mod tests {
     use hyperscale_types::test_utils::{make_finalized_wave, test_notarized_transaction_v1};
     use hyperscale_types::{
-        BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, Provisions, ShardId,
+        BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, ShardId,
         TimestampRange, TransactionDecision, routable_from_notarized_v1,
     };
 
@@ -218,6 +218,7 @@ mod tests {
             ShardId::leaf(1, 1),
             BlockHeight::new(u64::from(seed)),
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
         ))

@@ -19,8 +19,8 @@ use hyperscale_jmt::TreeReader as JmtTreeReader;
 use hyperscale_storage::{SubstateStore, SubstateView, VersionedStore};
 use hyperscale_types::state_key::vm_flat_key;
 use hyperscale_types::{
-    BlockHeight, MerkleInclusionProof, NodeId, ProvisionEntry, Provisions, ShardId, SubstateEntry,
-    TxHash, WeightedTimestamp,
+    BlockHeight, MerkleInclusionProof, NodeId, ProvisionEntry, Provisions, RevealChain, ShardId,
+    SubstateEntry, TxHash, WeightedTimestamp,
 };
 use tracing::warn;
 
@@ -49,6 +49,7 @@ pub fn build_provisions<S>(
     target_shard: ShardId,
     source_block_height: BlockHeight,
     source_block_ts: WeightedTimestamp,
+    source_block_reveal: RevealChain,
     requests: &[ProvisionsRequest],
 ) -> Option<Arc<Provisions>>
 where
@@ -158,6 +159,7 @@ where
         target_shard,
         source_block_height,
         source_block_ts,
+        source_block_reveal,
         proof,
         transactions,
     )))

@@ -134,6 +134,7 @@ where
             block_height,
             transactions,
             wave_start_ts,
+            wave_start_reveal,
             state_root: _,
         } => {
             let start = Stopwatch::start();
@@ -148,6 +149,7 @@ where
                 shard_trie,
                 block_hash,
                 wave_start_ts,
+                wave_start_reveal,
             };
             // Engine dispatch is typed: the block splits into per-variant
             // sub-batches, each engine executes its own, and the receipts
@@ -179,6 +181,7 @@ where
             block_height,
             requests,
             wave_start_ts,
+            wave_start_reveal,
         } => {
             fn inputs<'a>(reqs: &[&'a CrossShardExecutionRequest]) -> Vec<CrossShardTxInput<'a>> {
                 reqs.iter()
@@ -187,6 +190,7 @@ where
                         provisions: &r.provisions,
                         ownership: &r.ownership,
                         clock: r.clock,
+                        randomness: r.randomness,
                     })
                     .collect()
             }
@@ -202,6 +206,7 @@ where
                 shard_trie,
                 block_hash,
                 wave_start_ts,
+                wave_start_reveal,
             };
             // Engine dispatch is typed, exactly like the single-shard arm:
             // per-variant sub-batches, receipts merged back in canonical

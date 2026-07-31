@@ -244,7 +244,7 @@ impl ProvisionPipeline {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::{Hash, MerkleInclusionProof, ProvisionEntry, TxHash};
+    use hyperscale_types::{Hash, MerkleInclusionProof, ProvisionEntry, RevealChain, TxHash};
 
     use super::*;
 
@@ -258,6 +258,7 @@ mod tests {
             ShardId::leaf(2, 0),
             height,
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(&[seed])),

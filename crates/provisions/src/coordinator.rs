@@ -1479,6 +1479,7 @@ mod tests {
             target_shard,
             height,
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             transactions,
         )

@@ -123,6 +123,7 @@ pub fn serve_provision_request<S: ShardStorage>(
         req.target_shard,
         req.block_height,
         block.header().parent_qc().weighted_timestamp(),
+        block.header().reveal_chain(),
         &requests,
     );
 

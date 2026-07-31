@@ -1488,7 +1488,7 @@ mod tests {
         stub_vm_transaction, test_node, test_transaction, test_transaction_with_nodes,
         test_validity_range,
     };
-    use hyperscale_types::{NodeId, Verified, WitnessSources};
+    use hyperscale_types::{NodeId, RevealChain, Verified, WitnessSources};
 
     /// Test-only convenience: wrap any `RoutableTransaction` in a
     /// `Verified` witness via the test-only gate.
@@ -1546,6 +1546,7 @@ mod tests {
             ShardId::ROOT,
             height,
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             transactions,
         );

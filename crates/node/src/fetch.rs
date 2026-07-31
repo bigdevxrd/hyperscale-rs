@@ -736,14 +736,15 @@ mod partition_tests {
         // before signature/merkle verification — so unsolicited deliveries
         // must be dropped at the response boundary.
         use hyperscale_types::{
-            BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, Provisions, ShardId, TxHash,
-            WeightedTimestamp,
+            BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain,
+            ShardId, TxHash, WeightedTimestamp,
         };
         let asked = Arc::new(Provisions::new(
             ShardId::leaf(2, 1),
             ShardId::leaf(2, 2),
             BlockHeight::new(10),
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"asked")),
@@ -757,6 +758,7 @@ mod partition_tests {
             ShardId::leaf(2, 2),
             BlockHeight::new(11),
             WeightedTimestamp::ZERO,
+            RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"extra")),
