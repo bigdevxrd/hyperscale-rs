@@ -108,6 +108,16 @@ fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGraph {
 }
 
 fn signed_transfer(seed: u8, from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransaction {
+    signed_transfer_with_fee(seed, from, to, amount, 1_000_000)
+}
+
+fn signed_transfer_with_fee(
+    seed: u8,
+    from: [u8; 16],
+    to: [u8; 16],
+    amount: u128,
+    max_fee: u128,
+) -> RoutableTransaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
     let tree = EnvelopeTree {
         root: IntentDecl {
@@ -121,7 +131,7 @@ fn signed_transfer(seed: u8, from: [u8; 16], to: [u8; 16], amount: u128) -> Rout
         tree: encode_tree(&tree).into(),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&key.public_key().0),
-        max_fee: 1_000_000,
+        max_fee,
         gas_limit: 1_000_000,
         snapshot_pins: Vec::new(),
         validity_start_ms: 0,
@@ -138,7 +148,15 @@ fn execute(
     executor: &VmExecutor,
     transactions: &[Arc<Verified<RoutableTransaction>>],
 ) -> Vec<ExecutedTx> {
-    let snapshot_store = MapDb::genesis(&[(ALICE, 1_000), (BOB, 50)]);
+    execute_on(&[(ALICE, 1_000), (BOB, 50)], executor, transactions)
+}
+
+fn execute_on(
+    accounts: &[([u8; 16], u128)],
+    executor: &VmExecutor,
+    transactions: &[Arc<Verified<RoutableTransaction>>],
+) -> Vec<ExecutedTx> {
+    let snapshot_store = MapDb::genesis(accounts);
     let snapshot = DynSnapshot(&snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
@@ -245,4 +263,37 @@ fn serial_and_parallel_scheduling_produce_identical_receipts() {
         assert_eq!(left.tx_hash, right.tx_hash);
         assert_eq!(left.consensus, right.consensus);
     }
+}
+
+/// A completed transfer burns its attested actual — fuel, capped at the
+/// signed ceiling — from the payer's vault as part of the receipt's own
+/// writes, so the burn rides the attested `writes_root` and the
+/// sync-replayable work items.
+#[test]
+fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
+    let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
+    let payer = vm_account_address(&key.public_key().0);
+    let accounts = [(payer, 1_000), (BOB, 50)];
+    let executor = VmExecutor::new(&accounts, ExecutionMode::Serial);
+    // A transfer's fuel far exceeds the tiny ceiling, so the burn is
+    // exactly `max_fee` — the cap working.
+    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        signed_transfer_with_fee(7, payer, BOB, 100, 10),
+    ));
+    let executed = execute_on(&accounts, &executor, &[tx]);
+    assert_eq!(executed.len(), 1);
+    let ConsensusReceipt::Succeeded {
+        database_updates, ..
+    } = &executed[0].consensus
+    else {
+        panic!("transfer must succeed: {:?}", executed[0].consensus);
+    };
+    assert_eq!(
+        vault_cell(database_updates, payer),
+        Some(encode_amount(1_000 - 100 - 10).to_vec())
+    );
+    assert_eq!(
+        vault_cell(database_updates, BOB),
+        Some(encode_amount(150).to_vec())
+    );
 }

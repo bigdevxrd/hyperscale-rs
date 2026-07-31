@@ -303,17 +303,77 @@ fn vm_metadata(fuel: u64, error: Option<String>) -> ExecutionMetadata {
 /// Assemble one kernel receipt into the projected [`ExecutedTx`]: fold
 /// its delta, root its writes, and run the shard projection. Aborts
 /// carry their reason and fuel in the node-local metadata.
+/// Apply the payer's fee burn on top of a transaction's kernel-mirroring
+/// fold. The burn is part of the receipt's writes — and so of its
+/// attested `writes_root` and the sync-replayable work items — while the
+/// pre-fee `running` map stays the kernel differential's source: the
+/// applied value of a fee-bearing cell is always
+/// `saturating_sub(pre-fee value, cumulative fees)`.
+fn apply_fee_burn(
+    writes: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    running: &BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    base: &VmBase,
+    fees_applied: &mut BTreeMap<SubstateKey, u128>,
+    fee: Option<(SubstateKey, u128)>,
+    fuel: u64,
+) {
+    // The transaction's own burn first: the attested actual — fuel, until
+    // real pricing lands — capped at the signed ceiling.
+    if let Some((vault, max_fee)) = fee {
+        let burn = u128::from(fuel).min(max_fee);
+        if burn > 0 {
+            *fees_applied.entry(vault).or_insert(0) += burn;
+        }
+    }
+    // Re-derive every fee-bearing cell this transaction's update set
+    // covers from the pre-fee fold: later writes of a debited cell must
+    // carry the cumulative burn, or their absolute updates would revert
+    // earlier debits at commit.
+    for (vault, fees) in fees_applied.iter() {
+        let prefee = writes
+            .get(vault)
+            .cloned()
+            .or_else(|| running.get(vault).cloned())
+            .unwrap_or_else(|| base.cells.get(vault).cloned());
+        let Some(bytes) = prefee else {
+            continue;
+        };
+        let Ok(cell): Result<[u8; 16], _> = bytes.as_slice().try_into() else {
+            continue;
+        };
+        let debited = u128::from_le_bytes(cell).saturating_sub(*fees);
+        writes.insert(*vault, Some(debited.to_le_bytes().to_vec()));
+    }
+}
+
+/// The fold's mutable state across a batch: the pre-fee kernel-mirror
+/// map (the differential's source) and the cumulative fee burns layered
+/// on top of it.
+struct FoldState {
+    running: BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    fees_applied: BTreeMap<SubstateKey, u128>,
+}
+
 fn assemble_executed_tx(
     ctx: &WaveBatchContext<'_>,
     base: &VmBase,
-    running: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    fold: &mut FoldState,
     vm_tx: VmTxHash,
     receipt: &Receipt,
+    fee: Option<(SubstateKey, u128)>,
     is_local: &dyn Fn(Address) -> bool,
 ) -> ExecutedTx {
     let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
     let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
-        let writes = fold_delta(receipt, base, running, vm_tx, is_local);
+        let mut writes = fold_delta(receipt, base, &mut fold.running, vm_tx, is_local);
+        apply_fee_burn(
+            &mut writes,
+            &fold.running,
+            base,
+            &mut fold.fees_applied,
+            fee,
+            receipt.fuel,
+        );
         let mut updates = writes_to_updates(&writes);
         sort_database_updates(&mut updates);
         let writes_root = compute_writes_root(&updates);
@@ -488,18 +548,52 @@ impl VmExecutor {
         // Fold receipts into per-transaction absolute updates in
         // canonical order, then check the folded end state against the
         // kernel's own applied store — the fold must be the same fold.
-        let mut running: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
+        // The fee payers this shard settles: a completed transaction
+        // burns its attested actual from its payer's vault, on the
+        // payer's shard only.
+        let fee_by_tx: BTreeMap<VmTxHash, (SubstateKey, u128)> = transactions
+            .iter()
+            .filter_map(|tx| {
+                let vm = tx.vm()?;
+                let (owner, local) = tx.vm_fee_vault()?;
+                if !is_local(Address(owner)) {
+                    return None;
+                }
+                Some((
+                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    (
+                        SubstateKey {
+                            owner: Address(owner),
+                            local: LocalKey(local),
+                        },
+                        vm.max_fee,
+                    ),
+                ))
+            })
+            .collect();
+
+        let mut fold = FoldState {
+            running: BTreeMap::new(),
+            fees_applied: BTreeMap::new(),
+        };
         let mut folded: BTreeMap<VmTxHash, ExecutedTx> = BTreeMap::new();
         for (vm_tx, receipt) in &outcome.receipts {
-            let executed =
-                assemble_executed_tx(ctx, &base, &mut running, *vm_tx, receipt, &is_local);
+            let executed = assemble_executed_tx(
+                ctx,
+                &base,
+                &mut fold,
+                *vm_tx,
+                receipt,
+                fee_by_tx.get(vm_tx).copied(),
+                &is_local,
+            );
             folded.insert(*vm_tx, executed);
         }
 
         // The differential: every folded key's end value must equal the
         // kernel's applied store. A mismatch is a fold defect — receipts
         // silently diverging from kernel semantics — and must never ship.
-        for (key, change) in &running {
+        for (key, change) in &fold.running {
             let applied = Base::cell(&outcome.store, *key);
             assert_eq!(
                 change.as_ref(),
