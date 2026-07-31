@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_types::{
-    BlockHeight, ConsensusPublicKey, ExecutionCertificate, NodeId, RoutableTransaction, ShardId,
-    TopologySnapshot, ValidatorId, Verifiable, VoteCount, WaveId,
+    BlockHeight, ConsensusPublicKey, DeclaredKey, ExecutionCertificate, NodeId,
+    RoutableTransaction, ShardId, TopologySnapshot, ValidatorId, Verifiable, VoteCount, WaveId,
 };
 
 /// Per-shard recipient lists for provision broadcasting.
@@ -140,6 +140,43 @@ pub fn build_provision_requests(
         if topology_snapshot.is_single_shard_transaction(tx) {
             continue;
         }
+        // VM arm: serve the locally owned read-set keys (fresh reads and
+        // read-modify-write priors) to every remote participant. Nothing
+        // node-granular travels; a leg owning no provision targets emits
+        // nothing at all.
+        if let Some(routing) = tx.vm_routing() {
+            let trie = topology_snapshot.shard_trie();
+            let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
+                .provision_keys
+                .iter()
+                .filter_map(|key| match key {
+                    DeclaredKey::Prefix {
+                        owner,
+                        local: Some(local),
+                    } if trie.shard_for_prefix(*owner) == local_shard => Some((*owner, *local)),
+                    _ => None,
+                })
+                .collect();
+            if vm_local_keys.is_empty() {
+                continue;
+            }
+            let target_nodes: Vec<(ShardId, Vec<NodeId>)> = topology_snapshot
+                .all_shards_for_transaction(tx)
+                .into_iter()
+                .filter(|&s| s != local_shard)
+                .map(|s| (s, Vec::new()))
+                .collect();
+            if target_nodes.is_empty() {
+                continue;
+            }
+            provision_requests.push(ProvisionsRequest {
+                tx_hash: tx.hash(),
+                local_nodes: Vec::new(),
+                target_nodes,
+                vm_local_keys,
+            });
+            continue;
+        }
         let all_nodes: Vec<NodeId> = tx
             .declared_reads()
             .iter()
@@ -183,6 +220,7 @@ pub fn build_provision_requests(
                 tx_hash: tx.hash(),
                 local_nodes: owned_nodes,
                 target_nodes,
+                vm_local_keys: Vec::new(),
             });
         }
     }

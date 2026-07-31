@@ -17,6 +17,7 @@ use hyperscale_engine::fetch_state_entries;
 use hyperscale_engine::sharding::expand_nodes_with_owned_at_height;
 use hyperscale_jmt::TreeReader as JmtTreeReader;
 use hyperscale_storage::{SubstateStore, SubstateView, VersionedStore};
+use hyperscale_types::state_key::vm_flat_key;
 use hyperscale_types::{
     BlockHeight, MerkleInclusionProof, NodeId, ProvisionEntry, Provisions, ShardId, SubstateEntry,
     TxHash,
@@ -67,7 +68,40 @@ where
         else {
             continue;
         };
-        if target_nodes.is_empty() || req.local_nodes.is_empty() {
+        if req.local_nodes.is_empty() && req.vm_local_keys.is_empty() {
+            continue;
+        }
+
+        // The VM arm: read the exact flat keys of the transaction's local
+        // read set at the source height. No ownership walk — identity
+        // keying made ownership maps structurally absent — and no target
+        // nodes: the receiver re-derives everything from the envelope.
+        if !req.vm_local_keys.is_empty() {
+            let mut entries = Vec::with_capacity(req.vm_local_keys.len());
+            for (owner, local) in &req.vm_local_keys {
+                let Some(value) =
+                    view.get_vm_substate_at_height(*owner, *local, source_block_height)
+                else {
+                    warn!(
+                        source_shard = source_shard.inner(),
+                        target_shard = target_shard.inner(),
+                        block_height = source_block_height.inner(),
+                        tx_hash = %req.tx_hash,
+                        "build_provisions: height unavailable for VM flat key"
+                    );
+                    return None;
+                };
+                if let Some(value) = value {
+                    let storage_key = vm_flat_key(*owner, *local);
+                    all_storage_keys.push(storage_key.clone());
+                    entries.push(SubstateEntry::new(storage_key, Some(value)));
+                }
+            }
+            staged.push((req.tx_hash, entries, Vec::new(), Vec::new()));
+            continue;
+        }
+
+        if target_nodes.is_empty() {
             continue;
         }
 

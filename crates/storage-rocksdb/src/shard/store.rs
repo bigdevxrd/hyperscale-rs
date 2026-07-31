@@ -73,6 +73,38 @@ impl SubstateStore for RocksDbShardStorage {
         Some(snap.list_raw_values_for_node(node_id))
     }
 
+    fn get_vm_substate_at_height(
+        &self,
+        owner: [u8; 16],
+        local: [u8; 16],
+        block_height: BlockHeight,
+    ) -> Option<Option<Vec<u8>>> {
+        use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+        use radix_substate_store_interface::interface::{DbPartitionKey, SubstateDatabase};
+        let snapshot = self.db.snapshot();
+        let (current_version, _) = read_jmt_metadata(&snapshot);
+        if block_height.inner() > current_version {
+            return None;
+        }
+        let floor = current_version.saturating_sub(self.jmt_history_length);
+        if block_height.inner() < floor {
+            return None;
+        }
+        let snap = RocksDbSnapshot {
+            snapshot,
+            db: &self.db,
+            version: block_height.inner(),
+            current_version,
+        };
+        Some(snap.get_raw_substate_by_db_key(
+            &DbPartitionKey {
+                node_key: vm_db_node_key(owner),
+                partition_num: VM_PARTITION,
+            },
+            &DbSortKey(local.to_vec()),
+        ))
+    }
+
     fn generate_merkle_proofs(
         &self,
         storage_keys: &[Vec<u8>],

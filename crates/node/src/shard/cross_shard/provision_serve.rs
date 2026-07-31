@@ -8,7 +8,7 @@ use hyperscale_provisions::build_provisions;
 use hyperscale_storage::{PendingChain, ShardStorage};
 use hyperscale_types::network::request::GetProvisionsRequest;
 use hyperscale_types::network::response::GetProvisionResponse;
-use hyperscale_types::{NodeId, ShardId, ShardTrie};
+use hyperscale_types::{DeclaredKey, NodeId, ShardId, ShardTrie};
 use tracing::warn;
 
 /// Serve an inbound provision request from a target shard needing our state.
@@ -45,6 +45,37 @@ pub fn serve_provision_request<S: ShardStorage>(
 
     let mut requests: Vec<ProvisionsRequest> = Vec::new();
     for tx in block.transactions().iter() {
+        // VM arm: the same read-set keys the gossip emit path serves,
+        // re-derived from the envelope.
+        if let Some(routing) = tx.vm_routing() {
+            let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
+                .provision_keys
+                .iter()
+                .filter_map(|key| match key {
+                    DeclaredKey::Prefix {
+                        owner,
+                        local: Some(local),
+                    } if shard_trie.shard_for_prefix(*owner) == local_shard => {
+                        Some((*owner, *local))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let targets_requester = routing
+                .all_prefixes()
+                .iter()
+                .any(|prefix| shard_trie.shard_for_prefix(*prefix) == req.target_shard);
+            if vm_local_keys.is_empty() || !targets_requester {
+                continue;
+            }
+            requests.push(ProvisionsRequest {
+                tx_hash: tx.hash(),
+                local_nodes: Vec::new(),
+                target_nodes: vec![(req.target_shard, Vec::new())],
+                vm_local_keys,
+            });
+            continue;
+        }
         let local_nodes: Vec<NodeId> = tx
             .declared_reads()
             .iter()
@@ -69,6 +100,7 @@ pub fn serve_provision_request<S: ShardStorage>(
             tx_hash: tx.hash(),
             local_nodes,
             target_nodes: vec![(req.target_shard, target_nodes)],
+            vm_local_keys: Vec::new(),
         });
     }
 

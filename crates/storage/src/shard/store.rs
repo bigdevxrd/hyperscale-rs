@@ -79,6 +79,21 @@ pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
         block_height: BlockHeight,
     ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>>;
 
+    /// Read one VM flat-key substate at a specific historical block
+    /// height. The exact-key sibling of
+    /// [`Self::list_substates_for_node_at_height`]: VM provision targets
+    /// are substate-granular, so serving reads points, never scans.
+    ///
+    /// Returns `None` if the height is unavailable (garbage-collected or
+    /// not yet committed); `Some(None)` when the cell is absent at that
+    /// height.
+    fn get_vm_substate_at_height(
+        &self,
+        owner: [u8; 16],
+        local: [u8; 16],
+        block_height: BlockHeight,
+    ) -> Option<Option<Vec<u8>>>;
+
     /// Generate a batched merkle multiproof for the given storage keys.
     ///
     /// `owner_map` owner-prefixes internal nodes' leaf keys so the proof

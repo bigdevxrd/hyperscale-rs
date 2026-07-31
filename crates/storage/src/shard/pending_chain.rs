@@ -1019,6 +1019,55 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         Some(out)
     }
 
+    fn get_vm_substate_at_height(
+        &self,
+        owner: [u8; 16],
+        local: [u8; 16],
+        block_height: BlockHeight,
+    ) -> Option<Option<Vec<u8>>> {
+        use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+        let persisted_version = (*self.base).jmt_height();
+        if block_height <= persisted_version {
+            return (*self.base).get_vm_substate_at_height(owner, local, block_height);
+        }
+
+        // Base value at the persisted tip, then pending receipts in
+        // commit order up to `block_height` — the same overlay walk as
+        // the node-level listing, narrowed to one flat key.
+        let mut value = (*self.base).get_vm_substate_at_height(owner, local, persisted_version)?;
+        let node_key = vm_db_node_key(owner);
+        let sort_key = DbSortKey(local.to_vec());
+        for (h, receipt) in &self.versioned_receipts {
+            if *h > block_height {
+                break;
+            }
+            let Some(updates) = receipt.database_updates() else {
+                continue;
+            };
+            let Some(node_updates) = updates.node_updates.get(&node_key) else {
+                continue;
+            };
+            let Some(partition_updates) = node_updates.partition_updates.get(&VM_PARTITION) else {
+                continue;
+            };
+            match partition_updates {
+                PartitionDatabaseUpdates::Delta { substate_updates } => {
+                    match substate_updates.get(&sort_key) {
+                        Some(DatabaseUpdate::Set(v)) => value = Some(v.clone()),
+                        Some(DatabaseUpdate::Delete) => value = None,
+                        None => {}
+                    }
+                }
+                PartitionDatabaseUpdates::Reset {
+                    new_substate_values,
+                } => {
+                    value = new_substate_values.get(&sort_key).cloned();
+                }
+            }
+        }
+        Some(value)
+    }
+
     fn generate_merkle_proofs(
         &self,
         storage_keys: &[Vec<u8>],
@@ -1224,6 +1273,14 @@ mod tests {
             _node_id: &NodeId,
             _block_height: BlockHeight,
         ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>> {
+            None
+        }
+        fn get_vm_substate_at_height(
+            &self,
+            _owner: [u8; 16],
+            _local: [u8; 16],
+            _block_height: BlockHeight,
+        ) -> Option<Option<Vec<u8>>> {
             None
         }
         fn generate_merkle_proofs(

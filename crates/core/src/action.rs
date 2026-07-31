@@ -146,6 +146,11 @@ pub struct ProvisionsRequest {
     /// Per-target-shard nodes this tx reads from each remote shard.
     /// Used to populate `ProvisionEntry::target_nodes` for conflict detection.
     pub target_nodes: Vec<(ShardId, Vec<NodeId>)>,
+    /// VM arm: the locally owned flat keys of the transaction's read set
+    /// (fresh reads and read-modify-write priors) to serve, as
+    /// `(owner, local)` halves. Empty for Radix transactions, whose
+    /// state travels node-granular through `local_nodes`.
+    pub vm_local_keys: Vec<([u8; 16], [u8; 16])>,
 }
 
 /// Actions the state machine wants to perform.

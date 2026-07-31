@@ -1270,6 +1270,14 @@ mod tests {
     }
 
     impl SubstateStore for MockStore {
+        fn get_vm_substate_at_height(
+            &self,
+            _owner: [u8; 16],
+            _local: [u8; 16],
+            _block_height: BlockHeight,
+        ) -> Option<Option<Vec<u8>>> {
+            None
+        }
         type Snapshot<'a> = Self;
         fn snapshot(&self) -> Self::Snapshot<'_> {
             self.clone()
