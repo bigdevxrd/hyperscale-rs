@@ -122,6 +122,17 @@ impl ProvisioningTracker {
         self.stamp_deadline(tx_hash);
     }
 
+    /// Whether provisions from `shard` have been absorbed for `tx_hash`.
+    /// For a VM transaction's payer shard this is the transaction commit
+    /// proof held: absorption admits a bundle only against a
+    /// commit-proven source header, committed into the local chain.
+    #[must_use]
+    pub fn has_received_from(&self, tx_hash: TxHash, shard: ShardId) -> bool {
+        self.received
+            .get(&tx_hash)
+            .is_some_and(|received| received.contains(&shard))
+    }
+
     /// Whether every required provision for `tx_hash` has been received.
     /// Returns `false` for txs with no recorded requirements (single-shard
     /// txs or txs we aren't tracking). A recorded empty requirement is
@@ -331,6 +342,21 @@ mod tests {
         assert_eq!(t.required_len(), 0);
         assert_eq!(t.received_len(), 0);
         assert!(!t.is_fully_provisioned(TxHash::from_raw(Hash::from_bytes(b"missing"))));
+    }
+
+    #[test]
+    fn has_received_from_tracks_absorbed_sources() {
+        let mut t = ProvisioningTracker::new();
+        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        assert!(!t.has_received_from(tx, shard(1)));
+
+        // An empty-entry bundle — the payer shard's engagement evidence
+        // for a commutative leg — counts exactly like a state-carrying
+        // one: absorption is the commitment axis.
+        let batch = make_provisions(shard(1), BlockHeight::new(5), vec![tx]);
+        t.absorb_provisions(&batch);
+        assert!(t.has_received_from(tx, shard(1)));
+        assert!(!t.has_received_from(tx, shard(2)));
     }
 
     #[test]

@@ -242,12 +242,17 @@ pub fn vm_hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport,
     (report, span)
 }
 
-/// A cross-shard VM transfer settles.
+/// A cross-shard VM transfer settles through the payer-first holdback.
 ///
 /// The reserve leg lives on the payer's shard and the delta leg on the
-/// recipient's; neither leg provisions anything (D23 — both are
-/// commutative), so each shard's wave records an empty dependency set
-/// and dispatches without waiting. Settlement is the EC exchange alone.
+/// recipient's; neither leg provisions state (both are commutative), so
+/// the payer's wave records an empty dependency set and
+/// dispatches immediately. The recipient engages only on the transaction
+/// commit proof — the payer's empty-entry bundle, consumable once the
+/// payer's block commit-proves — so its commit trails the payer's by one
+/// cross-shard hop, and its wave's requirement is satisfied by the
+/// bundle committing beside the transaction. Settlement is then the EC
+/// exchange.
 ///
 /// # Panics
 ///

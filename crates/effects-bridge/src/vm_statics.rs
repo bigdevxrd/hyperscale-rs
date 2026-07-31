@@ -388,9 +388,9 @@ impl VmStatics for BridgeStatics {
 
         // Fresh reads share, mutations exclude, and snapshot reads are
         // lock-free and client-proven — they take no admission key and
-        // make no participant. The provision set is D23's: fresh reads
-        // plus read-modify-write priors, the values a counterpart shard
-        // cannot execute without.
+        // make no participant. The provision set is the read set:
+        // fresh reads plus read-modify-write priors, the values a
+        // counterpart shard cannot execute without.
         let mut read_keys = BTreeSet::new();
         let mut write_keys = BTreeSet::new();
         let mut provision_keys = BTreeSet::new();
@@ -638,7 +638,7 @@ mod tests {
             sender_vault.local.0
         )));
         assert!(derived.routing.read_keys.is_empty());
-        // A commutative-only transfer provisions nothing at all (D23).
+        // A commutative-only transfer provisions nothing at all.
         assert!(derived.routing.provision_keys.is_empty());
         assert!(derived.routing.provision_prefixes.is_empty());
         assert!(derived.subintent_hashes.is_empty());

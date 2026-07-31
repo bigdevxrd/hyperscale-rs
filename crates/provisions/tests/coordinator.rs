@@ -13,9 +13,9 @@ use hyperscale_types::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
     Hash, InFlightCount, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp, ProvisionHash,
-    ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, SignerBitfield, StateRoot,
-    TopologySchedule, TopologySnapshot, TransactionRoot, ValidatorId, Verified, WaveId,
-    WeightedTimestamp, WitnessSources,
+    ProvisionTxRoot, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId,
+    SignerBitfield, StateRoot, TopologySchedule, TopologySnapshot, TransactionRoot, ValidatorId,
+    Verified, WaveId, WeightedTimestamp, WitnessSources,
 };
 
 const TEST_BLOCK_INTERVAL_MS: u64 = 500;
@@ -94,6 +94,12 @@ fn make_remote_header_targeting(
         height,
         std::collections::BTreeSet::from([local_shard]),
     )];
+    // The expectation tracker keys on the header owing us a bundle — a
+    // `provision_tx_roots` entry, not wave naming alone.
+    let provision_tx_roots = std::collections::BTreeMap::from([(
+        local_shard,
+        ProvisionTxRoot::from_raw(Hash::from_bytes(b"placeholder-tx-root")),
+    )]);
     let header = BlockHeader::new(
         source_shard,
         height,
@@ -109,7 +115,7 @@ fn make_remote_header_targeting(
         LocalReceiptRoot::ZERO,
         ProvisionsRoot::ZERO,
         waves,
-        std::collections::BTreeMap::new(),
+        provision_tx_roots,
         InFlightCount::ZERO,
         BeaconWitnessRoot::ZERO,
         BeaconWitnessLeafCount::ZERO,

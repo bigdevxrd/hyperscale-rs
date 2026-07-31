@@ -68,7 +68,7 @@ where
         else {
             continue;
         };
-        if req.local_nodes.is_empty() && req.vm_local_keys.is_empty() {
+        if !req.vm && req.local_nodes.is_empty() {
             continue;
         }
 
@@ -76,7 +76,9 @@ where
         // read set at the source height. No ownership walk — identity
         // keying made ownership maps structurally absent — and no target
         // nodes: the receiver re-derives everything from the envelope.
-        if !req.vm_local_keys.is_empty() {
+        // A keyless request still stages its transaction: the payer
+        // shard's empty-entry bundle is the engagement evidence.
+        if req.vm {
             let mut entries = Vec::with_capacity(req.vm_local_keys.len());
             for (owner, local) in &req.vm_local_keys {
                 let Some(value) =

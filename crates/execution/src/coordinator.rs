@@ -477,11 +477,12 @@ impl ExecutionCoordinator {
                     let tx_hash = tx.hash();
                     // The dependency set is what execution waits for. The
                     // Radix engine needs every remote participant's full
-                    // declared state; a VM leg needs only the shards
-                    // owning its read set (D23) — deltas and reserves
-                    // provision nothing, so a commutative-only leg
-                    // records an empty requirement and dispatches
-                    // without waiting.
+                    // declared state; a VM leg needs the shards owning
+                    // its read set plus — on a non-payer shard —
+                    // the payer shard, whose bundle is the engagement
+                    // evidence and flows even with empty entries. Only
+                    // the payer's own commutative leg records an empty
+                    // requirement and dispatches without waiting.
                     let remote_shards: BTreeSet<ShardId> = tx.vm_routing().map_or_else(
                         || {
                             participating
@@ -492,12 +493,19 @@ impl ExecutionCoordinator {
                         },
                         |routing| {
                             let trie = classification.shard_trie();
-                            routing
+                            let mut shards: BTreeSet<ShardId> = routing
                                 .provision_prefixes
                                 .iter()
                                 .map(|prefix| trie.shard_for_prefix(*prefix))
                                 .filter(|&s| s != local_shard)
-                                .collect()
+                                .collect();
+                            if let Some(vm) = tx.vm() {
+                                let payer_shard = trie.shard_for_prefix(vm.fee_payer);
+                                if payer_shard != local_shard {
+                                    shards.insert(payer_shard);
+                                }
+                            }
+                            shards
                         },
                     );
                     if remote_shards.is_empty() && !tx.is_vm() {
@@ -2542,6 +2550,15 @@ impl ExecutionCoordinator {
     #[must_use]
     pub fn get_finalized_waves(&self) -> Vec<Arc<Verifiable<FinalizedWave>>> {
         self.finalized.all_waves()
+    }
+
+    /// Whether provisions from `shard` have been absorbed for `tx_hash` —
+    /// committed chain content, since absorption runs at block commit.
+    /// The proposal seam's engagement check reads this for the payer
+    /// shard of a cross-shard VM transaction.
+    #[must_use]
+    pub fn has_provisions_from(&self, tx_hash: TxHash, shard: ShardId) -> bool {
+        self.provisioning.has_received_from(tx_hash, shard)
     }
 
     /// Get a finalized wave by its `WaveId` (returns `Arc` for sharing).

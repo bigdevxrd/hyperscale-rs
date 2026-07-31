@@ -65,7 +65,12 @@ pub fn serve_provision_request<S: ShardStorage>(
                 .all_prefixes()
                 .iter()
                 .any(|prefix| shard_trie.shard_for_prefix(*prefix) == req.target_shard);
-            if vm_local_keys.is_empty() || !targets_requester {
+            // The payer shard serves its bundle even with nothing owned
+            // — the engagement evidence — mirroring the emit path.
+            let is_payer_shard = tx
+                .vm()
+                .is_some_and(|vm| shard_trie.shard_for_prefix(vm.fee_payer) == local_shard);
+            if (vm_local_keys.is_empty() && !is_payer_shard) || !targets_requester {
                 continue;
             }
             requests.push(ProvisionsRequest {
@@ -73,6 +78,7 @@ pub fn serve_provision_request<S: ShardStorage>(
                 local_nodes: Vec::new(),
                 target_nodes: vec![(req.target_shard, Vec::new())],
                 vm_local_keys,
+                vm: true,
             });
             continue;
         }
@@ -101,6 +107,7 @@ pub fn serve_provision_request<S: ShardStorage>(
             local_nodes,
             target_nodes: vec![(req.target_shard, target_nodes)],
             vm_local_keys: Vec::new(),
+            vm: false,
         });
     }
 

@@ -151,6 +151,10 @@ pub struct ProvisionsRequest {
     /// `(owner, local)` halves. Empty for Radix transactions, whose
     /// state travels node-granular through `local_nodes`.
     pub vm_local_keys: Vec<([u8; 16], [u8; 16])>,
+    /// Whether this is a VM leg. A VM request stages its transaction
+    /// even with no locally owned keys: the payer shard's bundle is the
+    /// engagement evidence and flows with empty entries.
+    pub vm: bool,
 }
 
 /// Actions the state machine wants to perform.

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use hyperscale_core::Action;
 use hyperscale_types::{
     FinalizedWave, MAX_TXS_PER_BLOCK, Provisions, RoutableTransaction, TopologySchedule,
-    Verifiable, Verified,
+    TopologySnapshot, Verifiable, Verified,
 };
 
 use super::ShardParticipation;
@@ -48,12 +48,25 @@ impl ShardParticipation {
             quiesce,
         );
         let finalized_waves = self.execution_coordinator.get_finalized_waves();
+        let queued = self.provisions_coordinator.queued_provisions(self.now);
+
+        // The engagement gate: a non-payer shard proposes a cross-shard
+        // VM transaction only beside its payer bundle — this proposal's
+        // own provisions — or after an earlier block absorbed it. The
+        // bundle is the transaction commit proof (verified against a
+        // commit-proven payer header), so locks engage only on committed
+        // payer evidence; a mis-paired inclusion is backstopped by the
+        // dispatch gate's required-set check.
+        let topology = sched.head();
+        let ready_txs = ready_txs
+            .into_iter()
+            .filter(|tx| self.vm_engagement_held(tx, topology, &queued))
+            .collect();
+
         // Provisions coordinator stores `Verified` internally; lift each
         // batch into the `Verifiable` transport shape so the marker
         // survives across the proposal-build action.
-        let provisions = self
-            .provisions_coordinator
-            .queued_provisions(self.now)
+        let provisions = queued
             .into_iter()
             .map(|v| Arc::new((*v).clone().into()))
             .collect();
@@ -63,6 +76,37 @@ impl ShardParticipation {
             finalized_waves,
             provisions,
         }
+    }
+
+    /// Whether the engagement evidence for `tx` is in hand: not a VM
+    /// transaction, single-shard, our shard is the payer's, the payer's
+    /// bundle rides in `queued`, or an earlier block already absorbed it.
+    fn vm_engagement_held(
+        &self,
+        tx: &Arc<Verified<RoutableTransaction>>,
+        topology: &TopologySnapshot,
+        queued: &[Arc<Verified<Provisions>>],
+    ) -> bool {
+        let Some(vm) = tx.vm() else {
+            return true;
+        };
+        if topology.is_single_shard_transaction(tx.as_ref()) {
+            return true;
+        }
+        let payer_shard = topology.shard_trie().shard_for_prefix(vm.fee_payer);
+        if payer_shard == self.local_shard {
+            return true;
+        }
+        let tx_hash = tx.hash();
+        self.execution_coordinator
+            .has_provisions_from(tx_hash, payer_shard)
+            || queued.iter().any(|bundle| {
+                bundle.source_shard() == payer_shard
+                    && bundle
+                        .transactions()
+                        .iter()
+                        .any(|entry| entry.tx_hash == tx_hash)
+            })
     }
 
     /// Shared proposal logic for the post-dispatch retry hook and the

@@ -472,13 +472,15 @@ impl ProvisionCoordinator {
             return vec![];
         }
 
-        // Only track headers that target our shard (i.e., we expect provisions).
-        let local_shard = self.local_shard;
+        // Only track headers that owe us a bundle. The commitment is the
+        // header's own `provision_tx_roots` entry — waves can name our
+        // shard without the source owing state (a VM counterpart with
+        // nothing to attest), and an expectation keyed on wave naming
+        // would fetch a bundle that never exists.
         let targets_us = certified_header
             .header()
-            .waves()
-            .iter()
-            .any(|w| w.remote_shards().contains(&local_shard));
+            .provision_tx_roots()
+            .contains_key(&self.local_shard);
 
         if targets_us {
             let proposer = certified_header.header().proposer();
@@ -535,13 +537,12 @@ impl ProvisionCoordinator {
             })];
         }
 
-        // Only store headers that target our shard (i.e., we expect provisions).
-        let local_shard = self.local_shard;
+        // Only store headers that owe us a bundle — the same
+        // `provision_tx_roots` predicate the expectation tracker keys on.
         let targets_us = certified_header
             .header()
-            .waves()
-            .iter()
-            .any(|w| w.remote_shards().contains(&local_shard));
+            .provision_tx_roots()
+            .contains_key(&self.local_shard);
 
         if targets_us {
             // Store as verified (QC + commit proof already checked by the
@@ -1907,10 +1908,23 @@ mod tests {
         provision_targets: Vec<ShardId>,
     ) -> Arc<Verified<CertifiedBlockHeader>> {
         // Each target shard gets its own single-dependency wave so that
-        // `provision_targets()` on the resulting header yields the input set.
+        // `provision_targets()` on the resulting header yields the input
+        // set, and a placeholder `provision_tx_roots` entry — the
+        // commitment the expectation tracker keys on. Tests that fire
+        // matching bundles overwrite the entry with a real root via
+        // `make_certified_header_committing`.
         let waves: Vec<WaveId> = provision_targets
+            .iter()
+            .map(|&s| WaveId::new(shard, height, std::collections::BTreeSet::from([s])))
+            .collect();
+        let provision_tx_roots: BTreeMap<ShardId, ProvisionTxRoot> = provision_targets
             .into_iter()
-            .map(|s| WaveId::new(shard, height, std::collections::BTreeSet::from([s])))
+            .map(|s| {
+                (
+                    s,
+                    ProvisionTxRoot::from_raw(Hash::from_bytes(b"placeholder-tx-root")),
+                )
+            })
             .collect();
         let header = BlockHeader::new(
             shard,
@@ -1929,7 +1943,7 @@ mod tests {
             LocalReceiptRoot::ZERO,
             ProvisionsRoot::ZERO,
             waves,
-            BTreeMap::new(),
+            provision_tx_roots,
             InFlightCount::ZERO,
             BeaconWitnessRoot::ZERO,
             BeaconWitnessLeafCount::ZERO,

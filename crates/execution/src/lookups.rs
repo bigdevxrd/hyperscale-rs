@@ -124,6 +124,54 @@ pub fn assign_waves(
     waves
 }
 
+/// The VM arm of [`build_provision_requests`]: the locally owned
+/// read-set keys (fresh reads and read-modify-write priors) toward every
+/// remote participant. Nothing node-granular travels. The payer shard's
+/// bundle flows even with nothing to serve — it is the engagement
+/// evidence a counterpart demands before proposing the transaction;
+/// other shards emit only what they own.
+fn vm_provision_request(
+    topology_snapshot: &TopologySnapshot,
+    tx: &Arc<Verifiable<RoutableTransaction>>,
+    local_shard: ShardId,
+) -> Option<ProvisionsRequest> {
+    let routing = tx.vm_routing()?;
+    let trie = topology_snapshot.shard_trie();
+    let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
+        .provision_keys
+        .iter()
+        .filter_map(|key| match key {
+            DeclaredKey::Prefix {
+                owner,
+                local: Some(local),
+            } if trie.shard_for_prefix(*owner) == local_shard => Some((*owner, *local)),
+            _ => None,
+        })
+        .collect();
+    let is_payer_shard = tx
+        .vm()
+        .is_some_and(|vm| trie.shard_for_prefix(vm.fee_payer) == local_shard);
+    if vm_local_keys.is_empty() && !is_payer_shard {
+        return None;
+    }
+    let target_nodes: Vec<(ShardId, Vec<NodeId>)> = topology_snapshot
+        .all_shards_for_transaction(tx)
+        .into_iter()
+        .filter(|&s| s != local_shard)
+        .map(|s| (s, Vec::new()))
+        .collect();
+    if target_nodes.is_empty() {
+        return None;
+    }
+    Some(ProvisionsRequest {
+        tx_hash: tx.hash(),
+        local_nodes: Vec::new(),
+        target_nodes,
+        vm_local_keys,
+        vm: true,
+    })
+}
+
 /// Build provision requests and shard recipients for cross-shard transactions.
 ///
 /// Returns `None` if there are no cross-shard transactions needing provisions.
@@ -140,41 +188,10 @@ pub fn build_provision_requests(
         if topology_snapshot.is_single_shard_transaction(tx) {
             continue;
         }
-        // VM arm: serve the locally owned read-set keys (fresh reads and
-        // read-modify-write priors) to every remote participant. Nothing
-        // node-granular travels; a leg owning no provision targets emits
-        // nothing at all.
-        if let Some(routing) = tx.vm_routing() {
-            let trie = topology_snapshot.shard_trie();
-            let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
-                .provision_keys
-                .iter()
-                .filter_map(|key| match key {
-                    DeclaredKey::Prefix {
-                        owner,
-                        local: Some(local),
-                    } if trie.shard_for_prefix(*owner) == local_shard => Some((*owner, *local)),
-                    _ => None,
-                })
-                .collect();
-            if vm_local_keys.is_empty() {
-                continue;
+        if tx.is_vm() {
+            if let Some(request) = vm_provision_request(topology_snapshot, tx, local_shard) {
+                provision_requests.push(request);
             }
-            let target_nodes: Vec<(ShardId, Vec<NodeId>)> = topology_snapshot
-                .all_shards_for_transaction(tx)
-                .into_iter()
-                .filter(|&s| s != local_shard)
-                .map(|s| (s, Vec::new()))
-                .collect();
-            if target_nodes.is_empty() {
-                continue;
-            }
-            provision_requests.push(ProvisionsRequest {
-                tx_hash: tx.hash(),
-                local_nodes: Vec::new(),
-                target_nodes,
-                vm_local_keys,
-            });
             continue;
         }
         let all_nodes: Vec<NodeId> = tx
@@ -221,6 +238,7 @@ pub fn build_provision_requests(
                 local_nodes: owned_nodes,
                 target_nodes,
                 vm_local_keys: Vec::new(),
+                vm: false,
             });
         }
     }

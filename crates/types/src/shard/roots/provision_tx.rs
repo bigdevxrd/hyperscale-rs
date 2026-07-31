@@ -82,6 +82,25 @@ impl Verified<ProvisionTxRootsMap> {
             if topology_snapshot.is_single_shard_transaction(tx) {
                 continue;
             }
+            // A VM transaction fans out only from shards with something
+            // to attest: the payer shard — whose bundle is the
+            // engagement evidence and flows even with no state — and
+            // the shards owning part of its read set. Radix
+            // transactions fan out from every participant, which all
+            // hold declared state for each other.
+            if let Some(vm) = tx.vm() {
+                let trie = topology_snapshot.shard_trie();
+                let is_payer = trie.shard_for_prefix(vm.fee_payer) == local_shard;
+                let owns_read_set = tx.vm_routing().is_some_and(|routing| {
+                    routing
+                        .provision_prefixes
+                        .iter()
+                        .any(|prefix| trie.shard_for_prefix(*prefix) == local_shard)
+                });
+                if !is_payer && !owns_read_set {
+                    continue;
+                }
+            }
             for shard in topology_snapshot.all_shards_for_transaction(tx) {
                 if shard == local_shard {
                     continue;

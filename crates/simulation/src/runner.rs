@@ -140,8 +140,9 @@ pub struct SimConfig {
     /// vault cells at genesis. Empty runs no VM traffic.
     pub vm_accounts: Vec<([u8; 16], u128)>,
     /// The VM batch executor's group scheduling. Receipts are
-    /// schedule-invariant, so this cannot change any outcome — the D16
-    /// A/B constructs one cluster per mode and asserts exactly that.
+    /// schedule-invariant, so this cannot change any outcome — the
+    /// serial-vs-parallel A/B constructs one cluster per mode and
+    /// asserts exactly that.
     pub vm_execution_mode: ExecutionMode,
 }
 

@@ -213,7 +213,7 @@ pub struct VmRouting {
     pub write_prefixes: Vec<[u8; 16]>,
     /// The keys whose committed values counterpart shards must carry:
     /// fresh reads plus read-modify-write priors. Deltas, blind writes,
-    /// and reserves provision nothing (D23).
+    /// and reserves provision nothing.
     pub provision_keys: Vec<DeclaredKey>,
     /// Owner prefixes behind `provision_keys`, deduplicated ascending —
     /// the wave's provision dependency set routes on these.

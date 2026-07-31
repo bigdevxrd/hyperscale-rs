@@ -151,8 +151,8 @@ mod tests {
     use hyperscale_types::test_utils::make_live_block;
     use hyperscale_types::{
         BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader, BlockHeight,
-        CertifiedBlockHeader, ChainOrigin, LocalTimestamp, QuorumCertificate, RevealChain, ShardId,
-        ValidatorId, Verified, WaveId,
+        CertifiedBlockHeader, ChainOrigin, Hash, LocalTimestamp, ProvisionTxRoot,
+        QuorumCertificate, RevealChain, ShardId, ValidatorId, Verified, WaveId,
     };
 
     use crate::assert_emits;
@@ -198,7 +198,12 @@ mod tests {
                 header.local_receipt_root(),
                 header.provision_root(),
                 vec![wave],
-                header.provision_tx_roots().clone().into_inner(),
+                // The expectation tracker keys on the header owing us a
+                // bundle — a provision_tx_roots entry for our shard.
+                std::collections::BTreeMap::from([(
+                    ShardId::ROOT,
+                    ProvisionTxRoot::from_raw(Hash::from_bytes(b"placeholder-tx-root")),
+                )]),
                 header.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
