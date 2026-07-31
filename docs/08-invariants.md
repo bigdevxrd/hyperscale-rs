@@ -112,6 +112,13 @@ The consolidated register of the system's safety and liveness properties, with s
 | **INV-ECON-5** | Determinism | **Deterministic pricing.** `min_stake` and every gate it feeds are pure functions of `BeaconState` (inherits INV-BEACON-2); the auto-reactivation sweep reprices after each promotion and terminates at a fixpoint. |
 | **INV-ECON-6** | Safety | **Co-hosting safety.** Co-hosted vnodes of one validator identity never sign concurrently (per-identity signer seat with an epoch fence); vnode resource sharing is invisible to consensus. |
 
+## VM cross-shard fee assurance — [06](06-resource-economics.md)
+
+| ID | Class | Property |
+|---|---|---|
+| **INV-VM-9** | Safety | **Commit-proof-gated engagement.** A non-payer shard engages a cross-shard VM transaction — admits it to a proposal, takes its locks, starts its deadline clock — only while holding a transaction commit proof: the payer shard's provisions bundle naming the transaction (empty entries for a commutative leg), consumable only against a commit-proven header of the payer block that committed it under its `max_fee` reservation. A certified-but-uncommitted payer block engages nothing; an insolvent payer's transaction never commits at the payer shard (the reservation is a block-validity condition) and so engages no counterpart lock anywhere. |
+| **INV-VM-10** | Safety | **Reservation resolution.** Every fee reservation a payer-shard block engages resolves exactly once, at the wave's terminal: on success the EC-attested actual burns at the payer shard and the surplus releases; on abort the class floor burns and the remainder releases; fees never move cross-shard. Under payer-shard termination the reservation moves with its subtree and the successor's sweep resolves it from the frozen settlement verdict. Payer balance plus held reservations plus cumulative burn is conserved throughout. |
+
 ## Determinism substrate — [07](07-determinism-and-testing.md)
 
 | ID | Class | Property |
