@@ -207,6 +207,7 @@ pub fn build_proposal<S: ShardChainWriter>(
     provisions: Vec<Arc<Verifiable<Provisions>>>,
     parent_in_flight: InFlightCount,
     parent_load: Option<ShardLoad>,
+    substate_bytes: Option<u64>,
     finalized_tx_count: u32,
     ready_signals: Vec<ReadySignal>,
     reshape_trigger: Option<ReshapeTrigger>,
@@ -314,7 +315,7 @@ pub fn build_proposal<S: ShardChainWriter>(
     // way on the voting side.
     let load = parent_load
         .unwrap_or(ShardLoad::ZERO)
-        .advance(gas_over_certificates(&certificates), None);
+        .advance(gas_over_certificates(&certificates), substate_bytes);
 
     let header = BlockHeader::new(
         local_shard,
@@ -655,6 +656,7 @@ where
             round,
             witness_sources,
             substate_bytes,
+            claimed_substate_bytes,
             thresholds,
             finalized_waves,
             topology_snapshot,
@@ -681,6 +683,7 @@ where
                 receipts: &receipts,
                 witness_sources: &witness_sources,
                 substate_bytes,
+                claimed_substate_bytes,
                 thresholds,
                 topology_snapshot: &topology_snapshot,
             };
@@ -830,6 +833,7 @@ where
             fee_read_height,
             parent_in_flight,
             parent_load,
+            substate_bytes,
             finalized_tx_count,
             ready_signals,
             reshape_trigger,
@@ -952,6 +956,7 @@ where
                 provisions.clone(),
                 parent_in_flight,
                 parent_load,
+                substate_bytes,
                 finalized_tx_count,
                 ready_signals,
                 reshape_trigger,

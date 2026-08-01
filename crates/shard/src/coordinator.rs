@@ -1708,7 +1708,7 @@ impl ShardCoordinator {
             &self.pending_blocks,
             self.verification.verified_certified_blocks(),
         ) {
-            Ok(count) => Ok(Some(count)),
+            Ok(count) => Ok(count),
             Err(SubstateCountBlocked::SyncAdmitted(_))
                 if topology_schedule
                     .recovery_bridge(self.local_shard)
@@ -1998,6 +1998,7 @@ impl ShardCoordinator {
             Arc::clone(committee),
             vm_fee_checks,
             self.committed_height,
+            substate_bytes,
         );
 
         info!(

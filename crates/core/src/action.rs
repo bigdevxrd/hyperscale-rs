@@ -752,6 +752,8 @@ pub enum Action {
         /// ancestry crosses a halt recovery's sync-admitted suffix); the
         /// recomputed assertion must then be absent.
         substate_bytes: Option<u64>,
+        /// The header's own claim about that total, checked against it.
+        claimed_substate_bytes: Option<u64>,
         /// Reshape thresholds in force for this network.
         thresholds: ReshapeThresholds,
         /// Finalized waves whose receipts contribute receipt-sourced
@@ -903,6 +905,12 @@ pub enum Action {
         /// Attested load on the parent's header — the running gas total
         /// this block advances by the gas its own certificates report.
         parent_load: Option<ShardLoad>,
+        /// Committed substate byte total behind the parent's post-state —
+        /// the level this block attests, resolved by the coordinator ahead
+        /// of the build so the header and the reshape assertion it carries
+        /// agree on one value. `None` takes the reshape predicate out of
+        /// play, and the header states that absence rather than guessing.
+        substate_bytes: Option<u64>,
         /// Number of transactions finalized by wave certificates in this block.
         finalized_tx_count: u32,
         /// Dwell-eligible [`ReadySignal`]s drained from the proposer's pool

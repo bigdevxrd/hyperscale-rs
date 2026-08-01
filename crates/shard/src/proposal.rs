@@ -364,6 +364,7 @@ pub fn assemble_build_action(
     classification_topology_snapshot: Arc<TopologySnapshot>,
     vm_fee_checks: Vec<VmFeeDemand>,
     fee_read_height: BlockHeight,
+    substate_bytes: Option<u64>,
 ) -> BuildActionPlan {
     let (parent_block_hash, parent_qc) = chain.proposal_parent();
     let parent_block_height = parent_qc.height();
@@ -440,6 +441,7 @@ pub fn assemble_build_action(
         fee_read_height,
         parent_in_flight,
         parent_load,
+        substate_bytes,
         finalized_tx_count,
         ready_signals,
         reshape_trigger,

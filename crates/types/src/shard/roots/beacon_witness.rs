@@ -81,6 +81,11 @@ pub struct BeaconWitnessRootContext<'a> {
     /// assertion is absent: a manifest claiming a trigger anyway is
     /// rejected.
     pub substate_bytes: Option<u64>,
+    /// The header's own claim about that total. Verification rejects a
+    /// claim that differs from the resolved value, which is what lets the
+    /// next block's resolution read this header's field instead of walking
+    /// its ancestry: the claim a descendant trusts was checked here.
+    pub claimed_substate_bytes: Option<u64>,
     /// Reshape thresholds in force for this network.
     pub thresholds: ReshapeThresholds,
     /// Topology snapshot anchoring the proposer-rotation rule the
@@ -138,6 +143,15 @@ pub enum BeaconWitnessRootVerifyError {
         claimed: Option<ReshapeTrigger>,
         /// The locally derived assertion.
         derived: Option<ReshapeTrigger>,
+    },
+    /// The header's claimed substate byte total differs from the total
+    /// resolved locally behind the block's parent state.
+    #[error("claimed substate byte total {claimed:?} ≠ resolved {derived:?}")]
+    SubstateBytesMismatch {
+        /// The header's claim.
+        claimed: Option<u64>,
+        /// The locally resolved total.
+        derived: Option<u64>,
     },
     /// The block's randomness reveal is not a valid VRF by the
     /// block's proposer over `(network, shard, height)`. Its digest is
@@ -320,6 +334,32 @@ pub fn ready_leaf_payload(
     }
 }
 
+/// Check the header's claimed substate byte total against the locally
+/// resolved value, absence included — the out-of-play total is a claim like
+/// any other.
+///
+/// Runs before the reshape predicate that reads the same quantity, and it is
+/// what lets a descendant's one-step recurrence read this header's field
+/// instead of walking its ancestry: the claim a descendant trusts was
+/// checked here, by this block's own committee.
+fn verify_substate_bytes_claim(
+    ctx: &BeaconWitnessRootContext<'_>,
+) -> Result<(), BeaconWitnessRootVerifyError> {
+    if ctx.claimed_substate_bytes != ctx.substate_bytes {
+        tracing::warn!(
+            claimed = ?ctx.claimed_substate_bytes,
+            derived = ?ctx.substate_bytes,
+            height = ctx.height.inner(),
+            "Substate byte total verification FAILED"
+        );
+        return Err(BeaconWitnessRootVerifyError::SubstateBytesMismatch {
+            claimed: ctx.claimed_substate_bytes,
+            derived: ctx.substate_bytes,
+        });
+    }
+    Ok(())
+}
+
 /// Check the header's claimed reveal chain against the shared derivation.
 ///
 /// Runs after the reveal proof itself verifies, so the output folded here is
@@ -436,6 +476,8 @@ impl Verify<&BeaconWitnessRootContext<'_>> for BeaconWitnessRoot {
         )
         .unwrap_or(usize::MAX);
         let window = ctx.parent_witness_leaves.get(trim..).unwrap_or(&[]);
+
+        verify_substate_bytes_claim(ctx)?;
 
         // The manifest's reshape assertion must equal the locally
         // recomputed load predicate — including the once-per-window
@@ -640,6 +682,7 @@ mod tests {
             receipts: &[],
             witness_sources,
             substate_bytes: None,
+            claimed_substate_bytes: None,
             thresholds: ReshapeThresholds::DISABLED,
             topology_snapshot,
         }
@@ -719,6 +762,7 @@ mod tests {
         let mut ctx = context_with(&topology_snapshot, &ws, shard, 0, Vec::new(), 0);
         ctx.thresholds = ReshapeThresholds { split_bytes: 10 };
         ctx.substate_bytes = Some(10);
+        ctx.claimed_substate_bytes = Some(10);
 
         assert_eq!(
             BeaconWitnessRoot::ZERO.verify(&ctx).unwrap_err(),
@@ -773,8 +817,44 @@ mod tests {
         ctx.parent_leaves_start = BeaconWitnessLeafCount::new(2);
         ctx.thresholds = ReshapeThresholds { split_bytes: 10 };
         ctx.substate_bytes = Some(11);
+        ctx.claimed_substate_bytes = Some(11);
 
         assert!(expected_root.verify(&ctx).is_ok());
+    }
+
+    /// The header's byte-total claim is checked against the local
+    /// resolution before the predicate that reads it, in both directions: a
+    /// claimed value where none resolves, and a value that simply differs.
+    /// This is the check a descendant's one-step recurrence relies on.
+    #[test]
+    fn a_substate_byte_claim_that_diverges_is_rejected() {
+        let shard = ShardId::ROOT;
+        let topology_snapshot = snapshot_with_base(shard, 0);
+        let ws = empty_sources(shard);
+
+        // Claimed where nothing resolves — the out-of-play case a proposer
+        // must state rather than paper over.
+        let mut invented = context_with(&topology_snapshot, &ws, shard, 0, Vec::new(), 0);
+        invented.claimed_substate_bytes = Some(4_096);
+        assert_eq!(
+            BeaconWitnessRoot::ZERO.verify(&invented).unwrap_err(),
+            BeaconWitnessRootVerifyError::SubstateBytesMismatch {
+                claimed: Some(4_096),
+                derived: None,
+            }
+        );
+
+        // Resolved but understated.
+        let mut understated = context_with(&topology_snapshot, &ws, shard, 0, Vec::new(), 0);
+        understated.substate_bytes = Some(8_192);
+        understated.claimed_substate_bytes = Some(8_191);
+        assert_eq!(
+            BeaconWitnessRoot::ZERO.verify(&understated).unwrap_err(),
+            BeaconWitnessRootVerifyError::SubstateBytesMismatch {
+                claimed: Some(8_191),
+                derived: Some(8_192),
+            }
+        );
     }
 
     /// A ready signal from a validator holding an observer seat derives

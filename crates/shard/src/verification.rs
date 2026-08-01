@@ -1417,6 +1417,7 @@ impl VerificationPipeline {
             round: header.round(),
             witness_sources: Arc::clone(block.witness_sources()),
             substate_bytes,
+            claimed_substate_bytes: header.load().substate_bytes,
             thresholds,
             finalized_waves,
             topology_snapshot: topology_snapshot.clone(),
@@ -1460,7 +1461,7 @@ impl VerificationPipeline {
             pending_blocks,
             &self.verified_certified_blocks,
         ) {
-            Ok(count) => Ok(Some(count)),
+            Ok(count) => Ok(count),
             Err(SubstateCountBlocked::SyncAdmitted(blocking_hash))
                 if self
                     .verified_certified_blocks
@@ -1699,18 +1700,22 @@ pub struct SubstateCountSource<'a> {
     pub deltas: &'a HashMap<BlockHash, i64>,
 }
 
-/// Why a substate-byte walk failed to resolve
+/// Why a substate-byte resolution blocked
 /// ([`SubstateCountSource::count_behind`]).
+///
+/// Neither arm covers an *absent* total: a parent whose own resolution was
+/// out of play is answered `Ok(None)` instead, because that is a settled
+/// fact rather than something a caller can wait out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubstateCountBlocked {
-    /// The named ancestor's content or execution delta is still in
-    /// flight — the caller parks on it; its completion (or its commit)
-    /// re-drives the walk.
+    /// The parent's content or execution delta is still in flight — the
+    /// caller parks on it; its completion (or its commit) re-drives the
+    /// resolution.
     Outstanding(BlockHash),
-    /// The walk crossed the named sync-admitted certified block:
-    /// QC-attested but never locally executed, so no byte delta can ever
-    /// land for it — only its commit (whose persistence reconciles the
-    /// frontier from storage) resolves the walk. For a block inside a halt
+    /// The parent is a sync-admitted certified block: QC-attested but never
+    /// locally executed, so no byte delta can ever land for it — only its
+    /// commit (whose persistence reconciles the frontier from storage)
+    /// resolves it. For a block inside a halt
     /// recovery's suffix band (pending or completed —
     /// `TopologySchedule::recovery_suffix_band`), every replica that
     /// synced the suffix agrees on the absent delta, so the caller
@@ -1721,7 +1726,7 @@ pub enum SubstateCountBlocked {
 }
 
 impl SubstateCountBlocked {
-    /// The block whose progress unblocks the walk, whichever way it was
+    /// The block whose progress unblocks the resolution, whichever way it
     /// blocked — the hash callers park on.
     pub const fn blocking_hash(self) -> BlockHash {
         match self {
@@ -1731,42 +1736,75 @@ impl SubstateCountBlocked {
 }
 
 impl SubstateCountSource<'_> {
-    /// Substate count behind `parent_hash`'s post-state: the frontier
-    /// count plus pending deltas along the chain from the committed tip
-    /// up to and including `parent_hash`. `Err` classifies the blocked
-    /// walk — an outstanding ancestor delta (or, for a frontier lagging
-    /// the tip, the tip's persistence reconcile), or a crossing of a
-    /// sync-admitted certified block whose delta can never land.
+    /// Substate count behind `parent_hash`'s post-state.
+    ///
+    /// A one-step recurrence rather than a walk: every header attests the
+    /// byte total behind *its* parent, so the total behind `parent_hash` is
+    /// the parent's own attested claim advanced by the parent's byte delta.
+    /// A committed parent skips even that and reads the reconciled frontier.
+    /// Only the parent is consulted, so a block no longer waits on deltas
+    /// for ancestors above it.
+    ///
+    /// Trusting the parent's claim rests on the parent's own vote having
+    /// checked it against this same recurrence: a poisoned claim never
+    /// certifies, so no descendant of one commits, and descendants agree
+    /// with each other regardless because they read the same field. This is
+    /// the argument `beacon_witness_base` already makes for reading the
+    /// window base off the header instead of rebuilding beacon state.
+    ///
+    /// `Err` classifies the blocked resolution — the parent's delta still
+    /// outstanding (or, for a frontier lagging the tip, the tip's
+    /// persistence reconcile), or a parent whose delta can never land.
     pub fn count_behind(
         &self,
         committed_hash: BlockHash,
         parent_hash: BlockHash,
         pending_blocks: &PendingBlocks,
         certified_blocks: &HashMap<BlockHash, Arc<Verified<CertifiedBlock>>>,
-    ) -> Result<u64, SubstateCountBlocked> {
-        let mut total: i64 = 0;
-        let mut current = parent_hash;
-        while current != committed_hash {
-            let Some(pending) = pending_blocks.get(current) else {
-                if certified_blocks.contains_key(&current) {
-                    return Err(SubstateCountBlocked::SyncAdmitted(current));
-                }
-                return Err(SubstateCountBlocked::Outstanding(current));
-            };
-            let Some(delta) = self.deltas.get(&current) else {
-                return Err(SubstateCountBlocked::Outstanding(current));
-            };
-            total += delta;
-            current = pending.header().parent_block_hash();
+    ) -> Result<Option<u64>, SubstateCountBlocked> {
+        if parent_hash == committed_hash {
+            if self.frontier.0 != self.committed_height {
+                return Err(SubstateCountBlocked::Outstanding(committed_hash));
+            }
+            return Ok(Some(self.frontier.1));
         }
-        if self.frontier.0 != self.committed_height {
-            return Err(SubstateCountBlocked::Outstanding(committed_hash));
-        }
-        Ok(self
-            .frontier
-            .1
-            .checked_add_signed(total)
-            .expect("substate byte total must not go negative"))
+        let Some(parent) = pending_blocks
+            .get(parent_hash)
+            .map(PendingBlock::header)
+            .or_else(|| {
+                certified_blocks
+                    .get(&parent_hash)
+                    .map(|certified| certified.block().header())
+            })
+        else {
+            return Err(SubstateCountBlocked::Outstanding(parent_hash));
+        };
+        // The parent's own claim is the total behind *its* parent, already
+        // checked against this same recurrence when the parent was voted —
+        // so one delta closes the gap and no ancestor beyond the parent is
+        // consulted.
+        //
+        // An absent claim is a resolved fact, not a gap: the parent's own
+        // resolution was out of play, so every descendant's is too until a
+        // committed parent reads the reconciled frontier instead. Answering
+        // `Ok(None)` rather than blocking matters — a caller that parked
+        // here would wait on a value that can never arrive.
+        let Some(behind_parent) = parent.load().substate_bytes else {
+            return Ok(None);
+        };
+        let Some(delta) = self.deltas.get(&parent_hash) else {
+            // A certified block that was never executed locally has no delta
+            // and never will; only its commit resolves the walk.
+            if certified_blocks.contains_key(&parent_hash) {
+                return Err(SubstateCountBlocked::SyncAdmitted(parent_hash));
+            }
+            return Err(SubstateCountBlocked::Outstanding(parent_hash));
+        };
+        Ok(Some(
+            behind_parent
+                .checked_add_signed(*delta)
+                .expect("substate byte total must not go negative"),
+        ))
     }
 }
 
@@ -2355,7 +2393,14 @@ mod tests {
         TopologySchedule::new(1_000, Epoch::GENESIS, Arc::new(snapshot.clone()))
     }
 
-    fn header(height: BlockHeight, parent_block_hash: BlockHash, in_flight: u32) -> BlockHeader {
+    /// A header stating `substate_bytes` as the total behind its parent —
+    /// the claim a descendant's one-step recurrence reads.
+    fn header_claiming(
+        height: BlockHeight,
+        parent_block_hash: BlockHash,
+        in_flight: u32,
+        substate_bytes: Option<u64>,
+    ) -> BlockHeader {
         BlockHeader::new(
             ShardId::ROOT,
             height,
@@ -2379,7 +2424,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
-            ShardLoad::ZERO,
+            ShardLoad::ZERO.advance(0, substate_bytes),
         )
     }
 
@@ -2389,8 +2434,18 @@ mod tests {
         in_flight: u32,
         transactions: Vec<Arc<Verifiable<RoutableTransaction>>>,
     ) -> Block {
+        block_claiming(height, parent_block_hash, in_flight, transactions, None)
+    }
+
+    fn block_claiming(
+        height: BlockHeight,
+        parent_block_hash: BlockHash,
+        in_flight: u32,
+        transactions: Vec<Arc<Verifiable<RoutableTransaction>>>,
+        substate_bytes: Option<u64>,
+    ) -> Block {
         Block::Live {
-            header: header(height, parent_block_hash, in_flight),
+            header: header_claiming(height, parent_block_hash, in_flight, substate_bytes),
             transactions: Arc::new(transactions.into()),
             certificates: Arc::new(BoundedVec::new()),
             provisions: Arc::new(BoundedVec::new()),
@@ -2584,7 +2639,9 @@ mod tests {
     fn count_behind_classifies_walk_blockers() {
         let committed_hash = bh(b"committed");
 
-        let block = block_with(BlockHeight::new(1), committed_hash, 0, vec![]);
+        // The block states the total behind its own parent; the recurrence
+        // advances that claim by the block's own delta.
+        let block = block_claiming(BlockHeight::new(1), committed_hash, 0, vec![], Some(100));
         let block_hash = block.hash();
         let mut pb =
             PendingBlock::from_complete_block(&block, vec![], vec![], LocalTimestamp::ZERO);
@@ -2601,9 +2658,18 @@ mod tests {
             deltas: &deltas,
         };
 
+        // A committed parent reads the reconciled frontier and consults no
+        // header at all.
+        assert_eq!(
+            source.count_behind(committed_hash, committed_hash, &pending, empty_certified()),
+            Ok(Some(100)),
+        );
+
+        // An uncommitted parent: its attested claim plus its own delta, with
+        // no ancestor above it consulted.
         assert_eq!(
             source.count_behind(committed_hash, block_hash, &pending, empty_certified()),
-            Ok(107),
+            Ok(Some(107)),
         );
 
         let missing = bh(b"missing");
@@ -2615,7 +2681,9 @@ mod tests {
         // The same chain shape, but with the ancestor held only in the
         // verified-certified cache — a sync-admitted block awaiting its
         // round-contiguous commit.
-        let synced = block_with(BlockHeight::new(1), committed_hash, 1, vec![]);
+        // A real header states a resolved total; what a sync-admitted block
+        // lacks is the *delta*, because it was never executed locally.
+        let synced = block_claiming(BlockHeight::new(1), committed_hash, 1, vec![], Some(100));
         let synced_hash = synced.hash();
         let qc = QuorumCertificate::new(
             synced_hash,
@@ -2636,6 +2704,28 @@ mod tests {
         assert_eq!(
             source.count_behind(committed_hash, synced_hash, &pending, &certified),
             Err(SubstateCountBlocked::SyncAdmitted(synced_hash)),
+        );
+
+        // A parent whose own total was out of play answers `None` rather
+        // than blocking: the absence is a resolved fact that propagates
+        // forward, and a caller parking on it would wait for a value that
+        // can never arrive.
+        let out_of_play = block_claiming(BlockHeight::new(1), committed_hash, 9, vec![], None);
+        let out_of_play_hash = out_of_play.hash();
+        let mut opb =
+            PendingBlock::from_complete_block(&out_of_play, vec![], vec![], LocalTimestamp::ZERO);
+        opb.construct_block()
+            .expect("complete block constructs cleanly");
+        let mut with_out_of_play = PendingBlocks::new();
+        with_out_of_play.insert(opb);
+        assert_eq!(
+            source.count_behind(
+                committed_hash,
+                out_of_play_hash,
+                &with_out_of_play,
+                empty_certified()
+            ),
+            Ok(None),
         );
 
         // A pending ancestor whose delta hasn't landed is outstanding —
