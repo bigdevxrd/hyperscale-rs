@@ -362,6 +362,7 @@ pub fn make_test_receipt(seed: u8) -> StoredReceipt {
             data: EventData(vec![seed, seed + 1]),
         }],
         beacon_witness_events: Vec::new(),
+        gas_consumed: 0,
     };
     let metadata = Some(ExecutionMetadata::new(
         FeeSummary {
@@ -499,6 +500,7 @@ pub fn commit_block_with_updates(
             owned_nodes: BoundedVec::new(),
             application_events: vec![],
             beacon_witness_events: Vec::new(),
+            gas_consumed: 0,
         }),
         metadata: None,
     };

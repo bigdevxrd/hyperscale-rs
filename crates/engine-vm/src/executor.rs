@@ -418,7 +418,12 @@ fn build_fee_receipt(
         OwnershipRoot::ZERO,
     )
     .receipt_hash();
-    let cached = CachedVmOutput::vm_succeeded(updates, receipt_hash, vm_metadata(0, None));
+    // No gas: this receipt settles a floor, it does not report execution.
+    // The transaction whose abort it settles consumed real work, but that
+    // work is unattested — a failed outcome carries no gas either — so an
+    // abort contributes nothing to its shard's emission weight. Pricing
+    // aborted work is the floor's job, not the weight's.
+    let cached = CachedVmOutput::vm_succeeded(updates, receipt_hash, vm_metadata(0, None), 0);
     Some(
         project_to_shard(
             &cached,
@@ -469,7 +474,12 @@ fn assemble_executed_tx(
             OwnershipRoot::ZERO,
         )
         .receipt_hash();
-        CachedVmOutput::vm_succeeded(updates, receipt_hash, vm_metadata(receipt.fuel, None))
+        CachedVmOutput::vm_succeeded(
+            updates,
+            receipt_hash,
+            vm_metadata(receipt.fuel, None),
+            receipt.fuel,
+        )
     } else {
         let reason = match &receipt.outcome {
             Outcome::UserError { reason } | Outcome::ProtocolError { reason } => reason.clone(),

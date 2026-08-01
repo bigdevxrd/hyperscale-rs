@@ -4730,6 +4730,7 @@ mod tests {
                     owned_nodes: BoundedVec::new(),
                     application_events: vec![],
                     beacon_witness_events: Vec::new(),
+                    gas_consumed: 0,
                 }),
                 metadata: None,
             });

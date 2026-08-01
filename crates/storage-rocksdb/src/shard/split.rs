@@ -721,6 +721,7 @@ mod tests {
                     owned_nodes: BoundedVec::new(),
                     application_events: Vec::new(),
                     beacon_witness_events: Vec::new(),
+                    gas_consumed: 0,
                 }),
             )];
             let height = BlockHeight::new(u64::from(seed));

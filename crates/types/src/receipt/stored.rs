@@ -68,6 +68,7 @@ mod tests {
                 owned_nodes: BoundedVec::new(),
                 application_events: vec![make_event(1)],
                 beacon_witness_events: Vec::new(),
+                gas_consumed: 0,
             }),
         );
         assert!(synced.metadata.is_none());

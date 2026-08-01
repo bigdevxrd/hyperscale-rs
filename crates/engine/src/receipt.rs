@@ -75,6 +75,12 @@ enum CachedVmOutputBody {
         /// `beacon_witness_events` only on the shard owning that node, so a
         /// committed system transaction reports the action exactly once.
         system_witness: Option<(NodeId, BeaconWitnessEvent)>,
+        /// Gas the engine consumed — VM fuel, or the Radix engine's
+        /// execution plus finalization cost units. Shard-invariant here
+        /// and filtered to nothing by projection: every participant that
+        /// ran this batch consumed the same amount, and locality scoping
+        /// shows up as a different batch rather than a different number.
+        gas_consumed: u64,
     },
 }
 
@@ -105,6 +111,7 @@ impl CachedVmOutput {
         raw_updates: DatabaseUpdates,
         receipt_hash: GlobalReceiptHash,
         metadata: ExecutionMetadata,
+        gas_consumed: u64,
     ) -> Self {
         Self {
             metadata,
@@ -114,6 +121,7 @@ impl CachedVmOutput {
                 application_events: Vec::new(),
                 receipt_hash,
                 system_witness: None,
+                gas_consumed,
             },
         }
     }
@@ -190,6 +198,12 @@ pub fn compute_vm_output(
     };
 
     let metadata = build_execution_metadata(receipt);
+    // The Radix engine's gas analogue: the two integer cost-unit counters
+    // it meters deterministically. The XRD-denominated figures beside them
+    // are priced through the fee table and belong to the local fee
+    // summary, not to a hash-covered work total.
+    let gas_consumed = u64::from(receipt.fee_summary.total_execution_cost_units_consumed)
+        + u64::from(receipt.fee_summary.total_finalization_cost_units_consumed);
 
     if !matches!(commit.outcome, TransactionOutcome::Success(_)) {
         // Failed receipts carry no consensus payload; metadata still flows.
@@ -249,6 +263,7 @@ pub fn compute_vm_output(
             application_events,
             receipt_hash,
             system_witness,
+            gas_consumed,
         },
     }
 }
@@ -287,6 +302,7 @@ pub fn project_to_shard(
             application_events,
             receipt_hash,
             system_witness,
+            gas_consumed,
         } => {
             let mut database_updates = filter_updates_for_shard(
                 raw_updates,
@@ -325,6 +341,7 @@ pub fn project_to_shard(
                 owned_nodes,
                 application_events: application_events.clone(),
                 beacon_witness_events,
+                gas_consumed: *gas_consumed,
             };
             ExecutedTx::new(tx_hash, consensus, cached.metadata.clone())
         }
