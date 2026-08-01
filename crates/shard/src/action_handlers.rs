@@ -26,9 +26,9 @@ use hyperscale_types::{
     TimeoutContext, TopologySnapshot, TransactionRoot, TransactionRootContext, ValidatorId,
     Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
     block_header_message, block_vote_message, certified_block_header_message,
-    commit_witness_window, compute_waves, derive_leaves, local_settled_wave_ids,
-    missed_proposals_since_prev_commit, next_reveal_chain, ready_signal_message, shard_reveal_sign,
-    vrf_output_from_proof,
+    commit_witness_window, compute_waves, derive_leaves, gas_over_certificates,
+    local_settled_wave_ids, missed_proposals_since_prev_commit, next_reveal_chain,
+    ready_signal_message, shard_reveal_sign, vrf_output_from_proof,
 };
 
 /// Result of QC verification and assembly.
@@ -206,6 +206,7 @@ pub fn build_proposal<S: ShardChainWriter>(
     topology_snapshot: &TopologySnapshot,
     provisions: Vec<Arc<Verifiable<Provisions>>>,
     parent_in_flight: InFlightCount,
+    parent_load: Option<ShardLoad>,
     finalized_tx_count: u32,
     ready_signals: Vec<ReadySignal>,
     reshape_trigger: Option<ReshapeTrigger>,
@@ -306,6 +307,15 @@ pub fn build_proposal<S: ShardChainWriter>(
         .saturating_add(u32::try_from(transactions.len()).unwrap_or(u32::MAX))
         .saturating_sub(finalized_tx_count);
 
+    // The running gas total: the parent's advanced by what this block's
+    // certificates report. An unresolvable parent load would make the
+    // header unverifiable to everyone else, so it degrades to the parent's
+    // own total rather than inventing one, and the check abstains the same
+    // way on the voting side.
+    let load = parent_load
+        .unwrap_or(ShardLoad::ZERO)
+        .advance(gas_over_certificates(&certificates), None);
+
     let header = BlockHeader::new(
         local_shard,
         height,
@@ -329,7 +339,7 @@ pub fn build_proposal<S: ShardChainWriter>(
         reveal_chain,
         split_child_roots,
         settled_waves_root,
-        ShardLoad::ZERO,
+        load,
     );
 
     let block = Block::Live {
@@ -819,6 +829,7 @@ where
             vm_fee_checks,
             fee_read_height,
             parent_in_flight,
+            parent_load,
             finalized_tx_count,
             ready_signals,
             reshape_trigger,
@@ -940,6 +951,7 @@ where
                 &classification_topology,
                 provisions.clone(),
                 parent_in_flight,
+                parent_load,
                 finalized_tx_count,
                 ready_signals,
                 reshape_trigger,

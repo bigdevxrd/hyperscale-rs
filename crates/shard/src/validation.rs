@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use hyperscale_types::{
     Block, BlockHeader, BlockHeight, LocalTimestamp, MAX_ROUND_GAP, MAX_TIMESTAMP_DELAY,
-    MAX_TIMESTAMP_RUSH, ProvisionHash, QuorumCertificate, RoutableTransaction, ShardId,
+    MAX_TIMESTAMP_RUSH, ProvisionHash, QuorumCertificate, RoutableTransaction, ShardId, ShardLoad,
     TopologySnapshot, TxHash, Verifiable, VoteCount, WaveId, compute_waves,
 };
 
@@ -437,6 +437,40 @@ pub fn validate_vm_engagement(
     Ok(())
 }
 
+/// The header's running gas total must be its parent's advanced by the gas
+/// the block's own certificates report.
+///
+/// Pure over the block plus one scalar off the parent header, which is what
+/// keeps a shard's attested work honest without any storage read: a
+/// proposer inflating its shard's emission weight has to inflate receipts
+/// its committee already checked under `local_receipt_root`.
+fn validate_block_gas(block: &Block, parent_load: Option<ShardLoad>) -> Result<(), String> {
+    // An unresolvable parent load is this node's own gap, not the block's,
+    // so it abstains rather than rejecting: recovery reads the scalar off
+    // the committed tip's stored header and a fresh start seeds `ZERO`, so
+    // the only way here is a store with no block at its committed height.
+    let Some(parent_load) = parent_load else {
+        tracing::warn!(
+            height = block.height().inner(),
+            "Skipping the gas-total check — parent load unresolvable"
+        );
+        return Ok(());
+    };
+    let claimed = block.header().load().cumulative_gas;
+    let expected = parent_load
+        .advance(block.gas_consumed(), None)
+        .cumulative_gas;
+    if claimed != expected {
+        return Err(format!(
+            "header claims cumulative gas {claimed} but the parent's {} \
+             plus this block's {} is {expected}",
+            parent_load.cumulative_gas,
+            block.gas_consumed(),
+        ));
+    }
+    Ok(())
+}
+
 /// Run all pre-vote block-contents checks: transaction ordering, `waves`
 /// recomputation, and cross-ancestor uniqueness for txs, certs, and
 /// provisions. Returns a single diagnostic on the first failure so the
@@ -451,10 +485,12 @@ pub fn validate_block_for_vote(
     qc_chain_provision_hashes: &HashSet<ProvisionHash>,
     dedup_index: &CommitDedupIndex,
     coasting: bool,
+    parent_load: Option<ShardLoad>,
 ) -> Result<(), String> {
     if coasting {
         validate_coast_block_empty(block)?;
     }
+    validate_block_gas(block, parent_load)?;
     validate_transactions_verified(block)?;
     validate_transaction_ordering(block)?;
     validate_waves(topology_snapshot, local_shard, block)?;
@@ -1117,6 +1153,32 @@ mod tests {
         }
     }
 
+    /// The running gas total is a validity condition, not a hint: a header
+    /// claiming more than its parent's total plus its own certificates'
+    /// gas is rejected, and the honest claim passes. A block with no
+    /// certificates consumes nothing, so it must repeat its parent's total
+    /// rather than reset.
+    #[test]
+    fn a_header_cannot_overstate_its_shard_s_gas() {
+        let parent = ShardLoad::ZERO.advance(500, None);
+        // The fixture carries no certificates, so the honest claim is the
+        // parent's total unchanged.
+        let honest = block_with_transactions(BlockHeight::new(1), Vec::new());
+        assert_eq!(honest.gas_consumed(), 0);
+        assert_eq!(honest.header().load().cumulative_gas, 0);
+
+        // Claiming zero against a parent that has consumed 500 understates,
+        // and is refused just as an overstatement is.
+        let err = validate_block_gas(&honest, Some(parent)).unwrap_err();
+        assert!(err.contains("cumulative gas"), "{err}");
+
+        // The matching claim passes.
+        assert!(validate_block_gas(&honest, Some(ShardLoad::ZERO)).is_ok());
+
+        // An unresolvable parent load abstains rather than rejecting.
+        assert!(validate_block_gas(&honest, None).is_ok());
+    }
+
     fn tx(seed: u8) -> Arc<Verifiable<RoutableTransaction>> {
         Arc::new(Verifiable::from(test_utils::test_transaction(seed)))
     }
@@ -1456,6 +1518,7 @@ mod tests {
             &HashSet::new(),
             &CommitDedupIndex::new(),
             false,
+            Some(ShardLoad::ZERO),
         )
         .unwrap_err();
         assert!(err.contains("not admission-validated"));
@@ -1476,6 +1539,7 @@ mod tests {
             &HashSet::new(),
             &CommitDedupIndex::new(),
             true,
+            Some(ShardLoad::ZERO),
         )
         .unwrap_err();
         assert!(err.contains("coast block"), "{err}");
@@ -1491,6 +1555,7 @@ mod tests {
                 &HashSet::new(),
                 &CommitDedupIndex::new(),
                 true,
+                Some(ShardLoad::ZERO),
             )
             .is_ok()
         );

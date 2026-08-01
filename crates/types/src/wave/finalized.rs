@@ -151,6 +151,17 @@ impl FinalizedWave {
         self.receipts.iter().map(|r| Arc::clone(&r.consensus))
     }
 
+    /// Gas this shard consumed across the wave's receipts.
+    ///
+    /// Saturating, so a forged wave cannot wrap a block's running total
+    /// into a smaller number than its parent's.
+    #[must_use]
+    pub fn gas_consumed(&self) -> u64 {
+        self.receipts.iter().fold(0u64, |sum, r| {
+            sum.saturating_add(r.consensus.gas_consumed())
+        })
+    }
+
     /// Iterator over the wave's tx hashes in canonical block order.
     pub fn tx_hashes(&self) -> impl Iterator<Item = TxHash> + '_ {
         self.local_ec().tx_outcomes().iter().map(TxOutcome::tx_hash)

@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHash, BlockHeader, BlockHeight, ChainOrigin, Hash, InFlightCount,
-    QuorumCertificate, RevealChain, SafeVoteRegisters, ShardAnchor, StateRoot, ValidatorId,
-    Verified, WeightedTimestamp,
+    QuorumCertificate, RevealChain, SafeVoteRegisters, ShardAnchor, ShardLoad, StateRoot,
+    ValidatorId, Verified, WeightedTimestamp,
 };
 
 /// State recovered from storage on startup.
@@ -58,6 +58,11 @@ pub struct RecoveredState {
     /// `ZERO` for the genesis tip; a `None` against a real tip skips the
     /// vote rather than accept a chain it cannot check.
     pub committed_reveal_chain: Option<RevealChain>,
+    /// Attested load carried by the committed tip's header — the running
+    /// gas total the next block advances, and the byte level behind it.
+    /// `None` when no block is stored at the committed height (fresh
+    /// start / genesis tip), where the coordinator seeds `ZERO`.
+    pub committed_load: Option<ShardLoad>,
 
     /// Weighted timestamp of the committed tip's *parent* QC — the tip's own
     /// position on the weighted-time grid, and the anchor of the committee
@@ -154,6 +159,7 @@ impl RecoveredState {
             anchor_qc: Some(anchor_qc),
             committed_in_flight: Some(boundary_header.in_flight()),
             committed_reveal_chain: Some(boundary_header.reveal_chain()),
+            committed_load: Some(boundary_header.load()),
             committed_block_anchor_wt: Some(boundary_header.parent_qc().weighted_timestamp()),
             // The boundary's parent is not imported, so the committee that
             // signed the boundary block resolves only through the fallback.

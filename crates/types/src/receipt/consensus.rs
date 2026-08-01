@@ -285,6 +285,17 @@ impl ConsensusReceipt {
         }
     }
 
+    /// Gas the engine consumed executing this tx on this shard, or zero
+    /// for a failure — which attests no work, so an aborted transaction
+    /// contributes nothing to its shard's emission weight.
+    #[must_use]
+    pub const fn gas_consumed(&self) -> u64 {
+        match self {
+            Self::Succeeded { gas_consumed, .. } => *gas_consumed,
+            Self::Failed => 0,
+        }
+    }
+
     /// Per-shard receipt hash used as a leaf in `local_receipt_root`.
     ///
     /// Hashes `outcome_byte || event_root || database_updates_hash ||

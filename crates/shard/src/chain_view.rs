@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use hyperscale_types::{
     BlockHash, BlockHeader, BlockHeight, CertifiedBlock, ChainOrigin, InFlightCount, ProvisionHash,
-    QuorumCertificate, RevealChain, ShardId, StateRoot, TxHash, Verified, WaveId,
+    QuorumCertificate, RevealChain, ShardId, ShardLoad, StateRoot, TxHash, Verified, WaveId,
 };
 use tracing::warn;
 
@@ -28,6 +28,7 @@ pub struct ChainView<'a> {
     committed_hash: BlockHash,
     committed_state_root: StateRoot,
     committed_in_flight: Option<InFlightCount>,
+    committed_load: Option<ShardLoad>,
     committed_reveal_chain: Option<RevealChain>,
     latest_qc: Option<&'a Verified<QuorumCertificate>>,
     pending: &'a PendingBlocks,
@@ -43,6 +44,7 @@ impl<'a> ChainView<'a> {
         committed_hash: BlockHash,
         committed_state_root: StateRoot,
         committed_in_flight: Option<InFlightCount>,
+        committed_load: Option<ShardLoad>,
         committed_reveal_chain: Option<RevealChain>,
         latest_qc: Option<&'a Verified<QuorumCertificate>>,
         pending: &'a PendingBlocks,
@@ -55,6 +57,7 @@ impl<'a> ChainView<'a> {
             committed_hash,
             committed_state_root,
             committed_in_flight,
+            committed_load,
             committed_reveal_chain,
             latest_qc,
             pending,
@@ -118,6 +121,19 @@ impl<'a> ChainView<'a> {
         }
         (parent_block_hash == self.committed_hash)
             .then_some(self.committed_in_flight)
+            .flatten()
+    }
+
+    /// Attested load on the parent header — the running gas total the next
+    /// block advances. `None` when the parent is unresolvable, under the
+    /// same conditions as [`Self::parent_in_flight_checked`].
+    #[must_use]
+    pub fn parent_load_checked(&self, parent_block_hash: BlockHash) -> Option<ShardLoad> {
+        if let Some(header) = self.get_header(parent_block_hash) {
+            return Some(header.load());
+        }
+        (parent_block_hash == self.committed_hash)
+            .then_some(self.committed_load)
             .flatten()
     }
 
@@ -275,6 +291,7 @@ mod tests {
             committed_hash,
             committed_state_root,
             committed_in_flight: None,
+            committed_load: None,
             committed_reveal_chain: None,
             latest_qc,
             pending,

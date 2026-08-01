@@ -78,6 +78,19 @@ pub type SharedProvisions = Arc<BoundedVec<Arc<Verifiable<Provisions>>, MAX_PROV
 /// payload has been dropped. Same `Arc` rationale as [`SharedTransactions`].
 pub type SharedProvisionHashes = Arc<BoundedVec<ProvisionHash, MAX_PROVISIONS_PER_BLOCK>>;
 
+/// Gas a shard consumed across the waves `certificates` settle.
+///
+/// Free-standing so the proposer can price the certificates it selected
+/// before the header those certificates go under exists, while
+/// [`Block::gas_consumed`] answers the same question for a built block.
+/// One derivation, so the two sides cannot drift.
+#[must_use]
+pub fn gas_over_certificates(certificates: &[Arc<Verifiable<FinalizedWave>>]) -> u64 {
+    certificates.iter().fold(0u64, |sum, wave| {
+        sum.saturating_add(wave.as_unverified().gas_consumed())
+    })
+}
+
 /// Complete block with header and transaction data.
 ///
 /// Transactions are stored in a single flat list, sorted by hash for deterministic ordering.
@@ -374,6 +387,23 @@ impl Block {
         match self {
             Self::Live { certificates, .. } | Self::Sealed { certificates, .. } => certificates,
         }
+    }
+
+    /// Gas this shard consumed across the waves the block settles.
+    ///
+    /// The increment behind the header's running gas total, and the reason
+    /// that total is checkable: a block's certificates carry their own
+    /// receipts and survive sealing, so the block that claims the total
+    /// also carries the evidence for its own contribution. Proposer and
+    /// verifier both read this, so neither can drift from the other.
+    ///
+    /// Attribution follows settlement rather than execution — the only
+    /// division derivable from one block's content. The running total is
+    /// unaffected; only which epoch a given transaction's gas falls into
+    /// can shift by the settlement lag.
+    #[must_use]
+    pub fn gas_consumed(&self) -> u64 {
+        gas_over_certificates(self.certificates())
     }
 
     /// Provisions. Non-empty only for `Live`; `Sealed` blocks have

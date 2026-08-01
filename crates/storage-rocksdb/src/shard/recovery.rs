@@ -6,7 +6,7 @@ use hyperscale_metrics::record_storage_operation;
 use hyperscale_storage::{RecoveredState, SubstateStore};
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, BlockMetadata, ChainOrigin, Hash, RevealChain,
-    SafeVoteRegisters, ShardWitnessPayload, ValidatorId, WeightedTimestamp,
+    SafeVoteRegisters, ShardLoad, ShardWitnessPayload, ValidatorId, WeightedTimestamp,
 };
 
 use super::column_families::{BeaconWitnessesCf, BlocksCf, SafeVoteRegistersCf};
@@ -73,6 +73,7 @@ impl RocksDbShardStorage {
             anchor_qc: None,
             committed_in_flight: None,
             committed_reveal_chain: self.committed_reveal_chain(committed_height),
+            committed_load: self.committed_load(committed_height),
             committed_block_anchor_wt: self.anchor_ts_at(committed_height),
             committed_committee_anchor_wt: committed_height
                 .prev()
@@ -127,6 +128,16 @@ impl RocksDbShardStorage {
         let metadata: BlockMetadata =
             get::<BlocksCf>(&*self.db, blocks_cf, &committed_height.inner())?;
         Some(metadata.header().reveal_chain())
+    }
+
+    /// Attested load carried by the committed tip's header. `None` under
+    /// the same condition as [`Self::committed_reveal_chain`].
+    fn committed_load(&self, committed_height: BlockHeight) -> Option<ShardLoad> {
+        let cf = self.cf();
+        let blocks_cf = BlocksCf::handle(&cf);
+        let metadata: BlockMetadata =
+            get::<BlocksCf>(&*self.db, blocks_cf, &committed_height.inner())?;
+        Some(metadata.header().load())
     }
 
     /// The committed tip's witness window base, read from its stored

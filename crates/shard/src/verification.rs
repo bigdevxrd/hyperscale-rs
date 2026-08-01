@@ -2418,6 +2418,7 @@ mod tests {
             StateRoot::ZERO,
             None,
             None,
+            None,
             latest_qc,
             pending,
             empty_certified(),

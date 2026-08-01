@@ -369,6 +369,7 @@ pub fn assemble_build_action(
     let parent_block_height = parent_qc.height();
     let parent_state_root = chain.parent_state_root(parent_block_hash);
     let parent_in_flight = chain.parent_in_flight(parent_block_hash);
+    let parent_load = chain.parent_load_checked(parent_block_hash);
 
     let (
         timestamp,
@@ -438,6 +439,7 @@ pub fn assemble_build_action(
         vm_fee_checks,
         fee_read_height,
         parent_in_flight,
+        parent_load,
         finalized_tx_count,
         ready_signals,
         reshape_trigger,

@@ -98,6 +98,7 @@ struct StaleReparent {
     parent_state_root: StateRoot,
     parent_block_height: BlockHeight,
     parent_in_flight: InFlightCount,
+    parent_load: ShardLoad,
     height: BlockHeight,
 }
 
@@ -1405,6 +1406,7 @@ impl ShardCoordinatorSim {
                 vm_fee_checks: _,
                 fee_read_height: _,
                 parent_in_flight,
+                parent_load,
                 finalized_tx_count,
                 ready_signals,
                 reshape_trigger,
@@ -1435,6 +1437,7 @@ impl ShardCoordinatorSim {
                     parent_state_root,
                     parent_block_height,
                     parent_in_flight,
+                    parent_load,
                     height,
                 ) = if let Some(reparent) = stale {
                     self.byzantine[emitter_idx] = None;
@@ -1445,6 +1448,7 @@ impl ShardCoordinatorSim {
                         reparent.parent_state_root,
                         reparent.parent_block_height,
                         reparent.parent_in_flight,
+                        Some(reparent.parent_load),
                         reparent.height,
                     )
                 } else {
@@ -1454,6 +1458,7 @@ impl ShardCoordinatorSim {
                         parent_state_root,
                         parent_block_height,
                         parent_in_flight,
+                        parent_load,
                         height,
                     )
                 };
@@ -1487,6 +1492,7 @@ impl ShardCoordinatorSim {
                     &classification_topology,
                     provisions.clone(),
                     parent_in_flight,
+                    parent_load,
                     finalized_tx_count,
                     ready_signals,
                     reshape_trigger,
@@ -1904,6 +1910,7 @@ impl ShardCoordinatorSim {
             parent_state_root: ancestor.state_root(),
             parent_block_height: ancestor.height(),
             parent_in_flight: ancestor.in_flight(),
+            parent_load: ancestor.load(),
             height: ancestor.height().next(),
         })
     }

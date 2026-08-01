@@ -15,10 +15,10 @@ use hyperscale_types::{
     ProvisionHash, ProvisionTxRootsMap, Provisions, ProvisionsRoot, QuorumCertificate, RatifyPhase,
     RatifyRound, RatifyVote, ReadySignal, ReshapeThresholds, ReshapeTrigger, ResolvedCommittee,
     RevealChain, Round, RoutableTransaction, RoutingCommittees, SafeVoteRegisters,
-    SettledWavesRoot, ShardForkProof, ShardId, ShardVoteEquivocation, SharedCertificates,
-    SharedTransactions, SharedWitnessSources, SpcEmptyViewMsg, SpcHighTriple, SpcNewCommitMsg,
-    SpcProposalObject, SpcView, SplitChildRoots, StateRoot, SubstateEntry, Timeout,
-    TopologySnapshot, TransactionRoot, TransactionStatus, TxHash, TxOutcome, ValidatorId,
+    SettledWavesRoot, ShardForkProof, ShardId, ShardLoad, ShardVoteEquivocation,
+    SharedCertificates, SharedTransactions, SharedWitnessSources, SpcEmptyViewMsg, SpcHighTriple,
+    SpcNewCommitMsg, SpcProposalObject, SpcView, SplitChildRoots, StateRoot, SubstateEntry,
+    Timeout, TopologySnapshot, TransactionRoot, TransactionStatus, TxHash, TxOutcome, ValidatorId,
     Verifiable, Verified, VoteCount, WaveId, WeightedTimestamp,
 };
 
@@ -900,6 +900,9 @@ pub enum Action {
         fee_read_height: BlockHeight,
         /// Parent block's in-flight count (for deterministic computation).
         parent_in_flight: InFlightCount,
+        /// Attested load on the parent's header — the running gas total
+        /// this block advances by the gas its own certificates report.
+        parent_load: Option<ShardLoad>,
         /// Number of transactions finalized by wave certificates in this block.
         finalized_tx_count: u32,
         /// Dwell-eligible [`ReadySignal`]s drained from the proposer's pool

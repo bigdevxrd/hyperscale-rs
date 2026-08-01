@@ -87,7 +87,7 @@ use hyperscale_types::{
     LocalReceiptRoot, LocalReceiptRootVerifyError, MAX_ROUND_GAP, ProvisionRootVerifyError,
     ProvisionTxRootsMap, ProvisionTxRootsVerifyError, Provisions, ProvisionsRoot, QcContext,
     QcVerifyError, QuorumCertificate, RecoveryCause, RevealChain, Round, RoutableTransaction,
-    SafeVoteRegisters, StateRoot, StateRootVerifyError, Timeout, TopologySchedule,
+    SafeVoteRegisters, ShardLoad, StateRoot, StateRootVerifyError, Timeout, TopologySchedule,
     TopologySnapshot, TransactionRoot, TxHash, TxRootVerifyError, ValidatorId, Verifiable,
     Verified, Verifier, Verify, VoteCount, derive_leaves, missed_proposals_since_prev_commit,
     ready_leaf_payload,
@@ -255,6 +255,12 @@ pub struct ShardCoordinator {
     /// block extending the pruned tip can't have its chain checked, so the
     /// vote is skipped until the first commit reseats the scalar.
     committed_reveal_chain: Option<RevealChain>,
+    /// Attested load on the committed tip's header — the running gas total
+    /// the next block advances. Held as a scalar for the same reason
+    /// `committed_block_anchor_wt` is: the tip's header is pruned from the
+    /// pending and certified caches, so a block whose parent is the tip has
+    /// no held header to read it off.
+    committed_load: Option<ShardLoad>,
 
     /// Latest QC (certifies the latest certified block). Verified at
     /// every adoption gate; the typestate makes that invariant local.
@@ -458,6 +464,12 @@ impl ShardCoordinator {
                     .is_none()
                     .then_some(RevealChain::ZERO)
             }),
+            committed_load: recovered.committed_load.or_else(|| {
+                recovered
+                    .committed_hash
+                    .is_none()
+                    .then_some(ShardLoad::ZERO)
+            }),
             latest_qc: recovered.latest_qc,
             anchor_qc: recovered.anchor_qc,
             deferred_qc: DeferredQc::new(),
@@ -515,6 +527,7 @@ impl ShardCoordinator {
             self.committed_hash,
             self.committed_state_root,
             self.committed_in_flight,
+            self.committed_load,
             self.committed_reveal_chain,
             self.latest_qc.as_ref(),
             &self.pending_blocks,
@@ -1288,6 +1301,7 @@ impl ShardCoordinator {
         self.committed_state_root = genesis.header().state_root();
         self.committed_in_flight = Some(genesis.header().in_flight());
         self.committed_reveal_chain = Some(genesis.header().reveal_chain());
+        self.committed_load = Some(genesis.header().load());
         // A chain's genesis height and clock are per-chain properties: a
         // split child's genesis continues the parent's height line and
         // anchors at its final canonical weighted timestamp (ZERO and
@@ -3063,6 +3077,8 @@ impl ShardCoordinator {
             &qc_chain_provision_hashes,
             &self.dedup_index,
             coasting,
+            self.chain_view()
+                .parent_load_checked(block.header().parent_block_hash()),
         ) {
             warn!(
                 validator = ?self.me,
@@ -4376,6 +4392,7 @@ impl ShardCoordinator {
         self.committed_state_root = block.header().state_root();
         self.committed_in_flight = Some(block.header().in_flight());
         self.committed_reveal_chain = Some(block.header().reveal_chain());
+        self.committed_load = Some(block.header().load());
         self.gc_settled_sets();
 
         // Retire the committed block's substate delta into the count
