@@ -707,11 +707,13 @@ impl WaveState {
                         .cloned()
                         .expect("execution result must be present under provisioned branch")
                 };
-                // An abort still settles the payer's fee when the engine
-                // built one for this transaction.
+                // An outcome that applies no effects still settles the
+                // payer's charge when the engine built one — an abort
+                // whose effects were discarded, or a failure that produced
+                // none.
                 match (&outcome, self.fee_receipts.get(tx_hash)) {
-                    (ExecutionOutcome::Aborted, Some(fee)) => {
-                        TxOutcome::aborted_with_fee(*tx_hash, fee.consensus.receipt_hash())
+                    (ExecutionOutcome::Aborted | ExecutionOutcome::Failed, Some(fee)) => {
+                        TxOutcome::with_fee(*tx_hash, outcome.clone(), fee.consensus.receipt_hash())
                     }
                     _ => TxOutcome::new(*tx_hash, outcome.clone()),
                 }
@@ -1052,6 +1054,16 @@ impl WaveState {
                 {
                     receipts.push(fee);
                 }
+                continue;
+            }
+            // A failure that settles a charge stores that receipt instead
+            // of its own — the `Failed` receipt carries nothing, and the
+            // pairing stays one receipt per outcome either way.
+            if outcome.fee_receipt().is_some()
+                && let Some(fee) = self.fee_receipts.remove(&outcome.tx_hash())
+            {
+                self.take_receipt(outcome.tx_hash());
+                receipts.push(fee);
                 continue;
             }
             if let Some(receipt) = self.take_receipt(outcome.tx_hash()) {

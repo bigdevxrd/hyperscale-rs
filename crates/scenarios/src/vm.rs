@@ -666,6 +666,62 @@ pub fn vm_abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
     );
 }
 
+/// A transaction that fails still pays, and what it pays depends on whose
+/// fault the failure was.
+///
+/// Failing must never be the cheaper way to buy execution. An uncovered
+/// withdrawal loses a deterministic race it could not have foreseen — the
+/// sender declared honestly and another transaction got there first — so
+/// it settles the class floor, not the ceiling. What matters is that it
+/// settles something: the same attempt used to cost nothing at all, which
+/// made trapping strictly cheaper than succeeding for identical work.
+///
+/// # Panics
+///
+/// Panics if the uncovered withdrawal does not reject, if the covered
+/// transfer that follows does not accept, or if the rejected attempt
+/// moves the payer's vault by anything other than the floor.
+pub fn vm_failure_charges_its_payer(c: &mut impl Cluster) {
+    let shard = ShardId::ROOT;
+    let (payer, from) = vm_sender(0);
+    let to = vm_recipient(0);
+
+    let before = vm_vault_balance(c, shard, from);
+    let over = build_vm_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
+    let floor = over.vm().expect("a VM envelope").abort_floor();
+    let over_hash = over.hash();
+    c.submit(Arc::new(over));
+    let status = await_tx_terminal(c, over_hash, epochs(8));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Reject))
+        ),
+        "an uncovered VM withdrawal must reject deterministically; status = {status:?}"
+    );
+
+    let after = vm_vault_balance(c, shard, from);
+    assert_eq!(
+        before.saturating_sub(after),
+        floor,
+        "a rejected attempt must settle exactly the class floor: \
+         before = {before}, after = {after}, floor = {floor}"
+    );
+
+    // The charge is the only thing that moved: the payer can still spend.
+    let fine = build_vm_transfer_tx(&payer, from, to, 50, validity_around(c.now()));
+    let fine_hash = fine.hash();
+    c.submit(Arc::new(fine));
+    let status = await_tx_terminal(c, fine_hash, epochs(8));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "a covered VM transfer must accept after a charged failure; status = {status:?}"
+    );
+}
+
 /// The committed balance of a VM account's native vault, read through the
 /// harness's client-proven snapshot seam.
 fn vm_vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {

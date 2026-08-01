@@ -363,14 +363,60 @@ fn apply_fee_burn(
     }
 }
 
-/// What this shard, as a transaction's fee payer, charges it: the vault,
-/// the signed ceiling a success burns up to, and — for the cross-shard
-/// legs a wave can abort after executing — the floor an abort settles.
+/// What this shard, as a transaction's fee payer, charges it.
 #[derive(Clone, Copy)]
 struct PayerFee {
     vault: SubstateKey,
+    /// The signed ceiling a success burns up to, and what the sender's
+    /// own defect costs.
     max_fee: u128,
-    abort_floor: Option<u128>,
+    /// The class floor: what an attempt owes when nothing it did was its
+    /// sender's fault.
+    floor: u128,
+    /// Whether a wave can abort this transaction after it executed —
+    /// true for a cross-shard leg, which is the one shape whose effects
+    /// are discarded after the engine completed them.
+    wave_abortable: bool,
+}
+
+/// What an attempt that applied no effects owes, by why it applied none.
+///
+/// Charging nothing is not an option: a transaction that consumed its
+/// limit and then trapped would cost its sender less than the same work
+/// succeeding, which is the inversion that makes failure the cheaper way
+/// to buy execution.
+///
+/// The consumed work itself cannot price this. Fuel at a trap is not
+/// agreed between the runtimes — one flushes its in-register counter
+/// while the other charges every executed operator — so a charge derived
+/// from it would differ across replicas on the same transaction. Both
+/// amounts below are functions of signed content alone.
+const fn charge_for(outcome: &Outcome, payer: PayerFee) -> Option<u128> {
+    match outcome {
+        // Completed here means the engine applied the effects. Only a
+        // wave can still discard them, and only for a cross-shard leg —
+        // that receipt is built in reserve and settles the floor if the
+        // abort comes.
+        Outcome::Completed { .. } => {
+            if payer.wave_abortable {
+                Some(payer.floor)
+            } else {
+                None
+            }
+        }
+        // The sender's own defect, and the only class worth grinding: it
+        // pays the ceiling it declared. Not the work consumed — that is
+        // unknowable — but the sender chose the bound, and anything less
+        // leaves failure discounted against success.
+        Outcome::UserError { .. } => Some(payer.max_fee),
+        // A lost deterministic race. The sender did nothing wrong and
+        // could not have avoided it, so it pays only the floor covering
+        // the declaration work its attempt really did consume.
+        Outcome::Infeasible { .. } => Some(payer.floor),
+        // The kernel's own defect. `materialize_abort` refuses to price
+        // it to the sender, and the burn agrees.
+        Outcome::ProtocolError { .. } => None,
+    }
 }
 
 /// The fold's mutable state across a batch: the pre-fee kernel-mirror
@@ -446,12 +492,11 @@ fn assemble_executed_tx(
     locality: &Locality,
 ) -> ExecutedTx {
     let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
-    // Built before this transaction's own burn folds in: an abort settles
-    // the floor over the state its siblings left, not over its own.
+    // Built before this transaction's own burn folds in: a charge settles
+    // over the state its siblings left, not over its own.
     let fee_receipt = fee.and_then(|payer| {
-        payer
-            .abort_floor
-            .and_then(|floor| build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, floor))
+        charge_for(&receipt.outcome, payer)
+            .and_then(|amount| build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, amount))
     });
     let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
         let mut writes = fold_delta(receipt, base, &mut fold.running, vm_tx, locality);
@@ -664,10 +709,8 @@ impl VmExecutor {
                             local: LocalKey(local),
                         },
                         max_fee: vm.max_fee,
-                        // Only a cross-shard leg can be aborted after it
-                        // executed, so only it needs the abort's receipt
-                        // built in reserve.
-                        abort_floor: cross_shard.then(|| vm.abort_floor()),
+                        floor: vm.abort_floor(),
+                        wave_abortable: cross_shard,
                     },
                 ))
             })

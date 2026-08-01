@@ -262,7 +262,10 @@ impl FinalizedWave {
                     None => continue,
                 },
                 ExecutionOutcome::Succeeded { receipt_hash } => Some(*receipt_hash),
-                ExecutionOutcome::Failed => None,
+                // A failure produced no effects to apply, but its payer
+                // still owes for the attempt. When it settles that charge
+                // the fee receipt stands in for the `Failed` receipt.
+                ExecutionOutcome::Failed => outcome.fee_receipt(),
             };
 
             let receipt =

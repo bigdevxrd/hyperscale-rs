@@ -13,15 +13,20 @@ use crate::{GlobalReceiptHash, TxHash};
 pub struct TxOutcome {
     tx_hash: TxHash,
     outcome: ExecutionOutcome,
-    /// Set when this shard aborts a transaction it pays for: the hash of
-    /// the fee receipt the abort settles.
+    /// Set when this shard charges a transaction it pays for without
+    /// applying its effects: the hash of the receipt carrying that charge.
     ///
     /// An aborted transaction's own effects never apply — that is what
-    /// makes a cross-shard abort atomic — but the payer still owes the
-    /// class floor, and state moves only through receipts. The fee
-    /// receipt is the reconciliation: it carries the floor debit and
-    /// nothing else, and naming its hash here puts it under the signed
-    /// receipt root like any other receipt's content.
+    /// makes a cross-shard abort atomic — and a failed one produced none
+    /// to apply. Either way the payer still owes for the work the attempt
+    /// consumed, and state moves only through receipts. The fee receipt is
+    /// the reconciliation: it carries that debit and nothing else, and
+    /// naming its hash here puts it under the signed receipt root like any
+    /// other receipt's content.
+    ///
+    /// A failure that settles one takes the place of the `Failed` receipt
+    /// it would otherwise store, so the one-receipt-per-outcome pairing is
+    /// unchanged.
     fee_receipt: Option<GlobalReceiptHash>,
 }
 
@@ -36,13 +41,24 @@ impl TxOutcome {
         }
     }
 
-    /// Create an aborted `TxOutcome` that settles the payer's floor
-    /// through the named fee receipt.
+    /// Create a `TxOutcome` that settles the payer's charge through the
+    /// named fee receipt.
+    ///
+    /// Both outcomes that owe a charge without applying the transaction's
+    /// own effects use this: an abort, whose effects are discarded to keep
+    /// the cross-shard settlement atomic, and a failure, whose effects the
+    /// engine never produced. In either case the transaction did work its
+    /// payer owes for, and the receipt named here is the only thing that
+    /// moves that charge.
     #[must_use]
-    pub const fn aborted_with_fee(tx_hash: TxHash, fee_receipt: GlobalReceiptHash) -> Self {
+    pub const fn with_fee(
+        tx_hash: TxHash,
+        outcome: ExecutionOutcome,
+        fee_receipt: GlobalReceiptHash,
+    ) -> Self {
         Self {
             tx_hash,
-            outcome: ExecutionOutcome::Aborted,
+            outcome,
             fee_receipt: Some(fee_receipt),
         }
     }
