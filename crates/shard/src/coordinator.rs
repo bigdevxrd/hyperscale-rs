@@ -6083,9 +6083,9 @@ mod tests {
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BoundedVec, CertificateRoot,
         ConsensusSignature, Epoch, Hash, InFlightCount, LocalReceiptRoot, MAX_TIMESTAMP_DELAY,
         MAX_TIMESTAMP_RUSH, NetworkDefinition, NetworkParams, ProvisionsRoot, RETENTION_HORIZON,
-        RevealChain, RoutableTransaction, ShardId, Signer, SignerBitfield, TopologySchedule,
-        TopologySnapshot, TransactionRoot, ValidatorId, ValidatorInfo, ValidatorSet, VoteCount,
-        WeightedTimestamp, WitnessSources, test_utils,
+        RevealChain, RoutableTransaction, ShardId, ShardLoad, Signer, SignerBitfield,
+        TopologySchedule, TopologySnapshot, TransactionRoot, ValidatorId, ValidatorInfo,
+        ValidatorSet, VoteCount, WeightedTimestamp, WitnessSources, test_utils,
     };
 
     use super::*;
@@ -6275,6 +6275,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         Block::Live {
             header,
@@ -6829,6 +6830,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             );
             Block::Live {
                 header,
@@ -6889,6 +6891,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 
@@ -6962,6 +6965,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
 
@@ -7030,6 +7034,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
 
         let actions = state.on_block_header(
@@ -7080,6 +7085,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         Block::Live {
             header,
@@ -7240,6 +7246,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             );
             let _ = state.on_block_header(
                 &topology_schedule,
@@ -7295,6 +7302,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
 
@@ -7375,6 +7383,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
 
@@ -7466,6 +7475,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
 
@@ -7541,6 +7551,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
         let block_hash = header.hash();
@@ -7631,6 +7642,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
         let block_hash = header.hash();
@@ -7739,6 +7751,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
         let block_hash = header.hash();
@@ -7794,6 +7807,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
         let actions = state.on_block_header(
@@ -8391,6 +8405,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
 
@@ -8742,6 +8757,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
         let actions1 = state.on_block_header(
@@ -8791,6 +8807,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
         let actions2 = state.on_block_header(
@@ -8892,6 +8909,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             )
         };
 
@@ -9728,6 +9746,7 @@ mod tests {
                     RevealChain::ZERO,
                     None,
                     None,
+                    ShardLoad::ZERO,
                 )
             },
             transactions: Arc::new(BoundedVec::new()),
@@ -9802,6 +9821,7 @@ mod tests {
                     RevealChain::ZERO,
                     None,
                     None,
+                    ShardLoad::ZERO,
                 )
             },
             transactions: Arc::new(BoundedVec::new()),
@@ -9855,6 +9875,7 @@ mod tests {
                     RevealChain::ZERO,
                     None,
                     None,
+                    ShardLoad::ZERO,
                 )
             },
             transactions: Arc::new(BoundedVec::new()),
@@ -10066,6 +10087,7 @@ mod tests {
                     RevealChain::ZERO,
                     None,
                     None,
+                    ShardLoad::ZERO,
                 )
             },
             transactions: Arc::new(vec![tx1.clone()].into()),
@@ -10105,6 +10127,7 @@ mod tests {
                     RevealChain::ZERO,
                     None,
                     None,
+                    ShardLoad::ZERO,
                 )
             },
             transactions: Arc::new(txs.into()),
@@ -10156,6 +10179,7 @@ mod tests {
                     RevealChain::ZERO,
                     None,
                     None,
+                    ShardLoad::ZERO,
                 )
             },
             transactions: Arc::new(vec![tx1.clone()].into()),
@@ -10193,6 +10217,7 @@ mod tests {
                     RevealChain::ZERO,
                     None,
                     None,
+                    ShardLoad::ZERO,
                 )
             },
             transactions: Arc::new(vec![tx1].into()),
@@ -10656,6 +10681,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         Block::Live {
             header,

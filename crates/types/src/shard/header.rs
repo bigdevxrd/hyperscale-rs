@@ -13,7 +13,7 @@ use crate::{
     BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeight, BoundedBTreeMap, BoundedVec,
     CertificateRoot, ChainOrigin, Hash, InFlightCount, LocalReceiptRoot,
     MAX_REMOTE_SHARDS_PER_WAVE, MAX_TXS_PER_BLOCK, ProposerTimestamp, ProvisionTxRoot,
-    ProvisionsRoot, QuorumCertificate, RevealChain, Round, SettledWavesRoot, ShardId,
+    ProvisionsRoot, QuorumCertificate, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad,
     SplitChildRoots, StateRoot, TransactionRoot, ValidatorId, Verifiable, Verified, Verify, WaveId,
     WeightedTimestamp,
 };
@@ -78,6 +78,14 @@ pub struct BlockHeader {
     /// resolves split-straddling waves against the terminated shard's
     /// settled set without walking its chain.
     settled_waves_root: Option<SettledWavesRoot>,
+    /// The shard's attested load through this block — consumed gas as a
+    /// running total, and the byte total behind the parent state. The
+    /// beacon reads it off the boundary header it already sources and
+    /// reweights the per-epoch emission by it; verification recomputes
+    /// both scalars and rejects a header whose claim diverges, so a
+    /// committed load carries the committee's quorum behind it. See
+    /// [`ShardLoad`].
+    load: ShardLoad,
 }
 
 impl BlockHeader {
@@ -87,7 +95,7 @@ impl BlockHeader {
     ///
     /// Panics if `waves.len() > MAX_TXS_PER_BLOCK` or
     /// `provision_tx_roots.len() > MAX_REMOTE_SHARDS_PER_WAVE`.
-    #[allow(clippy::too_many_arguments)] // mirrors the 22 stored fields
+    #[allow(clippy::too_many_arguments)] // mirrors the 23 stored fields
     #[must_use]
     pub fn new(
         shard_id: ShardId,
@@ -112,6 +120,7 @@ impl BlockHeader {
         reveal_chain: RevealChain,
         split_child_roots: Option<SplitChildRoots>,
         settled_waves_root: Option<SettledWavesRoot>,
+        load: ShardLoad,
     ) -> Self {
         Self {
             shard_id,
@@ -136,6 +145,7 @@ impl BlockHeader {
             reveal_chain,
             split_child_roots,
             settled_waves_root,
+            load,
         }
     }
 
@@ -179,6 +189,7 @@ impl BlockHeader {
             reveal_chain: RevealChain::ZERO,
             split_child_roots: None,
             settled_waves_root: None,
+            load: ShardLoad::ZERO,
         }
     }
 
@@ -230,6 +241,7 @@ impl BlockHeader {
             reveal_chain: RevealChain::ZERO,
             split_child_roots: None,
             settled_waves_root: None,
+            load: ShardLoad::ZERO,
         }
     }
 
@@ -295,6 +307,7 @@ impl BlockHeader {
             reveal_chain: RevealChain::ZERO,
             split_child_roots: None,
             settled_waves_root: None,
+            load: ShardLoad::ZERO,
         }
     }
 
@@ -527,8 +540,16 @@ impl BlockHeader {
         self.settled_waves_root
     }
 
+    /// The shard's attested load through this block: consumed gas as a
+    /// running total over the chain's history, and the byte total behind
+    /// the parent state. Both recomputed at verification.
+    #[must_use]
+    pub const fn load(&self) -> ShardLoad {
+        self.load
+    }
+
     /// Decompose into the raw fields, in struct-declaration order.
-    #[allow(clippy::type_complexity)] // mirrors the 22 stored fields
+    #[allow(clippy::type_complexity)] // mirrors the 23 stored fields
     #[must_use]
     pub fn into_parts(
         self,
@@ -555,6 +576,7 @@ impl BlockHeader {
         RevealChain,
         Option<SplitChildRoots>,
         Option<SettledWavesRoot>,
+        ShardLoad,
     ) {
         (
             self.shard_id,
@@ -579,6 +601,7 @@ impl BlockHeader {
             self.reveal_chain,
             self.split_child_roots,
             self.settled_waves_root,
+            self.load,
         )
     }
 
@@ -848,6 +871,7 @@ mod tests {
             reveal_chain,
             _,
             _,
+            _,
         ) = bare.clone().into_parts();
         let carrying = BlockHeader::new(
             shard_id,
@@ -872,6 +896,7 @@ mod tests {
             reveal_chain,
             Some(pair),
             None,
+            ShardLoad::ZERO,
         );
 
         let decoded: BlockHeader = basic_decode(&basic_encode(&carrying).unwrap()).unwrap();
@@ -909,6 +934,7 @@ mod tests {
             reveal_chain,
             split_child_roots,
             _,
+            _,
         ) = bare.clone().into_parts();
         let carrying = BlockHeader::new(
             shard_id,
@@ -933,6 +959,7 @@ mod tests {
             reveal_chain,
             split_child_roots,
             Some(root),
+            ShardLoad::ZERO,
         );
 
         let decoded: BlockHeader = basic_decode(&basic_encode(&carrying).unwrap()).unwrap();
@@ -951,8 +978,8 @@ mod tests {
             enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
                 .unwrap();
             enc.write_value_kind(ValueKind::Tuple).unwrap();
-            // BlockHeader has 22 fields.
-            enc.write_size(22).unwrap();
+            // BlockHeader has 23 fields.
+            enc.write_size(23).unwrap();
             enc.encode(&h.shard_id).unwrap();
             enc.encode(&h.height).unwrap();
             enc.encode(&h.parent_block_hash).unwrap();
@@ -991,7 +1018,7 @@ mod tests {
             enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
                 .unwrap();
             enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(22).unwrap();
+            enc.write_size(23).unwrap();
             enc.encode(&h.shard_id).unwrap();
             enc.encode(&h.height).unwrap();
             enc.encode(&h.parent_block_hash).unwrap();

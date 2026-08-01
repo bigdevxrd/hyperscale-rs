@@ -23,7 +23,7 @@ use crate::{
     CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, ExecutionCertificate,
     ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
     LocalReceiptRoot, NetworkDefinition, NodeId, ProposerTimestamp, ProvisionsRoot,
-    QuorumCertificate, RevealChain, Round, RoutableTransaction, ShardForkProof, ShardId,
+    QuorumCertificate, RevealChain, Round, RoutableTransaction, ShardForkProof, ShardId, ShardLoad,
     SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, TransactionDecision,
     TransactionRoot, TxHash, TxOutcome, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
     Verified, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction, WaveCertificate,
@@ -383,6 +383,7 @@ pub fn make_live_block(
         RevealChain::ZERO,
         None,
         None,
+        ShardLoad::ZERO,
     );
     let transactions: Vec<Arc<Verifiable<RoutableTransaction>>> = transactions
         .into_iter()
@@ -573,6 +574,7 @@ pub(crate) fn fork_header(
         RevealChain::ZERO,
         None,
         None,
+        ShardLoad::ZERO,
     )
 }
 
@@ -749,6 +751,7 @@ pub(crate) fn live_fork_header(
         RevealChain::ZERO,
         None,
         None,
+        ShardLoad::ZERO,
     )
 }
 
@@ -839,6 +842,7 @@ fn stamp_parent_qc_weighted_timestamp(block: Block, weighted_timestamp_ms: u64) 
             reveal_chain,
             split_child_roots,
             settled_waves_root,
+            load,
         ) = header.into_parts();
         let pqc = parent_qc.as_unverified();
         let stamped = QuorumCertificate::new(
@@ -874,6 +878,7 @@ fn stamp_parent_qc_weighted_timestamp(block: Block, weighted_timestamp_ms: u64) 
             reveal_chain,
             split_child_roots,
             settled_waves_root,
+            load,
         )
     };
     match block {

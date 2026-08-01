@@ -1238,10 +1238,10 @@ mod tests {
         BlockHeader, BlockHeight, BoundedVec, CertificateRoot, ChainOrigin, Epoch, Hash,
         InFlightCount, LocalReceiptRoot, MAX_WITNESSES_PER_SHARD, MIN_STAKE_FLOOR,
         ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round, SettledWavesRoot,
-        ShardBoundary, ShardCommittee, ShardForkProof, ShardId, ShardRecovery, ShardWitnessPayload,
-        SignerBitfield, SplitChildRoots, Stake, StakePool, StakePoolId, StateRoot, TransactionRoot,
-        TransitionCause, ValidatorId, VrfProof, WeightedTimestamp, compute_merkle_root,
-        compute_range_proof,
+        ShardBoundary, ShardCommittee, ShardForkProof, ShardId, ShardLoad, ShardRecovery,
+        ShardWitnessPayload, SignerBitfield, SplitChildRoots, Stake, StakePool, StakePoolId,
+        StateRoot, TransactionRoot, TransitionCause, ValidatorId, VrfProof, WeightedTimestamp,
+        compute_merkle_root, compute_range_proof,
     };
 
     use super::*;
@@ -1312,6 +1312,7 @@ mod tests {
             RevealChain::ZERO,
             split_child_roots,
             settled_waves_root,
+            ShardLoad::ZERO,
         )
     }
 
@@ -4158,6 +4159,7 @@ mod tests {
             RevealChain::ZERO,
             Some(pair),
             None,
+            ShardLoad::ZERO,
         )
     }
 }

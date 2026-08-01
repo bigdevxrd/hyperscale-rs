@@ -269,9 +269,10 @@ mod tests {
         AggregateSignature, BeaconWitnessRoot, BlockHeader, BlockHeight, BoundedVec,
         CertificateRoot, ConsensusSignature, Epoch, InFlightCount, LocalReceiptRoot,
         LocalTimestamp, NetworkDefinition, ProposerTimestamp, ProvisionsRoot, QuorumCertificate,
-        ReadySignal, ReshapeSeat, ReshapeTrigger, RevealChain, Round, SignerBitfield, Stake,
-        StakePoolId, StateRoot, TopologySnapshot, TransactionRoot, ValidatorId, ValidatorInfo,
-        ValidatorSet, VrfProof, WeightedTimestamp, WitnessSources, compute_merkle_root,
+        ReadySignal, ReshapeSeat, ReshapeTrigger, RevealChain, Round, ShardLoad, SignerBitfield,
+        Stake, StakePoolId, StateRoot, TopologySnapshot, TransactionRoot, ValidatorId,
+        ValidatorInfo, ValidatorSet, VrfProof, WeightedTimestamp, WitnessSources,
+        compute_merkle_root,
     };
 
     use super::*;
@@ -402,6 +403,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             ),
             transactions: Arc::new(BoundedVec::new()),
             certificates: Arc::new(BoundedVec::new()),

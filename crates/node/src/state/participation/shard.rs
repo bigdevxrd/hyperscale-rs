@@ -493,8 +493,9 @@ mod tests {
         BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHeader, BlockHeight, BlockManifest,
         CertifiedBlock, CertifiedBlockHeader, ChainOrigin, Hash, LocalTimestamp,
         MerkleInclusionProof, ProvisionEntry, ProvisionTxRoot, Provisions, QuorumCertificate,
-        RETENTION_HORIZON, RevealChain, Round, ShardForkProof, ShardId, TransactionStatus, TxHash,
-        ValidatorId, Verified, WaveId, WeightedTimestamp, WitnessSources,
+        RETENTION_HORIZON, RevealChain, Round, ShardForkProof, ShardId, ShardLoad,
+        TransactionStatus, TxHash, ValidatorId, Verified, WaveId, WeightedTimestamp,
+        WitnessSources,
     };
 
     use crate::state::test_support::TestNode;
@@ -552,6 +553,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             );
         }
         let certified_header =

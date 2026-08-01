@@ -8,6 +8,9 @@
 //!   quiesce every cross-shard consumer engages against a proven fork.
 //! - [`header`]: [`BlockHeader`] (shard-voted metadata).
 //! - [`limits`]: protocol-level caps on per-block payload sizes.
+//! - [`load`]: [`ShardLoad`](load::ShardLoad) — the consumed-gas and
+//!   stored-byte totals a header attests, which the beacon reweights
+//!   emission by.
 //! - [`manifest`]: hash-level [`BlockManifest`] and denormalized [`BlockMetadata`].
 //! - [`quorum_certificate`]: [`QuorumCertificate`] aggregating shard consensus votes.
 //! - [`roots`]: per-block merkle root helpers used by [`BlockHeader`] consumers.
@@ -33,6 +36,7 @@ pub mod fork_fence;
 pub mod header;
 pub mod inventory;
 pub mod limits;
+pub mod load;
 pub mod manifest;
 pub mod quorum_certificate;
 pub mod reshape;
@@ -61,9 +65,9 @@ mod tests {
         BlockHeight, BoundedVec, CertificateRoot, ChainOrigin, ExecutionCertificate,
         ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
         LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        ShardId, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome, ValidatorId,
-        Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, generate_ed25519_keypair,
-        routable_from_notarized_v1, sign_and_notarize,
+        ShardId, ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome,
+        ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
+        generate_ed25519_keypair, routable_from_notarized_v1, sign_and_notarize,
     };
 
     #[test]
@@ -91,6 +95,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
 
         let hash1 = header.hash();
@@ -236,7 +241,7 @@ mod tests {
     fn certified_block_decode_rejects_qc_block_hash_mismatch() {
         use sbor::{DecodeError, basic_decode, basic_encode};
 
-        use crate::CertifiedBlock;
+        use crate::{CertifiedBlock, ShardLoad};
 
         // Forge a non-genesis block paired with a genesis QC. Without the
         // pairing check at decode this slips past the synced-block apply
@@ -273,6 +278,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             );
         }
         let genesis_qc = QuorumCertificate::genesis(ShardId::leaf(1, 0), ChainOrigin::ROOT);

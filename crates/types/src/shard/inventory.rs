@@ -442,7 +442,7 @@ mod tests {
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeight,
         BloomFilter, BoundedVec, CertificateRoot, ChainOrigin, Hash, InFlightCount,
         LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardId,
-        SignerBitfield, StateRoot, TransactionRoot, ValidatorId, WeightedTimestamp,
+        ShardLoad, SignerBitfield, StateRoot, TransactionRoot, ValidatorId, WeightedTimestamp,
     };
 
     fn create_test_block() -> Block {
@@ -472,6 +472,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             ),
             transactions: Arc::new(vec![Arc::new(Verifiable::from(tx))].into()),
             certificates: Arc::new(BoundedVec::new()),

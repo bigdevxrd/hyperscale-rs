@@ -13,7 +13,7 @@ use hyperscale_types::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
     Hash, InFlightCount, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp, ProvisionHash,
-    ProvisionTxRoot, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId,
+    ProvisionTxRoot, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad,
     SignerBitfield, StateRoot, TopologySchedule, TopologySnapshot, TransactionRoot, ValidatorId,
     Verified, WaveId, WeightedTimestamp, WitnessSources,
 };
@@ -57,6 +57,7 @@ fn make_block(height: BlockHeight) -> CertifiedBlock {
         RevealChain::ZERO,
         None,
         None,
+        ShardLoad::ZERO,
     );
     let block = Block::Live {
         header,
@@ -123,6 +124,7 @@ fn make_remote_header_targeting(
         RevealChain::ZERO,
         None,
         None,
+        ShardLoad::ZERO,
     );
     let header_hash = header.hash();
     let qc = QuorumCertificate::new(

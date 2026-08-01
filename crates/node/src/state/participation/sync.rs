@@ -152,7 +152,7 @@ mod tests {
     use hyperscale_types::{
         BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader, BlockHeight,
         CertifiedBlockHeader, ChainOrigin, Hash, LocalTimestamp, ProvisionTxRoot,
-        QuorumCertificate, RevealChain, ShardId, ValidatorId, Verified, WaveId,
+        QuorumCertificate, RevealChain, ShardId, ShardLoad, ValidatorId, Verified, WaveId,
     };
 
     use crate::assert_emits;
@@ -211,6 +211,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             );
         }
         let certified_header =

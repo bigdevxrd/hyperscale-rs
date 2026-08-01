@@ -2699,8 +2699,8 @@ mod tests {
         KeptSeat, LeafIndex, LocalReceiptRoot, MIN_BEACON_COMMITTEE_SIZE, MIN_STAKE_FLOOR,
         NetworkDefinition, ObserverSeat, PcVector, ProposerTimestamp, ProvisionsRoot,
         QuorumCertificate, Randomness, RevealChain, Round, ShardBoundary, ShardCommittee,
-        ShardEpochContribution, ShardId, ShardWitnessPayload, Signer, SignerBitfield, SpcCert,
-        SpcView, Stake, StakePoolId, StateRoot, TransactionRoot, ValidatorId, VrfProof,
+        ShardEpochContribution, ShardId, ShardLoad, ShardWitnessPayload, Signer, SignerBitfield,
+        SpcCert, SpcView, Stake, StakePoolId, StateRoot, TransactionRoot, ValidatorId, VrfProof,
         WeightedTimestamp, build_qc1, build_qc2, build_qc3, build_ratify_cert, compute_merkle_root,
         compute_range_proof, genesis_config_hash, pc_context, sign_ratify_vote, sign_vote1,
         sign_vote2, sign_vote3, spc_context,
@@ -2833,6 +2833,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let block_hash = header.hash();
         let qc = QuorumCertificate::new(
@@ -2954,6 +2955,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let block_hash = header.hash();
         let qc = QuorumCertificate::new(
@@ -5348,6 +5350,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let block_hash = header.hash();
         let qc = QuorumCertificate::new(

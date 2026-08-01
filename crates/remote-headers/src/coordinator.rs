@@ -1634,7 +1634,7 @@ mod tests {
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
         CertificateRoot, ChainOrigin, Epoch, Hash, InFlightCount, LocalReceiptRoot,
         NetworkDefinition, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain,
-        Round, ShardId, Signer, SignerBitfield, StateRoot, TransactionRoot, ValidatorId,
+        Round, ShardId, ShardLoad, Signer, SignerBitfield, StateRoot, TransactionRoot, ValidatorId,
         ValidatorInfo, ValidatorSet,
     };
 
@@ -1678,6 +1678,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         // Deliberately set wrong block_hash
         let qc = QuorumCertificate::new(
@@ -1775,6 +1776,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let qc = QuorumCertificate::new(
             header.hash(),
@@ -1831,6 +1833,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let qc = QuorumCertificate::new(
             header.hash(),
@@ -2278,6 +2281,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let qc = QuorumCertificate::new(
             header.hash(),

@@ -43,7 +43,7 @@ use hyperscale_types::{
     LocalReceiptRootVerifyError, LocalTimestamp, NetworkDefinition, ProposerTimestamp,
     ProvisionRootVerifyError, ProvisionTxRootsContext, ProvisionTxRootsMap,
     ProvisionTxRootsVerifyError, Provisions, ProvisionsRoot, ProvisionsRootContext, QcContext,
-    QcVerifyError, QuorumCertificate, ReadySignal, Round, RoutableTransaction, ShardId,
+    QcVerifyError, QuorumCertificate, ReadySignal, Round, RoutableTransaction, ShardId, ShardLoad,
     ShardVoteEquivocation, ShardWitnessPayload, Signer, StateRoot, StateRootContext,
     StateRootVerifyError, StoredReceipt, Timeout, TimeoutContext, TopologySchedule,
     TopologySnapshot, TransactionRoot, TransactionRootContext, TxHash, TxRootVerifyError,
@@ -1952,5 +1952,6 @@ pub fn perturb_header_timestamp(h: &BlockHeader) -> BlockHeader {
         h.reveal_chain(),
         h.split_child_roots(),
         h.settled_waves_root(),
+        ShardLoad::ZERO,
     )
 }

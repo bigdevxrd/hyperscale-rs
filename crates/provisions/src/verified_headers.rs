@@ -96,8 +96,8 @@ mod tests {
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
         CertificateRoot, ChainOrigin, InFlightCount, LocalReceiptRoot, ProposerTimestamp,
-        ProvisionsRoot, QuorumCertificate, RevealChain, Round, SignerBitfield, StateRoot,
-        TransactionRoot, ValidatorId, WeightedTimestamp,
+        ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardLoad, SignerBitfield,
+        StateRoot, TransactionRoot, ValidatorId, WeightedTimestamp,
     };
 
     use super::*;
@@ -126,6 +126,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let header_hash = header.hash();
         let qc = QuorumCertificate::new(

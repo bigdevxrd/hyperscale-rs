@@ -17,10 +17,11 @@ use hyperscale_types::{
     BeaconWitnessRoot, BlockHash, BlockHeader, BlockHeight, CertificateRoot, ConsensusSignature,
     Epoch, Hash, InFlightCount, LocalReceiptRoot, MIN_STAKE_FLOOR, NetworkDefinition,
     PcVoteEquivocation, PendingWithdrawal, ProposerTimestamp, ProvisionsRoot, QuorumCertificate,
-    RevealChain, Round, ShardCommittee, ShardEpochContribution, ShardId, ShardVoteEquivocation,
-    ShardWitnessPayload, SignerBitfield, SlotEffects, Stake, StakePool, StakePoolId, StateRoot,
-    TransactionRoot, ValidatorId, ValidatorRecord, ValidatorStatus, VrfProof, WeightedTimestamp,
-    compute_merkle_root, compute_range_proof, validator_possession_proof_sign, vrf_sign,
+    RevealChain, Round, ShardCommittee, ShardEpochContribution, ShardId, ShardLoad,
+    ShardVoteEquivocation, ShardWitnessPayload, SignerBitfield, SlotEffects, Stake, StakePool,
+    StakePoolId, StateRoot, TransactionRoot, ValidatorId, ValidatorRecord, ValidatorStatus,
+    VrfProof, WeightedTimestamp, compute_merkle_root, compute_range_proof,
+    validator_possession_proof_sign, vrf_sign,
 };
 
 use crate::state::{ApplyEpochInput, apply_epoch};
@@ -347,6 +348,7 @@ fn boundary_header(shard: ShardId, root: BeaconWitnessRoot, leaf_count: u64) -> 
         RevealChain::ZERO,
         None,
         None,
+        ShardLoad::ZERO,
     )
 }
 

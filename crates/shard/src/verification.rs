@@ -2341,7 +2341,7 @@ mod tests {
     use hyperscale_types::{
         BeaconWitnessLeafCount, BoundedVec, CertificateRoot, Epoch, Hash, LocalReceiptRoot,
         LocalTimestamp, ProposerTimestamp, QuorumCertificate, RevealChain, Round,
-        RoutableTransaction, ShardId, SignerBitfield, TransactionRoot, ValidatorId,
+        RoutableTransaction, ShardId, ShardLoad, SignerBitfield, TransactionRoot, ValidatorId,
         WeightedTimestamp,
     };
 
@@ -2379,6 +2379,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 
@@ -2918,6 +2919,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let block = Block::Live {
             header: forged_header,

@@ -116,8 +116,8 @@ mod tests {
             BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader, BlockHeight,
             CertificateRoot, CertifiedBlockHeader, ChainOrigin, Hash, InFlightCount,
             LocalReceiptRoot, MerkleInclusionProof, ProposerTimestamp, ProvisionEntry,
-            ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, SignerBitfield,
-            StateRoot, TransactionRoot, TxHash, ValidatorId, WeightedTimestamp,
+            ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad,
+            SignerBitfield, StateRoot, TransactionRoot, TxHash, ValidatorId, WeightedTimestamp,
         };
 
         let source_shard = ShardId::leaf(1, 1);
@@ -160,6 +160,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let header_hash = header.hash();
         let qc = QuorumCertificate::new(

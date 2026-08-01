@@ -151,9 +151,10 @@ mod tests {
         AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block,
         BlockHash, BlockHeader, BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock,
         ChainOrigin, Hash, InFlightCount, LeafIndex, LocalReceiptRoot, ProposerTimestamp,
-        ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardWitnessPayload,
-        SignerBitfield, Stake, StakePoolId, StateRoot, TransactionRoot, ValidatorId, Verified,
-        WeightedTimestamp, WitnessSources, compute_merkle_root, verify_range_inclusion,
+        ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad,
+        ShardWitnessPayload, SignerBitfield, Stake, StakePoolId, StateRoot, TransactionRoot,
+        ValidatorId, Verified, WeightedTimestamp, WitnessSources, compute_merkle_root,
+        verify_range_inclusion,
     };
 
     use super::*;
@@ -195,6 +196,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 

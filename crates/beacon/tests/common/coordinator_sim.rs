@@ -29,7 +29,7 @@ use hyperscale_types::{
     LocalReceiptRoot, LocalTimestamp, MIN_STAKE_FLOOR, NetworkDefinition, PcValueElement, PcVector,
     PcVote1, PcVote2, PcVote3, PcVoteEquivocation, PcVoteVerifyContext, ProposerTimestamp,
     ProvisionsRoot, QuorumCertificate, Randomness, RatifyPhase, RatifyRound, RatifyVerifyContext,
-    RatifyVote, RevealChain, Round, SKIP_TIMEOUT, ShardId, ShardVoteEquivocation,
+    RatifyVote, RevealChain, Round, SKIP_TIMEOUT, ShardId, ShardLoad, ShardVoteEquivocation,
     ShardWitnessPayload, Signer, SignerBitfield, SpcEmptyViewMsg, SpcNewCommitMsg,
     SpcProposalObject, SpcVerifyContext, SpcView, Stake, StakePoolId, StateRoot, TransactionRoot,
     ValidatorId, Verifiable, Verified, WeightedTimestamp, compute_merkle_root, compute_range_proof,
@@ -1574,6 +1574,7 @@ fn make_source_header_with_parent_qc(
         RevealChain::ZERO,
         None,
         None,
+        ShardLoad::ZERO,
     );
     let block_hash = header.hash();
     let qc = QuorumCertificate::new(

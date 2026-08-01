@@ -135,6 +135,7 @@ pub use shard::limits::{
     MAX_FINALIZED_TX_PER_BLOCK, MAX_PROVISIONS_PER_BLOCK, MAX_ROUND_GAP, MAX_TX_IN_FLIGHT,
     MAX_TXS_PER_BLOCK,
 };
+pub use shard::load::ShardLoad;
 pub use shard::manifest::{BlockManifest, BlockMetadata};
 pub use shard::quorum_certificate::{QcContext, QcVerifyError, QuorumCertificate};
 pub use shard::reshape::{ReshapeThresholds, ReshapeTrigger};

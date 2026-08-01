@@ -957,8 +957,9 @@ mod tests {
         BlockHeader, BoundedVec, CertificateRoot, ChainOrigin, Hash, InFlightCount,
         LocalReceiptRoot, MerkleInclusionProof, NetworkDefinition, ProposerTimestamp,
         ProvisionEntry, ProvisionTxRoot, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        ShardId, SignerBitfield, StateRoot, TopologySnapshot, TransactionRoot, TxHash, ValidatorId,
-        ValidatorSet, Verifiable, WaveId, WeightedTimestamp, WitnessSources, compute_merkle_root,
+        ShardId, ShardLoad, SignerBitfield, StateRoot, TopologySnapshot, TransactionRoot, TxHash,
+        ValidatorId, ValidatorSet, Verifiable, WaveId, WeightedTimestamp, WitnessSources,
+        compute_merkle_root,
     };
     use proptest::bool::ANY as ANY_BOOL;
     use proptest::collection::vec as prop_vec;
@@ -1038,6 +1039,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         Arc::new(Verified::new_unchecked_for_test(CertifiedBlockHeader::new(
             header, qc,
@@ -1953,6 +1955,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let header_hash = header.hash();
         let qc = QuorumCertificate::new(
@@ -2018,6 +2021,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let block = Block::Live {
             header,
@@ -2328,6 +2332,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let provisions_verifiable: Arc<Verifiable<Provisions>> =
             Arc::new(Arc::unwrap_or_clone(provisions).into());

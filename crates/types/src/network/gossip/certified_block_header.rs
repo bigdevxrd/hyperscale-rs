@@ -99,7 +99,7 @@ mod tests {
         use crate::{
             BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHeader, BlockHeight, CertificateRoot,
             ChainOrigin, Hash, LocalReceiptRoot, ProvisionsRoot, QuorumCertificate, RevealChain,
-            Round, ShardId, StateRoot, TransactionRoot, ValidatorId,
+            Round, ShardId, ShardLoad, StateRoot, TransactionRoot, ValidatorId,
         };
 
         let header = BlockHeader::new(
@@ -125,6 +125,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let qc = QuorumCertificate::genesis(ShardId::leaf(1, 0), ChainOrigin::ROOT);
 

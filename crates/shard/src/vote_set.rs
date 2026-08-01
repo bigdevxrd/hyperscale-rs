@@ -440,7 +440,8 @@ mod tests {
     use hyperscale_types::{
         BeaconWitnessLeafCount, BeaconWitnessRoot, CertificateRoot, ChainOrigin, Hash,
         InFlightCount, LocalReceiptRoot, NetworkDefinition, ProposerTimestamp, ProvisionsRoot,
-        QuorumCertificate, RevealChain, ShardId, Signer, StateRoot, TransactionRoot, ValidatorId,
+        QuorumCertificate, RevealChain, ShardId, ShardLoad, Signer, StateRoot, TransactionRoot,
+        ValidatorId,
     };
 
     use super::*;
@@ -473,6 +474,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 

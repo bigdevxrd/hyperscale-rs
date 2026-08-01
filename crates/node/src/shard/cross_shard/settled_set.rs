@@ -239,9 +239,9 @@ mod tests {
         BlockHash, BlockHeader, BoundedVec, CertificateRoot, ExecutionCertificate,
         ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
         LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        ShardId, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome, ValidatorId,
-        Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
-        settled_waves_root_from_ids,
+        ShardId, ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome,
+        ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
+        WitnessSources, settled_waves_root_from_ids,
     };
 
     use super::*;
@@ -312,6 +312,7 @@ mod tests {
                 RevealChain::ZERO,
                 None,
                 None,
+                ShardLoad::ZERO,
             );
             let block = Block::Live {
                 header,

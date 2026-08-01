@@ -767,8 +767,8 @@ mod tests {
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BoundedVec, CertificateRoot,
         CommitProofVerifyError, ElidedCertifiedBlock, Hash, InFlightCount, Inventory,
-        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, SignerBitfield,
-        SplitChildRoots, TransactionRoot, VoteCount, WitnessSources,
+        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardLoad,
+        SignerBitfield, SplitChildRoots, TransactionRoot, VoteCount, WitnessSources,
     };
 
     use super::*;
@@ -989,6 +989,7 @@ mod tests {
             RevealChain::ZERO,
             pair,
             None,
+            ShardLoad::ZERO,
         );
         Block::Live {
             header,

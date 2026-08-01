@@ -428,9 +428,9 @@ mod tests {
         BlockHeader, BoundedVec, CertificateRoot, ChainOrigin, ConsensusReceipt,
         ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
         GlobalReceiptRoot, InFlightCount, LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot,
-        QuorumCertificate, RevealChain, Round, ShardId, SignerBitfield, StateRoot, TransactionRoot,
-        TxHash, TxOutcome, ValidatorId, Verifiable, WaveCertificate, WaveId, WeightedTimestamp,
-        WitnessSources,
+        QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, SignerBitfield, StateRoot,
+        TransactionRoot, TxHash, TxOutcome, ValidatorId, Verifiable, WaveCertificate, WaveId,
+        WeightedTimestamp, WitnessSources,
     };
 
     use super::*;
@@ -461,6 +461,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 
@@ -494,6 +495,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 

@@ -213,7 +213,7 @@ mod tests {
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockManifest,
         BoundedVec, CertificateRoot, Hash, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp,
         ProvisionsRoot, QuorumCertificate, RevealChain, Round, RoutableTransaction, ShardId,
-        SignerBitfield, TransactionRoot, ValidatorId, Verifiable, WeightedTimestamp,
+        ShardLoad, SignerBitfield, TransactionRoot, ValidatorId, Verifiable, WeightedTimestamp,
         WitnessSources, test_utils,
     };
 
@@ -243,6 +243,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 

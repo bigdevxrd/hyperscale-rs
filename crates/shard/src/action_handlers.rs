@@ -21,7 +21,7 @@ use hyperscale_types::{
     InFlightCount, LocalReceiptRoot, LocalReceiptRootContext, NetworkDefinition, PreparedCommit,
     ProposerTimestamp, ProvisionHash, ProvisionTxRootsContext, ProvisionTxRootsMap, Provisions,
     ProvisionsRoot, ProvisionsRootContext, QcContext, QuorumCertificate, ReadySignal,
-    ReshapeTrigger, RevealChain, Round, RoutableTransaction, SettledWavesRoot, ShardId,
+    ReshapeTrigger, RevealChain, Round, RoutableTransaction, SettledWavesRoot, ShardId, ShardLoad,
     SplitChildRoots, StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout,
     TimeoutContext, TopologySnapshot, TransactionRoot, TransactionRootContext, ValidatorId,
     Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
@@ -329,6 +329,7 @@ pub fn build_proposal<S: ShardChainWriter>(
         reveal_chain,
         split_child_roots,
         settled_waves_root,
+        ShardLoad::ZERO,
     );
 
     let block = Block::Live {

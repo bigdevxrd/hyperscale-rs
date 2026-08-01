@@ -1547,7 +1547,8 @@ mod tests {
 
     use hyperscale_types::{
         BeaconWitnessRoot, Block, BlockHeader, BoundedVec, CertificateRoot, InFlightCount,
-        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, TransactionRoot,
+        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardLoad,
+        TransactionRoot,
     };
 
     /// Tag the pin hook pushes into the sink, distinguishing pins from
@@ -1607,6 +1608,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let block = Block::Live {
             header,

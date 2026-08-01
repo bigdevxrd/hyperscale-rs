@@ -551,7 +551,7 @@ mod tests {
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
         BlockHeight, CertificateRoot, CertifiedBlockHeader, Hash, InFlightCount, LeafIndex,
         LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        ShardId, ShardWitnessPayload, SignerBitfield, Stake, StakePoolId, StateRoot,
+        ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield, Stake, StakePoolId, StateRoot,
         TransactionRoot, ValidatorId, Verified, WeightedTimestamp,
     };
 
@@ -605,6 +605,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         let block_hash = header.hash();
         let qc = QuorumCertificate::new(

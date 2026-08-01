@@ -540,7 +540,7 @@ mod tests {
         BoundedVec, CertificateRoot, ChainOrigin, FinalizedWave, Hash, InFlightCount,
         LocalReceiptRoot, MerkleInclusionProof, NetworkDefinition, ProposerTimestamp,
         ProvisionEntry, Provisions, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        RoutableTransaction, ShardId, Signer, SignerBitfield, StateRoot, TimestampRange,
+        RoutableTransaction, ShardId, ShardLoad, Signer, SignerBitfield, StateRoot, TimestampRange,
         TransactionDecision, TransactionRoot, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
         Verified, WeightedTimestamp, WitnessSources, compute_waves, test_utils,
     };
@@ -590,6 +590,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 
@@ -623,6 +624,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 
@@ -650,6 +652,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         );
         Block::Live {
             header,
@@ -859,6 +862,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 
@@ -1005,6 +1009,7 @@ mod tests {
             RevealChain::ZERO,
             None,
             None,
+            ShardLoad::ZERO,
         )
     }
 
