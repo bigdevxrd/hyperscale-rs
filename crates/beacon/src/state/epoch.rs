@@ -874,6 +874,12 @@ fn record_boundaries(
         }
         let (marks, is_terminal_contribution) =
             carried_terminal_marks(state, *shard, header, qc, windows);
+        // Read before the insert replaces the record: the byte level is
+        // carried forward when this crossing's header resolved no total.
+        let prior_substate_bytes = state
+            .boundaries
+            .get(shard)
+            .map_or(0, |record| record.substate_bytes);
         state.boundaries.insert(
             *shard,
             ShardBoundary {
@@ -883,6 +889,10 @@ fn record_boundaries(
                 weighted_timestamp: header.parent_qc().weighted_timestamp(),
                 witness_leaf_count: BeaconWitnessLeafCount::new(chunk_end),
                 witness_base: header.beacon_witness_base(),
+                gas_used: header.load().cumulative_gas,
+                // A level: an unresolved claim carries the previous value
+                // forward instead of reading as "the shard emptied".
+                substate_bytes: header.load().substate_bytes.unwrap_or(prior_substate_bytes),
                 last_live_epoch: epoch,
                 consecutive_misses: 0,
                 terminal_epoch: marks.terminal_epoch,
@@ -1105,6 +1115,8 @@ fn seed_split_children(
                 weighted_timestamp: genesis.header().parent_qc().weighted_timestamp(),
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: epoch,
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -1213,6 +1225,8 @@ fn compose_merge_parent(
             weighted_timestamp: genesis.header().parent_qc().weighted_timestamp(),
             witness_leaf_count: BeaconWitnessLeafCount::ZERO,
             witness_base: BeaconWitnessLeafCount::ZERO,
+            gas_used: 0,
+            substate_bytes: 0,
             last_live_epoch: epoch,
             consecutive_misses: 0,
             terminal_epoch: None,
@@ -1432,6 +1446,147 @@ mod tests {
             AggregateSignature::ZERO,
             WeightedTimestamp::from_millis(wt),
         )
+    }
+
+    /// `header` with `load` stamped on it — the attested-load claims the
+    /// fold reads off a boundary header. Rebuilt rather than mutated
+    /// because the field is hash-covered and private.
+    fn stamping_load(header: BlockHeader, load: ShardLoad) -> BlockHeader {
+        let (
+            shard_id,
+            height,
+            parent_block_hash,
+            parent_qc,
+            proposer,
+            timestamp,
+            round,
+            is_fallback,
+            state_root,
+            transaction_root,
+            certificate_root,
+            local_receipt_root,
+            provision_root,
+            waves,
+            provision_tx_roots,
+            in_flight,
+            beacon_witness_root,
+            beacon_witness_leaf_count,
+            beacon_witness_base,
+            reveal_chain,
+            split_child_roots,
+            settled_waves_root,
+            _,
+        ) = header.into_parts();
+        BlockHeader::new(
+            shard_id,
+            height,
+            parent_block_hash,
+            parent_qc,
+            proposer,
+            timestamp,
+            round,
+            is_fallback,
+            state_root,
+            transaction_root,
+            certificate_root,
+            local_receipt_root,
+            provision_root,
+            waves.iter().cloned().collect(),
+            provision_tx_roots.iter().map(|(k, v)| (*k, *v)).collect(),
+            in_flight,
+            beacon_witness_root,
+            beacon_witness_leaf_count,
+            beacon_witness_base,
+            reveal_chain,
+            split_child_roots,
+            settled_waves_root,
+            load,
+        )
+    }
+
+    /// The two attested-load quantities land on the record in their own
+    /// shapes: gas as a high-water mark whose successive differences are one
+    /// epoch's work, and the byte total as a level that an unresolved claim
+    /// leaves standing rather than zeroing.
+    #[test]
+    fn record_boundaries_carries_gas_as_a_mark_and_bytes_as_a_level() {
+        let mut state = single_pool_state(4);
+        state.chain_config.epoch_duration_ms = 1_000;
+        let shard = ShardId::leaf(1, 0);
+        let anchor_root = StateRoot::from_raw(Hash::from_bytes(b"anchor"));
+
+        let cross =
+            |state: &mut BeaconState, epoch: u64, height: u64, pred: u64, load: ShardLoad| {
+                let (header, payloads, range_proof) =
+                    boundary_block_with_witnesses(shard, height, pred, anchor_root, 0);
+                let header = stamping_load(header, load);
+                let qc = qc_over(&header, pred + 600);
+                let proposal = BeaconProposal::new(
+                    std::iter::once((shard, Some(qc))).collect(),
+                    Vec::new(),
+                    BTreeMap::new(),
+                    Vec::new(),
+                    VrfProof::ZERO,
+                );
+                let contributions: BTreeMap<ShardId, ShardEpochContribution> = std::iter::once((
+                    shard,
+                    ShardEpochContribution {
+                        boundary_header: header,
+                        payloads: payloads.into(),
+                        range_proof: range_proof.into(),
+                    },
+                ))
+                .collect();
+                record_boundaries(
+                    &BlsVerifier,
+                    state,
+                    &net(),
+                    Epoch::new(epoch),
+                    &vec![(ValidatorId::new(0), proposal)],
+                    &contributions,
+                    &BTreeSet::new(),
+                );
+            };
+
+        // First crossing: both quantities come straight off the header.
+        cross(
+            &mut state,
+            1,
+            5,
+            900,
+            ShardLoad::ZERO.advance(400, Some(8_192)),
+        );
+        let first = state.boundaries[&shard];
+        assert_eq!(first.gas_used, 400);
+        assert_eq!(first.substate_bytes, 8_192);
+
+        // Second: the mark advances, and the epoch's work is the difference
+        // the weighting reads — not the cumulative.
+        cross(
+            &mut state,
+            2,
+            9,
+            1_900,
+            ShardLoad::ZERO.advance(1_000, Some(9_000)),
+        );
+        let second = state.boundaries[&shard];
+        assert_eq!(second.gas_used, 1_000);
+        assert_eq!(second.gas_used - first.gas_used, 600);
+        assert_eq!(second.substate_bytes, 9_000);
+
+        // Third: a crossing whose header resolved no byte total leaves the
+        // level standing. Reading the absence as zero would tell the beacon
+        // the shard had emptied.
+        cross(
+            &mut state,
+            3,
+            13,
+            2_900,
+            ShardLoad::ZERO.advance(1_250, None),
+        );
+        let third = state.boundaries[&shard];
+        assert_eq!(third.gas_used, 1_250);
+        assert_eq!(third.substate_bytes, 9_000);
     }
 
     /// A boundary block (predecessor wt 900 ≤ the 1000 cut, own wt 1500
@@ -1655,6 +1810,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -1710,6 +1867,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -2102,6 +2261,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -2196,6 +2357,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -2269,6 +2432,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -2863,6 +3028,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: Some(Epoch::new(1)),
@@ -2881,6 +3048,8 @@ mod tests {
                     weighted_timestamp: WeightedTimestamp::ZERO,
                     witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                     witness_base: BeaconWitnessLeafCount::ZERO,
+                    gas_used: 0,
+                    substate_bytes: 0,
                     last_live_epoch: Epoch::new(1),
                     consecutive_misses: 0,
                     terminal_epoch: None,
@@ -3308,6 +3477,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -3328,6 +3499,8 @@ mod tests {
                     weighted_timestamp: WeightedTimestamp::ZERO,
                     witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                     witness_base: BeaconWitnessLeafCount::ZERO,
+                    gas_used: 0,
+                    substate_bytes: 0,
                     last_live_epoch: Epoch::new(1),
                     consecutive_misses: 0,
                     terminal_epoch: Some(Epoch::new(1)),
@@ -3473,6 +3646,8 @@ mod tests {
                     weighted_timestamp: WeightedTimestamp::ZERO,
                     witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                     witness_base: BeaconWitnessLeafCount::ZERO,
+                    gas_used: 0,
+                    substate_bytes: 0,
                     last_live_epoch: Epoch::new(1),
                     consecutive_misses: 0,
                     terminal_epoch: Some(Epoch::new(1)),
@@ -3491,6 +3666,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -3884,6 +4061,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: witness,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
@@ -4105,6 +4284,8 @@ mod tests {
                     weighted_timestamp: WeightedTimestamp::ZERO,
                     witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                     witness_base: BeaconWitnessLeafCount::ZERO,
+                    gas_used: 0,
+                    substate_bytes: 0,
                     last_live_epoch: Epoch::GENESIS,
                     consecutive_misses: 0,
                     terminal_epoch: None,

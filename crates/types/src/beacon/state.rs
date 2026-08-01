@@ -288,6 +288,19 @@ pub struct ShardBoundary {
     pub weighted_timestamp: WeightedTimestamp,
     /// Beacon-witness accumulator high-water mark at the boundary.
     pub witness_leaf_count: BeaconWitnessLeafCount,
+    /// Gas the shard's chain has consumed over its whole history, as of the
+    /// boundary header. A high-water mark, so one epoch's attested work is
+    /// the difference against the value the previous crossing recorded —
+    /// which makes a missed crossing absorbed by the next rather than lost.
+    /// Zero on a freshly seeded record: a chain starts its own count at
+    /// zero, including a split child or merged parent that inherits state
+    /// but not its predecessor's consumption.
+    pub gas_used: u64,
+    /// Committed substate byte total behind the boundary header's parent
+    /// state — a level, not a running total, so a crossing whose header
+    /// resolved no total (the halt-recovery case) leaves the recorded value
+    /// unrefreshed rather than zeroing it.
+    pub substate_bytes: u64,
     /// The boundary header's own witness window base — the low edge of
     /// the leaf range its `beacon_witness_root` commits. Serving
     /// committee members retain persisted witness payloads down to this
@@ -1960,6 +1973,8 @@ mod tests {
             weighted_timestamp: WeightedTimestamp::ZERO,
             witness_leaf_count: BeaconWitnessLeafCount::ZERO,
             witness_base: BeaconWitnessLeafCount::ZERO,
+            gas_used: 0,
+            substate_bytes: 0,
             last_live_epoch: creation,
             consecutive_misses: 0,
             terminal_epoch: None,
@@ -2026,6 +2041,8 @@ mod tests {
             weighted_timestamp: WeightedTimestamp::ZERO,
             witness_leaf_count: BeaconWitnessLeafCount::ZERO,
             witness_base: BeaconWitnessLeafCount::ZERO,
+            gas_used: 0,
+            substate_bytes: 0,
             last_live_epoch: Epoch::new(1),
             consecutive_misses: misses,
             terminal_epoch: None,
@@ -2324,6 +2341,8 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
+                gas_used: 0,
+                substate_bytes: 0,
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
