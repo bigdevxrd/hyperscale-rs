@@ -225,7 +225,7 @@ fn fold_delta(
     base: &VmBase,
     running: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
     tx: VmTxHash,
-    is_local: &dyn Fn(Address) -> bool,
+    locality: &Locality,
 ) -> BTreeMap<SubstateKey, Option<Vec<u8>>> {
     assert!(
         receipt.delta.entries.is_empty(),
@@ -241,38 +241,30 @@ fn fold_delta(
             .cloned()
             .unwrap_or_else(|| base.cells.get(&key).cloned())
     };
-    for (key, change) in &receipt.delta.cells {
-        if !is_local(key.owner) {
-            continue;
-        }
-        writes.insert(*key, change.clone());
+    // The owning shard folds its own cells; a movement on any other is the
+    // outbound record and never becomes an absolute write here.
+    let owned = receipt.delta.owned(locality);
+    for (key, change) in owned.cells() {
+        writes.insert(key, change.clone());
     }
-    for (key, movement) in &receipt.delta.movements {
-        if !is_local(key.owner) {
-            // The owning shard folds its own cells; here the movement is
-            // the outbound record and never becomes an absolute write.
-            continue;
-        }
-        let before = current(&writes, running, *key)
+    for (key, movement) in owned.movements() {
+        let before = current(&writes, running, key)
             .map_or(Ok(0), |bytes| decode_amount(&bytes))
             .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
         let after = before
             .checked_add(movement.credit)
             .and_then(|credited| credited.checked_sub(movement.debit))
             .unwrap_or_else(|| panic!("fold of {tx:?}: movement past the kernel-vetted floor"));
-        writes.insert(*key, Some(encode_amount(after).to_vec()));
+        writes.insert(key, Some(encode_amount(after).to_vec()));
     }
-    for (key, settled) in &receipt.delta.settles {
-        if !is_local(key.owner) {
-            continue;
-        }
-        let before = current(&writes, running, *key)
+    for (key, settled) in owned.settles() {
+        let before = current(&writes, running, key)
             .map_or(Ok(0), |bytes| decode_amount(&bytes))
             .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
         let after = before
-            .checked_sub(*settled)
+            .checked_sub(settled)
             .unwrap_or_else(|| panic!("fold of {tx:?}: settle past the committed amount"));
-        writes.insert(*key, Some(encode_amount(after).to_vec()));
+        writes.insert(key, Some(encode_amount(after).to_vec()));
     }
     for (key, change) in &writes {
         running.insert(*key, change.clone());
@@ -446,7 +438,7 @@ fn assemble_executed_tx(
     vm_tx: VmTxHash,
     receipt: &Receipt,
     fee: Option<PayerFee>,
-    is_local: &dyn Fn(Address) -> bool,
+    locality: &Locality,
 ) -> ExecutedTx {
     let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
     // Built before this transaction's own burn folds in: an abort settles
@@ -457,7 +449,7 @@ fn assemble_executed_tx(
             .and_then(|floor| build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, floor))
     });
     let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
-        let mut writes = fold_delta(receipt, base, &mut fold.running, vm_tx, is_local);
+        let mut writes = fold_delta(receipt, base, &mut fold.running, vm_tx, locality);
         apply_fee_burn(
             &mut writes,
             &fold.running,
@@ -526,12 +518,6 @@ impl VmExecutor {
         } else {
             Locality::All
         };
-        let is_local = {
-            let trie = ctx.shard_trie.clone();
-            let local_shard = ctx.local_shard;
-            move |owner: Address| !cross_shard || trie.shard_for_prefix(owner.0) == local_shard
-        };
-
         // Derive every transaction; refusals become deterministic
         // failures without touching the batch.
         let mut prepared: BTreeMap<VmTxHash, PreparedVmTx> = BTreeMap::new();
@@ -583,7 +569,7 @@ impl VmExecutor {
         for entry in prepared.values() {
             for effect in entry.declared.iter() {
                 if let EffectTarget::Point(key) = effect.target
-                    && is_local(key.owner)
+                    && locality.is_local(key.owner)
                     && let Some(value) = read_cell(snapshot, key)
                 {
                     cells.insert(key, value);
@@ -657,7 +643,7 @@ impl VmExecutor {
             .filter_map(|tx| {
                 let vm = tx.vm()?;
                 let (owner, local) = tx.vm_fee_vault()?;
-                if !is_local(Address(owner)) {
+                if !locality.is_local(Address(owner)) {
                     return None;
                 }
                 Some((
@@ -690,7 +676,7 @@ impl VmExecutor {
                 *vm_tx,
                 receipt,
                 fee_by_tx.get(vm_tx).copied(),
-                &is_local,
+                &locality,
             );
             folded.insert(*vm_tx, executed);
         }
