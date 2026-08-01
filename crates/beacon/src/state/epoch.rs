@@ -188,6 +188,14 @@ pub fn apply_epoch(
     // A `Skip` carries every prior boundary forward untouched; a Normal
     // epoch records fresh boundaries and bumps the miss counter for any
     // active shard with no qualifying contribution.
+    // The epoch's attested gas per shard is the movement of each boundary
+    // record's high-water mark across this fold, so snapshot the marks
+    // before the crossings land and difference them after.
+    let gas_marks_before: BTreeMap<ShardId, u64> = state
+        .boundaries
+        .iter()
+        .map(|(shard, record)| (*shard, record.gas_used))
+        .collect();
     let (mut witness, reveals) = if let ApplyEpochInput::Normal {
         committed,
         shard_contributions,
@@ -239,7 +247,17 @@ pub fn apply_epoch(
     ));
     let withdrawal = complete_pending_withdrawals(state);
     let reactivated = auto_reactivate(state);
-    let rewards_credited = distribute_epoch_rewards(state);
+    // A shard with no prior record differences against zero, which is its
+    // whole cumulative — right for a chain seeded this epoch.
+    let shard_gas: BTreeMap<ShardId, u64> = state
+        .boundaries
+        .iter()
+        .map(|(shard, record)| {
+            let before = gas_marks_before.get(shard).copied().unwrap_or(0);
+            (*shard, record.gas_used.saturating_sub(before))
+        })
+        .collect();
+    let rewards_credited = distribute_epoch_rewards(state, &shard_gas);
     let timeout_readied = auto_ready_timeout(state);
     run_shuffle_step(state);
     // Close resolvable rotations after the shuffle, never before it. The
@@ -1542,7 +1560,7 @@ mod tests {
                     state,
                     &net(),
                     Epoch::new(epoch),
-                    &vec![(ValidatorId::new(0), proposal)],
+                    &[(ValidatorId::new(0), proposal)],
                     &contributions,
                     &BTreeSet::new(),
                 );

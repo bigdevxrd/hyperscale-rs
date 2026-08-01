@@ -42,6 +42,7 @@ pub use beacon::{
     CandidateBeaconBlockVerifyError, CandidateVerifyContext, CertifiedBeaconBlock,
     CertifiedBeaconBlockPairingError, CertifiedBeaconBlockVerifyContext,
     CertifiedBeaconBlockVerifyError, CohortSeat, CommitteeTransition, CompletedRecovery,
+    EMISSION_PARTICIPATION_WEIGHT, EMISSION_STORAGE_WEIGHT, EMISSION_WORK_WEIGHT,
     EMISSIONS_PER_EPOCH, EPOCHS_PER_YEAR, GenesisPool, GenesisValidator, HALT_THRESHOLD_EPOCHS,
     IMPOUND_EPOCHS_DEFAULT, JAIL_COOLDOWN_EPOCHS, JailReason, KeeperSeat, KeptSeat,
     MAX_BEACON_COMMITTEE, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EQUIVOCATIONS_PER_PROPOSER,

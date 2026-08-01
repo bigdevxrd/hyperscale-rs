@@ -298,3 +298,37 @@ pub const EPOCHS_PER_YEAR: u64 = (60 / 5) * 24 * 365;
 pub const EMISSIONS_PER_EPOCH: Stake = Stake::from_attos(
     (TOKENS_PER_YEAR_TARGET as u128) * Stake::ATTOS_PER_WHOLE / (EPOCHS_PER_YEAR as u128),
 );
+
+/// Weight every ready validator earns for participating, independent of
+/// what its shard did.
+///
+/// The floor exists because a quiet shard is still secured: its committee
+/// runs consensus, produces blocks, and stands behind the shard's state
+/// whether or not traffic arrived. Weighting on attested work alone would
+/// pay a shard nothing for being idle, which would make a new shard
+/// unfundable and reward abandoning quiet ones.
+///
+/// With the two work weights at zero this term alone reproduces the
+/// pro-rata-by-ready-validator split exactly, so the weighting degrades to
+/// its predecessor rather than to nothing.
+pub const EMISSION_PARTICIPATION_WEIGHT: u64 = 1_000_000;
+
+/// Weight distributed across shards by their share of the epoch's attested
+/// gas.
+///
+/// The compute each shard's committee actually performed, including the
+/// cross-shard legs whose fees burned at another shard's payer.
+///
+/// A *share*, not a rate: the term is `weight × shard_gas / total_gas`, so
+/// the constant is a dimensionless ratio against
+/// [`EMISSION_PARTICIPATION_WEIGHT`] rather than a guess at what a gas unit
+/// is worth. Phase 6 sets the ratio against measured baselines.
+pub const EMISSION_WORK_WEIGHT: u64 = 1_000_000;
+
+/// Weight distributed across shards by their share of committed stored
+/// bytes — the state each shard's committee holds and serves.
+///
+/// Keys on bytes rather than bond value, so a later move in the per-byte
+/// storage rate grandfathers nobody. A share on the same footing as
+/// [`EMISSION_WORK_WEIGHT`]; phase 6 sets the ratio.
+pub const EMISSION_STORAGE_WEIGHT: u64 = 1_000_000;

@@ -255,7 +255,7 @@ mod tests {
         convict_pool(&mut state, StakePoolId::new(0), epoch);
         let total0 = state.pools[&StakePoolId::new(0)].total_stake;
 
-        let credits = distribute_epoch_rewards(&mut state);
+        let credits = distribute_epoch_rewards(&mut state, &std::collections::BTreeMap::new());
 
         assert!(!credits.contains_key(&StakePoolId::new(0)));
         assert_eq!(

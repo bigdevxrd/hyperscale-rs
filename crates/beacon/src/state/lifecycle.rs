@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use hyperscale_types::{
-    BeaconState, EMISSIONS_PER_EPOCH, Stake, StakePoolId, ValidatorId, ValidatorStatus,
+    BeaconState, EMISSION_PARTICIPATION_WEIGHT, EMISSION_STORAGE_WEIGHT, EMISSION_WORK_WEIGHT,
+    EMISSIONS_PER_EPOCH, ShardId, Stake, StakePoolId, ValidatorId, ValidatorStatus,
 };
 
 /// Promote `InsufficientStake` validators back to `Pooled` for every
@@ -106,40 +107,90 @@ pub(super) fn auto_reactivate(state: &mut BeaconState) -> Vec<ValidatorId> {
     reactivated
 }
 
-/// Credit one epoch's emissions across stake pools pro-rata to each
-/// pool's count of `OnShard { ready: true }` validators.
+/// One shard's emission weight per ready validator: a participation floor
+/// plus its share of the epoch's attested gas and of committed stored bytes.
 ///
-/// Pure deterministic function of `(state)`. Returns the per-pool
-/// credits actually applied; zero-share pools are omitted.
+/// Shares rather than rates, so the constants are dimensionless ratios
+/// against the floor instead of guesses at what a gas unit or a byte is
+/// worth. A zero network total drops that term for everyone rather than
+/// dividing by zero, which is what an epoch with no traffic — or a network
+/// with no state yet — actually means.
+///
+/// The weight is per validator, so a shard's total scales with its
+/// committee size. Committees are capped at one size by design, so this is
+/// uniform scaling; it is not an attempt to price a seat.
+fn shard_emission_weight(gas_delta: u64, gas_total: u128, bytes: u64, bytes_total: u128) -> u128 {
+    // `checked_div` carries the zero-total case: a network that attested no
+    // gas, or holds no state yet, drops that term for everyone rather than
+    // dividing by zero.
+    let work = (u128::from(EMISSION_WORK_WEIGHT) * u128::from(gas_delta))
+        .checked_div(gas_total)
+        .unwrap_or(0);
+    let storage = (u128::from(EMISSION_STORAGE_WEIGHT) * u128::from(bytes))
+        .checked_div(bytes_total)
+        .unwrap_or(0);
+    u128::from(EMISSION_PARTICIPATION_WEIGHT) + work + storage
+}
+
+/// Credit one epoch's emissions across stake pools, weighting each ready
+/// `OnShard` validator by what its shard attested this epoch.
+///
+/// `shard_gas` is the epoch's attested gas per shard — the difference
+/// between each boundary record's mark and the one the previous crossing
+/// left — and the stored-byte level comes off the records themselves. Both
+/// are quorum-backed chain content by the time they reach here, so every
+/// replica weights identically.
+///
+/// Pure deterministic function of `(state, shard_gas)`. Returns the
+/// per-pool credits actually applied; zero-share pools are omitted.
 ///
 /// Integer-division rounding remainder is burned — the per-year
 /// emission envelope
 /// ([`TOKENS_PER_YEAR_TARGET`](hyperscale_types::TOKENS_PER_YEAR_TARGET))
 /// is a sizing target, not a hard cap, so the per-epoch remainder
-/// (at most `active_pools − 1` attos) drops on the floor rather than
-/// accumulating in state.
+/// drops on the floor rather than accumulating in state.
 /// Epochs where no pool has a ready `OnShard` validator return an
 /// empty map without crediting — the whole epoch's emission burns.
 ///
-/// `u128` intermediate arithmetic is overflow-safe for the full
-/// `Stake` range: the multiplication is `emission × validators_in_pool`,
-/// both bounded well below `u128::MAX / u128::MAX` headroom.
-pub(super) fn distribute_epoch_rewards(state: &mut BeaconState) -> BTreeMap<StakePoolId, Stake> {
-    let mut active_count: BTreeMap<StakePoolId, u64> = BTreeMap::new();
+/// `u128` intermediate arithmetic is overflow-safe for the full `Stake`
+/// range: the multiplication is `emission × pool_weight`, and weights are
+/// bounded by the three weight constants times the validator count.
+pub(super) fn distribute_epoch_rewards(
+    state: &mut BeaconState,
+    shard_gas: &BTreeMap<ShardId, u64>,
+) -> BTreeMap<StakePoolId, Stake> {
+    let gas_total: u128 = shard_gas.values().map(|g| u128::from(*g)).sum();
+    let bytes_total: u128 = state
+        .boundaries
+        .values()
+        .map(|b| u128::from(b.substate_bytes))
+        .sum();
+    let weight_of = |shard: ShardId| -> u128 {
+        shard_emission_weight(
+            shard_gas.get(&shard).copied().unwrap_or(0),
+            gas_total,
+            state.boundaries.get(&shard).map_or(0, |b| b.substate_bytes),
+            bytes_total,
+        )
+    };
+
+    let mut pool_weight: BTreeMap<StakePoolId, u128> = BTreeMap::new();
     for record in state.validators.values() {
-        if matches!(record.status, ValidatorStatus::OnShard { ready: true, .. }) {
-            *active_count.entry(record.pool).or_insert(0) += 1;
+        if let ValidatorStatus::OnShard {
+            shard, ready: true, ..
+        } = record.status
+        {
+            *pool_weight.entry(record.pool).or_insert(0) += weight_of(shard);
         }
     }
-    let total_active: u64 = active_count.values().sum();
-    if total_active == 0 {
+    let total: u128 = pool_weight.values().sum();
+    if total == 0 {
         return BTreeMap::new();
     }
     let emission = EMISSIONS_PER_EPOCH.attos();
-    let total = u128::from(total_active);
     let mut credited = BTreeMap::new();
-    for (pool_id, n) in active_count {
-        let share_attos = emission * u128::from(n) / total;
+    for (pool_id, n) in pool_weight {
+        let share_attos = emission * n / total;
         if share_attos == 0 {
             continue;
         }
@@ -191,7 +242,7 @@ pub(super) fn auto_ready_timeout(state: &mut BeaconState) -> Vec<ValidatorId> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use hyperscale_types::{
         BeaconState, Epoch, JailReason, MIN_STAKE_FLOOR, ShardCommittee, ShardId,
@@ -439,7 +490,7 @@ mod tests {
         );
         let pre_total = state.pools[&StakePoolId::new(0)].total_stake;
 
-        let credited = distribute_epoch_rewards(&mut state);
+        let credited = distribute_epoch_rewards(&mut state, &BTreeMap::new());
 
         assert!(credited.is_empty());
         assert_eq!(state.pools[&StakePoolId::new(0)].total_stake, pre_total);
@@ -485,7 +536,7 @@ mod tests {
             .extend([ValidatorId::new(0), ValidatorId::new(1)]);
         let pre_total = state.pools[&pool_id].total_stake;
 
-        let credited = distribute_epoch_rewards(&mut state);
+        let credited = distribute_epoch_rewards(&mut state, &BTreeMap::new());
 
         // One pool got credited (the only one with ready actives).
         assert_eq!(credited.len(), 1);
@@ -566,7 +617,7 @@ mod tests {
             );
         }
 
-        let credited = distribute_epoch_rewards(&mut state);
+        let credited = distribute_epoch_rewards(&mut state, &BTreeMap::new());
 
         // Pool A's share = EMISSIONS_PER_EPOCH * 1 / 4 (integer
         // div). Pool B's share = EMISSIONS_PER_EPOCH * 3 / 4.
@@ -633,7 +684,7 @@ mod tests {
             validator_record(20, 2, ValidatorStatus::Pooled),
         );
 
-        let credited = distribute_epoch_rewards(&mut state);
+        let credited = distribute_epoch_rewards(&mut state, &BTreeMap::new());
 
         // Only pool A credited.
         assert_eq!(credited.len(), 1);
@@ -643,12 +694,101 @@ mod tests {
 
     /// Deterministic: two states with byte-identical inputs produce
     /// byte-identical credits.
+    /// The weighting moves emission toward the shard that did the work,
+    /// and it degrades to its predecessor when no shard attested any: with
+    /// an empty gas map and no recorded bytes, only the participation floor
+    /// applies, which is the pro-rata-by-ready-validator split.
+    #[test]
+    fn emission_weights_follow_attested_work_and_fall_back_to_participation() {
+        use hyperscale_types::{
+            BeaconWitnessLeafCount, BlockHash, BlockHeight, ShardBoundary, StateRoot,
+            WeightedTimestamp,
+        };
+
+        // Two pools, one validator each, on two different shards.
+        let mut state = single_pool_state(1);
+        let busy = ShardId::leaf(1, 0);
+        let quiet = ShardId::leaf(1, 1);
+        let second = ValidatorId::new(1);
+        let second_pool = StakePoolId::new(1);
+        state.pools.insert(
+            second_pool,
+            StakePool {
+                id: second_pool,
+                total_stake: Stake::from_attos(MIN_STAKE_FLOOR.attos()),
+                validators: std::iter::once(second).collect(),
+                pending_withdrawals: Vec::new(),
+                released_cumulative: Stake::ZERO,
+                conviction: None,
+            },
+        );
+        state.validators.insert(
+            second,
+            validator_record(
+                1,
+                1,
+                ValidatorStatus::OnShard {
+                    shard: quiet,
+                    ready: true,
+                    placed_at_epoch: Epoch::GENESIS,
+                },
+            ),
+        );
+
+        // No attested work anywhere: the floor alone, so the two pools split
+        // evenly — exactly the pre-weighting behaviour.
+        let flat = distribute_epoch_rewards(&mut state, &BTreeMap::new());
+        assert_eq!(flat[&StakePoolId::new(0)], flat[&second_pool]);
+
+        // Now the busy shard attested every gas unit of the epoch. Its
+        // pool's share must exceed the quiet one's, and the emission is
+        // still divided rather than inflated.
+        let gas = BTreeMap::from([(busy, 10_000u64), (quiet, 0u64)]);
+        let weighted = distribute_epoch_rewards(&mut state, &gas);
+        assert!(
+            weighted[&StakePoolId::new(0)] > weighted[&second_pool],
+            "work should move emission: {weighted:?}"
+        );
+        let total: u128 = weighted.values().map(|s| s.attos()).sum();
+        assert!(total <= EMISSIONS_PER_EPOCH.attos());
+
+        // The quiet shard still earns: the floor is what keeps a secured but
+        // idle shard fundable.
+        assert!(weighted[&second_pool] > Stake::from_attos(0));
+
+        // Stored bytes weigh on the same footing. Giving the quiet shard the
+        // network's whole byte level pulls its share back up.
+        let record = ShardBoundary {
+            state_root: StateRoot::ZERO,
+            block_hash: BlockHash::ZERO,
+            height: BlockHeight::GENESIS,
+            weighted_timestamp: WeightedTimestamp::ZERO,
+            witness_leaf_count: BeaconWitnessLeafCount::ZERO,
+            witness_base: BeaconWitnessLeafCount::ZERO,
+            gas_used: 0,
+            substate_bytes: 1_000_000,
+            last_live_epoch: Epoch::GENESIS,
+            consecutive_misses: 0,
+            terminal_epoch: None,
+            terminal_delivered: false,
+            settled_waves_root: None,
+            reshape_admitted_epoch: None,
+        };
+        state.boundaries.insert(quiet, record);
+        let with_storage = distribute_epoch_rewards(&mut state, &gas);
+        assert!(
+            with_storage[&second_pool] > weighted[&second_pool],
+            "stored bytes should weigh: {with_storage:?}"
+        );
+    }
+
     #[test]
     fn distribute_epoch_rewards_is_deterministic() {
         let mut a = single_pool_state(4);
         let mut b = single_pool_state(4);
-        let credits_a = distribute_epoch_rewards(&mut a);
-        let credits_b = distribute_epoch_rewards(&mut b);
+        let gas = BTreeMap::new();
+        let credits_a = distribute_epoch_rewards(&mut a, &gas);
+        let credits_b = distribute_epoch_rewards(&mut b, &gas);
         assert_eq!(credits_a, credits_b);
         assert_eq!(a.pools, b.pools);
     }
