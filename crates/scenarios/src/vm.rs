@@ -283,6 +283,98 @@ pub fn vm_cross_shard_transfer(c: &mut impl Cluster) {
     );
 }
 
+/// Both shards' attested load reaches the beacon, including the
+/// counterpart's — the shard the fee never paid.
+///
+/// Fees never move cross-shard, and this exercises the whole of what
+/// replaces them. A cross-shard transfer
+/// burns its fee at the payer's shard alone, so the counterpart executes
+/// its leg for nothing; the work it did is instead attested as gas on its
+/// own receipts, carried on its own headers, and folded onto its own
+/// boundary record, where the emission weighting reads it. The assertion
+/// that carries the rule is the counterpart's mark moving at all.
+///
+/// The byte level is checked for stability rather than for conservation
+/// across a reshape: bonds do not exist yet, so INV-VM-7's own clause has
+/// nothing to conserve. What is checkable today is that the channel
+/// neither invents nor loses state — a quiesced network's recorded levels
+/// do not drift.
+///
+/// # Panics
+///
+/// Panics if the transfer does not accept, if either shard's mark or byte
+/// level never reaches the beacon within budget, if the counterpart
+/// attests no work for the leg it executed, or if a recorded byte level
+/// moves while nothing is executing.
+pub fn vm_attested_load_reaches_the_beacon(c: &mut impl Cluster) {
+    let left = ShardId::leaf(1, 0);
+    let right = ShardId::leaf(1, 1);
+
+    let (payer, from, to) = vm_cross_shard_cast();
+    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+    let status = await_tx_terminal(c, hash, epochs(16));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "cross-shard VM transfer did not accept; status = {status:?}"
+    );
+
+    // Wait for both shards to fold a crossing carrying a non-zero mark.
+    let both_attested = |c: &_| {
+        recorded_gas(c, left).is_some_and(|g| g > 0)
+            && recorded_gas(c, right).is_some_and(|g| g > 0)
+    };
+    assert!(
+        c.run_until(epochs(24), both_attested),
+        "attested gas never reached the beacon: left = {:?}, right = {:?}",
+        recorded_gas(c, left),
+        recorded_gas(c, right),
+    );
+
+    // The counterpart burned no fee and still attested its work — without
+    // this the emission weighting would pay it only the participation
+    // floor, and cross-shard execution would be unfunded.
+    let counterpart_gas = recorded_gas(c, right).expect("counterpart record present");
+    assert!(
+        counterpart_gas > 0,
+        "the counterpart shard attested no work for a leg it executed"
+    );
+
+    // The byte levels are recorded, and a quiesced network does not drift:
+    // nothing executes, so no state appears or vanishes on either record.
+    let settled = |c: &_| recorded_bytes(c, left).is_some() && recorded_bytes(c, right).is_some();
+    assert!(
+        c.run_until(epochs(8), settled),
+        "byte levels never reached the beacon"
+    );
+    let before = (recorded_bytes(c, left), recorded_bytes(c, right));
+    // Burn the budget with nothing to wait for: the condition never holds,
+    // so this runs the cluster on for the whole span and returns false.
+    c.run_until(epochs(8), |_| false);
+    let after = (recorded_bytes(c, left), recorded_bytes(c, right));
+    assert_eq!(
+        before, after,
+        "recorded byte levels drifted with nothing executing"
+    );
+}
+
+/// The gas mark on `shard`'s boundary record, if the beacon has folded a
+/// crossing for it.
+fn recorded_gas<C: Cluster>(c: &C, shard: ShardId) -> Option<u64> {
+    c.beacon_state()
+        .and_then(|state| state.boundaries.get(&shard).map(|b| b.gas_used))
+}
+
+/// The stored-byte level on `shard`'s boundary record.
+fn recorded_bytes<C: Cluster>(c: &C, shard: ShardId) -> Option<u64> {
+    c.beacon_state()
+        .and_then(|state| state.boundaries.get(&shard).map(|b| b.substate_bytes))
+}
+
 /// A randomness-reading transaction derives one draw on both shards.
 ///
 /// Both accounts stamp the transaction's draw into their own entropy

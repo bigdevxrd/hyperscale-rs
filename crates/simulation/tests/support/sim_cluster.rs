@@ -111,7 +111,7 @@ impl SimCluster {
     }
 
     /// [`Self::with_vm_accounts`] with an explicit VM batch scheduling
-    /// mode — one side of the D16 serial/parallel A/B.
+    /// mode — one side of the serial/parallel A/B.
     #[must_use]
     pub fn with_vm_mode(
         config: &ScenarioConfig,

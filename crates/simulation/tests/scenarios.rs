@@ -38,10 +38,11 @@ use hyperscale_scenarios::{
     split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
     surviving_sibling_split_seats_full_committees, vm_abort_converges,
-    vm_abort_floor_settles_on_deadline, vm_cross_shard_transfer, vm_hot_recipient,
-    vm_insolvent_payer_engages_nothing, vm_randomness_draw_agrees_across_shards,
-    vm_single_transfer, vm_snapshot_only_commits_nothing, vm_snapshot_reads_committed_baseline,
-    vm_zipf_payments, withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
+    vm_abort_floor_settles_on_deadline, vm_attested_load_reaches_the_beacon,
+    vm_cross_shard_transfer, vm_hot_recipient, vm_insolvent_payer_engages_nothing,
+    vm_randomness_draw_agrees_across_shards, vm_single_transfer, vm_snapshot_only_commits_nothing,
+    vm_snapshot_reads_committed_baseline, vm_zipf_payments,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_simulation::ExecutionMode;
 use hyperscale_storage::ShardChainReader;
@@ -202,6 +203,16 @@ fn vm_cross_shard_transfer_sim() {
 }
 
 #[test]
+fn vm_attested_load_reaches_the_beacon_sim() {
+    let mut cluster = SimCluster::with_grown_vm_accounts(
+        &vm_cross_shard_config(),
+        42,
+        &vm_cross_shard_genesis_accounts(),
+    );
+    vm_attested_load_reaches_the_beacon(&mut cluster);
+}
+
+#[test]
 fn vm_randomness_draw_agrees_across_shards_sim() {
     let mut cluster = SimCluster::with_grown_vm_accounts(
         &vm_cross_shard_config(),
@@ -266,8 +277,9 @@ fn mixed_engine_blocks_sim() {
     mixed_engine_blocks(&mut cluster, 6);
 }
 
-/// D16 on committed blocks: one seed, serial vs parallel VM batch
-/// scheduling, identical committed state roots. Receipts are
+/// Deterministic parallel wave execution on committed blocks: one seed,
+/// serial vs parallel VM batch scheduling, identical committed state
+/// roots. Receipts are
 /// schedule-invariant by kernel construction; this pins that the
 /// property survives the whole pipeline — fold, receipt hashing, JMT
 /// build, commit.
