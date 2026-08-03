@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use hyperscale_vm_effects::{EffectSet, Manifest, ManifestHash, NodeInput, SubstateKey, Value};
+use hyperscale_vm_effects::{Declaration, Manifest, ManifestHash, NodeInput, SubstateKey, Value};
 use hyperscale_vm_kernel::{
     Capability, GuestRunner, KernelSession, Outcome, RunResult, TxHash as VmTxHash, encode_amount,
 };
@@ -27,8 +27,9 @@ pub struct PreparedVmTx {
     /// surface but part of the derivation the executor caches.
     #[allow(dead_code)] // consumed once the stdlib surface grows fresh-ID methods
     pub identity: ManifestHash,
-    /// The routed effect set — the batch entry's declaration.
-    pub declared: EffectSet,
+    /// The routed declaration, both views: the folded set scheduling
+    /// reads, and the clause order materialization walks.
+    pub declaration: Declaration,
     /// The subintent nullifier keys the batch entry enforces.
     pub nullifiers: Vec<SubstateKey>,
 }

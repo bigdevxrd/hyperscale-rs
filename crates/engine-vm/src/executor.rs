@@ -34,7 +34,7 @@ use hyperscale_types::{
     install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, Declaration, EffectSet, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
+    Address, Declaration, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
     PrefixShardResolver, RoleId, SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
@@ -157,7 +157,7 @@ impl VmExecutor {
     fn prepare(
         &self,
         tx: &RoutableTransaction,
-    ) -> Result<(Manifest, ManifestHash, EffectSet, Vec<SubstateKey>), String> {
+    ) -> Result<(Manifest, ManifestHash, Declaration, Vec<SubstateKey>), String> {
         let vm = tx
             .vm()
             .ok_or_else(|| "Radix body in a VM sub-batch".to_string())?;
@@ -178,14 +178,14 @@ impl VmExecutor {
             &PrefixShardResolver { bits: 0 },
         )
         .map_err(|error| format!("routing: {error}"))?;
-        // Single-shard execution sees the transaction's full effect set;
-        // the resolver's shard keys are irrelevant to its union.
-        let mut declared = EffectSet::new();
-        for effect in routing.per_shard.values().flat_map(EffectSet::iter) {
-            declared
-                .insert(effect)
-                .map_err(|error| format!("effect set: {error:?}"))?;
-        }
+        // Both views of the declaration, straight from the fold: the
+        // folded set that scheduling and judging read, and the clause
+        // order capability materialization walks. Unioning `per_shard`
+        // here would reach the same set but discard the order, which is
+        // what a guest's positional handle parameters are indexed by.
+        let declaration = routing
+            .declaration()
+            .map_err(|error| format!("declaration: {error:?}"))?;
         let nullifiers = admitted
             .subintents
             .iter()
@@ -194,7 +194,7 @@ impl VmExecutor {
         Ok((
             admitted.admitted.manifest().clone(),
             admitted.admitted.identity(),
-            declared,
+            declaration,
             nullifiers,
         ))
     }
@@ -593,14 +593,14 @@ impl VmExecutor {
         for tx in transactions {
             let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
             match self.prepare(tx) {
-                Ok((manifest, identity, declared, nullifiers)) => {
+                Ok((manifest, identity, declaration, nullifiers)) => {
                     record_transaction_executed();
                     prepared.insert(
                         vm_tx,
                         PreparedVmTx {
                             manifest,
                             identity,
-                            declared,
+                            declaration,
                             nullifiers,
                         },
                     );
@@ -635,7 +635,7 @@ impl VmExecutor {
             }
         }
         for entry in prepared.values() {
-            for effect in entry.declared.iter() {
+            for effect in entry.declaration.set.iter() {
                 if let EffectTarget::Point(key) = effect.target
                     && locality.is_local(key.owner)
                     && let Some(value) = read_cell(snapshot, key)
@@ -677,22 +677,7 @@ impl VmExecutor {
                     .get(vm_tx)
                     .copied()
                     .expect("every prepared transaction has an environment");
-                // `ordered` is the kernel's capability-table order, and
-                // the true order is the signature's clause order — which
-                // is not available at this seam. `prepare` unions
-                // `routing.per_shard`, and `route` returns per-shard
-                // `EffectSet`s that discarded the clause order when they
-                // folded. Canonical order is what remains.
-                //
-                // Sound today because nothing reads the table
-                // positionally: `runner::rep_of` resolves every handle by
-                // searching for a `Capability` it reconstructs from the
-                // manifest node. It stops being sound the moment a guest
-                // takes handles as positional parameters — which is what a
-                // generated guest does — and the fix is upstream, in
-                // `route` carrying each node's clause order through
-                // `Routing` rather than only the folded sets.
-                let declaration = Declaration::from_set(entry.declared.clone());
+                let declaration = entry.declaration.clone();
                 BatchTx {
                     tx: *vm_tx,
                     declared: declaration.set,
