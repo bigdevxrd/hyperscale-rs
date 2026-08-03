@@ -144,6 +144,30 @@ fn signed_transfer_with_fee(
     RoutableTransaction::new_vm(vm)
 }
 
+/// The account address the fee-paying tests derive from their signing key.
+fn fee_payer(seed: u8) -> [u8; 16] {
+    let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
+    vm_account_address(&key.public_key().0)
+}
+
+/// Every account any test in this binary transacts with.
+///
+/// The VM statics are process-global and first-installed-wins, so every
+/// executor here has to be built over one world: sharing a process, the
+/// first `VmExecutor::new` fixes the instance registry for every test that
+/// follows, and an address missing from it fails admission with `no
+/// instance` rather than anything to do with the test's own subject. Per-test
+/// balances are unaffected — those come from the snapshot `execute_on`
+/// builds, which is separate from the world.
+fn world_accounts() -> Vec<([u8; 16], u128)> {
+    vec![
+        (ALICE, 1_000),
+        (BOB, 50),
+        (fee_payer(7), 1_000),
+        (fee_payer(11), 110),
+    ]
+}
+
 fn execute(
     executor: &VmExecutor,
     transactions: &[Arc<Verified<RoutableTransaction>>],
@@ -230,7 +254,7 @@ fn entropy_cell(executed: &ExecutedTx, owner: [u8; 16]) -> Option<Vec<u8>> {
 /// randomness-reading guest's receipt.
 #[test]
 fn a_stamp_writes_the_draw_its_anchor_fixes() {
-    let executor = VmExecutor::new(&[(ALICE, 1_000), (BOB, 50)], ExecutionMode::Serial);
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
         signed_stamp(9, ALICE),
     ));
@@ -303,7 +327,7 @@ fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
 
 #[test]
 fn a_transfer_folds_to_identity_keyed_absolute_updates() {
-    let executor = VmExecutor::new(&[(ALICE, 1_000), (BOB, 50)], ExecutionMode::Serial);
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
         signed_transfer(7, ALICE, BOB, 100),
     ));
@@ -334,7 +358,7 @@ fn a_transfer_folds_to_identity_keyed_absolute_updates() {
 
 #[test]
 fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
-    let executor = VmExecutor::new(&[(ALICE, 1_000), (BOB, 50)], ExecutionMode::Serial);
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let over = Arc::new(Verified::<RoutableTransaction>::from_persisted(
         signed_transfer(8, BOB, ALICE, 500),
     ));
@@ -364,8 +388,8 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
 
 #[test]
 fn serial_and_parallel_scheduling_produce_identical_receipts() {
-    let serial = VmExecutor::new(&[(ALICE, 1_000), (BOB, 50)], ExecutionMode::Serial);
-    let parallel = VmExecutor::new(&[(ALICE, 1_000), (BOB, 50)], ExecutionMode::Parallel);
+    let serial = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let parallel = VmExecutor::new(&world_accounts(), ExecutionMode::Parallel);
     let txs: Vec<Arc<Verified<RoutableTransaction>>> = (0..4)
         .map(|i| {
             Arc::new(Verified::<RoutableTransaction>::from_persisted(
@@ -388,10 +412,9 @@ fn serial_and_parallel_scheduling_produce_identical_receipts() {
 /// sync-replayable work items.
 #[test]
 fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
-    let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
-    let payer = vm_account_address(&key.public_key().0);
+    let payer = fee_payer(7);
     let accounts = [(payer, 1_000), (BOB, 50)];
-    let executor = VmExecutor::new(&accounts, ExecutionMode::Serial);
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     // A transfer's fuel far exceeds the tiny ceiling, so the burn is
     // exactly `max_fee` — the cap working.
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
@@ -421,11 +444,10 @@ fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
     // store's delete-on-zero rule itself — otherwise the commonest way a
     // vault empties leaves sixteen zero bytes behind, and a storage bond
     // that can never be refunded.
-    let key = Ed25519PrivateKey::from_bytes(&[11u8; 32]).unwrap();
-    let payer = vm_account_address(&key.public_key().0);
+    let payer = fee_payer(11);
     // Exactly the transfer plus the ceiling: nothing survives the burn.
     let accounts = [(payer, 110), (BOB, 50)];
-    let executor = VmExecutor::new(&accounts, ExecutionMode::Serial);
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
         signed_transfer_with_fee(11, payer, BOB, 100, 10),
     ));
