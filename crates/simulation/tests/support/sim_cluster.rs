@@ -27,8 +27,9 @@ use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::state_key::vm_flat_key;
 use hyperscale_types::{
-    BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
-    Signer, StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId, VmSnapshotPin,
+    BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds,
+    RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision, TransactionStatus,
+    TxHash, ValidatorId, VmEvent, VmSnapshotPin,
 };
 use radix_common::math::Decimal;
 use radix_common::types::ComponentAddress;
@@ -475,6 +476,15 @@ impl Cluster for SimCluster {
             value: value.map(Into::into),
             proof,
         })
+    }
+
+    fn vm_events(&self, shard: ShardId, tx: TxHash) -> Option<Vec<VmEvent>> {
+        let store =
+            (0..self.runner.num_hosts()).find_map(|host| self.runner.hosts_shard(host, shard))?;
+        match store.get_consensus_receipt(&tx)?.as_ref() {
+            ConsensusReceipt::Succeeded { vm_events, .. } => Some(vm_events.clone()),
+            ConsensusReceipt::Failed => Some(Vec::new()),
+        }
     }
 
     fn tx_status(&self, tx: TxHash) -> Option<TransactionStatus> {

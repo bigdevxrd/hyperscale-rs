@@ -7,7 +7,7 @@ use hyperscale_crypto_bls::BlsSigner;
 use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
     BeaconState, BlockHeight, RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision,
-    TransactionStatus, TxHash, VmSnapshotPin,
+    TransactionStatus, TxHash, VmEvent, VmSnapshotPin,
 };
 
 use super::Budget;
@@ -96,6 +96,16 @@ pub trait Cluster {
         local: [u8; 16],
     ) -> Option<VmSnapshotPin> {
         let _ = (shard, owner, local);
+        None
+    }
+
+    /// The VM events `shard`'s own copy of `tx`'s receipt carries.
+    ///
+    /// An event is stored where its emitter lives, so this differs by
+    /// shard for a multi-shard transaction by design. `None` when no
+    /// hosted store on `shard` holds the receipt.
+    fn vm_events(&self, shard: ShardId, tx: TxHash) -> Option<Vec<VmEvent>> {
+        let _ = (shard, tx);
         None
     }
 

@@ -283,6 +283,64 @@ pub fn vm_cross_shard_transfer(c: &mut impl Cluster) {
     );
 }
 
+/// A multi-shard transaction's events land only on their emitters' home
+/// receipts.
+///
+/// The withdrawal emits from the payer's account and the deposit from the
+/// recipient's, and the two accounts sit on different shards. Each shard
+/// stores its own event and not the other's, while the receipt hash both
+/// committees agree on covers the union — so attribution splits the
+/// storage without splitting the agreement.
+///
+/// # Panics
+///
+/// Panics if the transfer does not accept, if either shard never holds a
+/// receipt for it, or if either shard stores an event whose emitter lives
+/// on the other.
+pub fn vm_events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
+    let (payer, from, to) = vm_cross_shard_cast();
+    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+
+    let status = await_tx_terminal(c, hash, epochs(16));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "cross-shard VM transfer did not accept; status = {status:?}"
+    );
+
+    let (sender_shard, recipient_shard) = (ShardId::leaf(1, 0), ShardId::leaf(1, 1));
+    // Receipts persist a beat behind the decision, so wait for both.
+    let stored = c.run_until(epochs(8), |c| {
+        c.vm_events(sender_shard, hash).is_some() && c.vm_events(recipient_shard, hash).is_some()
+    });
+    assert!(stored, "both shards must hold a receipt for the transfer");
+
+    let sender_events = c.vm_events(sender_shard, hash).expect("payer receipt");
+    let recipient_events = c
+        .vm_events(recipient_shard, hash)
+        .expect("recipient receipt");
+    assert_eq!(
+        sender_events
+            .iter()
+            .map(|event| event.emitter)
+            .collect::<Vec<_>>(),
+        vec![from],
+        "the payer shard stores its own emission and nothing else"
+    );
+    assert_eq!(
+        recipient_events
+            .iter()
+            .map(|event| event.emitter)
+            .collect::<Vec<_>>(),
+        vec![to],
+        "the recipient shard stores its own emission and nothing else"
+    );
+}
+
 /// Both shards' attested load reaches the beacon, including the
 /// counterpart's — the shard the fee never paid.
 ///
