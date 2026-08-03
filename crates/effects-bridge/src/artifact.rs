@@ -12,8 +12,11 @@
 //! they do not know, which is what lets the artifact the chain stores be
 //! the artifact the engine compiles.
 
+use std::collections::BTreeSet;
+
 use hyperscale_types::VmStaticsError;
 use hyperscale_vm_effects::PackageMetadata;
+use wasmparser::{BinaryReaderError, ComponentExternalKind, Parser, Payload};
 
 use crate::vm_metadata::{decode_metadata, encode_metadata};
 
@@ -123,6 +126,64 @@ fn find_section(artifact: &[u8]) -> Result<Option<&[u8]>, VmStaticsError> {
     Ok(found)
 }
 
+/// The metadata a publish admits from an artifact, or why it does not.
+///
+/// Three things are checkable today, and they are checked: the artifact
+/// declares a metadata section at all, the section decodes canonically
+/// and within the bounds the vocabulary fixes, and every method it
+/// describes is a function the component actually exports. Whether a
+/// signature over-approximates the code it describes is a compiler's
+/// judgement, and this is not one — an under-declaration is harmless
+/// because the capability gate never materialises a handle the
+/// declaration did not ask for, so a wrong signature costs its author a
+/// trap rather than costing anyone else safety.
+///
+/// # Errors
+///
+/// [`VmStaticsError`] on an unparseable artifact, an absent or
+/// non-canonical metadata section, or a declared method the component
+/// does not export.
+pub fn admit_package(artifact: &[u8]) -> Result<PackageMetadata, VmStaticsError> {
+    let metadata = extract_metadata(artifact)?
+        .ok_or_else(|| VmStaticsError("artifact declares no effect metadata section".into()))?;
+    let exports = component_func_exports(artifact)?;
+    for method in metadata.methods.keys() {
+        if !exports.contains(method.as_str()) {
+            return Err(VmStaticsError(format!(
+                "metadata declares method {method:?}, which the component does not export"
+            )));
+        }
+    }
+    Ok(metadata)
+}
+
+/// The component's own function exports, by name.
+///
+/// Scoped to the outermost component: a nested component's exports are
+/// its own, reachable through nothing a manifest can name.
+fn component_func_exports(artifact: &[u8]) -> Result<BTreeSet<String>, VmStaticsError> {
+    let parse =
+        |error: BinaryReaderError| VmStaticsError(format!("artifact does not parse: {error}"));
+    let mut exports = BTreeSet::new();
+    let mut depth = 0usize;
+    for payload in Parser::new(0).parse_all(artifact) {
+        match payload.map_err(parse)? {
+            Payload::ModuleSection { .. } | Payload::ComponentSection { .. } => depth += 1,
+            Payload::End(_) => depth = depth.saturating_sub(1),
+            Payload::ComponentExportSection(reader) if depth == 0 => {
+                for export in reader {
+                    let export = export.map_err(parse)?;
+                    if export.kind == ComponentExternalKind::Func {
+                        exports.insert(export.name.name.to_owned());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(exports)
+}
+
 fn write_uleb128(mut value: usize, out: &mut Vec<u8>) {
     loop {
         let byte = u8::try_from(value & 0x7F).expect("seven bits fit a byte");
@@ -168,8 +229,40 @@ fn read_uleb128(bytes: &[u8], pos: &mut usize) -> Result<usize, VmStaticsError> 
 #[cfg(test)]
 mod tests {
     use hyperscale_vm_effects::stdlib::{account_metadata, book_metadata};
+    use hyperscale_vm_effects::{MethodSignature, PackageMetadata};
+    use wat::parse_str;
 
     use super::*;
+
+    /// A component exporting one no-argument function per name.
+    fn component_exporting(names: &[&str]) -> Vec<u8> {
+        use std::fmt::Write as _;
+
+        let mut source = String::from("(component\n  (core module $m\n");
+        for index in 0..names.len() {
+            let _ = writeln!(source, "    (func (export \"f{index}\"))");
+        }
+        source.push_str("  )\n  (core instance $i (instantiate $m))\n");
+        for (index, name) in names.iter().enumerate() {
+            let _ = writeln!(
+                source,
+                "  (func (export \"{name}\") (canon lift (core func $i \"f{index}\")))"
+            );
+        }
+        source.push(')');
+        parse_str(&source).expect("the component assembles")
+    }
+
+    /// Metadata declaring one empty signature per method name.
+    fn declaring(methods: &[&str]) -> PackageMetadata {
+        let mut metadata = PackageMetadata::default();
+        for method in methods {
+            metadata
+                .methods
+                .insert((*method).into(), MethodSignature::default());
+        }
+        metadata
+    }
 
     /// The smallest well-formed artifact shape the walk accepts: a
     /// preamble and nothing else.
@@ -315,5 +408,69 @@ mod tests {
                 assert_ne!(metadata, account_metadata());
             }
         }
+    }
+
+    #[test]
+    fn a_publish_admits_metadata_the_component_backs() {
+        let component = component_exporting(&["deposit", "withdraw"]);
+        let metadata = declaring(&["deposit", "withdraw"]);
+        let artifact = attach_metadata(&component, &metadata).expect("attaches");
+        assert_eq!(admit_package(&artifact).expect("admits"), metadata);
+
+        // Declaring fewer methods than the component exports is fine:
+        // an export nothing declares is an export nothing can call.
+        let partial = attach_metadata(&component, &declaring(&["deposit"])).expect("attaches");
+        assert!(admit_package(&partial).is_ok());
+    }
+
+    #[test]
+    fn a_publish_refuses_a_method_the_component_does_not_export() {
+        let component = component_exporting(&["deposit"]);
+        let artifact =
+            attach_metadata(&component, &declaring(&["deposit", "withdraw"])).expect("attaches");
+        let refused = admit_package(&artifact).expect_err("refuses");
+        assert!(refused.0.contains("withdraw"), "{}", refused.0);
+
+        // The name has to match exactly — a component export is looked
+        // up by the name a manifest node writes.
+        let renamed = attach_metadata(
+            &component_exporting(&["deposit2"]),
+            &declaring(&["deposit"]),
+        )
+        .expect("attaches");
+        assert!(admit_package(&renamed).is_err());
+    }
+
+    #[test]
+    fn a_publish_refuses_an_artifact_that_declares_nothing() {
+        // No signatures, no deploy: an artifact without the section is
+        // refused rather than published with an empty table.
+        let component = component_exporting(&["deposit"]);
+        assert!(admit_package(&component).is_err());
+        // And one whose section is not parseable as an artifact at all.
+        assert!(admit_package(&with_section(1, b"code")).is_err());
+    }
+
+    #[test]
+    fn only_the_outermost_components_exports_count() {
+        // A nested component's exports are its own; nothing a manifest
+        // names can reach them, so they cannot back a declaration.
+        let inner = "(component (core module $m (func (export \"f\"))) \
+             (core instance $i (instantiate $m)) \
+             (func (export \"hidden\") (canon lift (core func $i \"f\"))))";
+        let outer = parse_str(&*format!(
+            "(component (core module $m (func (export \"f\"))) \
+             (core instance $i (instantiate $m)) \
+             (func (export \"shown\") (canon lift (core func $i \"f\"))) \
+             {inner})"
+        ))
+        .expect("the component assembles");
+
+        assert_eq!(
+            component_func_exports(&outer).expect("parses"),
+            BTreeSet::from(["shown".to_owned()])
+        );
+        let artifact = attach_metadata(&outer, &declaring(&["hidden"])).expect("attaches");
+        assert!(admit_package(&artifact).is_err());
     }
 }

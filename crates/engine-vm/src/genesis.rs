@@ -8,7 +8,7 @@
 
 use std::sync::LazyLock;
 
-use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, extract_metadata};
+use hyperscale_effects_bridge::{ProtocolHasher, admit_package, attach_metadata};
 pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
@@ -57,21 +57,20 @@ pub struct VmWorld {
 /// package published under its artifact hash, one instance per funded
 /// address.
 ///
-/// The published signatures are the ones the artifact declares, read out
-/// of it the way a publish transaction reads them — genesis is the cold
-/// start of the same cache, not a second source of truth for it.
+/// The published signatures are the ones the artifact declares, admitted
+/// through the same check a publish transaction runs — genesis is the
+/// cold start of the cache, not a second source of truth for it.
 ///
 /// # Panics
 ///
-/// Panics if the stdlib artifact does not declare decodable metadata — a
-/// build defect, not a runtime condition.
+/// Panics if the stdlib artifact would not be admissible as a published
+/// package — a build defect, not a runtime condition.
 #[must_use]
 pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
     let artifact = account_artifact();
     let account_package = package_hash(&ProtocolHasher, artifact);
-    let metadata = extract_metadata(artifact)
-        .expect("the stdlib account artifact walks")
-        .expect("the stdlib account artifact declares its effect metadata");
+    let metadata =
+        admit_package(artifact).expect("the stdlib account artifact publishes as a package");
     let mut cache = MetadataCache::new();
     cache.publish(account_package, metadata);
     let mut instances = InstanceRegistry::new();
@@ -174,11 +173,10 @@ mod tests {
             package_hash(&ProtocolHasher, ACCOUNT_COMPONENT)
         );
 
-        // What genesis publishes is read out of the artifact, and it is
-        // the signature set the stdlib authors.
-        let declared = extract_metadata(artifact)
-            .expect("walks")
-            .expect("declares its metadata");
+        // What genesis publishes is admitted out of the artifact by the
+        // publish check, and it is the signature set the stdlib authors:
+        // the real guest's exports back every method it declares.
+        let declared = admit_package(artifact).expect("publishes as a package");
         assert_eq!(declared, account_metadata());
         let world = genesis_world(&[]);
         assert_eq!(world.cache.get(world.account_package), Some(&declared));

@@ -21,7 +21,7 @@ mod wire;
 
 use std::collections::BTreeMap;
 
-pub use artifact::{METADATA_SECTION, attach_metadata, extract_metadata};
+pub use artifact::{METADATA_SECTION, admit_package, attach_metadata, extract_metadata};
 use blake3::Hasher as Blake3;
 use hyperscale_types::{NodeId, RoutableTransaction, ShardId, TopologySnapshot};
 use hyperscale_vm_effects::{
