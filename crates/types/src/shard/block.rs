@@ -85,9 +85,9 @@ pub type SharedProvisionHashes = Arc<BoundedVec<ProvisionHash, MAX_PROVISIONS_PE
 /// [`Block::gas_consumed`] answers the same question for a built block.
 /// One derivation, so the two sides cannot drift.
 #[must_use]
-pub fn gas_over_certificates(certificates: &[Arc<Verifiable<FinalizedWave>>]) -> u64 {
+pub fn work_over_certificates(certificates: &[Arc<Verifiable<FinalizedWave>>]) -> u64 {
     certificates.iter().fold(0u64, |sum, wave| {
-        sum.saturating_add(wave.as_unverified().gas_consumed())
+        sum.saturating_add(wave.as_unverified().attested_work())
     })
 }
 
@@ -402,8 +402,8 @@ impl Block {
     /// unaffected; only which epoch a given transaction's gas falls into
     /// can shift by the settlement lag.
     #[must_use]
-    pub fn gas_consumed(&self) -> u64 {
-        gas_over_certificates(self.certificates())
+    pub fn attested_work(&self) -> u64 {
+        work_over_certificates(self.certificates())
     }
 
     /// Provisions. Non-empty only for `Live`; `Sealed` blocks have

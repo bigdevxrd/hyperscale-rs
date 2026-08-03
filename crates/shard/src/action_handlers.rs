@@ -26,9 +26,9 @@ use hyperscale_types::{
     TimeoutContext, TopologySnapshot, TransactionRoot, TransactionRootContext, ValidatorId,
     Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
     block_header_message, block_vote_message, certified_block_header_message,
-    commit_witness_window, compute_waves, derive_leaves, gas_over_certificates,
-    local_settled_wave_ids, missed_proposals_since_prev_commit, next_reveal_chain,
-    ready_signal_message, shard_reveal_sign, vrf_output_from_proof,
+    commit_witness_window, compute_waves, derive_leaves, local_settled_wave_ids,
+    missed_proposals_since_prev_commit, next_reveal_chain, ready_signal_message, shard_reveal_sign,
+    vrf_output_from_proof, work_over_certificates,
 };
 
 /// Result of QC verification and assembly.
@@ -315,7 +315,7 @@ pub fn build_proposal<S: ShardChainWriter>(
     // way on the voting side.
     let load = parent_load
         .unwrap_or(ShardLoad::ZERO)
-        .advance(gas_over_certificates(&certificates), substate_bytes);
+        .advance(work_over_certificates(&certificates), substate_bytes);
 
     let header = BlockHeader::new(
         local_shard,

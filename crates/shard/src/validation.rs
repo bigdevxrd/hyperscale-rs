@@ -458,14 +458,14 @@ fn validate_block_gas(block: &Block, parent_load: Option<ShardLoad>) -> Result<(
     };
     let claimed = block.header().load().cumulative_gas;
     let expected = parent_load
-        .advance(block.gas_consumed(), None)
+        .advance(block.attested_work(), None)
         .cumulative_gas;
     if claimed != expected {
         return Err(format!(
             "header claims cumulative gas {claimed} but the parent's {} \
              plus this block's {} is {expected}",
             parent_load.cumulative_gas,
-            block.gas_consumed(),
+            block.attested_work(),
         ));
     }
     Ok(())
@@ -1164,7 +1164,7 @@ mod tests {
         // The fixture carries no certificates, so the honest claim is the
         // parent's total unchanged.
         let honest = block_with_transactions(BlockHeight::new(1), Vec::new());
-        assert_eq!(honest.gas_consumed(), 0);
+        assert_eq!(honest.attested_work(), 0);
         assert_eq!(honest.header().load().cumulative_gas, 0);
 
         // Claiming zero against a parent that has consumed 500 understates,

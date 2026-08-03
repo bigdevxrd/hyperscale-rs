@@ -341,9 +341,10 @@ pub fn project_to_shard(
                 owned_nodes,
                 application_events: application_events.clone(),
                 beacon_witness_events,
-                gas_consumed: *gas_consumed,
             };
-            ExecutedTx::new(tx_hash, consensus, cached.metadata.clone())
+            let mut executed = ExecutedTx::new(tx_hash, consensus, cached.metadata.clone());
+            executed.attested_work = *gas_consumed;
+            executed
         }
     }
 }

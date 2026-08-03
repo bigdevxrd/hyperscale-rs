@@ -49,7 +49,7 @@ pub mod witness_sources;
 
 pub use block::{
     Block, SharedCertificates, SharedProvisions, SharedTransactions, TerminalRef,
-    VerifiedBlockAssembleError, gas_over_certificates, shared_transactions_from_raw,
+    VerifiedBlockAssembleError, shared_transactions_from_raw, work_over_certificates,
 };
 pub use witness_sources::{SharedWitnessSources, WitnessSources};
 

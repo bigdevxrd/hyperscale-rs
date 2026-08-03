@@ -482,15 +482,27 @@ fn build_fee_receipt(
     )
 }
 
+/// What the kernel reported for one transaction: the effect record every
+/// participant derives identically, and this shard's own attested share.
+#[derive(Clone, Copy)]
+struct KernelOutput<'a> {
+    receipt: &'a Receipt,
+    work: u64,
+}
+
 fn assemble_executed_tx(
     ctx: &WaveBatchContext<'_>,
     base: &VmBase,
     fold: &mut FoldState,
     vm_tx: VmTxHash,
-    receipt: &Receipt,
+    kernel: KernelOutput<'_>,
     fee: Option<PayerFee>,
     locality: &Locality,
 ) -> ExecutedTx {
+    let KernelOutput {
+        receipt,
+        work: attested_work,
+    } = kernel;
     let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
     // Built before this transaction's own burn folds in: a charge settles
     // over the state its siblings left, not over its own.
@@ -543,6 +555,7 @@ fn assemble_executed_tx(
         &HashMap::new(),
     );
     executed.fee_receipt = fee_receipt;
+    executed.attested_work = attested_work;
     executed
 }
 
@@ -739,12 +752,20 @@ impl VmExecutor {
         };
         let mut folded: BTreeMap<VmTxHash, ExecutedTx> = BTreeMap::new();
         for (vm_tx, receipt) in &outcome.receipts {
+            // The kernel priced this shard's share under the same locality
+            // the receipts were applied through, so nothing here re-derives
+            // it — a workspace-side filter would be a second opinion on a
+            // quantity that must agree.
+            let kernel = KernelOutput {
+                receipt,
+                work: outcome.work.get(vm_tx).map_or(0, |w| w.units),
+            };
             let executed = assemble_executed_tx(
                 ctx,
                 &base,
                 &mut fold,
                 *vm_tx,
-                receipt,
+                kernel,
                 fee_by_tx.get(vm_tx).copied(),
                 &locality,
             );

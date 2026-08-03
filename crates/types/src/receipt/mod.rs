@@ -38,7 +38,6 @@ mod tests {
             owned_nodes: BoundedVec::new(),
             application_events: events,
             beacon_witness_events: Vec::new(),
-            gas_consumed: 0,
         }
     }
 

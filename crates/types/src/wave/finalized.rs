@@ -151,15 +151,20 @@ impl FinalizedWave {
         self.receipts.iter().map(|r| Arc::clone(&r.consensus))
     }
 
-    /// Gas this shard consumed across the wave's receipts.
+    /// Work this shard attests across the wave's transactions.
+    ///
+    /// Read off the local EC's outcomes rather than the receipts, so it
+    /// covers the verdicts that produced no receipt — a failure or an
+    /// abort still declared, routed, and locked.
     ///
     /// Saturating, so a forged wave cannot wrap a block's running total
     /// into a smaller number than its parent's.
     #[must_use]
-    pub fn gas_consumed(&self) -> u64 {
-        self.receipts.iter().fold(0u64, |sum, r| {
-            sum.saturating_add(r.consensus.gas_consumed())
-        })
+    pub fn attested_work(&self) -> u64 {
+        self.local_ec()
+            .tx_outcomes()
+            .iter()
+            .fold(0u64, |sum, outcome| sum.saturating_add(outcome.work()))
     }
 
     /// Iterator over the wave's tx hashes in canonical block order.

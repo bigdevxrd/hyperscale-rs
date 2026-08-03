@@ -362,6 +362,55 @@ pub fn vm_attested_load_reaches_the_beacon(c: &mut impl Cluster) {
     );
 }
 
+/// A transaction that never applied an effect still attests the work its
+/// shard did for it.
+///
+/// This is what moving the quantity off the receipt buys. A receipt records
+/// effects, so an attempt that produced none has nothing to carry — and a
+/// failure or an abort is exactly when a shard has already paid for
+/// admission, routing, and locking. The outcome exists for every verdict,
+/// so the work rides there and the shard is credited for the attempt.
+///
+/// # Panics
+///
+/// Panics if the uncovered withdrawal does not reject, or if the shard's
+/// attested mark fails to move across a block whose only transaction
+/// applied nothing.
+pub fn vm_a_failed_attempt_still_attests_work(c: &mut impl Cluster) {
+    let shard = ShardId::ROOT;
+    let (payer, from) = vm_sender(0);
+    let to = vm_recipient(0);
+
+    // Settle any earlier traffic so the mark below moves only for the
+    // failure this scenario submits.
+    assert!(
+        c.run_until(epochs(4), |c| recorded_gas(c, shard).is_some()),
+        "the beacon never folded a crossing for the shard"
+    );
+    let before = recorded_gas(c, shard).expect("a folded crossing");
+
+    let over = build_vm_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
+    let over_hash = over.hash();
+    c.submit(Arc::new(over));
+    let status = await_tx_terminal(c, over_hash, epochs(8));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Reject))
+        ),
+        "an uncovered VM withdrawal must reject deterministically; status = {status:?}"
+    );
+
+    // The attempt applied nothing, so under the old shape — work carried on
+    // the receipt — there was no receipt to carry it and the mark stood
+    // still.
+    assert!(
+        c.run_until(epochs(24), |c| recorded_gas(c, shard)
+            .is_some_and(|now| now > before)),
+        "a failed attempt attested no work: mark stuck at {before}"
+    );
+}
+
 /// The gas mark on `shard`'s boundary record, if the beacon has folded a
 /// crossing for it.
 fn recorded_gas<C: Cluster>(c: &C, shard: ShardId) -> Option<u64> {

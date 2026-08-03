@@ -61,9 +61,10 @@ pub use support::{
 };
 pub use transactions::{cross_shard_tx, livelock_resolves_promptly, single_shard_tx};
 pub use vm::{
-    mixed_engine_blocks, vm_abort_converges, vm_abort_floor_settles_on_deadline,
-    vm_attested_load_reaches_the_beacon, vm_cross_shard_transfer, vm_failure_charges_its_payer,
-    vm_hot_recipient, vm_insolvent_payer_engages_nothing, vm_randomness_draw_agrees_across_shards,
+    mixed_engine_blocks, vm_a_failed_attempt_still_attests_work, vm_abort_converges,
+    vm_abort_floor_settles_on_deadline, vm_attested_load_reaches_the_beacon,
+    vm_cross_shard_transfer, vm_failure_charges_its_payer, vm_hot_recipient,
+    vm_insolvent_payer_engages_nothing, vm_randomness_draw_agrees_across_shards,
     vm_single_transfer, vm_snapshot_only_commits_nothing, vm_snapshot_reads_committed_baseline,
     vm_zipf_payments,
 };

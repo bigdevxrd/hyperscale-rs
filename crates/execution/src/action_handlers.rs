@@ -22,7 +22,7 @@ use hyperscale_types::network::notification::{
 };
 use hyperscale_types::{
     ExecutionCertificate, ExecutionCertificateContext, ExecutionVote, FinalizedWaveContext,
-    Stopwatch, StoredReceipt, TxOutcome, Verifiable, Verified, exec_cert_batch_message,
+    Stopwatch, StoredReceipt, TxHash, TxOutcome, Verifiable, Verified, exec_cert_batch_message,
     exec_vote_batch_message,
 };
 
@@ -33,20 +33,35 @@ use hyperscale_types::{
 /// Split a batch's executed records into the three parallel streams the
 /// wave consumes: outcomes for the vote, execution receipts, and the fee
 /// receipts held in reserve against an abort.
-fn split_execution_outputs(
-    executed: Vec<ExecutedTx>,
-) -> (Vec<TxOutcome>, Vec<StoredReceipt>, Vec<StoredReceipt>) {
+fn split_execution_outputs(executed: Vec<ExecutedTx>) -> ExecutionOutputs {
     let mut outcomes = Vec::with_capacity(executed.len());
     let mut results = Vec::with_capacity(executed.len());
     let mut fee_receipts = Vec::new();
+    let mut work = Vec::with_capacity(executed.len());
     for mut tx in executed {
         outcomes.push(tx.outcome());
+        work.push((tx.tx_hash, tx.attested_work));
         if let Some(fee) = tx.fee_receipt.take() {
             fee_receipts.push(StoredReceipt::synced(tx.tx_hash, Arc::new(fee)));
         }
         results.push(StoredReceipt::from(tx));
     }
-    (outcomes, results, fee_receipts)
+    ExecutionOutputs {
+        outcomes,
+        results,
+        fee_receipts,
+        attested_work: work,
+    }
+}
+
+/// The four per-batch products execution hands the wave: the outcomes it
+/// votes, the receipts it stores, the charges an attempt that applied
+/// nothing still settles, and what this shard attests it did.
+struct ExecutionOutputs {
+    outcomes: Vec<TxOutcome>,
+    results: Vec<StoredReceipt>,
+    fee_receipts: Vec<StoredReceipt>,
+    attested_work: Vec<(TxHash, u64)>,
 }
 
 /// Outcomes flow through `ctx.notify`. Variants owned by other coordinator
@@ -166,13 +181,19 @@ where
                     .execute_wave_batch(&wave_ctx, &snapshot, &vm_txs),
             );
             executed.sort_by_key(|tx| tx.tx_hash);
-            let (tx_outcomes, results, fee_receipts) = split_execution_outputs(executed);
+            let ExecutionOutputs {
+                outcomes: tx_outcomes,
+                results,
+                fee_receipts,
+                attested_work,
+            } = split_execution_outputs(executed);
             record_execution_latency(start.elapsed().as_secs_f64());
             ctx.notify_protocol(ProtocolEvent::ExecutionBatchCompleted {
                 wave_id,
                 results,
                 tx_outcomes,
                 fee_receipts,
+                attested_work,
             });
         }
         Action::ExecuteCrossShardTransactions {
@@ -225,13 +246,19 @@ where
                 &inputs(&vm_requests),
             ));
             executed.sort_by_key(|tx| tx.tx_hash);
-            let (tx_outcomes, results, fee_receipts) = split_execution_outputs(executed);
+            let ExecutionOutputs {
+                outcomes: tx_outcomes,
+                results,
+                fee_receipts,
+                attested_work,
+            } = split_execution_outputs(executed);
             record_execution_latency(start.elapsed().as_secs_f64());
             ctx.notify_protocol(ProtocolEvent::ExecutionBatchCompleted {
                 wave_id,
                 results,
                 tx_outcomes,
                 fee_receipts,
+                attested_work,
             });
         }
 

@@ -95,22 +95,6 @@ pub enum ConsensusReceipt {
         /// time; the root of those events is bound into `receipt_hash`
         /// via [`GlobalReceipt::beacon_witness_root`].
         beacon_witness_events: Vec<BeaconWitnessEvent>,
-        /// Gas the engine consumed executing this tx on this shard.
-        ///
-        /// Per-shard rather than global, and deliberately so: execution is
-        /// locality-scoped, so two participants of one cross-shard
-        /// transaction do different amounts of work and each attests its
-        /// own. Receipt agreement is intra-committee only, so this
-        /// divergence costs nothing — and it is the quantity a shard's
-        /// emission weight reads, which must be the work that shard did
-        /// rather than what the payer's shard was charged.
-        ///
-        /// Lives here rather than beside the fee data in
-        /// [`ExecutionMetadata`](crate::ExecutionMetadata) because it is
-        /// consensus-critical: it feeds a hash-covered header field, and
-        /// metadata is absent on any receipt that arrived by sync and
-        /// prunable on the rest.
-        gas_consumed: u64,
     },
     /// All failures collapse to one variant — the canonical
     /// [`FAILED_RECEIPT_HASH`] is derived at hash time, no payload needed.
@@ -152,16 +136,14 @@ impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusRe
                 owned_nodes,
                 application_events,
                 beacon_witness_events,
-                gas_consumed,
             } => {
                 encoder.write_discriminator(RECEIPT_VARIANT_SUCCEEDED)?;
-                encoder.write_size(6)?;
+                encoder.write_size(5)?;
                 encoder.encode(receipt_hash)?;
                 encoder.encode(database_updates)?;
                 encoder.encode(owned_nodes)?;
                 encoder.encode(application_events)?;
                 encoder.encode(beacon_witness_events)?;
-                encoder.encode(gas_consumed)?;
             }
             Self::Failed => {
                 encoder.write_discriminator(RECEIPT_VARIANT_FAILED)?;
@@ -182,9 +164,9 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
         let length = decoder.read_size()?;
         match discriminator {
             RECEIPT_VARIANT_SUCCEEDED => {
-                if length != 6 {
+                if length != 5 {
                     return Err(DecodeError::UnexpectedSize {
-                        expected: 6,
+                        expected: 5,
                         actual: length,
                     });
                 }
@@ -205,14 +187,12 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
                     decoder,
                     MAX_BEACON_WITNESS_EVENTS_PER_TX,
                 )?;
-                let gas_consumed: u64 = decoder.decode()?;
                 Ok(Self::Succeeded {
                     receipt_hash,
                     database_updates,
                     owned_nodes,
                     application_events,
                     beacon_witness_events,
-                    gas_consumed,
                 })
             }
             RECEIPT_VARIANT_FAILED => {
@@ -285,27 +265,13 @@ impl ConsensusReceipt {
         }
     }
 
-    /// Gas the engine consumed executing this tx on this shard, or zero
-    /// for a failure — which attests no work, so an aborted transaction
-    /// contributes nothing to its shard's emission weight.
-    #[must_use]
-    pub const fn gas_consumed(&self) -> u64 {
-        match self {
-            Self::Succeeded { gas_consumed, .. } => *gas_consumed,
-            Self::Failed => 0,
-        }
-    }
-
     /// Per-shard receipt hash used as a leaf in `local_receipt_root`.
     ///
     /// Hashes `outcome_byte || event_root || database_updates_hash ||
-    /// owned_nodes_hash || gas_consumed`. Folding the ownership map binds
-    /// the keying used for this shard's owner-prefixed leaves into the
-    /// block's `local_receipt_root`; folding the gas puts the shard's
-    /// attested work under the same root, which is what lets a header
-    /// claim a running gas total the committee has already checked.
-    /// `Failed` produces the same hash as a
-    /// no-write/no-event/no-ownership/no-gas failure.
+    /// owned_nodes_hash`. Folding the ownership map binds the keying used
+    /// for this shard's owner-prefixed leaves into the block's
+    /// `local_receipt_root`. `Failed` produces the same hash as a
+    /// no-write/no-event/no-ownership failure.
     ///
     /// # Panics
     ///
@@ -314,12 +280,11 @@ impl ConsensusReceipt {
     /// practice.
     #[must_use]
     pub fn local_receipt_hash(&self) -> Hash {
-        let (outcome_byte, event_root, database_updates, owned_nodes, gas_consumed) = match self {
+        let (outcome_byte, event_root, database_updates, owned_nodes) = match self {
             Self::Succeeded {
                 database_updates,
                 owned_nodes,
                 application_events,
-                gas_consumed,
                 ..
             } => {
                 let event_hashes: Vec<Hash> = application_events
@@ -332,7 +297,6 @@ impl ConsensusReceipt {
                     event_root,
                     database_updates.clone(),
                     owned_nodes.clone(),
-                    *gas_consumed,
                 )
             }
             Self::Failed => (
@@ -340,7 +304,6 @@ impl ConsensusReceipt {
                 Hash::ZERO,
                 DatabaseUpdates::default(),
                 BoundedVec::new(),
-                0,
             ),
         };
         let updates_bytes = basic_encode(&database_updates).expect("encode should not fail");
@@ -352,7 +315,6 @@ impl ConsensusReceipt {
             event_root.as_bytes(),
             updates_hash.as_bytes(),
             owned_hash.as_bytes(),
-            &gas_consumed.to_le_bytes(),
         ])
     }
 }
@@ -376,7 +338,6 @@ mod tests {
                 data: EventData(vec![4, 5, 6]),
             }],
             beacon_witness_events: Vec::new(),
-            gas_consumed: 0,
         }
     }
 
@@ -386,48 +347,6 @@ mod tests {
         let bytes = basic_encode(&receipt).unwrap();
         let decoded: ConsensusReceipt = basic_decode(&bytes).unwrap();
         assert_eq!(decoded, receipt);
-    }
-
-    /// Consumed gas is hash-affecting: two receipts alike in every other
-    /// field hash differently, and the value survives the wire. This is
-    /// what makes the quantity attested — a header claiming a running gas
-    /// total is checkable only because `local_receipt_root` already
-    /// commits each receipt's contribution.
-    #[test]
-    fn gas_consumed_is_covered_by_the_local_receipt_hash() {
-        let cheap = sample_succeeded();
-        let ConsensusReceipt::Succeeded {
-            receipt_hash,
-            database_updates,
-            owned_nodes,
-            application_events,
-            beacon_witness_events,
-            ..
-        } = cheap.clone()
-        else {
-            unreachable!("sample is Succeeded")
-        };
-        let dear = ConsensusReceipt::Succeeded {
-            receipt_hash,
-            database_updates,
-            owned_nodes,
-            application_events,
-            beacon_witness_events,
-            gas_consumed: 1_887,
-        };
-
-        assert_ne!(cheap.local_receipt_hash(), dear.local_receipt_hash());
-
-        let decoded: ConsensusReceipt = basic_decode(&basic_encode(&dear).unwrap()).unwrap();
-        assert_eq!(decoded, dear);
-        assert_eq!(decoded.local_receipt_hash(), dear.local_receipt_hash());
-
-        // A failure attests no gas, so it keeps hashing like the canonical
-        // no-payload failure regardless of what any success consumed.
-        assert_eq!(
-            ConsensusReceipt::Failed.local_receipt_hash(),
-            ConsensusReceipt::Failed.local_receipt_hash()
-        );
     }
 
     #[test]
@@ -448,7 +367,7 @@ mod tests {
             .unwrap();
         enc.write_value_kind(ValueKind::Enum).unwrap();
         enc.write_discriminator(RECEIPT_VARIANT_SUCCEEDED).unwrap();
-        enc.write_size(6).unwrap();
+        enc.write_size(5).unwrap();
         enc.encode(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")))
             .unwrap();
         enc.encode(&DatabaseUpdates::default()).unwrap();
@@ -479,7 +398,7 @@ mod tests {
             .unwrap();
         enc.write_value_kind(ValueKind::Enum).unwrap();
         enc.write_discriminator(RECEIPT_VARIANT_SUCCEEDED).unwrap();
-        enc.write_size(6).unwrap();
+        enc.write_size(5).unwrap();
         enc.encode(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")))
             .unwrap();
         enc.encode(&DatabaseUpdates::default()).unwrap();
@@ -527,7 +446,6 @@ mod tests {
             owned_nodes: BoundedVec::new(),
             application_events: Vec::new(),
             beacon_witness_events: Vec::new(),
-            gas_consumed: 0,
         };
         let bytes = basic_encode(&receipt).unwrap();
         let err = basic_decode::<ConsensusReceipt>(&bytes).unwrap_err();

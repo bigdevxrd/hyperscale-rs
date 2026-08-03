@@ -761,6 +761,7 @@ impl ExecutionCoordinator {
         results: Vec<StoredReceipt>,
         tx_outcomes: Vec<TxOutcome>,
         fee_receipts: Vec<StoredReceipt>,
+        attested_work: Vec<(TxHash, u64)>,
     ) -> Vec<Action> {
         if results.is_empty() && tx_outcomes.is_empty() {
             tracing::warn!(
@@ -782,6 +783,9 @@ impl ExecutionCoordinator {
         }
         for fee in fee_receipts {
             wave.record_fee_receipt(fee);
+        }
+        for (tx_hash, work) in attested_work {
+            wave.record_attested_work(tx_hash, work);
         }
         for wr in tx_outcomes {
             let (tx_hash, outcome) = wr.into_parts();
@@ -3089,6 +3093,7 @@ mod tests {
             vec![],
             vec![TxOutcome::new(tx_hash, ExecutionOutcome::Failed)],
             vec![],
+            vec![],
         );
 
         let blocked = state.emit_vote_actions(&unresolvable);
@@ -4730,7 +4735,6 @@ mod tests {
                     owned_nodes: BoundedVec::new(),
                     application_events: vec![],
                     beacon_witness_events: Vec::new(),
-                    gas_consumed: 0,
                 }),
                 metadata: None,
             });

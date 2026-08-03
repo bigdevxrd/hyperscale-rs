@@ -22,8 +22,8 @@ use hyperscale_types::{
     RoutableTransaction, ShardForkProof, ShardId, ShardVoteEquivocation, ShardWitnessPayload,
     SpcEmptyViewMsg, SpcEmptyViewMsgVerifyError, SpcNewCommitMsg, SpcNewCommitMsgVerifyError,
     SpcProposalObject, SpcProposalObjectVerifyError, SpcView, StateRoot, StateRootVerifyError,
-    StoredReceipt, Timeout, TransactionRoot, TxOutcome, TxRootVerifyError, ValidatorId, Verifiable,
-    Verified, WaveId, WeightedTimestamp,
+    StoredReceipt, Timeout, TransactionRoot, TxHash, TxOutcome, TxRootVerifyError, ValidatorId,
+    Verifiable, Verified, WaveId, WeightedTimestamp,
 };
 
 /// How a node learned about the certifying QC that commits a given block.
@@ -549,6 +549,9 @@ pub enum ProtocolEvent {
         /// Held in reserve: an abort settles one of these in place of the
         /// discarded execution receipt.
         fee_receipts: Vec<StoredReceipt>,
+        /// What this shard attests it did per transaction, carried to the
+        /// wave so the outcomes it votes report it.
+        attested_work: Vec<(TxHash, u64)>,
     },
 
     /// Received an execution vote whose signature has already been

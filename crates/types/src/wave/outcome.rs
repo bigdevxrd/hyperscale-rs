@@ -28,13 +28,33 @@ pub struct TxOutcome {
     /// it would otherwise store, so the one-receipt-per-outcome pairing is
     /// unchanged.
     fee_receipt: Option<GlobalReceiptHash>,
+    /// What this shard attests it did for the transaction, under the
+    /// engine's schedule.
+    ///
+    /// Beside the outcome rather than inside the receipt, and the
+    /// distinction is load-bearing. A receipt is the effect record every
+    /// participant of a cross-shard transaction derives identically —
+    /// locality decides what is *applied* from it, never what it *says*.
+    /// Work is the opposite kind of quantity: this shard's own share,
+    /// which the participants are meant to differ on. It also covers every
+    /// verdict, where a receipt covers only the outcomes that produced
+    /// one, so an attempt that failed or aborted still reports the
+    /// declaration work it really did.
+    work: u64,
 }
 
 impl TxOutcome {
     /// Create a new `TxOutcome` settling no fee receipt.
     #[must_use]
     pub const fn new(tx_hash: TxHash, outcome: ExecutionOutcome) -> Self {
+        Self::attesting(tx_hash, outcome, 0)
+    }
+
+    /// A `TxOutcome` attesting `work`, settling no fee receipt.
+    #[must_use]
+    pub const fn attesting(tx_hash: TxHash, outcome: ExecutionOutcome, work: u64) -> Self {
         Self {
+            work,
             tx_hash,
             outcome,
             fee_receipt: None,
@@ -55,12 +75,20 @@ impl TxOutcome {
         tx_hash: TxHash,
         outcome: ExecutionOutcome,
         fee_receipt: GlobalReceiptHash,
+        work: u64,
     ) -> Self {
         Self {
+            work,
             tx_hash,
             outcome,
             fee_receipt: Some(fee_receipt),
         }
+    }
+
+    /// What this shard attests it did for the transaction.
+    #[must_use]
+    pub const fn work(&self) -> u64 {
+        self.work
     }
 
     /// The fee receipt this outcome settles, if any.

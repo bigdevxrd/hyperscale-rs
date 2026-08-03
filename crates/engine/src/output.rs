@@ -29,6 +29,12 @@ pub struct ExecutedTx {
     /// Present only where this shard is the fee payer of a cross-shard
     /// transaction — the one shape a wave can abort after executing.
     pub fee_receipt: Option<ConsensusReceipt>,
+    /// What this shard attests it did for the transaction, under the
+    /// engine's schedule. Rides the wave certificate's outcome rather than
+    /// the receipt: a receipt is the effect record every participant
+    /// derives identically, while this is the shard's own share, and it
+    /// covers the verdicts that produce no receipt at all.
+    pub attested_work: u64,
 }
 
 impl ExecutedTx {
@@ -46,6 +52,7 @@ impl ExecutedTx {
             consensus,
             metadata,
             fee_receipt: None,
+            attested_work: 0,
         }
     }
 
@@ -57,6 +64,7 @@ impl ExecutedTx {
             consensus: ConsensusReceipt::Failed,
             metadata: ExecutionMetadata::empty(),
             fee_receipt: None,
+            attested_work: 0,
         }
     }
 
@@ -76,7 +84,7 @@ impl ExecutedTx {
             },
             ConsensusReceipt::Failed => ExecutionOutcome::Failed,
         };
-        TxOutcome::new(self.tx_hash, outcome)
+        TxOutcome::attesting(self.tx_hash, outcome, self.attested_work)
     }
 }
 

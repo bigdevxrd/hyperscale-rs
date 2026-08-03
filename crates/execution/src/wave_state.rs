@@ -104,6 +104,9 @@ pub struct WaveState {
     /// An abort settles one of these: the transaction's own effects are
     /// discarded, the payer's floor is not.
     fee_receipts: HashMap<TxHash, StoredReceipt>,
+    /// What this shard attests it did per transaction, carried from
+    /// execution onto the outcomes it votes.
+    attested_work: HashMap<TxHash, u64>,
     /// Whether execution has been dispatched (single `ExecuteTransactions` /
     /// `ExecuteCrossShardTransactions` emitted). Set true once execution fires.
     dispatched: bool,
@@ -231,6 +234,7 @@ impl WaveState {
             engagement_pending: HashMap::new(),
             engagement_deadline: None,
             fee_receipts: HashMap::new(),
+            attested_work: HashMap::new(),
             dispatched: false,
             execution_results: HashMap::new(),
             execution_receipts: HashMap::new(),
@@ -510,6 +514,14 @@ impl WaveState {
             .or_insert(receipt);
     }
 
+    /// Record what this shard attested it did for a transaction.
+    pub fn record_attested_work(&mut self, tx_hash: TxHash, work: u64) {
+        if !self.tx_hash_set.contains(&tx_hash) {
+            return;
+        }
+        self.attested_work.insert(tx_hash, work);
+    }
+
     /// Record the fee receipt the engine built beside a transaction's
     /// execution receipt: what the payer owes if the wave aborts it.
     pub fn record_fee_receipt(&mut self, receipt: StoredReceipt) {
@@ -711,11 +723,17 @@ impl WaveState {
                 // payer's charge when the engine built one — an abort
                 // whose effects were discarded, or a failure that produced
                 // none.
+                let work = self.attested_work.get(tx_hash).copied().unwrap_or(0);
                 match (&outcome, self.fee_receipts.get(tx_hash)) {
                     (ExecutionOutcome::Aborted | ExecutionOutcome::Failed, Some(fee)) => {
-                        TxOutcome::with_fee(*tx_hash, outcome.clone(), fee.consensus.receipt_hash())
+                        TxOutcome::with_fee(
+                            *tx_hash,
+                            outcome.clone(),
+                            fee.consensus.receipt_hash(),
+                            work,
+                        )
                     }
-                    _ => TxOutcome::new(*tx_hash, outcome.clone()),
+                    _ => TxOutcome::attesting(*tx_hash, outcome.clone(), work),
                 }
             })
             .collect();
@@ -1199,7 +1217,6 @@ mod tests {
                     owned_nodes: BoundedVec::new(),
                     application_events: vec![],
                     beacon_witness_events: Vec::new(),
-                    gas_consumed: 0,
                 }
             } else {
                 ConsensusReceipt::Failed
@@ -1267,7 +1284,6 @@ mod tests {
                 database_updates: DatabaseUpdates::default(),
                 application_events: Vec::new(),
                 beacon_witness_events: Vec::new(),
-                gas_consumed: 0,
                 owned_nodes: Vec::new().into(),
             }),
         )
