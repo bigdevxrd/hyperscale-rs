@@ -15,6 +15,7 @@ pub mod consensus;
 pub mod global;
 pub mod metadata;
 pub mod stored;
+pub mod vm_event;
 
 #[cfg(test)]
 mod tests {
@@ -38,6 +39,7 @@ mod tests {
             owned_nodes: BoundedVec::new(),
             application_events: events,
             beacon_witness_events: Vec::new(),
+            vm_events: Vec::new(),
         }
     }
 

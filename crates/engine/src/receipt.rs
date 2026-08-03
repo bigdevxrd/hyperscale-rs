@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use hyperscale_types::{
     ApplicationEvent, BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, EventData,
     EventRoot, ExecutionMetadata, FeeSummary, GlobalReceipt, GlobalReceiptHash, Hash, LogLevel,
-    NodeId, RoutableTransaction, ShardId, ShardTrie, TxHash, compute_merkle_root,
+    NodeId, RoutableTransaction, ShardId, ShardTrie, TxHash, VmEvent, compute_merkle_root,
     has_partition_reset, system_action,
 };
 use radix_engine::transaction::{
@@ -68,6 +68,10 @@ enum CachedVmOutputBody {
         raw_updates: DatabaseUpdates,
         declared_set: HashSet<NodeId>,
         application_events: Vec<ApplicationEvent>,
+        /// VM events in emission order, unfiltered: the projection picks
+        /// each shard's own by the emitter's home, and the event root
+        /// covers the whole union.
+        vm_events: Vec<VmEvent>,
         receipt_hash: GlobalReceiptHash,
         /// A beacon action the transaction carried in its plaintext message,
         /// paired with the node that routes its emission (the transaction's
@@ -112,6 +116,7 @@ impl CachedVmOutput {
         receipt_hash: GlobalReceiptHash,
         metadata: ExecutionMetadata,
         gas_consumed: u64,
+        vm_events: Vec<VmEvent>,
     ) -> Self {
         Self {
             metadata,
@@ -119,6 +124,7 @@ impl CachedVmOutput {
                 raw_updates,
                 declared_set: HashSet::new(),
                 application_events: Vec::new(),
+                vm_events,
                 receipt_hash,
                 system_witness: None,
                 gas_consumed,
@@ -261,6 +267,9 @@ pub fn compute_vm_output(
             raw_updates,
             declared_set,
             application_events,
+            // The Radix path emits none; its events ride
+            // `application_events`, which every participant keeps.
+            vm_events: Vec::new(),
             receipt_hash,
             system_witness,
             gas_consumed,
@@ -300,6 +309,7 @@ pub fn project_to_shard(
             raw_updates,
             declared_set,
             application_events,
+            vm_events,
             receipt_hash,
             system_witness,
             gas_consumed,
@@ -335,12 +345,22 @@ pub fn project_to_shard(
                 }
                 _ => Vec::new(),
             };
+            // An event is stored where its emitter lives, so each shard
+            // keeps its own and the rest are another shard's to hold. The
+            // receipt hash covers the whole union, so dropping them here
+            // costs no agreement.
+            let vm_events: Vec<VmEvent> = vm_events
+                .iter()
+                .filter(|event| shard_trie.shard_for_prefix(event.emitter) == local_shard)
+                .cloned()
+                .collect();
             let consensus = ConsensusReceipt::Succeeded {
                 receipt_hash: *receipt_hash,
                 database_updates,
                 owned_nodes,
                 application_events: application_events.clone(),
                 beacon_witness_events,
+                vm_events,
             };
             let mut executed = ExecutedTx::new(tx_hash, consensus, cached.metadata.clone());
             executed.attested_work = *gas_consumed;

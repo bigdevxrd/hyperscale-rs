@@ -128,6 +128,7 @@ fn commit_with(
                 owned_nodes: BoundedVec::new(),
                 application_events: vec![],
                 beacon_witness_events: Vec::new(),
+                vm_events: Vec::new(),
             }),
             metadata: None,
         };

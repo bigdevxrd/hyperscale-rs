@@ -517,3 +517,73 @@ fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
         Some(encode_amount(150).to_vec())
     );
 }
+
+/// An account whose prefix routes to the other half of a two-shard trie.
+const FAR: [u8; 16] = [0x88; 16];
+
+/// Execute one batch as `local_shard` under a two-leaf trie.
+fn execute_on_shard(
+    executor: &VmExecutor,
+    local_shard: ShardId,
+    transactions: &[Arc<Verified<RoutableTransaction>>],
+) -> Vec<ExecutedTx> {
+    let snapshot_store = MapDb::genesis(&[(ALICE, 1_000), (FAR, 50)]);
+    let snapshot = DynSnapshot(&snapshot_store);
+    let cache = ProcessExecutionCache::new(HashSet::from([local_shard]));
+    let trie = ShardTrie::uniform(1);
+    let ctx = WaveBatchContext {
+        par: Parallelism::Sequential,
+        cache: &cache,
+        local_shard,
+        shard_trie: &trie,
+        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
+        wave_start_ts: WeightedTimestamp::from_millis(1_000),
+        wave_start_reveal: RevealChain::ZERO,
+    };
+    executor.execute_wave_batch(&ctx, &snapshot, transactions)
+}
+
+fn events_of(executed: &ExecutedTx) -> Vec<([u8; 16], u32)> {
+    let ConsensusReceipt::Succeeded { vm_events, .. } = &executed.consensus else {
+        panic!("transfer must succeed: {:?}", executed.consensus);
+    };
+    vm_events
+        .iter()
+        .map(|event| (event.emitter, event.event_type))
+        .collect()
+}
+
+fn hash_of(executed: &ExecutedTx) -> Hash {
+    let ConsensusReceipt::Succeeded { receipt_hash, .. } = &executed.consensus else {
+        panic!("transfer must succeed");
+    };
+    *receipt_hash.as_raw()
+}
+
+/// A transfer's two legs emit from accounts on different shards. Each
+/// shard's receipt keeps only the events its own instances emitted, while
+/// the receipt hash — which covers the union — stays identical, so the
+/// committees agree on what the transaction emitted without either shard
+/// storing the other's events.
+#[test]
+fn an_event_lands_only_on_its_emitters_home_shard() {
+    let world = vec![(ALICE, 1_000u128), (FAR, 50), (fee_payer(7), 1_000)];
+    let executor = VmExecutor::new(&world, ExecutionMode::Serial);
+    let trie = ShardTrie::uniform(1);
+    let (near, far) = (trie.shard_for_prefix(ALICE), trie.shard_for_prefix(FAR));
+    assert_ne!(near, far, "the two accounts must sit on different shards");
+
+    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        signed_transfer(7, ALICE, FAR, 100),
+    ));
+    let sender_side = execute_on_shard(&executor, near, std::slice::from_ref(&tx));
+    let recipient_side = execute_on_shard(&executor, far, &[tx]);
+
+    assert_eq!(events_of(&sender_side[0]), vec![(ALICE, 0)]);
+    assert_eq!(events_of(&recipient_side[0]), vec![(FAR, 1)]);
+    assert_eq!(
+        hash_of(&sender_side[0]),
+        hash_of(&recipient_side[0]),
+        "the receipt hash covers the union, so it cannot differ by shard",
+    );
+}

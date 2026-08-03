@@ -31,7 +31,7 @@ use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_part
 use hyperscale_types::{
     BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata, FeeSummary, GlobalReceipt,
     Hash, OwnershipRoot, RevealChain, RoutableTransaction, SubstateEntry, TxHash, Verified,
-    install_vm_statics,
+    VmEvent, compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, Declaration, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
@@ -469,7 +469,8 @@ fn build_fee_receipt(
     // work is unattested — a failed outcome carries no gas either — so an
     // abort contributes nothing to its shard's emission weight. Pricing
     // aborted work is the floor's job, not the weight's.
-    let cached = CachedVmOutput::vm_succeeded(updates, receipt_hash, vm_metadata(0, None), 0);
+    let cached =
+        CachedVmOutput::vm_succeeded(updates, receipt_hash, vm_metadata(0, None), 0, Vec::new());
     Some(
         project_to_shard(
             &cached,
@@ -523,9 +524,22 @@ fn assemble_executed_tx(
         let mut updates = writes_to_updates(&writes);
         sort_database_updates(&mut updates);
         let writes_root = compute_writes_root(&updates);
+        // Every participant derives the same events from the same
+        // manifest, so the root covers the whole union while each shard's
+        // receipt keeps only what its own instances emitted.
+        let vm_events: Vec<VmEvent> = receipt
+            .events
+            .iter()
+            .map(|event| VmEvent {
+                emitter: event.emitter.0,
+                event_type: event.event_type,
+                payload: event.payload.clone(),
+            })
+            .collect();
+        let event_hashes: Vec<Hash> = vm_events.iter().map(VmEvent::hash).collect();
         let receipt_hash = GlobalReceipt::new(
             true,
-            EventRoot::ZERO,
+            EventRoot::from_raw(compute_merkle_root(&event_hashes)),
             BeaconWitnessRoot::ZERO,
             writes_root,
             OwnershipRoot::ZERO,
@@ -536,6 +550,7 @@ fn assemble_executed_tx(
             receipt_hash,
             vm_metadata(receipt.fuel, None),
             receipt.fuel,
+            vm_events,
         )
     } else {
         let reason = match &receipt.outcome {

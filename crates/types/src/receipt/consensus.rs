@@ -24,7 +24,8 @@ use crate::sbor_codec::decode_bounded_vec;
 use crate::{
     ApplicationEvent, BeaconWitnessEvent, BeaconWitnessRoot, BoundedVec, DatabaseUpdates,
     EventRoot, GlobalReceipt, GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX,
-    MAX_OWNED_NODES_PER_TX, NodeId, OwnershipRoot, WritesRoot, compute_merkle_root,
+    MAX_OWNED_NODES_PER_TX, MAX_VM_EVENTS_PER_TX, NodeId, OwnershipRoot, VmEvent, WritesRoot,
+    compute_merkle_root,
 };
 
 /// Cap on `ConsensusReceipt::Succeeded.application_events` count at decode
@@ -95,6 +96,13 @@ pub enum ConsensusReceipt {
         /// time; the root of those events is bound into `receipt_hash`
         /// via [`GlobalReceipt::beacon_witness_root`].
         beacon_witness_events: Vec<BeaconWitnessEvent>,
+        /// VM events whose emitting instance lives on this shard. Unlike
+        /// `application_events`, these differ per shard by design: an
+        /// event is stored where its emitter lives, while `receipt_hash`
+        /// binds the canonical union through
+        /// [`GlobalReceipt::event_root`], so committees still agree on
+        /// what the transaction emitted. Empty on the Radix path.
+        vm_events: Vec<VmEvent>,
     },
     /// All failures collapse to one variant — the canonical
     /// [`FAILED_RECEIPT_HASH`] is derived at hash time, no payload needed.
@@ -136,14 +144,16 @@ impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusRe
                 owned_nodes,
                 application_events,
                 beacon_witness_events,
+                vm_events,
             } => {
                 encoder.write_discriminator(RECEIPT_VARIANT_SUCCEEDED)?;
-                encoder.write_size(5)?;
+                encoder.write_size(6)?;
                 encoder.encode(receipt_hash)?;
                 encoder.encode(database_updates)?;
                 encoder.encode(owned_nodes)?;
                 encoder.encode(application_events)?;
                 encoder.encode(beacon_witness_events)?;
+                encoder.encode(vm_events)?;
             }
             Self::Failed => {
                 encoder.write_discriminator(RECEIPT_VARIANT_FAILED)?;
@@ -164,9 +174,9 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
         let length = decoder.read_size()?;
         match discriminator {
             RECEIPT_VARIANT_SUCCEEDED => {
-                if length != 5 {
+                if length != 6 {
                     return Err(DecodeError::UnexpectedSize {
-                        expected: 5,
+                        expected: 6,
                         actual: length,
                     });
                 }
@@ -187,12 +197,14 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
                     decoder,
                     MAX_BEACON_WITNESS_EVENTS_PER_TX,
                 )?;
+                let vm_events = decode_bounded_vec::<_, VmEvent>(decoder, MAX_VM_EVENTS_PER_TX)?;
                 Ok(Self::Succeeded {
                     receipt_hash,
                     database_updates,
                     owned_nodes,
                     application_events,
                     beacon_witness_events,
+                    vm_events,
                 })
             }
             RECEIPT_VARIANT_FAILED => {
@@ -338,6 +350,7 @@ mod tests {
                 data: EventData(vec![4, 5, 6]),
             }],
             beacon_witness_events: Vec::new(),
+            vm_events: Vec::new(),
         }
     }
 
@@ -367,7 +380,7 @@ mod tests {
             .unwrap();
         enc.write_value_kind(ValueKind::Enum).unwrap();
         enc.write_discriminator(RECEIPT_VARIANT_SUCCEEDED).unwrap();
-        enc.write_size(5).unwrap();
+        enc.write_size(6).unwrap();
         enc.encode(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")))
             .unwrap();
         enc.encode(&DatabaseUpdates::default()).unwrap();
@@ -398,7 +411,7 @@ mod tests {
             .unwrap();
         enc.write_value_kind(ValueKind::Enum).unwrap();
         enc.write_discriminator(RECEIPT_VARIANT_SUCCEEDED).unwrap();
-        enc.write_size(5).unwrap();
+        enc.write_size(6).unwrap();
         enc.encode(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")))
             .unwrap();
         enc.encode(&DatabaseUpdates::default()).unwrap();
@@ -446,6 +459,7 @@ mod tests {
             owned_nodes: BoundedVec::new(),
             application_events: Vec::new(),
             beacon_witness_events: Vec::new(),
+            vm_events: Vec::new(),
         };
         let bytes = basic_encode(&receipt).unwrap();
         let err = basic_decode::<ConsensusReceipt>(&bytes).unwrap_err();

@@ -1217,6 +1217,7 @@ mod tests {
                     owned_nodes: BoundedVec::new(),
                     application_events: vec![],
                     beacon_witness_events: Vec::new(),
+                    vm_events: Vec::new(),
                 }
             } else {
                 ConsensusReceipt::Failed
@@ -1284,6 +1285,7 @@ mod tests {
                 database_updates: DatabaseUpdates::default(),
                 application_events: Vec::new(),
                 beacon_witness_events: Vec::new(),
+                vm_events: Vec::new(),
                 owned_nodes: Vec::new().into(),
             }),
         )
