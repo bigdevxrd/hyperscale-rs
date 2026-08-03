@@ -21,13 +21,14 @@ use hyperscale_types::{
 use hyperscale_vm_effects::stdlib::{ENTROPY, VAULT};
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg, GraphNode,
-    Hash32, InstanceRegistry, IntentDecl, LocalKey, ManifestGraph, ManifestHash, MetadataCache,
-    Mode, PrefixShardResolver, Subintent, SubstateKey, Value, YieldBinding, YieldParam, admit_tree,
+    Hash32, InstanceRegistry, IntentDecl, ManifestGraph, ManifestHash, MetadataCache, Mode,
+    PrefixShardResolver, Subintent, SubstateKey, Value, YieldBinding, YieldParam, admit_tree,
     child_key, route_tree,
 };
 use sbor::prelude::*;
 
 use crate::ProtocolHasher;
+use crate::wire::{WireValue, value, wire_value};
 
 const DOMAIN_VM_ACCOUNT: &[u8] = b"hyperscale/engine-vm/account-address";
 
@@ -66,19 +67,6 @@ pub fn vm_account_address(public_key: &[u8; 32]) -> [u8; 16] {
     let mut address = [0u8; 16];
     address.copy_from_slice(&digest.0[..16]);
     address
-}
-
-/// Wire mirror of [`Value`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireValue {
-    U64(u64),
-    U128(u128),
-    Bytes(Vec<u8>),
-    Address([u8; 16]),
-    Key([u8; 16], [u8; 16]),
-    Bucket([u8; 16]),
-    Tuple(Vec<Self>),
-    List(Vec<Self>),
 }
 
 /// Wire mirror of [`Constraint`].
@@ -146,37 +134,6 @@ struct WireTree {
     root: WireIntent,
     root_bindings: Vec<WireBinding>,
     subintents: Vec<WireSubintent>,
-}
-
-fn wire_value(value: &Value) -> WireValue {
-    match value {
-        Value::U64(x) => WireValue::U64(*x),
-        Value::U128(x) => WireValue::U128(*x),
-        Value::Bytes(bytes) => WireValue::Bytes(bytes.clone()),
-        Value::Address(address) => WireValue::Address(address.0),
-        Value::Key(key) => WireValue::Key(key.owner.0, key.local.0),
-        Value::Bucket { resource } => WireValue::Bucket(resource.0),
-        Value::Tuple(fields) => WireValue::Tuple(fields.iter().map(wire_value).collect()),
-        Value::List(items) => WireValue::List(items.iter().map(wire_value).collect()),
-    }
-}
-
-fn value(wire: WireValue) -> Value {
-    match wire {
-        WireValue::U64(x) => Value::U64(x),
-        WireValue::U128(x) => Value::U128(x),
-        WireValue::Bytes(bytes) => Value::Bytes(bytes),
-        WireValue::Address(address) => Value::Address(Address(address)),
-        WireValue::Key(owner, local) => Value::Key(SubstateKey {
-            owner: Address(owner),
-            local: LocalKey(local),
-        }),
-        WireValue::Bucket(resource) => Value::Bucket {
-            resource: Address(resource),
-        },
-        WireValue::Tuple(fields) => Value::Tuple(fields.into_iter().map(value).collect()),
-        WireValue::List(items) => Value::List(items.into_iter().map(value).collect()),
-    }
 }
 
 const fn wire_constraint(constraint: &Constraint) -> WireConstraint {

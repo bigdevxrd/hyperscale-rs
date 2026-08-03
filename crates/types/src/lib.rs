@@ -116,7 +116,9 @@ pub use receipt::consensus::{ConsensusReceipt, FAILED_RECEIPT_HASH, has_partitio
 pub use receipt::global::GlobalReceipt;
 pub use receipt::metadata::{ApplicationEvent, EventData, ExecutionMetadata, FeeSummary, LogLevel};
 pub use receipt::stored::StoredReceipt;
-pub use receipt::vm_event::{MAX_VM_EVENT_PAYLOAD_LEN, MAX_VM_EVENTS_PER_TX, VmEvent};
+pub use receipt::vm_event::{
+    MAX_VM_EVENT_PAYLOAD_LEN, MAX_VM_EVENT_TYPES, MAX_VM_EVENTS_PER_TX, VmEvent,
+};
 pub use sbor_codec::{
     BoundedBTreeMap, BoundedBTreeSet, BoundedBytes, BoundedLengthError, BoundedString, BoundedVec,
 };

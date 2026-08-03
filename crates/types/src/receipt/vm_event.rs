@@ -29,6 +29,13 @@ pub const MAX_VM_EVENT_PAYLOAD_LEN: usize = 4 * 1024;
 /// can claim before iteration begins.
 pub const MAX_VM_EVENTS_PER_TX: usize = 256;
 
+/// Cap on the event types one package's table may name.
+///
+/// Mirrors the kernel's bound on an emitted index: an entry past it names
+/// a type no execution could ever emit, so metadata claiming one is
+/// malformed rather than merely wasteful.
+pub const MAX_VM_EVENT_TYPES: u32 = 1024;
+
 /// One event a VM transaction emitted.
 #[derive(Clone, Debug, PartialEq, Eq, Categorize, Encode)]
 pub struct VmEvent {

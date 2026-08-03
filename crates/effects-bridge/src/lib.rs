@@ -14,7 +14,9 @@
 //! and asserted for determinism via [`routing_digest`], never a consensus
 //! artifact or an admission input.
 
+pub mod vm_metadata;
 pub mod vm_statics;
+mod wire;
 
 use std::collections::BTreeMap;
 
@@ -23,6 +25,7 @@ use hyperscale_types::{NodeId, RoutableTransaction, ShardId, TopologySnapshot};
 use hyperscale_vm_effects::{
     Address, Effect, EffectSet, EffectTarget, Hash32, Hasher, LocalKey, Mode, SubstateKey, Window,
 };
+pub use vm_metadata::{MAX_PACKAGE_METADATA_BYTES, decode_metadata, encode_metadata};
 pub use vm_statics::{
     BridgeStatics, VM_XRD, decode_tree, encode_tree, entropy_key, envelope_identity, vault_key,
     vm_account_address,
