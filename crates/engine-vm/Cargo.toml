@@ -32,5 +32,11 @@ wasmtime.workspace = true
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 hyperscale-vm-ref.workspace = true
 
+# The reference interpreter only ships on wasm32, so nothing in a native
+# run would notice it rejecting the artifact's metadata section — and the
+# first thing to notice would be the browser build.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+hyperscale-vm-ref.workspace = true
+
 [lints]
 workspace = true

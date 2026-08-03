@@ -14,12 +14,14 @@
 //! and asserted for determinism via [`routing_digest`], never a consensus
 //! artifact or an admission input.
 
+pub mod artifact;
 pub mod vm_metadata;
 pub mod vm_statics;
 mod wire;
 
 use std::collections::BTreeMap;
 
+pub use artifact::{METADATA_SECTION, attach_metadata, extract_metadata};
 use blake3::Hasher as Blake3;
 use hyperscale_types::{NodeId, RoutableTransaction, ShardId, TopologySnapshot};
 use hyperscale_vm_effects::{

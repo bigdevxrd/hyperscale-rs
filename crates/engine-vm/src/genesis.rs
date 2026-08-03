@@ -6,15 +6,40 @@
 //! balances land as identity-keyed vault cells beside the Radix
 //! bootstrap in one genesis batch.
 
-use hyperscale_effects_bridge::ProtocolHasher;
+use std::sync::LazyLock;
+
+use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, extract_metadata};
 pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
-use hyperscale_vm_effects::{Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash};
+use hyperscale_vm_effects::{
+    Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, package_hash,
+};
 use hyperscale_vm_kernel::encode_amount;
-use hyperscale_vm_stdlib::{account_metadata, account_package_hash};
+use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 use indexmap::IndexMap;
 use radix_substate_store_interface::interface::DatabaseUpdates;
+
+/// The stdlib account package as a publishable artifact: the committed
+/// guest blob with its effect metadata attached in the section a
+/// published package carries it in.
+///
+/// Composition is deterministic — one committed blob, one authored
+/// signature set, one frozen encoding — so every node holds the same
+/// bytes and therefore the same content address. The vocabulary crate
+/// stays wire-free, which is why the artifact is assembled here rather
+/// than committed with the section already in it.
+static ACCOUNT_ARTIFACT: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    attach_metadata(ACCOUNT_COMPONENT, &account_metadata())
+        .expect("the stdlib account metadata attaches to its committed blob")
+});
+
+/// The stdlib account artifact: what the engine compiles and what the
+/// package's content address covers.
+#[must_use]
+pub fn account_artifact() -> &'static [u8] {
+    &ACCOUNT_ARTIFACT
+}
 
 /// The genesis-static VM world: published stdlib metadata and the funded
 /// accounts' instance registrations.
@@ -31,11 +56,24 @@ pub struct VmWorld {
 /// Build the world for `accounts` (owner prefix, balance): the account
 /// package published under its artifact hash, one instance per funded
 /// address.
+///
+/// The published signatures are the ones the artifact declares, read out
+/// of it the way a publish transaction reads them — genesis is the cold
+/// start of the same cache, not a second source of truth for it.
+///
+/// # Panics
+///
+/// Panics if the stdlib artifact does not declare decodable metadata — a
+/// build defect, not a runtime condition.
 #[must_use]
 pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
-    let account_package = account_package_hash(&ProtocolHasher);
+    let artifact = account_artifact();
+    let account_package = package_hash(&ProtocolHasher, artifact);
+    let metadata = extract_metadata(artifact)
+        .expect("the stdlib account artifact walks")
+        .expect("the stdlib account artifact declares its effect metadata");
     let mut cache = MetadataCache::new();
-    cache.publish(account_package, account_metadata());
+    cache.publish(account_package, metadata);
     let mut instances = InstanceRegistry::new();
     for (address, _) in accounts {
         instances.register(
@@ -121,6 +159,46 @@ mod tests {
             assert_eq!(flat.len(), VM_FLAT_KEY_LEN);
             assert_eq!(vm_flat_key_parts(&flat), Some((owner, key.local.0)));
         }
+    }
+
+    #[test]
+    fn the_stdlib_artifact_describes_itself() {
+        let artifact = account_artifact();
+
+        // The code is the committed blob and the section is what was
+        // added, so the address covers both.
+        assert!(artifact.starts_with(ACCOUNT_COMPONENT));
+        assert!(artifact.len() > ACCOUNT_COMPONENT.len());
+        assert_ne!(
+            package_hash(&ProtocolHasher, artifact),
+            package_hash(&ProtocolHasher, ACCOUNT_COMPONENT)
+        );
+
+        // What genesis publishes is read out of the artifact, and it is
+        // the signature set the stdlib authors.
+        let declared = extract_metadata(artifact)
+            .expect("walks")
+            .expect("declares its metadata");
+        assert_eq!(declared, account_metadata());
+        let world = genesis_world(&[]);
+        assert_eq!(world.cache.get(world.account_package), Some(&declared));
+        assert_eq!(
+            world.account_package,
+            package_hash(&ProtocolHasher, artifact)
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn both_runtimes_accept_the_section_carrying_artifact() {
+        // The blessed engine's acceptance is proved by every guest test
+        // in this crate, which now runs the artifact. The reference
+        // interpreter ships only on wasm32, so its acceptance has no
+        // native witness unless one is written.
+        use hyperscale_vm_ref::RefComponent;
+
+        RefComponent::decode(account_artifact())
+            .expect("the reference interpreter decodes the stdlib artifact");
     }
 
     #[test]

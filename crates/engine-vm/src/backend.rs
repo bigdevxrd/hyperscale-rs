@@ -59,11 +59,11 @@ mod native {
         DeltaCell, ReserveCell, SnapCell, WriteCell, add_kernel_to_linker, blessed_engine,
         validate_component,
     };
-    use hyperscale_vm_stdlib::ACCOUNT_COMPONENT;
     use wasmtime::component::{Component, InstancePre, Linker, Resource};
     use wasmtime::{Engine, Store};
 
     use super::{FUEL, HostState, Invocation, InvokeOutcome, KernelSession};
+    use crate::genesis::account_artifact;
 
     /// The compiled account guest, pre-linked for cheap instantiation.
     pub struct GuestBackend {
@@ -74,16 +74,20 @@ mod native {
     impl GuestBackend {
         /// Compile the genesis packages on the blessed engine.
         ///
+        /// The artifact compiled is the one the package address covers,
+        /// metadata section included: what the chain stores is what the
+        /// engine runs.
+        ///
         /// # Panics
         ///
-        /// Panics if the committed stdlib blob fails profile validation
-        /// or compilation — a build defect, not a runtime condition.
+        /// Panics if the stdlib artifact fails profile validation or
+        /// compilation — a build defect, not a runtime condition.
         pub fn new() -> Self {
             let engine = blessed_engine().expect("blessed engine configuration is pinned");
-            validate_component(ACCOUNT_COMPONENT)
-                .expect("the committed stdlib account component clears the profile");
-            let component = Component::new(&engine, ACCOUNT_COMPONENT)
-                .expect("the committed stdlib account component compiles");
+            let artifact = account_artifact();
+            validate_component(artifact).expect("the stdlib account artifact clears the profile");
+            let component =
+                Component::new(&engine, artifact).expect("the stdlib account artifact compiles");
             let mut linker = Linker::<HostState>::new(&engine);
             add_kernel_to_linker(&mut linker).expect("kernel world wiring");
             let account = linker
@@ -157,9 +161,9 @@ pub use native::GuestBackend;
 #[cfg(target_arch = "wasm32")]
 mod reference {
     use hyperscale_vm_ref::{CVal, RefComponent, RefComponentInstance, ResourceKind};
-    use hyperscale_vm_stdlib::ACCOUNT_COMPONENT;
 
     use super::{HostState, Invocation, InvokeOutcome, KernelSession};
+    use crate::genesis::account_artifact;
 
     /// The decoded account guest under the reference interpreter.
     pub struct GuestBackend {
@@ -171,12 +175,12 @@ mod reference {
         ///
         /// # Panics
         ///
-        /// Panics if the committed stdlib blob fails to decode — a build
+        /// Panics if the stdlib artifact fails to decode — a build
         /// defect, not a runtime condition.
         pub fn new() -> Self {
             Self {
-                account: RefComponent::decode(ACCOUNT_COMPONENT)
-                    .expect("the committed stdlib account component decodes"),
+                account: RefComponent::decode(account_artifact())
+                    .expect("the stdlib account artifact decodes"),
             }
         }
 
