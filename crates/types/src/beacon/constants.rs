@@ -319,7 +319,7 @@ pub const EMISSION_PARTICIPATION_WEIGHT: u64 = 1_000_000;
 /// The compute each shard's committee actually performed, including the
 /// cross-shard legs whose fees burned at another shard's payer.
 ///
-/// A *share*, not a rate: the term is `weight × shard_gas / total_gas`, so
+/// A *share*, not a rate: the term is `weight × shard_work / total_gas`, so
 /// the constant is a dimensionless ratio against
 /// [`EMISSION_PARTICIPATION_WEIGHT`] rather than a guess at what a gas unit
 /// is worth. Phase 6 sets the ratio against measured baselines.

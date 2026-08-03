@@ -132,7 +132,7 @@ pub fn build_genesis_beacon_state(config: &BeaconGenesisConfig) -> BeaconState {
                     weighted_timestamp: WeightedTimestamp::ZERO,
                     witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                     witness_base: BeaconWitnessLeafCount::ZERO,
-                    gas_used: 0,
+                    attested_work: 0,
                     substate_bytes: 0,
                     last_live_epoch: Epoch::GENESIS,
                     consecutive_misses: 0,

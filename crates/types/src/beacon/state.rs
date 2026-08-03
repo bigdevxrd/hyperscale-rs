@@ -295,7 +295,7 @@ pub struct ShardBoundary {
     /// Zero on a freshly seeded record: a chain starts its own count at
     /// zero, including a split child or merged parent that inherits state
     /// but not its predecessor's consumption.
-    pub gas_used: u64,
+    pub attested_work: u64,
     /// Committed substate byte total behind the boundary header's parent
     /// state — a level, not a running total, so a crossing whose header
     /// resolved no total (the halt-recovery case) leaves the recorded value
@@ -1973,7 +1973,7 @@ mod tests {
             weighted_timestamp: WeightedTimestamp::ZERO,
             witness_leaf_count: BeaconWitnessLeafCount::ZERO,
             witness_base: BeaconWitnessLeafCount::ZERO,
-            gas_used: 0,
+            attested_work: 0,
             substate_bytes: 0,
             last_live_epoch: creation,
             consecutive_misses: 0,
@@ -2041,7 +2041,7 @@ mod tests {
             weighted_timestamp: WeightedTimestamp::ZERO,
             witness_leaf_count: BeaconWitnessLeafCount::ZERO,
             witness_base: BeaconWitnessLeafCount::ZERO,
-            gas_used: 0,
+            attested_work: 0,
             substate_bytes: 0,
             last_live_epoch: Epoch::new(1),
             consecutive_misses: misses,
@@ -2341,7 +2341,7 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::ZERO,
                 witness_leaf_count: BeaconWitnessLeafCount::ZERO,
                 witness_base: BeaconWitnessLeafCount::ZERO,
-                gas_used: 0,
+                attested_work: 0,
                 substate_bytes: 0,
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,

@@ -10,7 +10,7 @@ use sbor::prelude::*;
 /// epoch, a joining node off the block it joined at — and every replica
 /// recomputes them before voting. The pair is deliberately two shapes:
 ///
-/// - [`cumulative_gas`](Self::cumulative_gas) is a **flow**, carried as a
+/// - [`cumulative_work`](Self::cumulative_work) is a **flow**, carried as a
 ///   running total over the chain's whole history. A consumer wanting one
 ///   epoch's consumption differences it against the total it last
 ///   recorded, which makes the quantity monotone and its application
@@ -24,14 +24,20 @@ use sbor::prelude::*;
 ///   and a missed crossing simply leaves the value unrefreshed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
 pub struct ShardLoad {
-    /// Gas this chain has consumed over its whole history, through the
+    /// Work this chain has attested over its whole history, through the
     /// certificates the block itself carries.
+    ///
+    /// Priced by the engine's schedule, which combines the compute an
+    /// execution consumed with the footprint its declaration claimed —
+    /// so a participant that applied almost nothing still reports the
+    /// exclusivity it held. Consensus carries the one scalar and never
+    /// the ratio behind it.
     ///
     /// Accumulation saturates rather than wrapping. Wrapping would break
     /// the monotonicity a differencing consumer relies on, and it has no
     /// honest reading: the epoch it straddles would come out as zero
     /// consumption or as the whole counter's width.
-    pub cumulative_gas: u64,
+    pub cumulative_work: u64,
     /// Committed substate byte total behind the block's parent state —
     /// the same quantity the reshape predicate evaluates.
     ///
@@ -46,35 +52,35 @@ pub struct ShardLoad {
 impl ShardLoad {
     /// Nothing consumed and no resolved byte total.
     ///
-    /// Every structural genesis header's load: a chain starts its own gas
+    /// Every structural genesis header's load: a chain starts its own
     /// count at zero — including a split child or a merged parent, which
-    /// inherit state but not their predecessor's consumption — and a
+    /// inherit state but not their predecessor's attested work — and a
     /// genesis block has no parent state to have a total behind.
     pub const ZERO: Self = Self {
-        cumulative_gas: 0,
+        cumulative_work: 0,
         substate_bytes: None,
     };
 
-    /// This load advanced by `gas` and re-anchored on `substate_bytes`.
+    /// This load advanced by `work` and re-anchored on `substate_bytes`.
     ///
     /// The successor relation the proposer applies and every verifier
     /// recomputes, so neither side can drift on the arithmetic.
     #[must_use]
-    pub const fn advance(self, gas: u64, substate_bytes: Option<u64>) -> Self {
+    pub const fn advance(self, work: u64, substate_bytes: Option<u64>) -> Self {
         Self {
-            cumulative_gas: self.cumulative_gas.saturating_add(gas),
+            cumulative_work: self.cumulative_work.saturating_add(work),
             substate_bytes,
         }
     }
 
-    /// Gas consumed between `self` and the later `next`.
+    /// Work attested between `self` and the later `next`.
     ///
     /// Saturating in the same direction the counter runs: a successor
     /// total below this one cannot happen on one chain, and answering
     /// zero keeps a fold that meets one from crediting a wrap.
     #[must_use]
-    pub const fn gas_since(self, next: Self) -> u64 {
-        next.cumulative_gas.saturating_sub(self.cumulative_gas)
+    pub const fn work_since(self, next: Self) -> u64 {
+        next.cumulative_work.saturating_sub(self.cumulative_work)
     }
 }
 
@@ -83,40 +89,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advance_accumulates_gas_and_replaces_the_byte_level() {
+    fn advance_accumulates_work_and_replaces_the_byte_level() {
         let start = ShardLoad::ZERO;
         let next = start.advance(70, Some(4_096));
-        assert_eq!(next.cumulative_gas, 70);
+        assert_eq!(next.cumulative_work, 70);
         assert_eq!(next.substate_bytes, Some(4_096));
 
-        // Gas accumulates; the byte total is a level, so it replaces.
+        // Work accumulates; the byte total is a level, so it replaces.
         let later = next.advance(30, Some(8_192));
-        assert_eq!(later.cumulative_gas, 100);
+        assert_eq!(later.cumulative_work, 100);
         assert_eq!(later.substate_bytes, Some(8_192));
 
-        // An unresolved byte total does not disturb the running gas.
+        // An unresolved byte total does not disturb the running work.
         let unresolved = later.advance(5, None);
-        assert_eq!(unresolved.cumulative_gas, 105);
+        assert_eq!(unresolved.cumulative_work, 105);
         assert_eq!(unresolved.substate_bytes, None);
     }
 
     #[test]
-    fn gas_since_differences_the_running_total() {
+    fn work_since_differences_the_running_total() {
         let earlier = ShardLoad::ZERO.advance(400, None);
         let later = earlier.advance(90, None);
-        assert_eq!(earlier.gas_since(later), 90);
+        assert_eq!(earlier.work_since(later), 90);
 
         // Idempotent against the total already recorded.
-        assert_eq!(later.gas_since(later), 0);
+        assert_eq!(later.work_since(later), 0);
 
         // A total below the recorded one credits nothing rather than wrapping.
-        assert_eq!(later.gas_since(earlier), 0);
+        assert_eq!(later.work_since(earlier), 0);
     }
 
     #[test]
     fn saturating_accumulation_does_not_wrap() {
         let brim = ShardLoad::ZERO.advance(u64::MAX, None);
-        assert_eq!(brim.advance(1_000, None).cumulative_gas, u64::MAX);
+        assert_eq!(brim.advance(1_000, None).cumulative_work, u64::MAX);
     }
 
     #[test]

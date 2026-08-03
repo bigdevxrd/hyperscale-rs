@@ -8,7 +8,7 @@
 //!   quiesce every cross-shard consumer engages against a proven fork.
 //! - [`header`]: [`BlockHeader`] (shard-voted metadata).
 //! - [`limits`]: protocol-level caps on per-block payload sizes.
-//! - [`load`]: [`ShardLoad`](load::ShardLoad) — the consumed-gas and
+//! - [`load`]: [`ShardLoad`](load::ShardLoad) — the attested-work and
 //!   stored-byte totals a header attests, which the beacon reweights
 //!   emission by.
 //! - [`manifest`]: hash-level [`BlockManifest`] and denormalized [`BlockMetadata`].

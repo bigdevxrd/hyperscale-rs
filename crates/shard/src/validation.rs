@@ -437,14 +437,14 @@ pub fn validate_vm_engagement(
     Ok(())
 }
 
-/// The header's running gas total must be its parent's advanced by the gas
-/// the block's own certificates report.
+/// The header's running work total must be its parent's advanced by the
+/// work the block's own certificates report.
 ///
 /// Pure over the block plus one scalar off the parent header, which is what
 /// keeps a shard's attested work honest without any storage read: a
 /// proposer inflating its shard's emission weight has to inflate receipts
 /// its committee already checked under `local_receipt_root`.
-fn validate_block_gas(block: &Block, parent_load: Option<ShardLoad>) -> Result<(), String> {
+fn validate_block_work(block: &Block, parent_load: Option<ShardLoad>) -> Result<(), String> {
     // An unresolvable parent load is this node's own gap, not the block's,
     // so it abstains rather than rejecting: recovery reads the scalar off
     // the committed tip's stored header and a fresh start seeds `ZERO`, so
@@ -452,19 +452,19 @@ fn validate_block_gas(block: &Block, parent_load: Option<ShardLoad>) -> Result<(
     let Some(parent_load) = parent_load else {
         tracing::warn!(
             height = block.height().inner(),
-            "Skipping the gas-total check — parent load unresolvable"
+            "Skipping the work-total check — parent load unresolvable"
         );
         return Ok(());
     };
-    let claimed = block.header().load().cumulative_gas;
+    let claimed = block.header().load().cumulative_work;
     let expected = parent_load
         .advance(block.attested_work(), None)
-        .cumulative_gas;
+        .cumulative_work;
     if claimed != expected {
         return Err(format!(
-            "header claims cumulative gas {claimed} but the parent's {} \
+            "header claims cumulative work {claimed} but the parent's {} \
              plus this block's {} is {expected}",
-            parent_load.cumulative_gas,
+            parent_load.cumulative_work,
             block.attested_work(),
         ));
     }
@@ -490,7 +490,7 @@ pub fn validate_block_for_vote(
     if coasting {
         validate_coast_block_empty(block)?;
     }
-    validate_block_gas(block, parent_load)?;
+    validate_block_work(block, parent_load)?;
     validate_transactions_verified(block)?;
     validate_transaction_ordering(block)?;
     validate_waves(topology_snapshot, local_shard, block)?;
@@ -1153,30 +1153,30 @@ mod tests {
         }
     }
 
-    /// The running gas total is a validity condition, not a hint: a header
+    /// The running work total is a validity condition, not a hint: a header
     /// claiming more than its parent's total plus its own certificates'
-    /// gas is rejected, and the honest claim passes. A block with no
+    /// work is rejected, and the honest claim passes. A block with no
     /// certificates consumes nothing, so it must repeat its parent's total
     /// rather than reset.
     #[test]
-    fn a_header_cannot_overstate_its_shard_s_gas() {
+    fn a_header_cannot_overstate_its_shard_s_work() {
         let parent = ShardLoad::ZERO.advance(500, None);
         // The fixture carries no certificates, so the honest claim is the
         // parent's total unchanged.
         let honest = block_with_transactions(BlockHeight::new(1), Vec::new());
         assert_eq!(honest.attested_work(), 0);
-        assert_eq!(honest.header().load().cumulative_gas, 0);
+        assert_eq!(honest.header().load().cumulative_work, 0);
 
         // Claiming zero against a parent that has consumed 500 understates,
         // and is refused just as an overstatement is.
-        let err = validate_block_gas(&honest, Some(parent)).unwrap_err();
-        assert!(err.contains("cumulative gas"), "{err}");
+        let err = validate_block_work(&honest, Some(parent)).unwrap_err();
+        assert!(err.contains("cumulative work"), "{err}");
 
         // The matching claim passes.
-        assert!(validate_block_gas(&honest, Some(ShardLoad::ZERO)).is_ok());
+        assert!(validate_block_work(&honest, Some(ShardLoad::ZERO)).is_ok());
 
         // An unresolvable parent load abstains rather than rejecting.
-        assert!(validate_block_gas(&honest, None).is_ok());
+        assert!(validate_block_work(&honest, None).is_ok());
     }
 
     fn tx(seed: u8) -> Arc<Verifiable<RoutableTransaction>> {

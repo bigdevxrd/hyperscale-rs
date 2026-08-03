@@ -330,7 +330,7 @@ pub fn vm_attested_load_reaches_the_beacon(c: &mut impl Cluster) {
     };
     assert!(
         c.run_until(epochs(24), both_attested),
-        "attested gas never reached the beacon: left = {:?}, right = {:?}",
+        "attested work never reached the beacon: left = {:?}, right = {:?}",
         recorded_gas(c, left),
         recorded_gas(c, right),
     );
@@ -415,7 +415,7 @@ pub fn vm_a_failed_attempt_still_attests_work(c: &mut impl Cluster) {
 /// crossing for it.
 fn recorded_gas<C: Cluster>(c: &C, shard: ShardId) -> Option<u64> {
     c.beacon_state()
-        .and_then(|state| state.boundaries.get(&shard).map(|b| b.gas_used))
+        .and_then(|state| state.boundaries.get(&shard).map(|b| b.attested_work))
 }
 
 /// The stored-byte level on `shard`'s boundary record.

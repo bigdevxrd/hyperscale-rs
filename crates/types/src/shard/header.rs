@@ -78,7 +78,7 @@ pub struct BlockHeader {
     /// resolves split-straddling waves against the terminated shard's
     /// settled set without walking its chain.
     settled_waves_root: Option<SettledWavesRoot>,
-    /// The shard's attested load through this block — consumed gas as a
+    /// The shard's attested load through this block — attested work as a
     /// running total, and the byte total behind the parent state. The
     /// beacon reads it off the boundary header it already sources and
     /// reweights the per-epoch emission by it; verification recomputes
@@ -540,7 +540,7 @@ impl BlockHeader {
         self.settled_waves_root
     }
 
-    /// The shard's attested load through this block: consumed gas as a
+    /// The shard's attested load through this block: attested work as a
     /// running total over the chain's history, and the byte total behind
     /// the parent state. Both recomputed at verification.
     #[must_use]
