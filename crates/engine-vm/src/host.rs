@@ -70,6 +70,9 @@ macro_rules! delegate {
             fn hash(&self, data: &[u8]) -> [u8; 32] {
                 self.0.hash(data)
             }
+            fn emit(&mut self, event_type: u32, payload: Vec<u8>) -> Result<(), String> {
+                self.0.emit(event_type, payload).map_err(|t| t.to_string())
+            }
         }
     };
 }

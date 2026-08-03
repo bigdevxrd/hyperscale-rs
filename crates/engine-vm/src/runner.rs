@@ -69,9 +69,13 @@ impl ManifestRunner<'_> {
         entry: &PreparedVmTx,
         index: usize,
         outputs: &[Vec<Vec<u8>>],
-        session: KernelSession,
+        mut session: KernelSession,
     ) -> Result<NodeSuccess, NodeFailure> {
         let node = &entry.manifest.nodes[index];
+        // The node names its target, and an emission is attributed to it —
+        // the session holds one capability table for the whole transaction
+        // and cannot tell whose call is running.
+        session.enter_invocation(node.target);
         match node.method.as_str() {
             "withdraw" => {
                 let (
@@ -191,6 +195,7 @@ impl GuestRunner for ManifestRunner<'_> {
             match self.invoke_node(entry, index, &outputs, session) {
                 Ok((returned, node_outputs, consumed)) => {
                     session = returned;
+                    session.leave_invocation();
                     fuel += consumed;
                     outputs.push(node_outputs);
                 }
