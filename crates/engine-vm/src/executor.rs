@@ -34,7 +34,7 @@ use hyperscale_types::{
     install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, EffectSet, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
+    Address, Declaration, EffectSet, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
     PrefixShardResolver, RoleId, SubstateKey, admit_tree, route_tree,
 };
 use hyperscale_vm_kernel::{
@@ -664,9 +664,26 @@ impl VmExecutor {
                     .get(vm_tx)
                     .copied()
                     .expect("every prepared transaction has an environment");
+                // `ordered` is the kernel's capability-table order, and
+                // the true order is the signature's clause order — which
+                // is not available at this seam. `prepare` unions
+                // `routing.per_shard`, and `route` returns per-shard
+                // `EffectSet`s that discarded the clause order when they
+                // folded. Canonical order is what remains.
+                //
+                // Sound today because nothing reads the table
+                // positionally: `runner::rep_of` resolves every handle by
+                // searching for a `Capability` it reconstructs from the
+                // manifest node. It stops being sound the moment a guest
+                // takes handles as positional parameters — which is what a
+                // generated guest does — and the fix is upstream, in
+                // `route` carrying each node's clause order through
+                // `Routing` rather than only the folded sets.
+                let declaration = Declaration::from_set(entry.declared.clone());
                 BatchTx {
                     tx: *vm_tx,
-                    declared: entry.declared.clone(),
+                    declared: declaration.set,
+                    ordered: declaration.ordered,
                     nullifiers: entry.nullifiers.clone(),
                     clock_ms: env.clock_ms,
                     randomness: env.randomness,
