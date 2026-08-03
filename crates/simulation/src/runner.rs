@@ -139,6 +139,17 @@ pub struct SimConfig {
     /// process VM statics and the executor world, and seeds the funded
     /// vault cells at genesis. Empty runs no VM traffic.
     pub vm_accounts: Vec<([u8; 16], u128)>,
+    /// Addresses the process's VM statics must resolve, when that is wider
+    /// than what this cluster funds.
+    ///
+    /// The statics install once per process and the first installation
+    /// wins, so a test binary running several clusters has to register
+    /// every address any of them will transact with — otherwise the first
+    /// cluster fixes the instance registry and the rest fail admission.
+    /// Genesis still seeds only [`SimConfig::vm_accounts`], which is what
+    /// keeps per-cluster funding independent. Empty means "the same
+    /// accounts this cluster funds".
+    pub vm_world_accounts: Vec<([u8; 16], u128)>,
     /// The VM batch executor's group scheduling. Receipts are
     /// schedule-invariant, so this cannot change any outcome — the
     /// serial-vs-parallel A/B constructs one cluster per mode and
@@ -161,6 +172,7 @@ impl Default for SimConfig {
             crypto_scheme: CryptoScheme::default(),
             share_declared_reads: false,
             vm_accounts: Vec::new(),
+            vm_world_accounts: Vec::new(),
             vm_execution_mode: ExecutionMode::Serial,
         }
     }
@@ -367,8 +379,13 @@ impl SimulationRunner {
 
         // One VM engine per cluster: the genesis-static world is shared by
         // every host, and construction installs the process VM statics.
+        let world_accounts = if network_config.vm_world_accounts.is_empty() {
+            &network_config.vm_accounts
+        } else {
+            &network_config.vm_world_accounts
+        };
         let shared_vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::new(
-            &network_config.vm_accounts,
+            world_accounts,
             network_config.vm_execution_mode,
         ));
 

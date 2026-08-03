@@ -720,6 +720,28 @@ pub fn vm_snapshot_cast() -> (Ed25519PrivateKey, [u8; 16], [u8; 16], [u8; 16]) {
     (payer, from, to, guard)
 }
 
+/// Every VM account address any scenario in this crate transacts with.
+///
+/// The VM statics are process-global and first-installed-wins, so a test
+/// binary sharing one process must install a world covering every scenario
+/// it will run — otherwise the first cluster built fixes the instance
+/// registry and every later scenario's addresses fail admission with `no
+/// instance`, which reads as a defect in whatever that scenario was
+/// testing. Balances here are placeholders: `genesis_world` registers
+/// addresses and ignores amounts, and each cluster still seeds its own
+/// funding from its own fixture — which matters, because the insolvent
+/// scenario deliberately funds an address the cross-shard one funds richly.
+#[must_use]
+pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
+    let mut all = vm_genesis_accounts(24, 6);
+    all.extend(vm_cross_shard_genesis_accounts());
+    all.extend(vm_insolvent_genesis_accounts());
+    all.extend(vm_snapshot_genesis_accounts());
+    all.sort_unstable_by_key(|(address, _)| *address);
+    all.dedup_by_key(|(address, _)| *address);
+    all
+}
+
 /// Genesis funding for the snapshot cast: the payer funded, the local
 /// recipient registered with dust, and the guarded account holding
 /// [`VM_SNAPSHOT_GUARD_BALANCE`] on the other shard.

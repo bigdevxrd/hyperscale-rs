@@ -17,7 +17,7 @@ use hyperscale_network_memory::NodeIndex;
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::query::{chain_fate, status_rank};
 use hyperscale_scenarios::tx::{
-    merge_vote_payer, merge_vote_payer_account, straddler_genesis_balances,
+    merge_vote_payer, merge_vote_payer_account, straddler_genesis_balances, vm_world_accounts,
 };
 use hyperscale_scenarios::{
     Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
@@ -203,6 +203,13 @@ impl SimCluster {
             cross_shard_latency: config.latency,
             share_declared_reads: args.share_declared_reads,
             vm_accounts: args.vm_accounts.to_vec(),
+            // Unconditional, including for clusters that fund no VM
+            // accounts at all: the statics install once per process and the
+            // first cluster built wins, and a scenario that never touches
+            // the VM would otherwise install an empty registry that every
+            // VM scenario after it fails against. Registering an address
+            // nothing transacts with costs nothing.
+            vm_world_accounts: vm_world_accounts(),
             vm_execution_mode: args.vm_execution_mode,
             ..SimConfig::default()
         };
