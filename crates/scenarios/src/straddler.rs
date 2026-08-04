@@ -9,6 +9,8 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
+use hyperscale_engine_vm::VM_XRD;
+use hyperscale_engine_vm::genesis::vault_key;
 use hyperscale_types::{
     BlockHeight, Ed25519PrivateKey, Epoch, ShardId, TransactionDecision, TransactionStatus, TxHash,
 };
@@ -20,8 +22,9 @@ use crate::support::query::{
 };
 use crate::support::tx::{
     MERGE_STRADDLER_LEFT, MERGE_STRADDLER_RIGHT, MERGE_STRADDLER_SURVIVOR, STRADDLER_SPLITTER,
-    STRADDLER_SURVIVOR, build_reshape_threshold_vote_tx, build_vm_transfer_tx,
-    merge_straddler_setup, split_straddler_setup, validity_around,
+    STRADDLER_SUCCESSOR, STRADDLER_SURVIVOR, SplitStraddlerSetup, TERMINATING_PAYER_FUNDING,
+    build_reshape_threshold_vote_tx, build_vm_transfer_tx, merge_straddler_setup, merge_vote_payer,
+    split_straddler_setup, validity_around,
 };
 use crate::support::wait::{
     await_anchor_seeded, await_beacon_epoch, await_merge_keeper_count, await_root_matches_anchor,
@@ -129,6 +132,54 @@ pub fn split_straddler_ec_partition_atomic(c: &mut impl FaultableCluster) {
     );
 }
 
+/// Grow the root into the splitter/survivor pair and vote the reshape
+/// threshold down so only the heavier splitter crosses it and terminates.
+///
+/// The shared front half of every split-straddler choreography: on return the
+/// splitter has an admitted split, the survivor has none, and both committees
+/// are stable — the seam a fault probe keys a rule on.
+///
+/// # Panics
+///
+/// Panics if the grow misses its budget, the splitter fails to admit a split,
+/// or the survivor admits one.
+pub fn arm_splitter_termination<C: Cluster>(c: &mut C) {
+    let splitter = STRADDLER_SPLITTER;
+    let survivor = STRADDLER_SURVIVOR;
+
+    split_lifecycle(c);
+    assert!(
+        c.serves_shard(splitter) && c.serves_shard(survivor),
+        "the grow must seat both the splitter and the survivor",
+    );
+
+    let payer = merge_vote_payer();
+    let current = beacon_epoch(c).expect("post-grow beacon epoch");
+    let epoch_ms = c
+        .beacon_state()
+        .expect("post-grow beacon state")
+        .chain_config
+        .epoch_duration_ms;
+    let vote = build_reshape_threshold_vote_tx(
+        &payer,
+        STRADDLER_SPLIT_BYTES,
+        Epoch::new(current.inner() + vote_activate_lead(c.vote_fold_budget_ms(), epoch_ms)),
+        &NetworkDefinition::simulator(),
+        1,
+        validity_around(c.now()),
+    );
+    c.submit(Arc::new(vote));
+
+    assert!(
+        await_split_admitted(c, splitter, epochs(20)),
+        "only the over-threshold splitter must admit a split",
+    );
+    assert!(
+        !split_admitted(c, survivor),
+        "the under-threshold survivor must not split",
+    );
+}
+
 /// The split-straddler choreography, minus the terminal assertion.
 ///
 /// Grows, votes the threshold down, submits settling then straddling waves,
@@ -148,44 +199,10 @@ pub fn split_straddler_run<C: Cluster>(
     mut before_settling: impl FnMut(&mut C),
 ) -> (Vec<TxHash>, ShardId, BlockHeight) {
     let splitter = STRADDLER_SPLITTER;
-    let survivor = STRADDLER_SURVIVOR;
     let (child_left, child_right) = splitter.children();
     let setup = split_straddler_setup();
-    let network = NetworkDefinition::simulator();
 
-    // Grow the root into the splitter and survivor siblings.
-    split_lifecycle(c);
-    assert!(
-        c.serves_shard(splitter) && c.serves_shard(survivor),
-        "the grow must seat both the splitter and the survivor",
-    );
-
-    // Vote the reshape threshold down so only the heavier splitter crosses.
-    let payer = &setup.straddlers[0].0;
-    let current = beacon_epoch(c).expect("post-grow beacon epoch");
-    let epoch_ms = c
-        .beacon_state()
-        .expect("post-grow beacon state")
-        .chain_config
-        .epoch_duration_ms;
-    let vote = build_reshape_threshold_vote_tx(
-        payer,
-        STRADDLER_SPLIT_BYTES,
-        Epoch::new(current.inner() + vote_activate_lead(c.vote_fold_budget_ms(), epoch_ms)),
-        &network,
-        1,
-        validity_around(c.now()),
-    );
-    c.submit(Arc::new(vote));
-
-    assert!(
-        await_split_admitted(c, splitter, epochs(20)),
-        "only the over-threshold splitter must admit a split",
-    );
-    assert!(
-        !split_admitted(c, survivor),
-        "the under-threshold survivor must not split",
-    );
+    arm_splitter_termination(c);
 
     let mut probes: Vec<TxHash> = Vec::new();
 
@@ -243,6 +260,237 @@ pub fn split_straddler_run<C: Cluster>(
     }
 
     (probes, splitter, terminal_b)
+}
+
+/// Submit the encumbered payer's second transaction beside an unencumbered
+/// payer's, and assert the splitter takes one and refuses the other.
+///
+/// The control is what makes the refusal mean something: submitted into the
+/// same shard at the same instant, it separates "this shard is refusing
+/// everything" — which it does once its split gates and it coasts on empty
+/// blocks — from "this shard is refusing this payer".
+///
+/// # Panics
+///
+/// Panics if the control never commits or the encumbered probe does.
+fn assert_payer_is_blocked<C: FaultableCluster>(
+    c: &mut C,
+    splitter: ShardId,
+    setup: &SplitStraddlerSetup,
+) {
+    let (payer_key, payer, _) = &setup.terminating;
+    let blocked = build_vm_transfer_tx(
+        payer_key,
+        *payer,
+        setup.successor_recipient,
+        STRADDLER_PAYMENT,
+        validity_around(c.now()),
+    );
+    let blocked_hash = blocked.hash();
+    c.submit(Arc::new(blocked));
+
+    let (control_key, control_payer) = &setup.control;
+    let control = build_vm_transfer_tx(
+        control_key,
+        *control_payer,
+        setup.successor_recipient,
+        STRADDLER_PAYMENT,
+        validity_around(c.now()),
+    );
+    let control_hash = control.hash();
+    c.submit(Arc::new(control));
+
+    assert!(
+        c.run_until(epochs(6), |c| c
+            .chain_fate(splitter, control_hash)
+            .0
+            .is_some()),
+        "an unencumbered payer's transaction must still commit on the splitter, \
+         or the refusal below proves nothing about the payer",
+    );
+    assert!(
+        c.chain_fate(splitter, blocked_hash).0.is_none(),
+        "the splitter must refuse the payer while its first transaction still \
+         holds that payer's vault",
+    );
+}
+
+/// Verify a payer whose shard terminates mid-flight is not stranded by it.
+///
+/// The one straddler shape the other scenarios never reach: their payers all
+/// live on the survivor, so the shard that dies is never the one holding the
+/// in-flight state. Here the payer is ground into the splitter's left child,
+/// so the splitter commits its transaction, engages `max_fee` against the
+/// payer's vault and takes the conflict lock on it, and then terminates.
+///
+/// [`isolate_ec_intake`] cuts every path by which the splitter obtains the
+/// survivor's execution certificate, which is what keeps that state standing.
+/// The payer's deadline still arrives and it still speaks its abort, so the
+/// transaction goes terminal — but a wave with an engaged counterpart needs
+/// that counterpart's certificate to finalize, and both the reservation's
+/// release and the settlement that would clear the lock key on a *finalized
+/// wave*, not on a verdict.
+///
+/// What the middle of this scenario measures is that the payer really is
+/// blocked, and that being blocked is about the payer rather than about the
+/// moment: a second transaction from it is refused while an unencumbered
+/// payer's, submitted into the same shard at the same instant, commits. It
+/// does not separate the reservation from the conflict lock, and cannot — a
+/// call transaction's withdraw names the very vault its fee burns from, so one
+/// payer's two transactions contend on one cell either way. Both are per-shard
+/// state, and the claim here is about all of it at once.
+///
+/// Then the shard terminates and the same shape is admitted by the successor.
+/// Neither the ledger nor the lock set is carried across: both are projections
+/// of a shard's own committed chain, and the successor's chain begins at its
+/// seeded genesis. The release is by construction rather than by an explicit
+/// sweep, which is what this pins.
+///
+/// The payer is funded above one fee ceiling and below two, so an inherited
+/// reservation would refuse the successor's probe on its own.
+///
+/// Requires disjoint splitter/survivor committees (no shared host), as
+/// [`split_straddler_ec_partition_atomic`] does, and the
+/// [`split_straddler_setup`] genesis funding.
+///
+/// # Panics
+///
+/// Panics if the splitter never commits the transaction, the control is
+/// refused, the encumbered probe is admitted anyway, the transaction never goes
+/// terminal or finalizes despite the cut, the split misses its budget, the
+/// transaction applies on either chain, the payer's vault moves, or the
+/// successor refuses the payer's next transaction.
+pub fn split_terminating_payer_releases_its_reservation(c: &mut impl FaultableCluster) {
+    let splitter = STRADDLER_SPLITTER;
+    let survivor = STRADDLER_SURVIVOR;
+    let successor = STRADDLER_SUCCESSOR;
+    let setup = split_straddler_setup();
+    let (payer_key, payer, recipient) = &setup.terminating;
+
+    arm_splitter_termination(c);
+
+    // Cut the splitter's execution-certificate intake before anything crosses:
+    // it will execute its own leg and speak its own verdict, and never hold the
+    // survivor's half, so no wave of its can finalize.
+    let _ = isolate_ec_intake(c, splitter, survivor);
+
+    let held = build_vm_transfer_tx(
+        payer_key,
+        *payer,
+        *recipient,
+        STRADDLER_PAYMENT,
+        validity_around(c.now()),
+    );
+    let held_hash = held.hash();
+    c.submit(Arc::new(held));
+
+    // The reservation engages when the splitter commits the transaction —
+    // before the split executes, so the shard that dies is the one holding it.
+    assert!(
+        c.run_until(epochs(10), |c| c
+            .chain_fate(splitter, held_hash)
+            .0
+            .is_some()),
+        "the splitter must commit the transaction and engage its reservation \
+         before it terminates",
+    );
+    assert_eq!(
+        vm_vault_balance(c, splitter, *payer),
+        TERMINATING_PAYER_FUNDING,
+        "the reservation must not move the payer's vault: it is an engagement, \
+         not an on-chain hold",
+    );
+
+    assert_payer_is_blocked(c, splitter, &setup);
+
+    // The payer's deadline arrives and it speaks its abort. No certificate
+    // follows it: the counterpart engaged, so finalization needs a certificate
+    // the cut will never deliver — and release keys on a finalized wave, not on
+    // a verdict, so the hold the probes just measured stands through the
+    // transaction's own resolution and on to the terminal.
+    let verdict = await_tx_terminal(c, held_hash, epochs(12));
+    assert!(
+        matches!(
+            verdict,
+            Some(TransactionStatus::Completed(TransactionDecision::Aborted))
+        ),
+        "the payer must abort at its deadline once no engagement can settle; \
+         status = {verdict:?}",
+    );
+    assert!(
+        c.chain_fate(splitter, held_hash).1.is_none(),
+        "no wave certificate may finalize while the counterpart's is cut off — \
+         without that, the reservation would release and the probe below would \
+         prove nothing",
+    );
+
+    // The split executes and the successor seats with the payer's cells.
+    let (child_left, child_right) = splitter.children();
+    assert!(
+        await_serves(c, child_left, epochs(28)) && await_serves(c, child_right, epochs(28)),
+        "both splitter children must be served within budget",
+    );
+    assert!(
+        await_anchor_seeded(c, successor, epochs(6)),
+        "the beacon must compose the successor's anchor",
+    );
+
+    // Nothing applied on either side, and nothing was charged: an abort with no
+    // certificate commits no fee receipt, and a receipt is the only thing that
+    // moves state.
+    for (shard, label) in [(splitter, "splitter"), (survivor, "survivor")] {
+        let fate = c.chain_fate(shard, held_hash).1.map(|(_, d)| d);
+        assert!(
+            fate != Some(TransactionDecision::Accept),
+            "the {label} applied a transaction its counterpart never settled; fate = {fate:?}",
+        );
+    }
+    // Nothing moved. The transfer aborted with no certificate behind it, so it
+    // settled no fee receipt, and a receipt is the only thing that moves state;
+    // the refused probe was never included anywhere at all.
+    assert_eq!(
+        vm_vault_balance(c, successor, *payer),
+        TERMINATING_PAYER_FUNDING,
+        "the payer's vault must carry across the split untouched",
+    );
+
+    // The release: the same shape the predecessor refused is admitted by the
+    // successor. Its ledger is a projection of its own committed chain, which
+    // begins at the seeded genesis, so there is no hold left to count against
+    // the payer — the reservation died with the shard that held it, without
+    // anything having to sweep it.
+    let released = build_vm_transfer_tx(
+        payer_key,
+        *payer,
+        setup.successor_recipient,
+        STRADDLER_PAYMENT,
+        validity_around(c.now()),
+    );
+    let released_hash = released.hash();
+    c.submit(Arc::new(released));
+    let status = await_tx_terminal(c, released_hash, epochs(10));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "the successor must admit what its predecessor refused — no shard's \
+         in-flight state outlives the shard; status = {status:?}",
+    );
+    assert!(
+        vm_vault_balance(c, successor, *payer) < TERMINATING_PAYER_FUNDING,
+        "the released transaction must actually have spent from the payer's vault",
+    );
+}
+
+/// The committed native-vault balance `owner` holds on `shard`.
+fn vm_vault_balance<C: Cluster>(c: &C, shard: ShardId, owner: [u8; 16]) -> u128 {
+    let vault = vault_key(owner, VM_XRD);
+    c.vm_substate(shard, vault.owner.0, vault.local.0)
+        .map_or(0, |bytes| {
+            let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
+            u128::from_le_bytes(cell)
+        })
 }
 
 /// Verify a surviving sibling's second-generation split seats correctly.

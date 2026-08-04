@@ -279,7 +279,36 @@ pub struct SplitStraddlerSetup {
     /// Straddler transfers: `(payer key, payer account in survivor, recipient in
     /// splitter)`.
     pub straddlers: Vec<(Ed25519PrivateKey, [u8; 16], [u8; 16])>,
+    /// The leg whose payer sits in the *terminating* splitter, so the
+    /// reservation it engages is held by a shard that dies before the wave
+    /// can resolve: `(payer key, payer in the splitter's left child,
+    /// recipient in the survivor)`.
+    pub terminating: (Ed25519PrivateKey, [u8; 16], [u8; 16]),
+    /// A recipient in the terminating payer's successor child, so the
+    /// post-terminal probe stays intra-shard.
+    pub successor_recipient: [u8; 16],
+    /// An unencumbered payer in the same shard as [`Self::terminating`]'s,
+    /// funded normally. Submitted beside the encumbered probe at the same
+    /// instant, it separates "this shard is refusing everything" from "this
+    /// shard is refusing this payer".
+    pub control: (Ed25519PrivateKey, [u8; 16]),
 }
+
+/// The successor child the terminating payer's cells land in when the
+/// splitter splits.
+pub const STRADDLER_SUCCESSOR: ShardId = ShardId::leaf(2, 0);
+
+/// What the terminating payer holds at genesis.
+///
+/// Above one signed fee ceiling and below two, so a reservation surviving
+/// its shard's terminal would leave the payer unable to cover a second
+/// transaction — which is exactly the encumbrance the probe looks for.
+pub const TERMINATING_PAYER_FUNDING: u128 = VM_MAX_FEE + VM_MAX_FEE / 2;
+
+const _: () = assert!(
+    TERMINATING_PAYER_FUNDING > VM_MAX_FEE && TERMINATING_PAYER_FUNDING < 2 * VM_MAX_FEE,
+    "the terminating payer must cover exactly one fee ceiling: one transaction      admits, a second while the first is in flight cannot",
+);
 
 /// A deterministic seeded account routing to `shard` under the `num_shards`-wide
 /// uniform trie, skipping seeds already `taken`.
@@ -437,8 +466,11 @@ fn bulk_fund_into(
 /// transfers from a survivor payer into a splitter recipient.
 #[must_use]
 pub fn split_straddler_setup() -> SplitStraddlerSetup {
-    let mut taken = Vec::new();
-    let mut balances = Vec::new();
+    let mut taken = vec![MERGE_VOTE_PAYER_SEED];
+    // The threshold vote is a fee-paying system action, so its payer's Radix
+    // account is funded here rather than left to whichever seed the ballast
+    // draw happened to reach.
+    let mut balances = vec![(merge_vote_payer_account(), Decimal::from(100_000))];
     ballast(
         STRADDLER_SPLITTER,
         2,
@@ -476,10 +508,28 @@ pub fn split_straddler_setup() -> SplitStraddlerSetup {
             )
         })
         .collect();
+
+    // The terminating payer is ground into the splitter's *left child*, so
+    // the successor holding its cells after the split is known up front
+    // rather than derived from a trie the scenario would have to rebuild.
+    let (terminating_key, terminating_payer) =
+        vm_account_routing_to_n(STRADDLER_SUCCESSOR, 4, &mut vm_taken);
+    let (_, terminating_recipient) = vm_account_routing_to(STRADDLER_SURVIVOR, &mut vm_taken);
+    let (_, successor_recipient) = vm_account_routing_to_n(STRADDLER_SUCCESSOR, 4, &mut vm_taken);
+    let (control_key, control_payer) =
+        vm_account_routing_to_n(STRADDLER_SUCCESSOR, 4, &mut vm_taken);
+    vm_accounts.push((terminating_payer, TERMINATING_PAYER_FUNDING));
+    vm_accounts.push((terminating_recipient, 10));
+    vm_accounts.push((successor_recipient, 10));
+    vm_accounts.push((control_payer, 10_000));
+
     SplitStraddlerSetup {
         balances,
         vm_accounts,
         straddlers,
+        terminating: (terminating_key, terminating_payer, terminating_recipient),
+        successor_recipient,
+        control: (control_key, control_payer),
     }
 }
 
@@ -614,9 +664,16 @@ pub fn build_faucet_tx(
 pub fn validity_around(now: Duration) -> TimestampRange {
     TimestampRange::new(
         WeightedTimestamp::ZERO.plus(now.saturating_sub(Duration::from_secs(5))),
-        WeightedTimestamp::ZERO.plus(now + Duration::from_secs(150)),
+        WeightedTimestamp::ZERO.plus(now + VALIDITY_FORWARD),
     )
 }
+
+/// How far forward [`validity_around`] opens a window.
+///
+/// Wall-clock rather than epoch-shaped, and both a transaction's
+/// inclusion deadline and — for a cross-shard VM payer — the point past
+/// which it gives up waiting for engagement echoes.
+const VALIDITY_FORWARD: Duration = Duration::from_secs(150);
 
 /// The VM account owned by [`signer_from_seed`]'s key for `seed`.
 #[must_use]
@@ -1106,8 +1163,16 @@ pub fn build_vm_composed_tx(
     RoutableTransaction::new_vm(vm)
 }
 
+/// The fee ceiling every built call envelope signs.
+///
+/// A placeholder — the constants are phase 6 scope, the structure is signed
+/// now — but a load-bearing one: the payer shard's reservation check demands
+/// the ceiling be coverable, so it must sit below the funded balances, and a
+/// scenario probing for a stale reservation sizes its funding against it.
+pub const VM_MAX_FEE: u128 = 1_000;
+
 /// Wrap a single-intent graph in a signed envelope with placeholder fee
-/// terms (the constants are phase 6 scope; the structure is signed now).
+/// terms.
 fn vm_envelope(
     graph: ManifestGraph,
     payer: &Ed25519PrivateKey,
@@ -1125,10 +1190,7 @@ fn vm_envelope(
         body: VmBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&payer.public_key().0),
-        // Placeholder fee terms under the genesis funding: the payer
-        // shard's reservation check demands the ceiling be coverable,
-        // so it must sit below the funded balances.
-        max_fee: 1_000,
+        max_fee: VM_MAX_FEE,
         gas_limit: 1_000_000,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),

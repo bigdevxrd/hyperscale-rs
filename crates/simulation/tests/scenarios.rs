@@ -38,10 +38,10 @@ use hyperscale_scenarios::{
     register_validator_pools_a_node, register_without_capacity_is_rejected,
     registered_validator_activates_onto_a_shard, shared_read_payments, single_shard_tx,
     split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
-    stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees, vm_a_failed_attempt_still_attests_work,
-    vm_abort_converges, vm_abort_floor_settles_on_deadline, vm_attested_load_reaches_the_beacon,
-    vm_cross_shard_transfer, vm_deploy_storm_rides_out,
+    split_terminating_payer_releases_its_reservation, stake_deposit_folds_into_beacon_state,
+    stake_withdraw_drops_effective_stake, surviving_sibling_split_seats_full_committees,
+    vm_a_failed_attempt_still_attests_work, vm_abort_converges, vm_abort_floor_settles_on_deadline,
+    vm_attested_load_reaches_the_beacon, vm_cross_shard_transfer, vm_deploy_storm_rides_out,
     vm_events_land_on_their_emitters_home_shard, vm_failure_charges_its_payer, vm_hot_recipient,
     vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
     vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,
@@ -1014,6 +1014,18 @@ fn split_straddler_ec_partition_atomic_at_seed(seed: u64) {
         &setup.vm_accounts,
     );
     split_straddler_ec_partition_atomic(&mut cluster);
+}
+
+#[test]
+fn split_terminating_payer_releases_its_reservation_sim() {
+    let setup = split_straddler_setup();
+    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
+        &straddler_config(),
+        11,
+        &setup.balances,
+        &setup.vm_accounts,
+    );
+    cluster.run_faultable(split_terminating_payer_releases_its_reservation);
 }
 
 #[test]

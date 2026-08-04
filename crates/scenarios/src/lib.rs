@@ -52,7 +52,8 @@ pub use reshape::{
 };
 pub use straddler::{
     isolate_ec_intake, merge_straddler_atomic, split_straddler_atomic,
-    split_straddler_ec_partition_atomic, split_straddler_run, straddler_one_sided_count,
+    split_straddler_ec_partition_atomic, split_straddler_run,
+    split_terminating_payer_releases_its_reservation, straddler_one_sided_count,
     surviving_sibling_split_seats_full_committees,
 };
 pub use support::{

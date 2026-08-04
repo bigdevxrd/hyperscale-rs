@@ -34,10 +34,10 @@ use hyperscale_scenarios::{
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
     single_shard_tx, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
-    stake_deposit_folds_into_beacon_state, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees, vm_abort_converges, vm_hot_recipient,
-    vm_single_transfer, vm_zipf_payments, withdrawal_ejects_a_validator_that_a_deposit_reactivates,
-    zipf_payments,
+    split_terminating_payer_releases_its_reservation, stake_deposit_folds_into_beacon_state,
+    stake_withdraw_drops_effective_stake, surviving_sibling_split_seats_full_committees,
+    vm_abort_converges, vm_hot_recipient, vm_single_transfer, vm_zipf_payments,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use serial_test::serial;
 use support::ProdCluster;
@@ -548,6 +548,24 @@ fn split_straddler_atomic_prod() {
         setup.vm_accounts,
     );
     split_straddler_atomic(&mut cluster);
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn split_terminating_payer_releases_its_reservation_prod() {
+    let setup = split_straddler_setup();
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &straddler_config(),
+        11,
+        EPOCH_MS,
+        setup.balances,
+        setup.vm_accounts,
+    );
+    cluster.run_faultable(split_terminating_payer_releases_its_reservation);
 }
 
 #[test]
