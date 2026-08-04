@@ -207,6 +207,9 @@ pub struct ProductionRunnerBuilder {
     publishers: RpcPublishers,
     /// Optional genesis configuration for initial state.
     genesis_config: Option<GenesisConfig>,
+    /// VM addresses the process-wide statics register, when that set must
+    /// be wider than this cluster's own genesis funding.
+    vm_world_accounts: Vec<([u8; 16], u128)>,
     /// Radix network definition for transaction validation.
     /// Defaults to simulator network if not set.
     network_definition: Option<NetworkDefinition>,
@@ -252,6 +255,7 @@ impl ProductionRunnerBuilder {
             channel_capacity: 10_000,
             publishers: RpcPublishers::default(),
             genesis_config: None,
+            vm_world_accounts: Vec::new(),
             network_definition: None,
             // Harness default: the routing overlay runs in production
             // tests; the validator binary always overrides this from its
@@ -337,6 +341,21 @@ impl ProductionRunnerBuilder {
     #[must_use]
     pub fn genesis_config(mut self, config: GenesisConfig) -> Self {
         self.genesis_config = Some(config);
+        self
+    }
+
+    /// Register `accounts` in the process VM statics instead of this
+    /// cluster's own genesis funding.
+    ///
+    /// The statics install once per process and the first installer wins, so
+    /// several clusters in one process must agree on one world or the later
+    /// ones fail admission against a registry that never heard of their
+    /// addresses. Registering an address nothing transacts with costs
+    /// nothing: the world carries identities, and each cluster still funds
+    /// its own balances from its own genesis.
+    #[must_use]
+    pub fn vm_world_accounts(mut self, accounts: Vec<([u8; 16], u128)>) -> Self {
+        self.vm_world_accounts = accounts;
         self
     }
 
@@ -535,12 +554,16 @@ impl ProductionRunnerBuilder {
         };
         let executor = RadixExecutor::new(network_definition);
         // The VM engine's world derives from the same genesis config the
-        // startup genesis path installs; construction installs the
-        // process VM statics.
-        let vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::new(
-            &engine_bootstrap.config.vm_accounts,
-            ExecutionMode::Serial,
-        ));
+        // startup genesis path installs, unless a wider one was set:
+        // construction installs the process VM statics, which are
+        // first-writer-wins, so several clusters in one process must agree.
+        let world_accounts = if self.vm_world_accounts.is_empty() {
+            &engine_bootstrap.config.vm_accounts
+        } else {
+            &self.vm_world_accounts
+        };
+        let vm_executor: Arc<dyn Executor> =
+            Arc::new(VmExecutor::new(world_accounts, ExecutionMode::Serial));
 
         // Each shard's `shard_event_senders` entry points at that
         // shard's own pinned-thread callback channel — callbacks,

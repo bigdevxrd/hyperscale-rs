@@ -497,8 +497,13 @@ const fn straddler_config() -> ScenarioConfig {
 )]
 fn split_straddler_atomic_prod() {
     let setup = split_straddler_setup();
-    let mut cluster =
-        ProdCluster::start_with_balances(&straddler_config(), 11, EPOCH_MS, setup.balances);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &straddler_config(),
+        11,
+        EPOCH_MS,
+        setup.balances,
+        setup.vm_accounts,
+    );
     split_straddler_atomic(&mut cluster);
 }
 
@@ -510,8 +515,13 @@ fn split_straddler_atomic_prod() {
 )]
 fn split_straddler_ec_partition_atomic_prod() {
     let setup = split_straddler_setup();
-    let mut cluster =
-        ProdCluster::start_with_balances(&straddler_config(), 11, EPOCH_MS, setup.balances);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &straddler_config(),
+        11,
+        EPOCH_MS,
+        setup.balances,
+        setup.vm_accounts,
+    );
     split_straddler_ec_partition_atomic(&mut cluster);
 }
 
@@ -541,11 +551,12 @@ const fn merge_straddler_config() -> ScenarioConfig {
 )]
 fn merge_straddler_atomic_prod() {
     let setup = merge_straddler_setup();
-    let mut cluster = ProdCluster::start_with_grown_balances(
+    let mut cluster = ProdCluster::start_with_grown_vm_accounts(
         &merge_straddler_config(),
         11,
         EPOCH_MS,
         setup.balances,
+        setup.vm_accounts,
     );
     merge_straddler_atomic(&mut cluster);
 }
@@ -591,11 +602,13 @@ fn halted_shard_recovers_by_committee_redraw_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn halted_shard_straddler_atomic_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let setup = halt_straddler_setup();
+    let mut cluster = ProdCluster::start_with_vm_accounts(
         &halt_recovery_config(),
         11,
         EPOCH_MS,
-        halt_straddler_setup().balances,
+        setup.balances,
+        setup.vm_accounts,
     );
     cluster.run_faultable(halted_shard_straddler_atomic);
 }
@@ -820,7 +833,12 @@ fn merge_seats_full_keeper_committee_prod() {
 )]
 fn surviving_sibling_split_seats_full_committees_prod() {
     let setup = split_straddler_setup();
-    let mut cluster =
-        ProdCluster::start_with_balances(&straddler_config(), 11, EPOCH_MS, setup.balances);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &straddler_config(),
+        11,
+        EPOCH_MS,
+        setup.balances,
+        setup.vm_accounts,
+    );
     surviving_sibling_split_seats_full_committees(&mut cluster);
 }

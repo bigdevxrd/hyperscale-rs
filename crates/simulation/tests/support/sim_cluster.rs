@@ -151,6 +151,28 @@ impl SimCluster {
         })
     }
 
+    /// [`Self::with_dedicated_pool_hosts`] with funded VM accounts beside
+    /// the Radix `balances` — the straddler and halt-recovery scenarios,
+    /// whose legs are VM transfers over a byte skew the Radix ballast
+    /// shapes.
+    #[must_use]
+    pub fn with_vm_and_dedicated_pool_hosts(
+        config: &ScenarioConfig,
+        seed: u64,
+        balances: &[(ComponentAddress, Decimal)],
+        vm_accounts: &[([u8; 16], u128)],
+    ) -> Self {
+        Self::build_full(&BuildArgs {
+            config,
+            seed,
+            balances,
+            dedicated_pool_hosts: true,
+            share_declared_reads: false,
+            vm_accounts,
+            vm_execution_mode: ExecutionMode::Serial,
+        })
+    }
+
     /// Build a genesis cluster giving each pool extra its own shard-less
     /// follower host rather than riding a committee host. This is a sim-only
     /// layout the shuffle-relocation tests (`vnode_relocation`, `pool_reseat`)
@@ -275,11 +297,34 @@ impl SimCluster {
         seed: u64,
         balances: &[(ComponentAddress, Decimal)],
     ) -> Self {
+        Self::with_grown_vm_and_balances(config, seed, balances, &[])
+    }
+
+    /// [`Self::with_grown_balances`] with funded VM accounts: genesis seats
+    /// them on the single ROOT shard and the grow moves their cells to
+    /// their prefix shards.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the grow or the threshold activation misses its budget.
+    #[must_use]
+    pub fn with_grown_vm_and_balances(
+        config: &ScenarioConfig,
+        seed: u64,
+        balances: &[(ComponentAddress, Decimal)],
+        vm_accounts: &[([u8; 16], u128)],
+    ) -> Self {
         let grow_config = ScenarioConfig {
             split_bytes: 0,
             ..*config
         };
-        let mut cluster = Self::with_balances(&grow_config, seed, balances);
+        let mut cluster = Self::with_vm_mode_and_balances(
+            &grow_config,
+            seed,
+            balances,
+            vm_accounts,
+            ExecutionMode::Serial,
+        );
         grow_to(&mut cluster, config.num_shards);
         vote_reshape_threshold(&mut cluster, &merge_vote_payer(), config.split_bytes);
         cluster

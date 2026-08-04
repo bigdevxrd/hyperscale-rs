@@ -16,7 +16,7 @@ use crate::support::faultable::FaultableCluster;
 use crate::support::query::beacon_epoch;
 use crate::support::tx::{
     HALT_STRADDLER_BATCH, account_from_seed, build_faucet_tx, build_transfer_tx,
-    halt_straddler_setup, signer_from_seed, validity_around,
+    halt_straddler_setup, signer_from_seed, validity_around, vm_account_shard,
 };
 use crate::support::wait::{await_beacon_epoch, await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -205,9 +205,12 @@ pub fn halted_shard_recovers_by_committee_redraw(c: &mut impl FaultableCluster) 
 /// finalized on both children before any fault installs, a racing batch
 /// submitted at the freeze edge — the last instant with any chance to
 /// commit on the halting shard — and a doomed batch submitted against the
-/// frozen shard. The surviving sibling must drive every in-flight wave to
+/// frozen shard. The surviving sibling must drive every wave it engaged to
 /// a terminal verdict on its own deadline clock during the halt, never
-/// hanging on the dead counterparty. After the recovery the two chains
+/// hanging on the dead counterparty; a probe whose payer is the dead shard
+/// engages nowhere, because no counterpart can hold evidence of a commit
+/// that never happened, and so has no lock or reservation to resolve.
+/// After the recovery the two chains
 /// must agree probe by probe: no wave applied on one side that the other
 /// refused, with absence on the recovered chain counting as an abort (the
 /// fresh committee resolves pre-halt waves from certificates alone and
@@ -228,15 +231,17 @@ pub fn halted_shard_recovers_by_committee_redraw(c: &mut impl FaultableCluster) 
 pub fn halted_shard_straddler_atomic(c: &mut impl FaultableCluster) {
     let (halted, survivor) = ShardId::ROOT.children();
     let setup = halt_straddler_setup();
-    let network = NetworkDefinition::simulator();
     split_lifecycle(c);
 
     // Settling batch: finalized on both children before any fault
     // installs, so each chain records the accept.
     let mut probes: Vec<TxHash> = Vec::new();
-    for (i, (key, from, to)) in setup.straddlers[..HALT_STRADDLER_BATCH].iter().enumerate() {
-        let nonce = 100 + u32::try_from(i).unwrap_or(0);
-        probes.push(submit_straddler(c, &network, key, *from, *to, nonce));
+    // Each probe's payer account beside its hash: which shard pays decides
+    // what the survivor owes once the counterpart freezes.
+    let mut payers: Vec<[u8; 16]> = Vec::new();
+    for (key, from, to) in &setup.straddlers[..HALT_STRADDLER_BATCH] {
+        probes.push(submit_straddler(c, key, *from, *to));
+        payers.push(*from);
     }
     assert!(
         c.run_until(epochs(12), |c| {
@@ -252,34 +257,57 @@ pub fn halted_shard_straddler_atomic(c: &mut impl FaultableCluster) {
     // squeezes through or is left in flight when it freezes. No per-batch
     // assertion; each probe lands in whichever tally bucket it raced into.
     let halt = freeze_shard(c, halted, survivor, |c| {
-        let racing = &setup.straddlers[HALT_STRADDLER_BATCH..2 * HALT_STRADDLER_BATCH];
-        for (i, (key, from, to)) in racing.iter().enumerate() {
-            let nonce = 200 + u32::try_from(i).unwrap_or(0);
-            probes.push(submit_straddler(c, &network, key, *from, *to, nonce));
+        for (key, from, to) in &setup.straddlers[HALT_STRADDLER_BATCH..2 * HALT_STRADDLER_BATCH] {
+            probes.push(submit_straddler(c, key, *from, *to));
+            payers.push(*from);
         }
     });
 
     // Doomed batch: submitted against the frozen shard. The survivor still
     // provisions to it — the topology seats the frozen committee until the
     // redraw — but nothing can commit there, so every wave is unsettleable.
-    for (i, (key, from, to)) in setup.straddlers[2 * HALT_STRADDLER_BATCH..]
-        .iter()
-        .enumerate()
-    {
-        let nonce = 300 + u32::try_from(i).unwrap_or(0);
-        probes.push(submit_straddler(c, &network, key, *from, *to, nonce));
+    for (key, from, to) in &setup.straddlers[2 * HALT_STRADDLER_BATCH..] {
+        probes.push(submit_straddler(c, key, *from, *to));
+        payers.push(*from);
     }
 
-    // The survivor's deadline clock keeps running through the halt: every
-    // in-flight wave must reach a terminal verdict well inside the
-    // detection window, not hang on the dead counterparty.
-    for hash in &probes[HALT_STRADDLER_BATCH..] {
-        let status = await_tx_terminal(c, *hash, epochs(4));
+    // The survivor's deadline clock keeps running through the halt: a wave
+    // it pays for reaches a terminal verdict well inside the detection
+    // window, not hanging on the dead counterparty. The verdict is the
+    // survivor's alone — no engagement echo can ever arrive from a frozen
+    // committee, so the payer speaks once, at its signed window's end.
+    //
+    // A wave the *halted* shard pays for is the opposite case and costs the
+    // survivor nothing: a counterpart engages only against evidence the
+    // payer shard committed, and a frozen shard commits nothing, so the
+    // survivor takes no lock, opens no wave and holds no reservation. There
+    // is nothing to terminate, which is why these are not waited on — doing
+    // so would spend the halt's own detection window on probes that were
+    // never going to answer.
+    let mut engaged = 0u32;
+    for (hash, from) in probes[HALT_STRADDLER_BATCH..]
+        .iter()
+        .zip(&payers[HALT_STRADDLER_BATCH..])
+    {
+        if vm_account_shard(*from, 2) != survivor {
+            assert!(
+                c.chain_fate(survivor, *hash).0.is_none(),
+                "the survivor engaged a wave whose payer shard is frozen",
+            );
+            continue;
+        }
+        engaged += 1;
+        let status = await_tx_terminal(c, *hash, epochs(6));
         assert!(
             matches!(status, Some(TransactionStatus::Completed(_))),
             "an in-flight wave must reach a terminal verdict during the halt; status = {status:?}",
         );
     }
+    assert!(
+        engaged > 0,
+        "no in-flight wave was paid for by the survivor — the probe batches \
+         no longer exercise its deadline clock",
+    );
 
     // The frozen chain's fates are canonical for pre-halt heights: the
     // recovery bridges over the QC-attested tip, so nothing recorded here
@@ -289,6 +317,44 @@ pub fn halted_shard_straddler_atomic(c: &mut impl FaultableCluster) {
 
     await_halt_recovery(c, &halt);
 
+    assert_chains_agree(c, halted, survivor, &probes, &fates_at_freeze);
+
+    // The recovered shard's cross-shard rail serves again: a fresh
+    // transfer per direction settles on both chains. The budget is generous
+    // — a ceiling, not the expected latency: the fresh committee is
+    // establishing cross-shard connectivity from a cold start (routing to
+    // the sibling, provision serving) right after the recovery record
+    // cleared, which on a real-network harness takes longer than a
+    // steady-state cross-shard settlement round.
+    let mut revived: Vec<TxHash> = Vec::new();
+    for (key, from, to) in &setup.post_recovery {
+        revived.push(submit_straddler(c, key, *from, *to));
+    }
+    assert!(
+        c.run_until(epochs(40), |c| {
+            revived
+                .iter()
+                .all(|h| chain_settled(c, halted, *h) && chain_settled(c, survivor, *h))
+        }),
+        "a post-recovery transfer per direction must settle on both chains",
+    );
+}
+
+/// Assert the two chains agree probe by probe once the halted shard has
+/// recovered: nothing applied on one side that the other refused, every
+/// settling probe accepted on both, every doomed probe applied on neither.
+///
+/// `fates_at_freeze` is the halted chain's own view taken before the
+/// recovery: an accept in either that snapshot or the post-recovery walk is
+/// an apply, since the snapshot covers heights a fresh member never synced
+/// and the walk covers anything finalized after resume.
+fn assert_chains_agree<C: Cluster>(
+    c: &C,
+    halted: ShardId,
+    survivor: ShardId,
+    probes: &[TxHash],
+    fates_at_freeze: &[Option<(BlockHeight, TransactionDecision)>],
+) {
     let mut consistent = 0u32;
     let mut aborted = 0u32;
     let mut halted_only = 0u32;
@@ -298,9 +364,6 @@ pub fn halted_shard_straddler_atomic(c: &mut impl FaultableCluster) {
         let frozen_fate = fates_at_freeze[idx];
         let halted_now = c.chain_fate(halted, *hash).1;
         let survivor_fate = c.chain_fate(survivor, *hash).1;
-        // An accept in either view of the halted chain is an apply: the
-        // at-freeze snapshot covers heights a fresh member never synced,
-        // the post-recovery walk covers anything finalized after resume.
         let halted_accept = [frozen_fate, halted_now]
             .iter()
             .any(|f| matches!(f, Some((_, TransactionDecision::Accept))));
@@ -332,27 +395,6 @@ pub fn halted_shard_straddler_atomic(c: &mut impl FaultableCluster) {
     assert!(
         aborted >= batch,
         "every doomed probe must resolve without an apply on either chain:{report}",
-    );
-
-    // The recovered shard's cross-shard rail serves again: a fresh
-    // transfer per direction settles on both chains. The budget is generous
-    // — a ceiling, not the expected latency: the fresh committee is
-    // establishing cross-shard connectivity from a cold start (routing to
-    // the sibling, provision serving) right after the recovery record
-    // cleared, which on a real-network harness takes longer than a
-    // steady-state cross-shard settlement round.
-    let mut revived: Vec<TxHash> = Vec::new();
-    for (i, (key, from, to)) in setup.post_recovery.iter().enumerate() {
-        let nonce = 400 + u32::try_from(i).unwrap_or(0);
-        revived.push(submit_straddler(c, &network, key, *from, *to, nonce));
-    }
-    assert!(
-        c.run_until(epochs(40), |c| {
-            revived
-                .iter()
-                .all(|h| chain_settled(c, halted, *h) && chain_settled(c, survivor, *h))
-        }),
-        "a post-recovery transfer per direction must settle on both chains",
     );
 }
 

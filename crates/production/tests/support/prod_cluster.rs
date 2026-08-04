@@ -122,11 +122,26 @@ impl ProdCluster {
         epoch_ms: u64,
         balances: Vec<(ComponentAddress, Decimal)>,
     ) -> Self {
+        Self::start_with_grown_vm_accounts(config, seed, epoch_ms, balances, Vec::new())
+    }
+
+    /// [`Self::start_with_grown_balances`] with funded VM accounts: genesis
+    /// seats them on the single ROOT shard and the grow moves their cells
+    /// to their prefix shards.
+    #[must_use]
+    pub fn start_with_grown_vm_accounts(
+        config: &ScenarioConfig,
+        seed: u64,
+        epoch_ms: u64,
+        balances: Vec<(ComponentAddress, Decimal)>,
+        vm_accounts: Vec<([u8; 16], u128)>,
+    ) -> Self {
         let grow_config = ScenarioConfig {
             split_bytes: 0,
             ..*config
         };
-        let mut cluster = Self::start_with_balances(&grow_config, seed, epoch_ms, balances);
+        let mut cluster =
+            Self::start_with_vm_accounts(&grow_config, seed, epoch_ms, balances, vm_accounts);
         grow_to(&mut cluster, config.num_shards);
         vote_reshape_threshold(&mut cluster, &merge_vote_payer(), config.split_bytes);
         cluster

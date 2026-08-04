@@ -576,10 +576,12 @@ fn halted_shard_recovers_by_committee_redraw_sim() {
 /// seed draws both the committees and the network ordering, so each one races
 /// the straddler's settlement against the re-draw differently.
 fn halted_shard_straddler_atomic_at_seed(seed: u64) {
-    let mut cluster = SimCluster::with_dedicated_pool_hosts(
+    let setup = halt_straddler_setup();
+    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
         &halt_recovery_config(),
         seed,
-        &halt_straddler_setup().balances,
+        &setup.balances,
+        &setup.vm_accounts,
     );
     cluster.run_faultable(halted_shard_straddler_atomic);
 }
@@ -941,7 +943,13 @@ const fn straddler_config() -> ScenarioConfig {
 #[test]
 fn split_straddler_atomic_sim() {
     let setup = split_straddler_setup();
-    let mut cluster = SimCluster::with_balances(&straddler_config(), 11, &setup.balances);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &straddler_config(),
+        11,
+        &setup.balances,
+        &setup.vm_accounts,
+        ExecutionMode::Serial,
+    );
     split_straddler_atomic(&mut cluster);
 }
 
@@ -955,8 +963,12 @@ fn split_straddler_atomic_sim() {
 /// resolve one-sided.
 fn split_straddler_ec_partition_atomic_at_seed(seed: u64) {
     let setup = split_straddler_setup();
-    let mut cluster =
-        SimCluster::with_dedicated_pool_hosts(&straddler_config(), seed, &setup.balances);
+    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
+        &straddler_config(),
+        seed,
+        &setup.balances,
+        &setup.vm_accounts,
+    );
     split_straddler_ec_partition_atomic(&mut cluster);
 }
 
@@ -1005,8 +1017,12 @@ const fn merge_straddler_config() -> ScenarioConfig {
 #[test]
 fn merge_straddler_atomic_sim() {
     let setup = merge_straddler_setup();
-    let mut cluster =
-        SimCluster::with_grown_balances(&merge_straddler_config(), 11, &setup.balances);
+    let mut cluster = SimCluster::with_grown_vm_and_balances(
+        &merge_straddler_config(),
+        11,
+        &setup.balances,
+        &setup.vm_accounts,
+    );
     merge_straddler_atomic(&mut cluster);
 }
 
@@ -1143,6 +1159,12 @@ fn merge_seats_full_keeper_committee_sim() {
 #[test]
 fn surviving_sibling_split_seats_full_committees_sim() {
     let setup = split_straddler_setup();
-    let mut cluster = SimCluster::with_balances(&straddler_config(), 11, &setup.balances);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &straddler_config(),
+        11,
+        &setup.balances,
+        &setup.vm_accounts,
+        ExecutionMode::Serial,
+    );
     surviving_sibling_split_seats_full_committees(&mut cluster);
 }

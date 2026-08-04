@@ -12,9 +12,7 @@ use std::sync::Arc;
 use hyperscale_types::{
     BlockHeight, Ed25519PrivateKey, Epoch, ShardId, TransactionDecision, TransactionStatus, TxHash,
 };
-use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
-use radix_common::types::ComponentAddress;
 
 use crate::reshape::split_lifecycle;
 use crate::support::query::{
@@ -22,8 +20,8 @@ use crate::support::query::{
 };
 use crate::support::tx::{
     MERGE_STRADDLER_LEFT, MERGE_STRADDLER_RIGHT, MERGE_STRADDLER_SURVIVOR, STRADDLER_SPLITTER,
-    STRADDLER_SURVIVOR, build_reshape_threshold_vote_tx, build_transfer_tx, merge_straddler_setup,
-    split_straddler_setup, validity_around,
+    STRADDLER_SURVIVOR, build_reshape_threshold_vote_tx, build_vm_transfer_tx,
+    merge_straddler_setup, split_straddler_setup, validity_around,
 };
 use crate::support::wait::{
     await_anchor_seeded, await_beacon_epoch, await_merge_keeper_count, await_root_matches_anchor,
@@ -199,9 +197,8 @@ pub fn split_straddler_run<C: Cluster>(
     // Settling waves: submitted while the splitter still commits real blocks, so
     // it finalizes them before its terminal cut — they settle atomically.
     let half = setup.straddlers.len() / 2;
-    for (i, (key, from, to)) in setup.straddlers.iter().take(half).enumerate() {
-        let nonce = 100 + u32::try_from(i).unwrap_or(0);
-        probes.push(submit_straddler(c, &network, key, *from, *to, nonce));
+    for (key, from, to) in setup.straddlers.iter().take(half) {
+        probes.push(submit_straddler(c, key, *from, *to));
     }
 
     // Advance until the gate drains the splitter from `pending_reshapes`: the
@@ -215,9 +212,8 @@ pub fn split_straddler_run<C: Cluster>(
     // Straddling waves: submitted all at once during the coast — the splitter is
     // still the active leaf, so the survivor provisions to it, but its empty
     // coast blocks settle nothing, leaving them in flight when it terminates.
-    for (i, (key, from, to)) in setup.straddlers.iter().skip(half).enumerate() {
-        let nonce = 200 + u32::try_from(i).unwrap_or(0);
-        probes.push(submit_straddler(c, &network, key, *from, *to, nonce));
+    for (key, from, to) in setup.straddlers.iter().skip(half) {
+        probes.push(submit_straddler(c, key, *from, *to));
     }
 
     // The split executes: both children seat and commit past genesis.
@@ -343,7 +339,6 @@ pub fn merge_straddler_atomic(c: &mut impl Cluster) {
     let merge_right = MERGE_STRADDLER_RIGHT;
     let merge_parent = merge_left.parent().expect("a depth-2 leaf has a parent");
     let setup = merge_straddler_setup();
-    let network = NetworkDefinition::simulator();
 
     // The cluster reaches this body grown to four shards; confirm every quarter
     // is seated and serving before driving the merge.
@@ -367,11 +362,7 @@ pub fn merge_straddler_atomic(c: &mut impl Cluster) {
         .straddlers
         .iter()
         .take(half)
-        .enumerate()
-        .map(|(i, (key, from, to))| {
-            let nonce = 100 + u32::try_from(i).unwrap_or(0);
-            submit_straddler(c, &network, key, *from, *to, nonce)
-        })
+        .map(|(key, from, to)| submit_straddler(c, key, *from, *to))
         .collect();
     probes.extend_from_slice(&settling);
     assert!(
@@ -392,9 +383,8 @@ pub fn merge_straddler_atomic(c: &mut impl Cluster) {
     // Straddling waves: submitted once the merge has paired and `leaf(2, 2)` is
     // coasting to its terminal — the survivor still provisions to it, but its
     // coast blocks settle nothing, leaving them in flight when it terminates.
-    for (i, (key, from, to)) in setup.straddlers.iter().skip(half).enumerate() {
-        let nonce = 200 + u32::try_from(i).unwrap_or(0);
-        probes.push(submit_straddler(c, &network, key, *from, *to, nonce));
+    for (key, from, to) in setup.straddlers.iter().skip(half) {
+        probes.push(submit_straddler(c, key, *from, *to));
     }
 
     // Drive the merge to fire: the keepers' ready signals collapse the children
@@ -465,25 +455,21 @@ pub fn chain_settled<C: Cluster>(c: &C, shard: ShardId, hash: TxHash) -> bool {
     )
 }
 
-/// Build a straddler transfer (survivor payer → splitter recipient) bracketing
+/// The payment every straddler leg carries.
+pub const STRADDLER_PAYMENT: u128 = 100;
+
+/// Build a straddler transfer (payer → counterpart-shard recipient) bracketing
 /// the current clock, submit it, and return its hash.
+///
+/// Each leg draws its own payer and recipient, so no two straddlers share
+/// signed content — hash dedup would otherwise read them as one transaction.
 pub fn submit_straddler<C: Cluster>(
     c: &mut C,
-    network: &NetworkDefinition,
     key: &Ed25519PrivateKey,
-    from: ComponentAddress,
-    to: ComponentAddress,
-    nonce: u32,
+    from: [u8; 16],
+    to: [u8; 16],
 ) -> TxHash {
-    let tx = build_transfer_tx(
-        key,
-        from,
-        to,
-        Decimal::from(100),
-        network,
-        nonce,
-        validity_around(c.now()),
-    );
+    let tx = build_vm_transfer_tx(key, from, to, STRADDLER_PAYMENT, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
     hash
