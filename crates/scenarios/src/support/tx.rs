@@ -775,6 +775,61 @@ pub fn vm_nullifier_race_genesis_accounts() -> Vec<([u8; 16], u128)> {
     ]
 }
 
+/// The cross-shard fault family's cast, over the depth-1 split.
+///
+/// One funded account in each child, so a transfer runs in either
+/// direction over the pair, plus an intra-shard control pair per child.
+/// The controls must be disjoint from the crossing pair: a transfer
+/// between the crossing accounts would declare the same vault cells as
+/// the in-flight cross-shard wave and queue behind it instead of proving
+/// the shard still settles locally.
+pub struct CrossShardFaultCast {
+    /// The payer and account in `leaf(1, 0)`.
+    pub left: (Ed25519PrivateKey, [u8; 16]),
+    /// The payer and account in `leaf(1, 1)`.
+    pub right: (Ed25519PrivateKey, [u8; 16]),
+    /// One intra-shard control per child: `(payer key, payer, recipient)`,
+    /// both accounts in the same child.
+    pub controls: Vec<(Ed25519PrivateKey, [u8; 16], [u8; 16])>,
+}
+
+/// Build the cross-shard fault family's cast.
+#[must_use]
+pub fn cross_shard_fault_cast() -> CrossShardFaultCast {
+    let mut taken = Vec::new();
+    let left = vm_account_routing_to(ShardId::leaf(1, 0), &mut taken);
+    let right = vm_account_routing_to(ShardId::leaf(1, 1), &mut taken);
+    let controls = [ShardId::leaf(1, 0), ShardId::leaf(1, 1)]
+        .into_iter()
+        .map(|shard| {
+            let (key, payer) = vm_account_routing_to(shard, &mut taken);
+            let (_, recipient) = vm_account_routing_to(shard, &mut taken);
+            (key, payer, recipient)
+        })
+        .collect();
+    CrossShardFaultCast {
+        left,
+        right,
+        controls,
+    }
+}
+
+/// Genesis VM accounts for the cross-shard fault family.
+///
+/// Every account is funded: the crossing pair pays in both directions, so
+/// each is a payer as well as a recipient, and a control recipient must
+/// exist before a deposit can land in it.
+#[must_use]
+pub fn cross_shard_fault_genesis_accounts() -> Vec<([u8; 16], u128)> {
+    let cast = cross_shard_fault_cast();
+    let mut accounts = vec![(cast.left.1, 10_000), (cast.right.1, 10_000)];
+    for (_, payer, recipient) in &cast.controls {
+        accounts.push((*payer, 10_000));
+        accounts.push((*recipient, 10));
+    }
+    accounts
+}
+
 /// Genesis funding for the insolvent-payer scenario: the same cast as
 /// [`vm_cross_shard_genesis_accounts`], but the payer holds dust — below
 /// any transfer's signed fee ceiling.
@@ -877,6 +932,7 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     all.extend(split_straddler_setup().vm_accounts);
     all.extend(merge_straddler_setup().vm_accounts);
     all.extend(halt_straddler_setup().vm_accounts);
+    all.extend(cross_shard_fault_genesis_accounts());
     all.sort_unstable_by_key(|(address, _)| *address);
     all.dedup_by_key(|(address, _)| *address);
     all

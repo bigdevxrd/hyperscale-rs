@@ -11,9 +11,10 @@ use std::time::Duration;
 use hyperscale_core::ProtocolEvent;
 use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
-    contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
-    halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
-    split_straddler_setup, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
+    contention_genesis_balances, cross_contention_genesis_balances,
+    cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances, halt_straddler_setup,
+    intershard_partition_genesis_balances, merge_straddler_setup, split_straddler_setup,
+    straddler_genesis_balances, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
     vm_insolvent_genesis_accounts, vm_nullifier_race_genesis_accounts, vm_storm_genesis_accounts,
     witness_genesis_balances,
 };
@@ -28,7 +29,7 @@ use hyperscale_scenarios::{
     gossip_drop_engages_fetch_fallback, grow_reaches_four_shard_topology,
     grow_reaches_two_shard_topology, halted_shard_recovers_by_committee_redraw,
     halted_shard_straddler_atomic, hot_component_saturation,
-    inter_shard_partition_aborts_waves_at_deadline, isolated_validator_still_settles,
+    inter_shard_partition_strands_waves_until_it_heals, isolated_validator_still_settles,
     livelock_resolves_promptly, liveness_baseline, merge_lifecycle,
     merge_seats_full_keeper_committee, merge_straddler_atomic,
     minority_fragment_rejoins_after_partition, mixed_engine_blocks, multi_vnode_progress,
@@ -464,52 +465,89 @@ fn participant_count_sweep_sim() {
 
 #[test]
 fn cross_shard_provisions_drop_fetch_fallback_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &split_config(),
+        11,
+        &straddler_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
+        ExecutionMode::Serial,
+    );
     cluster.run_faultable(cross_shard_provisions_drop_fetch_fallback);
 }
 
 #[test]
 fn cross_shard_exec_cert_drop_fetch_fallback_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &split_config(),
+        11,
+        &straddler_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
+        ExecutionMode::Serial,
+    );
     cluster.run_faultable(cross_shard_exec_cert_drop_fetch_fallback);
 }
 
 #[test]
 fn cross_shard_transaction_da_fetch_fallback_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &split_config(),
+        11,
+        &straddler_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
+        ExecutionMode::Serial,
+    );
     cluster.run_faultable(cross_shard_transaction_da_fetch_fallback);
 }
 
 #[test]
 fn cross_shard_header_fetch_fallback_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &split_config(),
+        11,
+        &straddler_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
+        ExecutionMode::Serial,
+    );
     cluster.run_faultable(cross_shard_header_fetch_fallback);
 }
 
 #[test]
 fn cross_shard_compound_drop_fetch_fallback_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &split_config(),
+        11,
+        &straddler_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
+        ExecutionMode::Serial,
+    );
     cluster.run_faultable(cross_shard_compound_drop_fetch_fallback);
 }
 
 #[test]
 fn cross_shard_provisions_recovers_after_transient_outage_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &split_config(),
+        11,
+        &straddler_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
+        ExecutionMode::Serial,
+    );
     cluster.run_faultable(cross_shard_provisions_recovers_after_transient_outage);
 }
 
 #[test]
-fn inter_shard_partition_aborts_waves_at_deadline_sim() {
+fn inter_shard_partition_strands_waves_until_it_heals_sim() {
     // A dedicated host per pool validator, so the split seats the two children on
     // disjoint host sets — matching production's one-validator-per-host layout —
     // and a host partition can sever every inter-shard edge without cutting
     // intra-shard consensus.
-    let mut cluster = SimCluster::with_dedicated_pool_hosts(
+    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
         &split_config(),
         11,
         &intershard_partition_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
     );
-    cluster.run_faultable(inter_shard_partition_aborts_waves_at_deadline);
+    cluster.run_faultable(inter_shard_partition_strands_waves_until_it_heals);
 }
 
 #[test]
@@ -891,7 +929,13 @@ fn shard_fork_drives_committee_recovery_sim() {
 /// engagement (its async retry path is nondeterministic), so that check lives
 /// here, keyed on the exact seed.
 fn request_loss_engages_at_seed(seed: u64) {
-    let mut cluster = SimCluster::new(&split_config(), seed);
+    let mut cluster = SimCluster::with_vm_mode_and_balances(
+        &split_config(),
+        seed,
+        &straddler_genesis_balances(),
+        &cross_shard_fault_genesis_accounts(),
+        ExecutionMode::Serial,
+    );
     let request_drops = cluster.run_faultable(cross_shard_provisions_fetch_with_request_loss);
     assert!(
         request_drops >= 1,

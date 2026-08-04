@@ -7,7 +7,6 @@ use hyperscale_types::{
     BlockHeight, Epoch, HALT_THRESHOLD_EPOCHS, ShardId, StateRoot, TransactionDecision,
     TransactionStatus, TxHash,
 };
-use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
 
 use crate::reshape::split_lifecycle;
@@ -15,8 +14,9 @@ use crate::straddler::{chain_settled, submit_straddler};
 use crate::support::faultable::FaultableCluster;
 use crate::support::query::beacon_epoch;
 use crate::support::tx::{
-    HALT_STRADDLER_BATCH, account_from_seed, build_faucet_tx, build_transfer_tx,
-    halt_straddler_setup, signer_from_seed, validity_around, vm_account_shard,
+    HALT_STRADDLER_BATCH, account_from_seed, build_faucet_tx, build_vm_transfer_tx,
+    cross_shard_fault_cast, halt_straddler_setup, signer_from_seed, validity_around,
+    vm_account_shard,
 };
 use crate::support::wait::{await_beacon_epoch, await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -775,36 +775,47 @@ pub fn partition_heals_at_exact_quorum(c: &mut impl FaultableCluster) {
     );
 }
 
-/// Severing every edge between two shards forces their in-flight cross-shard
-/// waves to abort at the wave deadline.
-///
-/// A deterministic, all-abort terminal — bounded, terminal damage (INV-EXEC-5),
-/// never a speculative or split decision.
+/// Severing every edge between two shards strands their in-flight cross-shard
+/// waves without ever splitting one, and healing resolves them.
 ///
 /// A two-shard cluster (`split_lifecycle`) whose committees sit on disjoint host
 /// sets, so `partition(committee_hosts(left), committee_hosts(right))` cuts every
 /// inter-shard edge in both directions while leaving intra-shard edges intact —
 /// unlike the drop scenarios, which always leave a fetch route the wave recovers
-/// through. The cut also splits the beacon quorum, so epoch production halts;
-/// the shards coast on their `L = 1` lookahead committees, and the hold stays
-/// well inside that runway (the wave deadline is a fraction of one epoch), so
-/// neither shard's consensus wedges — that starvation is a separate scenario.
+/// through.
 ///
-/// Cross-shard transfers move XRD between account `31` (left) and account `30`
-/// (right); the single-shard controls run on the disjoint accounts `40` / `41`,
-/// so they settle intra-shard without colliding with the severed waves' reserved
-/// writes. Requires [`intershard_partition_genesis_balances`] at genesis.
+/// No wave aborts while the cut holds, and that is the shape of the cut rather
+/// than a slow deadline. The same partition splits the beacon quorum, so epoch
+/// production halts, and both shards coast their `L = 1` lookahead runway and
+/// then hold at the schedule head with their attested clocks frozen. Every
+/// deadline in the system is read from that clock, so none of them can arrive:
+/// the cut that strands a wave is the cut that stops the clock its abort would
+/// be timed against. What must hold under it is the safety half — no stranded
+/// wave settles Accept on either side, and the two shards never disagree — and
+/// then, on the heal, that both reach a terminal verdict rather than wedging.
 ///
-/// [`intershard_partition_genesis_balances`]: crate::tx::intershard_partition_genesis_balances
+/// The deadline itself has its own scenario, which cuts the two message types a
+/// payer's bundle travels and leaves both committees and the beacon healthy, so
+/// the clock keeps running while the evidence does not arrive.
+///
+/// The two probes end up in different cases, deliberately. The one in flight as
+/// the cut lands was already committed on its payer's shard, so it owes a
+/// verdict and gets one on the heal. The one submitted into the frozen half was
+/// never included at all, and its signed window closes before that half
+/// resumes — so it expires in the pool with no chain owing it anything, which
+/// is what a validity window is for.
+///
+/// Cross-shard transfers run in each direction over the funded pair; the
+/// single-shard controls run on disjoint accounts, so they settle intra-shard
+/// without colliding with the severed waves' declared writes.
 ///
 /// # Panics
 ///
 /// Panics if a shard wedges under the severance, a single-shard control fails to
 /// settle, a severed cross-shard transfer settles or the two shards disagree on
-/// its fate, not every in-flight transfer aborts, or a fresh cross-shard
-/// transfer fails to settle after the heal.
-#[allow(clippy::too_many_lines)] // one linear severance narrative: submit, sever, abort, heal
-pub fn inter_shard_partition_aborts_waves_at_deadline(c: &mut impl FaultableCluster) {
+/// its fate, an in-flight transfer never resolves after the heal, or a fresh
+/// cross-shard transfer fails to settle.
+pub fn inter_shard_partition_strands_waves_until_it_heals(c: &mut impl FaultableCluster) {
     let (left, right) = ShardId::ROOT.children();
     split_lifecycle(c);
 
@@ -819,13 +830,8 @@ pub fn inter_shard_partition_aborts_waves_at_deadline(c: &mut impl FaultableClus
         "the two committees must sit on disjoint host sets: left={left_hosts:?}, right={right_hosts:?}",
     );
 
-    let network = NetworkDefinition::simulator();
-    let signer_left = signer_from_seed(31);
-    let account_left = account_from_seed(31);
-    let signer_right = signer_from_seed(30);
-    let account_right = account_from_seed(30);
+    let cast = cross_shard_fault_cast();
 
-    let aborted_before = c.metric("transactions_aborted", None);
     let left_before = c
         .committed_height(left)
         .expect("left serves before the severance")
@@ -836,46 +842,28 @@ pub fn inter_shard_partition_aborts_waves_at_deadline(c: &mut impl FaultableClus
         .inner();
 
     // A cross-shard transfer in flight as the cut lands.
-    let before_tx = build_transfer_tx(
-        &signer_left,
-        account_left,
-        account_right,
-        Decimal::from(500),
-        &network,
-        1,
-        validity_around(c.now()),
-    );
-    let before_hash = before_tx.hash();
-    c.submit(Arc::new(before_tx));
+    let before_hash = submit_crossing(c);
 
     // Sever every inter-shard edge (both directions), intra-shard edges intact.
     c.partition(&left_hosts, &right_hosts);
 
-    // A second cross-shard transfer submitted under the severance.
-    let during_tx = build_transfer_tx(
-        &signer_right,
-        account_right,
-        account_left,
-        Decimal::from(500),
-        &network,
-        1,
+    // A second cross-shard transfer submitted under the severance, sourced on
+    // the far side so each shard pays for one stranded wave.
+    let during_tx = build_vm_transfer_tx(
+        &cast.right.0,
+        cast.right.1,
+        cast.left.1,
+        CROSSING_PAYMENT,
         validity_around(c.now()),
     );
     let during_hash = during_tx.hash();
     c.submit(Arc::new(during_tx));
 
-    // A single-shard control per disjoint account — these must settle purely
-    // intra-shard while the cross-shard waves are stranded.
-    for seed in [40u8, 41] {
-        let control = build_transfer_tx(
-            &signer_from_seed(seed),
-            account_from_seed(seed),
-            account_from_seed(seed),
-            Decimal::from(100),
-            &network,
-            1,
-            validity_around(c.now()),
-        );
+    // A single-shard control per child, on accounts disjoint from the crossing
+    // pair — these must settle purely intra-shard while the cross-shard waves
+    // are stranded.
+    for (index, (key, from, to)) in cast.controls.iter().enumerate() {
+        let control = build_vm_transfer_tx(key, *from, *to, 100, validity_around(c.now()));
         let hash = control.hash();
         c.submit(Arc::new(control));
         let status = await_tx_terminal(c, hash, epochs(2));
@@ -884,7 +872,7 @@ pub fn inter_shard_partition_aborts_waves_at_deadline(c: &mut impl FaultableClus
                 status,
                 Some(TransactionStatus::Completed(TransactionDecision::Accept))
             ),
-            "single-shard control from account {seed} must settle under the severance; \
+            "single-shard control {index} must settle under the severance; \
              status = {status:?}",
         );
     }
@@ -908,23 +896,12 @@ pub fn inter_shard_partition_aborts_waves_at_deadline(c: &mut impl FaultableClus
         "the right shard wedged under the severance (before={right_before}, during={right_during})",
     );
 
-    // Hold past the wave deadline: both stranded transfers reach a terminal
-    // Abort. The deadline abort is a counterpart abort — it surfaces in the
-    // terminal-verdict cache, not always as an on-chain execution outcome — so
-    // the verdict is read from `tx_status` via `await_tx_terminal`.
+    // Neither stranded wave may settle while the cut holds. The verdict is
+    // read off both chains rather than waited for: with the beacon starved by
+    // the same partition, no attested clock is advancing, so a wave that has
+    // not resolved by now is not going to — and must not have resolved
+    // one-sided in the meantime.
     for (hash, label) in [(before_hash, "left→right"), (during_hash, "right→left")] {
-        let verdict = await_tx_terminal(c, hash, epochs(3));
-        assert!(
-            matches!(
-                verdict,
-                Some(TransactionStatus::Completed(TransactionDecision::Aborted))
-            ),
-            "the {label} cross-shard transfer must reach a terminal Abort at the \
-             wave deadline; status = {verdict:?}",
-        );
-        // Safety: no shard settled it Accept — the all-abort is deterministic,
-        // never a decision split across the shards — and where both recorded an on-chain
-        // fate, they agree.
         let left_fate = c.chain_fate(left, hash).1.map(|(_, decision)| decision);
         let right_fate = c.chain_fate(right, hash).1.map(|(_, decision)| decision);
         assert!(
@@ -941,26 +918,30 @@ pub fn inter_shard_partition_aborts_waves_at_deadline(c: &mut impl FaultableClus
             );
         }
     }
-    // Both severed transfers are reflected in the cluster-wide abort metric.
+
+    // Heal every edge. Epoch production resumes and both clocks restart, so a
+    // wave a shard had already committed resolves — by settling if its signed
+    // window is still open, by its payer's deadline if the heal came too late.
+    // Which one is a property of the timing, not of the machinery; that it
+    // terminates at all is the claim.
+    //
+    // A transfer submitted *into* the frozen half is the other case: its shard
+    // held at the schedule head without ever including it, and by the heal its
+    // signed window has closed, so it can never be included and no chain owes
+    // it a verdict. It expires, which is the pool's job and not consensus's.
+    c.heal_all();
+    let resolved = [(before_hash, "left→right"), (during_hash, "right→left")]
+        .into_iter()
+        .filter(|(hash, label)| assert_resolved_after_heal(c, left, right, *hash, label))
+        .count();
     assert!(
-        c.metric("transactions_aborted", None) >= aborted_before + 2,
-        "the abort metric must count both severed transfers (before={aborted_before}, now={})",
-        c.metric("transactions_aborted", None),
+        resolved > 0,
+        "no transfer was in flight across the cut — the severance landed before \
+         either shard could commit one, so nothing was stranded",
     );
 
-    // Heal every edge; a fresh cross-shard transfer settles normally.
-    c.heal_all();
-    let fresh_tx = build_transfer_tx(
-        &signer_left,
-        account_left,
-        account_right,
-        Decimal::from(500),
-        &network,
-        2,
-        validity_around(c.now()),
-    );
-    let fresh_hash = fresh_tx.hash();
-    c.submit(Arc::new(fresh_tx));
+    // A fresh cross-shard transfer settles normally on the healed network.
+    let fresh_hash = submit_crossing(c);
     let fresh_status = await_tx_terminal(c, fresh_hash, epochs(10));
     assert!(
         matches!(
@@ -970,6 +951,44 @@ pub fn inter_shard_partition_aborts_waves_at_deadline(c: &mut impl FaultableClus
         "a fresh cross-shard transfer must settle once the severance heals; \
          status = {fresh_status:?}",
     );
+}
+
+/// Assert `hash` resolved once the severance healed, and report whether it was
+/// ever committed at all.
+///
+/// A transfer a shard had committed owes a terminal verdict, and the two chains
+/// must agree wherever both recorded a fate. One no shard ever included owes
+/// nothing: its signed window closed while its half held at the schedule head,
+/// so it expires in the pool.
+fn assert_resolved_after_heal<C: FaultableCluster>(
+    c: &mut C,
+    left: ShardId,
+    right: ShardId,
+    hash: TxHash,
+    label: &str,
+) -> bool {
+    if c.chain_fate(left, hash).0.is_none() && c.chain_fate(right, hash).0.is_none() {
+        assert!(
+            c.tx_status(hash).is_none(),
+            "a transfer no shard ever committed reached a verdict anyway ({label})",
+        );
+        return false;
+    }
+    let verdict = await_tx_terminal(c, hash, epochs(10));
+    assert!(
+        matches!(verdict, Some(TransactionStatus::Completed(_))),
+        "the {label} transfer must resolve once the severance heals; status = {verdict:?}",
+    );
+    let left_fate = c.chain_fate(left, hash).1.map(|(_, decision)| decision);
+    let right_fate = c.chain_fate(right, hash).1.map(|(_, decision)| decision);
+    if let (Some(left_decision), Some(right_decision)) = (left_fate, right_fate) {
+        assert_eq!(
+            left_decision, right_decision,
+            "the shards disagreed on the {label} transfer's fate after the heal: \
+             left={left_decision:?}, right={right_decision:?}",
+        );
+    }
+    true
 }
 
 /// A ratification pool partitioned below quorum halts epoch production, and the
@@ -1073,17 +1092,61 @@ pub fn beacon_pool_partition_stalls_epoch_production(c: &mut impl FaultableClust
     );
 }
 
+/// The payment every cross-shard fault probe carries.
+const CROSSING_PAYMENT: u128 = 500;
+
+/// Submit a transfer from the left child's funded account into the right
+/// child's, and return its hash.
+///
+/// The signed validity window discriminates repeat submissions: two probes
+/// built at the same clock over the same pair would be one transaction under
+/// hash dedup, which is the replay protection working rather than a builder
+/// limitation.
+/// Assert `hash` really crossed the split: both children committed it.
+///
+/// Without this a scenario in this family passes on a transfer that never
+/// left one shard — the DA fetch engages for any dropped gossip, and the
+/// remote-header channel runs as ordinary machinery in a grown cluster, so
+/// neither counter alone distinguishes a crossing from a local payment.
+fn assert_crossed<C: Cluster>(c: &C, hash: TxHash, context: &str) {
+    let (left, right) = ShardId::ROOT.children();
+    assert!(
+        c.chain_fate(left, hash).0.is_some() && c.chain_fate(right, hash).0.is_some(),
+        "the {context} transfer never crossed the split: left={:?}, right={:?}",
+        c.chain_fate(left, hash).0,
+        c.chain_fate(right, hash).0,
+    );
+}
+
+fn submit_crossing<C: Cluster>(c: &mut C) -> TxHash {
+    let cast = cross_shard_fault_cast();
+    let tx = build_vm_transfer_tx(
+        &cast.left.0,
+        cast.left.1,
+        cast.right.1,
+        CROSSING_PAYMENT,
+        validity_around(c.now()),
+    );
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+    hash
+}
+
 /// Grow to two shards, drop the `broadcast` message type, then run a cross-shard
 /// transfer that must recover via the `fetch_kind` fetch fallback.
 ///
 /// Works for any broadcast the cross-shard flow relies on — a unicast
 /// cross-shard delivery (`provisions.broadcast`, `execution.cert.batch`) suppressed at the
 /// sender's gate, or a gossip broadcast (`transaction.gossip`, `block.committed`)
-/// suppressed by the receiver's inbound filter. The transfer moves 500 XRD from
-/// account `31` (left child) to `30` (right child), both funded at genesis.
+/// suppressed by the receiver's inbound filter. The transfer runs from the
+/// left child's funded account into the right child's, both seeded at genesis.
 /// Faults install after the split settles, so the grow rides its own broadcasts
 /// cleanly. Asserts the transfer accepts, the drop fired, the fetch engaged, and
 /// nothing aborted.
+///
+/// The provisions leg is the sharpest of these on the VM engine: a payer's
+/// bundle is the evidence its counterpart engages against, so suppressing the
+/// broadcast withholds engagement itself until the fetch bridges it.
 fn cross_shard_broadcast_drop(
     c: &mut impl FaultableCluster,
     broadcast: &'static str,
@@ -1097,20 +1160,7 @@ fn cross_shard_broadcast_drop(
     let fetch_before = c.metric("fetch_items_sent", Some(fetch_kind));
     let dropped = c.drop_type(broadcast);
 
-    let payer = signer_from_seed(31);
-    let from = account_from_seed(31);
-    let to = account_from_seed(30);
-    let transfer = build_transfer_tx(
-        &payer,
-        from,
-        to,
-        Decimal::from(500),
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
-    let hash = transfer.hash();
-    c.submit(Arc::new(transfer));
+    let hash = submit_crossing(c);
 
     let status = await_tx_terminal(c, hash, epochs(10));
     assert!(
@@ -1120,6 +1170,7 @@ fn cross_shard_broadcast_drop(
         ),
         "the cross-shard transfer must settle despite the dropped {broadcast}; status = {status:?}",
     );
+    assert_crossed(c, hash, broadcast);
     assert!(dropped.fired() >= 1, "the {broadcast} drop must fire");
     assert!(
         c.metric("fetch_items_sent", Some(fetch_kind)) > fetch_before,
@@ -1175,20 +1226,7 @@ pub fn cross_shard_compound_drop_fetch_fallback(c: &mut impl FaultableCluster) {
     let provisions_dropped = c.drop_type("provisions.broadcast");
     let exec_cert_dropped = c.drop_type("execution.cert.batch");
 
-    let payer = signer_from_seed(31);
-    let from = account_from_seed(31);
-    let to = account_from_seed(30);
-    let transfer = build_transfer_tx(
-        &payer,
-        from,
-        to,
-        Decimal::from(500),
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
-    let hash = transfer.hash();
-    c.submit(Arc::new(transfer));
+    let hash = submit_crossing(c);
 
     let status = await_tx_terminal(c, hash, epochs(12));
     assert!(
@@ -1198,6 +1236,7 @@ pub fn cross_shard_compound_drop_fetch_fallback(c: &mut impl FaultableCluster) {
         ),
         "the transfer must settle despite both channels dropped; status = {status:?}",
     );
+    assert_crossed(c, hash, "compound-drop");
     assert!(
         provisions_dropped.fired() >= 1,
         "the provisions.broadcast drop must fire",
@@ -1275,20 +1314,7 @@ pub fn cross_shard_provisions_fetch_with_request_loss(c: &mut impl FaultableClus
     let broadcast_dropped = c.drop_type("provisions.broadcast");
     let request_dropped = c.drop_type_with_probability("provision.request", 0.5);
 
-    let payer = signer_from_seed(31);
-    let from = account_from_seed(31);
-    let to = account_from_seed(30);
-    let transfer = build_transfer_tx(
-        &payer,
-        from,
-        to,
-        Decimal::from(500),
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
-    let hash = transfer.hash();
-    c.submit(Arc::new(transfer));
+    let hash = submit_crossing(c);
 
     let status = await_tx_terminal(c, hash, epochs(12));
     assert!(
@@ -1298,6 +1324,7 @@ pub fn cross_shard_provisions_fetch_with_request_loss(c: &mut impl FaultableClus
         ),
         "the transfer must settle despite 50% provision.request loss; status = {status:?}",
     );
+    assert_crossed(c, hash, "request-loss");
     assert!(
         broadcast_dropped.fired() >= 1,
         "the provisions.broadcast drop must fire",
@@ -1326,7 +1353,7 @@ pub fn cross_shard_provisions_fetch_with_request_loss(c: &mut impl FaultableClus
 /// way; the point is that removing a live drop rule mid-recovery is safe — the
 /// fetch bridge completes and no wave wedges.
 ///
-/// One transfer, not two: both spendable accounts (`31`, `30`) are declared
+/// One transfer, not two: both accounts of the crossing pair are declared
 /// writes of every transfer between them, so a second overlapping cross-shard
 /// transfer would race the first's conflict window rather than test recovery.
 ///
@@ -1339,20 +1366,7 @@ pub fn cross_shard_provisions_recovers_after_transient_outage(c: &mut impl Fault
     let fetch_before = c.metric("fetch_items_sent", Some("provision"));
     let dropped = c.drop_type("provisions.broadcast");
 
-    let payer = signer_from_seed(31);
-    let from = account_from_seed(31);
-    let to = account_from_seed(30);
-    let transfer = build_transfer_tx(
-        &payer,
-        from,
-        to,
-        Decimal::from(500),
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
-    let hash = transfer.hash();
-    c.submit(Arc::new(transfer));
+    let hash = submit_crossing(c);
 
     // Let the outage bite: the source shard's provision broadcast is dropped
     // before we lift the fault, so the recovery genuinely spans a removal.
@@ -1372,6 +1386,7 @@ pub fn cross_shard_provisions_recovers_after_transient_outage(c: &mut impl Fault
         "the transfer must settle via the provision fetch despite the transient \
          outage; status = {status:?}",
     );
+    assert_crossed(c, hash, "transient-outage");
     assert!(
         c.metric("fetch_items_sent", Some("provision")) > fetch_before,
         "the provision fetch fallback must bridge the outage (before={fetch_before})",
