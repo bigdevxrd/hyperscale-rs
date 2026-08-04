@@ -13,7 +13,10 @@ use hyperscale_engine::{
     DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
 };
 use hyperscale_engine_vm::genesis::{account_artifact, entropy_key, vault_key};
-use hyperscale_engine_vm::{ExecutionMode, VM_XRD, VmExecutor, vm_genesis_updates};
+use hyperscale_engine_vm::{
+    ExecutionMode, PreviewGrants, PreviewInputs, PreviewOutcome, PreviewReport, ResourceChange,
+    VM_XRD, VmExecutor, vm_genesis_updates,
+};
 use hyperscale_storage::{
     DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,
 };
@@ -755,6 +758,249 @@ fn only_a_cell_that_addresses_its_own_contents_publishes() {
     let cell = package_key(publisher, package);
     cache.absorb_cell(publisher, cell.local.0, &artifact);
     assert_eq!(cache.load().get(package), Some(&metadata));
+}
+
+/// Preview `tx` against a genesis snapshot of `accounts`, committing
+/// nothing.
+fn preview_on(
+    accounts: &[([u8; 16], u128)],
+    executor: &VmExecutor,
+    tx: &RoutableTransaction,
+    grants: PreviewGrants,
+) -> PreviewReport {
+    let snapshot_store = MapDb::genesis(accounts);
+    let snapshot = DynSnapshot(&snapshot_store);
+    executor.preview(
+        &snapshot,
+        tx,
+        PreviewInputs {
+            clock: WeightedTimestamp::from_millis(1_000),
+            randomness: RevealChain::ZERO,
+            grants,
+        },
+    )
+}
+
+/// The reported change to `owner`'s native vault.
+fn change_for(report: &PreviewReport, owner: [u8; 16]) -> ResourceChange {
+    let key = vault_key(owner, VM_XRD);
+    *report
+        .changes
+        .iter()
+        .find(|change| change.key == key)
+        .unwrap_or_else(|| panic!("no reported change for {owner:?}: {:?}", report.changes))
+}
+
+/// The preview fixture: a payer who funds the transfer and its fee, and a
+/// recipient. The ceiling sits far below the fuel a transfer burns, so the
+/// charge is the cap rather than the actual.
+const PREVIEW_CEILING: u128 = 10;
+
+struct PreviewFixture {
+    payer: [u8; 16],
+    accounts: Vec<([u8; 16], u128)>,
+    tx: RoutableTransaction,
+}
+
+fn preview_fixture() -> PreviewFixture {
+    let payer = fee_payer(7);
+    PreviewFixture {
+        payer,
+        accounts: vec![(payer, 1_000), (BOB, 50)],
+        tx: signed_transfer_with_fee(7, payer, BOB, 100, PREVIEW_CEILING),
+    }
+}
+
+/// A preview reports the transfer's resource changes: what leaves the
+/// sender's vault, what reaches the recipient's, and what the fee costs on
+/// top — read off the receipt's settles and movements without committing
+/// anything.
+#[test]
+fn a_preview_reports_the_resource_changes_a_transfer_would_make() {
+    let PreviewFixture {
+        payer,
+        accounts,
+        tx,
+    } = preview_fixture();
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let report = preview_on(&accounts, &executor, &tx, PreviewGrants::default());
+
+    assert_eq!(report.outcome, PreviewOutcome::Completed);
+    assert_eq!(report.fee, PREVIEW_CEILING, "a transfer's fuel exceeds it");
+    assert_eq!(report.changes.len(), 2, "two vaults move: {report:?}");
+
+    let sender = change_for(&report, payer);
+    assert_eq!((sender.before, sender.after), (1_000, 1_000 - 100 - 10));
+    assert_eq!(
+        (sender.settled, sender.credit, sender.debit),
+        (100, 0, 0),
+        "a withdrawal leaves through its reservation's settle"
+    );
+
+    let recipient = change_for(&report, BOB);
+    assert_eq!((recipient.before, recipient.after), (50, 150));
+    assert_eq!(
+        (recipient.credit, recipient.debit, recipient.settled),
+        (100, 0, 0),
+        "a deposit arrives as a commutative credit"
+    );
+
+    // Nothing moved: the same preview twice reports the same thing.
+    assert_eq!(
+        preview_on(&accounts, &executor, &tx, PreviewGrants::default()),
+        report,
+        "a preview commits nothing, so it is repeatable"
+    );
+}
+
+/// The preview's arithmetic is the wave's arithmetic: what it says a
+/// vault would hold is what the committed receipt writes there.
+#[test]
+fn a_preview_agrees_with_the_wave_that_would_commit_it() {
+    let PreviewFixture {
+        payer,
+        accounts,
+        tx,
+    } = preview_fixture();
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let report = preview_on(&accounts, &executor, &tx, PreviewGrants::default());
+
+    let verified = Arc::new(Verified::<RoutableTransaction>::from_persisted(tx));
+    let executed = execute_on(&accounts, &executor, &[verified]);
+    let ConsensusReceipt::Succeeded {
+        database_updates, ..
+    } = &executed[0].consensus
+    else {
+        panic!("the transfer must succeed: {:?}", executed[0].consensus);
+    };
+
+    for owner in [payer, BOB] {
+        assert_eq!(
+            vault_cell(database_updates, owner),
+            Some(encode_amount(change_for(&report, owner).after).to_vec()),
+            "the preview's figure for {owner:?} is what the wave commits"
+        );
+    }
+}
+
+/// Free credit is the one grant a preview can carry today: the fee is
+/// still priced and reported, but it never reaches the payer's vault, so
+/// a wallet can price an envelope its payer could not cover.
+#[test]
+fn free_credit_reports_the_fee_without_charging_it() {
+    let PreviewFixture {
+        payer,
+        accounts,
+        tx,
+    } = preview_fixture();
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let charged = preview_on(&accounts, &executor, &tx, PreviewGrants::default());
+    let credited = preview_on(
+        &accounts,
+        &executor,
+        &tx,
+        PreviewGrants { free_credit: true },
+    );
+
+    assert_eq!(credited.fee, charged.fee, "the fee is priced either way");
+    assert_eq!(
+        change_for(&credited, payer).after,
+        change_for(&charged, payer).after + charged.fee,
+        "credit keeps exactly the fee off the payer's vault"
+    );
+    assert_eq!(
+        change_for(&credited, BOB),
+        change_for(&charged, BOB),
+        "a grant to the payer moves nobody else"
+    );
+}
+
+/// An uncovered withdrawal previews as the abort it would be, priced at
+/// the class floor: the sender lost a deterministic race rather than
+/// making a mistake, so nothing but the floor leaves its vault.
+#[test]
+fn a_preview_prices_an_abort_at_its_class_floor() {
+    let payer = fee_payer(7);
+    let accounts = [(payer, 1_000), (BOB, 50)];
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let tx = signed_transfer_with_fee(7, payer, BOB, 5_000, PREVIEW_CEILING);
+    let report = preview_on(&accounts, &executor, &tx, PreviewGrants::default());
+
+    let PreviewOutcome::Aborted { reason } = &report.outcome else {
+        panic!("an uncovered withdrawal must abort: {:?}", report.outcome);
+    };
+    assert!(reason.contains("infeasible"), "reason = {reason}");
+    assert_eq!(report.fee, PREVIEW_CEILING / 10, "the abort floor");
+    assert_eq!(
+        report.changes,
+        vec![ResourceChange {
+            key: vault_key(payer, VM_XRD),
+            before: 1_000,
+            after: 1_000 - PREVIEW_CEILING / 10,
+            credit: 0,
+            debit: 0,
+            settled: 0,
+        }],
+        "an abort moves nothing but the floor"
+    );
+}
+
+/// An envelope admission would refuse previews as refused, and costs
+/// nothing: it could never enter a block, so nobody would pay for it.
+#[test]
+fn a_preview_refuses_what_admission_would_refuse() {
+    let stranger = [0xAB; 16];
+    assert!(
+        !world_accounts().iter().any(|(a, _)| *a == stranger),
+        "the address must be outside the world"
+    );
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let tx = signed_transfer_with_fee(7, stranger, BOB, 10, PREVIEW_CEILING);
+    let report = preview_on(&[(BOB, 50)], &executor, &tx, PreviewGrants::default());
+
+    assert!(
+        matches!(report.outcome, PreviewOutcome::Refused { .. }),
+        "outcome = {:?}",
+        report.outcome
+    );
+    assert_eq!(report.fee, 0);
+    assert!(report.changes.is_empty());
+}
+
+/// A publish previews too, and its price needs no state: judging an
+/// artifact costs one unit per byte, which is the whole answer.
+#[test]
+fn a_preview_prices_a_publish_by_its_artifact() {
+    let payer = fee_payer(7);
+    let artifact = account_artifact().to_vec();
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let tx = signed_publish(7, artifact.clone());
+    let report = preview_on(
+        &[(payer, 1_000_000)],
+        &executor,
+        &tx,
+        PreviewGrants::default(),
+    );
+
+    assert_eq!(report.outcome, PreviewOutcome::Completed);
+    assert_eq!(report.fee, artifact.len() as u128);
+    let vault = change_for(&report, payer);
+    assert_eq!(
+        (vault.before, vault.after),
+        (1_000_000, 1_000_000 - artifact.len() as u128)
+    );
+
+    // An artifact that is not a package is refused at admission, so it
+    // never enters a block and costs its publisher nothing.
+    let junk = signed_publish(7, b"\0asm\x01\0\0\0".to_vec());
+    let refused = preview_on(
+        &[(payer, 1_000_000)],
+        &executor,
+        &junk,
+        PreviewGrants::default(),
+    );
+    assert!(matches!(refused.outcome, PreviewOutcome::Refused { .. }));
+    assert_eq!(refused.fee, 0);
 }
 
 #[test]

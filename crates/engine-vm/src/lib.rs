@@ -18,6 +18,7 @@
 mod backend;
 mod executor;
 mod host;
+mod preview;
 mod runner;
 
 /// VM genesis seeding: the stdlib world and funded-account cells.
@@ -27,3 +28,4 @@ pub use executor::VmExecutor;
 pub use genesis::{VM_XRD, VmWorld, genesis_world, vm_genesis_updates};
 pub use hyperscale_effects_bridge::vm_account_address;
 pub use hyperscale_vm_kernel::ExecutionMode;
+pub use preview::{PreviewGrants, PreviewInputs, PreviewOutcome, PreviewReport, ResourceChange};

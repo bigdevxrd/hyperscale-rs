@@ -235,6 +235,12 @@ pub struct SimulationRunner {
     /// world the executor and statics were built with.
     vm_accounts: Vec<([u8; 16], u128)>,
 
+    /// The cluster's VM engine, kept in its concrete form beside the
+    /// `dyn Executor` every host runs. Preview is engine-side and has no
+    /// place on the executor seam, so a harness that drives it needs the
+    /// engine itself.
+    vm_engine: Arc<VmExecutor>,
+
     /// Beacon genesis config hash, retained for runtime-built
     /// `BeaconCoordinator`s.
     beacon_config_hash: GenesisConfigHash,
@@ -384,10 +390,11 @@ impl SimulationRunner {
         } else {
             &network_config.vm_world_accounts
         };
-        let shared_vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::new(
+        let vm_engine = Arc::new(VmExecutor::new(
             world_accounts,
             network_config.vm_execution_mode,
         ));
+        let shared_vm_executor: Arc<dyn Executor> = Arc::clone(&vm_engine) as Arc<dyn Executor>;
 
         // Generate keys for all registered validators using deterministic
         // seeding. Pool extras are registered in beacon genesis (landing
@@ -607,6 +614,7 @@ impl SimulationRunner {
             crypto_scheme,
             share_declared_reads: network_config.share_declared_reads,
             vm_accounts: network_config.vm_accounts.clone(),
+            vm_engine,
             beacon_config_hash,
             beacon_network,
             pending_participation_changes: Vec::new(),
@@ -676,6 +684,13 @@ impl SimulationRunner {
         host.hosted_shards()
             .any(|s| s == shard)
             .then(|| &**host.shard_io(shard).storage())
+    }
+
+    /// The cluster's VM engine, for the engine-side surfaces that sit
+    /// outside the executor seam — preview being the only one today.
+    #[must_use]
+    pub fn vm_engine(&self) -> &VmExecutor {
+        &self.vm_engine
     }
 
     /// Process-shared beacon storage for a host. One handle per host,

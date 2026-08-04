@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use hyperscale_engine::DynSnapshot;
+use hyperscale_engine_vm::{PreviewGrants, PreviewInputs, PreviewReport};
 use hyperscale_metrics::{MetricsRecorder, with_scoped_recorder};
 use hyperscale_metrics_memory::MemoryRecorder;
 use hyperscale_network::fault::{HostId, RuleHandle};
@@ -476,6 +478,33 @@ impl Cluster for SimCluster {
             value: value.map(Into::into),
             proof,
         })
+    }
+
+    fn vm_preview(
+        &self,
+        shard: ShardId,
+        tx: &RoutableTransaction,
+        grants: PreviewGrants,
+    ) -> Option<PreviewReport> {
+        let store = self
+            .live_committee_hosts(shard)
+            .into_iter()
+            .find_map(|host| self.runner.hosts_shard(host, shard))?;
+        // The chain's own freshest attested values stand in for the
+        // environment a committing block would fix. The draw is one
+        // sample, not a prediction: which block will commit the
+        // transaction, and so which reveal anchors it, is not yet decided.
+        let tip = store.get_certified_header(store.committed_height())?;
+        let snapshot = store.snapshot();
+        Some(self.runner.vm_engine().preview(
+            &DynSnapshot(&snapshot),
+            tx,
+            PreviewInputs {
+                clock: tip.qc().weighted_timestamp(),
+                randomness: tip.header().reveal_chain(),
+                grants,
+            },
+        ))
     }
 
     fn vm_events(&self, shard: ShardId, tx: TxHash) -> Option<Vec<VmEvent>> {

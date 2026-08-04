@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use hyperscale_effects_bridge::ProtocolHasher;
 use hyperscale_effects_bridge::vm_statics::package_key;
-use hyperscale_engine_vm::VM_XRD;
 use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
+use hyperscale_engine_vm::{PreviewGrants, PreviewOutcome, PreviewReport, ResourceChange, VM_XRD};
 use hyperscale_types::{
     BlockHeight, NetworkDefinition, ShardId, TransactionDecision, TransactionStatus, TxHash,
 };
@@ -847,6 +847,138 @@ fn vm_vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {
         let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
         u128::from_le_bytes(cell)
     })
+}
+
+/// The reported change to `owner`'s native vault.
+fn preview_change(report: &PreviewReport, owner: [u8; 16]) -> ResourceChange {
+    let vault = vault_key(owner, VM_XRD);
+    *report
+        .changes
+        .iter()
+        .find(|change| change.key == vault)
+        .unwrap_or_else(|| panic!("no reported change for {owner:?}: {:?}", report.changes))
+}
+
+/// A wallet's question before it signs, answered off the tip: what would
+/// this transfer move, and what would it cost?
+///
+/// Preview is engine-side and consensus-free, and the scenario holds it
+/// to both halves of that. The candidate is never submitted while it is
+/// being previewed — the chain advances past it and has never heard of
+/// it, and the payer's committed balance is exactly where it was — and
+/// then the same envelope is committed for real, where the balances it
+/// lands on are the figures the report named. A preview that reported
+/// plausible numbers nobody ever checked against a commit would be
+/// decoration.
+///
+/// Free credit is the one grant a preview carries today: it prices the
+/// fee without charging it, which is what lets a wallet cost an envelope
+/// its payer could not cover.
+///
+/// # Panics
+///
+/// Panics if the root shard serves no preview, if the report disagrees
+/// with the committed baseline or with what the transfer commits, if the
+/// preview leaks the transaction into the chain, or if the transfer does
+/// not accept.
+pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
+    const AMOUNT: u128 = 100;
+    let (payer, from) = vm_sender(0);
+    let to = vm_recipient(0);
+
+    // A preview reads the chain's own attested clock and reveal, so it
+    // wants a chain that has spoken at least once.
+    assert!(
+        await_height(c, ShardId::ROOT, 1, epochs(2)),
+        "root shard did not advance past genesis"
+    );
+    let sender_before = vm_vault_balance(c, ShardId::ROOT, from);
+    let recipient_before = vm_vault_balance(c, ShardId::ROOT, to);
+
+    let candidate = build_vm_transfer_tx(&payer, from, to, AMOUNT, validity_around(c.now()));
+    let hash = candidate.hash();
+    let report = c
+        .vm_preview(ShardId::ROOT, &candidate, PreviewGrants::default())
+        .expect("the root shard serves a preview");
+
+    assert_eq!(
+        report.outcome,
+        PreviewOutcome::Completed,
+        "a covered transfer previews as completed"
+    );
+    assert!(report.fee > 0, "a transfer costs its payer something");
+
+    let sender = preview_change(&report, from);
+    assert_eq!(
+        (sender.before, sender.settled, sender.after),
+        (sender_before, AMOUNT, sender_before - AMOUNT - report.fee),
+        "the sender pays the transfer through its reservation's settle, plus the fee"
+    );
+    let recipient = preview_change(&report, to);
+    assert_eq!(
+        (recipient.before, recipient.credit, recipient.after),
+        (recipient_before, AMOUNT, recipient_before + AMOUNT),
+        "the recipient is credited the transfer and charged nothing"
+    );
+
+    let credited = c
+        .vm_preview(
+            ShardId::ROOT,
+            &candidate,
+            PreviewGrants { free_credit: true },
+        )
+        .expect("the root shard serves a preview");
+    assert_eq!(credited.fee, report.fee, "the fee is priced either way");
+    assert_eq!(
+        preview_change(&credited, from).after,
+        sender.after + report.fee,
+        "free credit keeps exactly the fee off the payer's vault"
+    );
+
+    // Nothing was submitted, gossiped, or committed: the chain advances
+    // past the preview without ever holding the transaction.
+    let ahead = c
+        .committed_height(ShardId::ROOT)
+        .map_or(2, |h| h.inner() + 2);
+    assert!(
+        await_height(c, ShardId::ROOT, ahead, epochs(4)),
+        "the root shard did not advance past the preview"
+    );
+    assert!(
+        c.tx_status(hash).is_none(),
+        "a preview must not submit the transaction it previewed"
+    );
+    assert_eq!(
+        c.chain_fate(ShardId::ROOT, hash),
+        (None, None),
+        "a preview must reach no chain"
+    );
+    assert_eq!(
+        vm_vault_balance(c, ShardId::ROOT, from),
+        sender_before,
+        "a preview writes nothing"
+    );
+
+    // The same envelope for real: the report was the truth about it.
+    c.submit(Arc::new(candidate));
+    let status = await_tx_terminal(c, hash, epochs(8));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "the previewed transfer did not accept; status = {status:?}"
+    );
+    assert_eq!(
+        vm_vault_balance(c, ShardId::ROOT, from),
+        sender.after,
+        "the commit landed on the figure the preview named for the sender"
+    );
+    assert_eq!(
+        vm_vault_balance(c, ShardId::ROOT, to),
+        recipient.after,
+        "the commit landed on the figure the preview named for the recipient"
+    );
 }
 
 /// An adversarial deploy storm rides out: throughput degrades, no shard

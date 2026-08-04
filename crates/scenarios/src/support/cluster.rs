@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hyperscale_crypto_bls::BlsSigner;
+use hyperscale_engine_vm::{PreviewGrants, PreviewReport};
 use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
     BeaconState, BlockHeight, RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision,
@@ -96,6 +97,23 @@ pub trait Cluster {
         local: [u8; 16],
     ) -> Option<VmSnapshotPin> {
         let _ = (shard, owner, local);
+        None
+    }
+
+    /// What `tx` would move and cost, run against `shard`'s committed tip
+    /// without committing anything.
+    ///
+    /// Engine-side and consensus-free: the transaction is never
+    /// submitted, gossiped, or included, and nothing it computes is
+    /// attested. `None` when no hosted store on `shard` can serve the
+    /// snapshot and the tip whose clock the run reads.
+    fn vm_preview(
+        &self,
+        shard: ShardId,
+        tx: &RoutableTransaction,
+        grants: PreviewGrants,
+    ) -> Option<PreviewReport> {
+        let _ = (shard, tx, grants);
         None
     }
 

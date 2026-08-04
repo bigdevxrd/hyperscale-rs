@@ -1,0 +1,402 @@
+//! Preview: what a candidate envelope would do, without doing it.
+//!
+//! A wallet's question before it signs is what a transaction moves and
+//! what it costs. [`VmExecutor::preview`] answers it by running the
+//! envelope through the same derivation, the same kernel, and the same
+//! fee arithmetic a wave would, against a snapshot the caller supplies —
+//! and then reporting the receipt's movements and settles rather than
+//! folding them into anything.
+//!
+//! The entry is engine-side and consensus-free by construction. There is
+//! no `Action`, no `ProtocolEvent`, no network handler and no mempool
+//! path: reaching it means already holding the executor and a snapshot,
+//! which nothing a peer submits ever does. Nothing it computes is
+//! attested, ordered, or written.
+//!
+//! A preview is complete exactly where its snapshot is. Cells the
+//! snapshot cannot serve read absent, so an envelope spanning shards
+//! previews truthfully only at a node holding every cell it touches —
+//! which is a question about the snapshot, not about the preview.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use hyperscale_effects_bridge::admit_package;
+use hyperscale_engine::DynSnapshot;
+use hyperscale_types::{RevealChain, RoutableTransaction, VmEvent, WeightedTimestamp};
+use hyperscale_vm_effects::{Address, EffectTarget, Hash32, LocalKey, SubstateKey};
+use hyperscale_vm_kernel::{
+    Base, BatchTx, Locality, Outcome, Receipt, TxHash as VmTxHash, decode_amount, execute_batch,
+};
+
+use crate::executor::{
+    PayerFee, VmBase, charge_for, protocol_hash, publish_work, read_cell, tx_randomness,
+};
+use crate::genesis::vault_key;
+use crate::runner::{ManifestRunner, PreparedVmTx};
+use crate::{VM_XRD, VmExecutor};
+
+/// What a preview run is permitted that a committed execution is not.
+///
+/// Grants are opt-in: the empty set is the default, and a preview under
+/// it answers exactly what the chain would answer. One grant is
+/// expressible today because one bypassable rule exists. A preview
+/// cannot be granted a bypass of something nothing enforces, so the
+/// grant that would carry an auth exemption joins this struct when the
+/// stdlib grows an auth surface for it to exempt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PreviewGrants {
+    /// Run on credit: the fee is still reported, but never reaches the
+    /// payer's vault. This is what lets a wallet price an envelope whose
+    /// payer could not cover the ceiling it names.
+    pub free_credit: bool,
+}
+
+/// The transaction environment a preview reads, supplied by the caller
+/// because a candidate has no committing block to take it from.
+#[derive(Clone, Copy, Debug)]
+pub struct PreviewInputs {
+    /// The transaction clock. A committed execution reads the payer
+    /// block's parent-QC weighted timestamp; while the transaction is a
+    /// candidate, the caller's own tip is the nearest thing that exists.
+    pub clock: WeightedTimestamp,
+    /// The randomness anchor. A committed execution draws from the payer
+    /// block's reveal chain, and which block that will be is not yet
+    /// decided — so a randomness-reading envelope previews one sample of
+    /// its draw, never a prediction of it.
+    pub randomness: RevealChain,
+    /// What this run is granted.
+    pub grants: PreviewGrants,
+}
+
+/// How a previewed envelope ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreviewOutcome {
+    /// It completed: the reported changes are what would apply.
+    Completed,
+    /// It aborted, so nothing but the fee would apply.
+    Aborted {
+        /// The deterministic reason, as the receipt would carry it.
+        reason: String,
+    },
+    /// It could not be admitted, so it would never enter a block and
+    /// nobody would pay for it.
+    Refused {
+        /// Why admission would refuse it.
+        reason: String,
+    },
+}
+
+/// One amount cell's change under a previewed envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceChange {
+    /// The cell.
+    pub key: SubstateKey,
+    /// What the snapshot held.
+    pub before: u128,
+    /// What the envelope would leave — the fee included, unless the run
+    /// was free-credited.
+    pub after: u128,
+    /// Credited to the cell by commutative movement.
+    pub credit: u128,
+    /// Debited from it by commutative movement.
+    pub debit: u128,
+    /// Settled out of a reservation the transaction held on it.
+    pub settled: u128,
+}
+
+impl ResourceChange {
+    /// An untouched cell at its committed amount.
+    const fn at(key: SubstateKey, before: u128) -> Self {
+        Self {
+            key,
+            before,
+            after: before,
+            credit: 0,
+            debit: 0,
+            settled: 0,
+        }
+    }
+}
+
+/// What a candidate envelope would move and what it would cost.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewReport {
+    /// How the run ended.
+    pub outcome: PreviewOutcome,
+    /// Every amount cell the run moved, in canonical key order, plus the
+    /// payer's vault whenever the fee reaches it.
+    pub changes: Vec<ResourceChange>,
+    /// What the payer would burn. Zero for a refusal, which costs
+    /// nothing because it never reaches a block.
+    pub fee: u128,
+    /// Fuel the run consumed — what the fee is the capped form of, so a
+    /// wallet can see whether its ceiling bound the charge.
+    pub fuel: u64,
+    /// What the run emitted.
+    pub events: Vec<VmEvent>,
+}
+
+impl PreviewReport {
+    /// The report for an envelope that never reached execution.
+    fn refused(reason: impl Into<String>) -> Self {
+        Self {
+            outcome: PreviewOutcome::Refused {
+                reason: reason.into(),
+            },
+            changes: Vec::new(),
+            fee: 0,
+            fuel: 0,
+            events: Vec::new(),
+        }
+    }
+}
+
+/// The committed amount a cell holds in `base`, absent reading as zero —
+/// the same reading the fold gives an absent cell.
+fn amount_at(base: &VmBase, key: SubstateKey) -> u128 {
+    base.cells
+        .get(&key)
+        .map_or(0, |bytes| decode_amount(bytes).unwrap_or(0))
+}
+
+/// Fold a run's movements and settles into the wallet's report, landing
+/// the fee on the payer's vault unless the run was credited.
+///
+/// The walk is `Locality::All` deliberately: the report answers what the
+/// transaction does, and which shard applies which part of it is a
+/// question about commitment, not about resources.
+fn resource_changes(
+    base: &VmBase,
+    receipt: Option<&Receipt>,
+    fee: u128,
+    payer: SubstateKey,
+    grants: PreviewGrants,
+) -> Vec<ResourceChange> {
+    let mut changes: BTreeMap<SubstateKey, ResourceChange> = BTreeMap::new();
+    if let Some(receipt) = receipt {
+        let moved = receipt.delta.owned(&Locality::All);
+        for (key, movement) in moved.movements() {
+            let change = changes
+                .entry(key)
+                .or_insert_with(|| ResourceChange::at(key, amount_at(base, key)));
+            change.credit = change.credit.saturating_add(movement.credit);
+            change.debit = change.debit.saturating_add(movement.debit);
+        }
+        for (key, settled) in moved.settles() {
+            let change = changes
+                .entry(key)
+                .or_insert_with(|| ResourceChange::at(key, amount_at(base, key)));
+            change.settled = change.settled.saturating_add(settled);
+        }
+    }
+    let charged_to = (fee > 0 && !grants.free_credit).then_some(payer);
+    if let Some(vault) = charged_to {
+        changes
+            .entry(vault)
+            .or_insert_with(|| ResourceChange::at(vault, amount_at(base, vault)));
+    }
+    changes
+        .into_values()
+        .map(|mut change| {
+            let charged = if charged_to == Some(change.key) {
+                fee
+            } else {
+                0
+            };
+            change.after = change
+                .before
+                .saturating_add(change.credit)
+                .saturating_sub(change.debit)
+                .saturating_sub(change.settled)
+                .saturating_sub(charged);
+            change
+        })
+        .collect()
+}
+
+/// What the payer burns for a run that reached execution.
+///
+/// [`charge_for`] answers for an attempt that applied no effects; a
+/// completed run instead burns the attested actual capped at its
+/// ceiling, which is the figure the fee burn writes into the receipt.
+fn fee_for(outcome: &Outcome, fuel: u64, payer: PayerFee) -> u128 {
+    match outcome {
+        Outcome::Completed { .. } => u128::from(fuel).min(payer.max_fee),
+        aborted => charge_for(aborted, payer).unwrap_or(0),
+    }
+}
+
+impl VmExecutor {
+    /// Run `tx` against `snapshot` and report what it would move and what
+    /// it would cost, committing nothing.
+    ///
+    /// `tx` is the envelope in the wire form a wallet would submit, so
+    /// the preview's identity — which fresh-key derivation and the
+    /// randomness draw both root at — is the one the chain would use.
+    #[must_use]
+    pub fn preview(
+        &self,
+        snapshot: &DynSnapshot<'_>,
+        tx: &RoutableTransaction,
+        inputs: PreviewInputs,
+    ) -> PreviewReport {
+        let Some(vm) = tx.vm() else {
+            return PreviewReport::refused("not a VM transaction");
+        };
+        let payer = PayerFee {
+            // Derived rather than read off `vm_fee_vault`, which panics
+            // on an envelope derivation refuses — the exact envelope a
+            // preview exists to give an answer about.
+            vault: vault_key(vm.fee_payer, VM_XRD),
+            max_fee: vm.max_fee,
+            floor: vm.abort_floor(),
+            // A preview is one envelope against one snapshot: no wave can
+            // discard effects it completed, so the reserve-receipt shape
+            // does not arise.
+            wave_abortable: false,
+        };
+        if let Some(artifact) = vm.artifact() {
+            return preview_publish(snapshot, artifact, payer, inputs.grants);
+        }
+
+        let (manifest, identity, declaration, nullifiers) = match self.prepare(tx) {
+            Ok(derived) => derived,
+            Err(reason) => return PreviewReport::refused(reason),
+        };
+        let mut cells: BTreeMap<SubstateKey, Vec<u8>> = BTreeMap::new();
+        for effect in declaration.set.iter() {
+            if let EffectTarget::Point(key) = effect.target
+                && let Some(value) = read_cell(snapshot, key)
+            {
+                cells.insert(key, value);
+            }
+        }
+        // The fee vault is not a declared effect, and the report needs
+        // its committed amount to say what the charge would leave.
+        if let Some(value) = read_cell(snapshot, payer.vault) {
+            cells.insert(payer.vault, value);
+        }
+        // Pinned values override the snapshot, exactly as they do in a
+        // wave: the read is version-pinned to what the signer proved.
+        for pin in &vm.snapshot_pins {
+            let key = SubstateKey {
+                owner: Address(pin.owner),
+                local: LocalKey(pin.local),
+            };
+            match &pin.value {
+                Some(value) => {
+                    cells.insert(key, value.to_vec());
+                }
+                None => {
+                    cells.remove(&key);
+                }
+            }
+        }
+        let base = Arc::new(VmBase { cells });
+
+        let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+        let prepared = BTreeMap::from([(
+            vm_tx,
+            PreparedVmTx {
+                manifest,
+                identity,
+                declaration: declaration.clone(),
+                nullifiers: nullifiers.clone(),
+            },
+        )]);
+        let batch = [BatchTx {
+            tx: vm_tx,
+            declared: declaration.set,
+            ordered: declaration.ordered,
+            nullifiers,
+            clock_ms: inputs.clock.as_millis(),
+            randomness: tx_randomness(inputs.randomness, tx.hash()),
+        }];
+        let runner = ManifestRunner {
+            backend: &self.backend,
+            prepared: &prepared,
+        };
+        // Total locality: the report covers every cell the envelope
+        // touches, and the kernel judges each against whatever the
+        // snapshot served for it.
+        let outcome = match execute_batch(
+            Arc::clone(&base) as Arc<dyn Base>,
+            &batch,
+            &runner,
+            protocol_hash,
+            self.mode,
+            &Locality::All,
+        ) {
+            Ok(outcome) => outcome,
+            // The screen is a property of one derivation's own output, so
+            // this is unreachable for anything `prepare` accepted — and a
+            // preview answers rather than panics either way.
+            Err(error) => return PreviewReport::refused(error.to_string()),
+        };
+        let Some(receipt) = outcome.receipts.get(&vm_tx) else {
+            return PreviewReport::refused("the batch produced no receipt");
+        };
+        let fee = fee_for(&receipt.outcome, receipt.fuel, payer);
+        PreviewReport {
+            outcome: preview_outcome(&receipt.outcome),
+            changes: resource_changes(&base, Some(receipt), fee, payer.vault, inputs.grants),
+            fee,
+            fuel: receipt.fuel,
+            events: receipt
+                .events
+                .iter()
+                .map(|event| VmEvent {
+                    emitter: event.emitter.0,
+                    event_type: event.event_type,
+                    payload: event.payload.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A publish's answer, which needs no state: the whole verdict is a pure
+/// function of the artifact's bytes, and its price is one derivation over
+/// their length.
+///
+/// An artifact admission refuses costs nothing, because a publish that
+/// cannot be admitted never enters a block.
+fn preview_publish(
+    snapshot: &DynSnapshot<'_>,
+    artifact: &[u8],
+    payer: PayerFee,
+    grants: PreviewGrants,
+) -> PreviewReport {
+    if let Err(error) = admit_package(artifact) {
+        return PreviewReport::refused(error.0);
+    }
+    let work = publish_work(artifact);
+    let mut base = VmBase::default();
+    if let Some(value) = read_cell(snapshot, payer.vault) {
+        base.cells.insert(payer.vault, value);
+    }
+    let fee = u128::from(work).min(payer.max_fee);
+    PreviewReport {
+        outcome: PreviewOutcome::Completed,
+        changes: resource_changes(&base, None, fee, payer.vault, grants),
+        fee,
+        fuel: work,
+        events: Vec::new(),
+    }
+}
+
+/// The kernel's verdict as a preview reports it.
+fn preview_outcome(outcome: &Outcome) -> PreviewOutcome {
+    match outcome {
+        Outcome::Completed { .. } => PreviewOutcome::Completed,
+        Outcome::UserError { reason } | Outcome::ProtocolError { reason } => {
+            PreviewOutcome::Aborted {
+                reason: reason.clone(),
+            }
+        }
+        Outcome::Infeasible { key, amount } => PreviewOutcome::Aborted {
+            reason: format!("infeasible: {amount} uncovered on {key:?}"),
+        },
+    }
+}

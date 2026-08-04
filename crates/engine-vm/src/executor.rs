@@ -71,7 +71,7 @@ const DOMAIN_TX_RANDOMNESS: &[u8] = b"hyperscale/vm/tx-randomness";
 /// in, so every participant of a cross-shard transaction derives one
 /// receipt. Mixing the hash keeps two transactions in one payer block
 /// from sharing a draw.
-fn tx_randomness(anchor: RevealChain, tx: TxHash) -> [u8; 32] {
+pub fn tx_randomness(anchor: RevealChain, tx: TxHash) -> [u8; 32] {
     *Hash::from_parts(&[
         DOMAIN_TX_RANDOMNESS,
         anchor.as_raw().as_bytes(),
@@ -125,9 +125,9 @@ impl Base for VmBase {
 /// The VM engine: the genesis-static world, the compiled stdlib guests,
 /// and the batch scheduling mode.
 pub struct VmExecutor {
-    world: VmWorld,
-    backend: GuestBackend,
-    mode: ExecutionMode,
+    pub(crate) world: VmWorld,
+    pub(crate) backend: GuestBackend,
+    pub(crate) mode: ExecutionMode,
 }
 
 impl VmExecutor {
@@ -167,7 +167,7 @@ impl VmExecutor {
     /// the same `decode → admit → route` admission ran; refusal here
     /// means the transaction bypassed admission and fails
     /// deterministically.
-    fn prepare(
+    pub(crate) fn prepare(
         &self,
         tx: &RoutableTransaction,
     ) -> Result<(Manifest, ManifestHash, Declaration, Vec<SubstateKey>), String> {
@@ -219,7 +219,7 @@ impl VmExecutor {
 }
 
 /// Read one declared cell from the wave snapshot by its exact flat key.
-fn read_cell(snapshot: &DynSnapshot<'_>, key: SubstateKey) -> Option<DbSubstateValue> {
+pub fn read_cell(snapshot: &DynSnapshot<'_>, key: SubstateKey) -> Option<DbSubstateValue> {
     snapshot.get_raw_substate_by_db_key(
         &DbPartitionKey {
             node_key: vm_db_node_key(key.owner.0),
@@ -383,18 +383,18 @@ fn apply_fee_burn(
 
 /// What this shard, as a transaction's fee payer, charges it.
 #[derive(Clone, Copy)]
-struct PayerFee {
-    vault: SubstateKey,
+pub struct PayerFee {
+    pub vault: SubstateKey,
     /// The signed ceiling a success burns up to, and what the sender's
     /// own defect costs.
-    max_fee: u128,
+    pub max_fee: u128,
     /// The class floor: what an attempt owes when nothing it did was its
     /// sender's fault.
-    floor: u128,
+    pub floor: u128,
     /// Whether a wave can abort this transaction after it executed —
     /// true for a cross-shard leg, which is the one shape whose effects
     /// are discarded after the engine completed them.
-    wave_abortable: bool,
+    pub wave_abortable: bool,
 }
 
 /// What an attempt that applied no effects owes, by why it applied none.
@@ -409,7 +409,7 @@ struct PayerFee {
 /// while the other charges every executed operator — so a charge derived
 /// from it would differ across replicas on the same transaction. Both
 /// amounts below are functions of signed content alone.
-const fn charge_for(outcome: &Outcome, payer: PayerFee) -> Option<u128> {
+pub const fn charge_for(outcome: &Outcome, payer: PayerFee) -> Option<u128> {
     match outcome {
         // Completed here means the engine applied the effects. Only a
         // wave can still discard them, and only for a cross-shard leg —
@@ -501,6 +501,15 @@ fn build_fee_receipt(
     )
 }
 
+/// What judging and storing one artifact costs, whatever the verdict:
+/// the shard reached it from these bytes before it knew the answer.
+///
+/// One unit per byte is a placeholder against phase 6's measured
+/// baselines, like every other number in the fee model.
+pub const fn publish_work(artifact: &[u8]) -> u64 {
+    artifact.len() as u64
+}
+
 /// Settle one publish: the artifact lands in its content-addressed cell
 /// under the publisher, and the fee burns from the publisher's vault.
 ///
@@ -520,11 +529,7 @@ fn assemble_published_tx(
     locality: &Locality,
 ) -> ExecutedTx {
     let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
-    // Priced whatever the verdict, because judging the artifact is work
-    // the shard did before it knew the answer. One unit per byte is a
-    // placeholder against phase 6's measured baselines, like every other
-    // number in the fee model.
-    let work = artifact.len() as u64;
+    let work = publish_work(artifact);
 
     // Admission reached the whole verdict from these same bytes, so a
     // refusal here means the transaction bypassed admission — the same
