@@ -161,6 +161,7 @@ pub use native::GuestBackend;
 #[cfg(target_arch = "wasm32")]
 mod reference {
     use hyperscale_vm_ref::{CVal, RefComponent, RefComponentInstance, ResourceKind};
+    use hyperscale_vm_runtime::validate_component;
 
     use super::{HostState, Invocation, InvokeOutcome, KernelSession};
     use crate::genesis::account_artifact;
@@ -173,13 +174,20 @@ mod reference {
     impl GuestBackend {
         /// Decode the genesis packages.
         ///
+        /// The artifact clears the same profile it clears under the
+        /// blessed engine: the verdict is a property of the bytes, and
+        /// a build that interprets components rather than compiling them
+        /// has no less need of it.
+        ///
         /// # Panics
         ///
-        /// Panics if the stdlib artifact fails to decode — a build
-        /// defect, not a runtime condition.
+        /// Panics if the stdlib artifact fails profile validation or
+        /// decoding — a build defect, not a runtime condition.
         pub fn new() -> Self {
+            let artifact = account_artifact();
+            validate_component(artifact).expect("the stdlib account artifact clears the profile");
             Self {
-                account: RefComponent::decode(account_artifact())
+                account: RefComponent::decode(artifact)
                     .expect("the stdlib account artifact decodes"),
             }
         }

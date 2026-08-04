@@ -26,11 +26,14 @@ radix-substate-store-interface.workspace = true
 # fallback. Phase 2's differential guarantee — byte-identical receipts
 # and fuel across both runtimes — is what makes the split sound.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-hyperscale-vm-runtime.workspace = true
+hyperscale-vm-runtime = { workspace = true, features = ["engine"] }
 wasmtime.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 hyperscale-vm-ref.workspace = true
+# The profile validator alone: an artifact has to be judgeable where the
+# blessed engine is not built in.
+hyperscale-vm-runtime.workspace = true
 
 # The reference interpreter only ships on wasm32, so nothing in a native
 # run would notice it rejecting the artifact's metadata section — and the
