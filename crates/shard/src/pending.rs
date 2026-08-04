@@ -95,6 +95,11 @@ impl PendingBlocks {
         self.0.contains_key(&block_hash)
     }
 
+    /// Every pending block, in no particular order.
+    pub fn iter(&self) -> impl Iterator<Item = &PendingBlock> {
+        self.0.values()
+    }
+
     /// Number of distinct pending headers at `(height, round)`. An honest
     /// proposer produces one; a larger count is a Byzantine proposer
     /// equivocating, used to cap how many it can make the node store and

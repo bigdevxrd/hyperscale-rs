@@ -12,13 +12,15 @@
 //! This provides a strong DA guarantee: if a QC forms, at least 2f+1 validators have
 //! the complete block data, making it recoverable from any honest validator in that set.
 
+use std::collections::BTreeSet;
+
 use hyperscale_core::{Action, CommitSource, ProtocolEvent, TimerId, VmFeeDemand};
 use hyperscale_types::{
-    BlockHash, Hash, InFlightCount, LocalTimestamp, MAX_FINALIZED_TX_PER_BLOCK, MAX_PROGRESS_WAIT,
-    MAX_READY_SIGNALS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProposerTimestamp, ProvisionHash, QuiesceCut,
-    RETENTION_HORIZON, ReadySignal, ReshapeThresholds, ReshapeTrigger, ScheduleLookup,
-    SettledSetVerdict, SettledWaveSet, ShardId, SplitAtBoundary, StoredReceipt, WaveId,
-    WeightedTimestamp, derive_reshape_trigger, ready_signal_window, settled_set_verdict,
+    BlockHash, DeclaredKey, Hash, InFlightCount, LocalTimestamp, MAX_FINALIZED_TX_PER_BLOCK,
+    MAX_PROGRESS_WAIT, MAX_READY_SIGNALS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProposerTimestamp,
+    ProvisionHash, QuiesceCut, RETENTION_HORIZON, ReadySignal, ReshapeThresholds, ReshapeTrigger,
+    ScheduleLookup, SettledSetVerdict, SettledWaveSet, ShardId, SplitAtBoundary, StoredReceipt,
+    WaveId, WeightedTimestamp, derive_reshape_trigger, ready_signal_window, settled_set_verdict,
 };
 
 /// Shard consensus statistics for monitoring.
@@ -343,7 +345,7 @@ pub struct ShardCoordinator {
     /// it globally). One detection per key is enough — the conviction
     /// is permanent — so this gates the detection continuation, nothing
     /// more.
-    detected_equivocators: std::collections::BTreeSet<ValidatorId>,
+    detected_equivocators: BTreeSet<ValidatorId>,
 
     /// Per-shard beacon-witness accumulator. Previewed at proposal time
     /// to fill the new block's `(beacon_witness_root, beacon_witness_leaf_count)`;
@@ -494,7 +496,7 @@ impl ShardCoordinator {
             proposal: ProposalTracker::new(),
             dedup_index: CommitDedupIndex::new(),
             ready_signal_pool: ReadySignalPool::new(),
-            detected_equivocators: std::collections::BTreeSet::new(),
+            detected_equivocators: BTreeSet::new(),
             beacon_witness_accumulator: BeaconWitnessAccumulator::from_leaves(
                 recovered.beacon_witness_start,
                 recovered.beacon_witness_leaf_hashes,
@@ -2989,6 +2991,33 @@ impl ShardCoordinator {
         }
 
         self.create_vote(topology_schedule, block_hash, height, round)
+    }
+
+    /// The admission conflict keys held by transactions in blocks that
+    /// are proposed or certified but not yet committed.
+    ///
+    /// A transaction takes its mempool lock when its block *commits*, and
+    /// a proposer selects while earlier blocks are still uncommitted — so
+    /// the pipeline is deeper than the lock window, and two conflicting
+    /// transactions can both be selected before either locks anything.
+    /// This reads that window back out of chain content, which is what
+    /// lets selection exclude the conflicts the lock set does not yet
+    /// cover.
+    ///
+    /// Every pending block rather than one branch's ancestors, and every
+    /// key rather than the read/write split: both over-approximate, and
+    /// over-approximating only defers a transaction for the couple of
+    /// blocks the window lasts. Under-approximating admits a conflicting
+    /// pair, which is what this exists to stop.
+    #[must_use]
+    pub fn in_flight_admission_keys(&self) -> BTreeSet<DeclaredKey> {
+        self.pending_blocks
+            .iter()
+            .filter(|pending| pending.header().height() > self.committed_height)
+            .filter_map(|pending| pending.block())
+            .flat_map(|block| block.transactions().iter())
+            .flat_map(|tx| tx.admission_keys())
+            .collect()
     }
 
     /// Per-payer fee-reservation demands for the transaction list

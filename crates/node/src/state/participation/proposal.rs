@@ -58,8 +58,23 @@ impl ShardParticipation {
         // payer evidence; a mis-paired inclusion is backstopped by the
         // dispatch gate's required-set check.
         let topology = sched.head();
+        // A transaction takes its mempool lock when its block commits,
+        // and this selects while earlier blocks are still uncommitted —
+        // the pipeline is deeper than the lock window, so the ready set
+        // alone would let two conflicting transactions into two blocks
+        // and both would execute against the same baseline. The window
+        // the lock set does not yet cover is read back out of chain
+        // content and excluded here.
+        let in_flight = self.shard_coordinator.in_flight_admission_keys();
         let ready_txs = ready_txs
             .into_iter()
+            .filter(|tx| {
+                in_flight.is_empty()
+                    || !tx
+                        .admission_keys()
+                        .iter()
+                        .any(|key| in_flight.contains(key))
+            })
             .filter(|tx| self.vm_engagement_held(tx, topology, &queued))
             .collect();
 

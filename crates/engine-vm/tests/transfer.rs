@@ -65,6 +65,32 @@ impl MapDb {
     }
 }
 
+impl MapDb {
+    /// Apply a receipt's committed updates, as the commit path would.
+    fn apply(&mut self, updates: &DatabaseUpdates) {
+        for (node_key, node_updates) in &updates.node_updates {
+            let PartitionDatabaseUpdates::Delta { substate_updates } = node_updates
+                .partition_updates
+                .get(&VM_PARTITION)
+                .expect("VM updates land in the VM partition")
+            else {
+                panic!("VM updates are Delta-only");
+            };
+            for (sort_key, update) in substate_updates {
+                let key = (node_key.clone(), VM_PARTITION, sort_key.0.clone());
+                match update {
+                    DatabaseUpdate::Set(value) => {
+                        self.0.insert(key, value.clone());
+                    }
+                    DatabaseUpdate::Delete => {
+                        self.0.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl SubstateDatabase for MapDb {
     fn get_raw_substate_by_db_key(
         &self,
@@ -212,6 +238,8 @@ fn world_accounts() -> Vec<([u8; 16], u128)> {
         (fee_payer(7), 1_000),
         (fee_payer(11), 110),
         (fee_payer(23), 1_000),
+        (fee_payer(31), 1_000),
+        (fee_payer(32), 1_000),
     ]
 }
 
@@ -329,13 +357,100 @@ fn a_stamp_writes_the_draw_its_anchor_fixes() {
     );
 }
 
+/// Two independent payments into one account, each in its own batch.
+///
+/// The recipient's vault is a `delta` on both sides, which the mode
+/// lattice calls compatible — so nothing defers the second behind the
+/// first, and the two may legitimately be included in different blocks.
+/// What each receipt then carries is an *absolute* value for the cell,
+/// derived from whatever baseline its batch read.
+///
+/// Threaded, that is right: the second batch reads the first's applied
+/// credit and writes the sum. Against a shared baseline it is not: both
+/// batches read the same starting balance, both write the same absolute,
+/// and whichever settles last silently discards the other's credit.
+///
+/// The second half characterises a live defect rather than blessing it —
+/// a payment included while an earlier one is committed but not yet
+/// settled reads exactly that shared baseline.
+#[test]
+fn a_batch_baseline_decides_whether_two_payments_both_land() {
+    let payer_a = fee_payer(31);
+    let payer_b = fee_payer(32);
+    let hot = BOB;
+    let accounts = [(payer_a, 1_000), (payer_b, 1_000), (hot, 10)];
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+
+    let pay = |seed: u8, from: [u8; 16]| {
+        Arc::new(Verified::<RoutableTransaction>::from_persisted(
+            signed_transfer_with_fee(seed, from, hot, 100, 10),
+        ))
+    };
+
+    // Threaded: each batch reads what the previous one committed.
+    let mut store = MapDb::genesis(&accounts);
+    let mut threaded = Vec::new();
+    for (seed, from) in [(31u8, payer_a), (32, payer_b)] {
+        let executed = execute_batch_on(&store, &executor, &[pay(seed, from)]);
+        let updates = executed[0]
+            .consensus
+            .database_updates()
+            .expect("a completed payment commits updates");
+        threaded.push(vault_cell(updates, hot));
+        store.apply(updates);
+    }
+    assert_eq!(
+        threaded,
+        vec![
+            Some(encode_amount(110).to_vec()),
+            Some(encode_amount(210).to_vec())
+        ],
+        "each payment must land on top of the last"
+    );
+
+    // Unthreaded: both batches read the genesis baseline, as two blocks
+    // committed inside one unsettled window would.
+    let genesis = MapDb::genesis(&accounts);
+    let shared: Vec<Option<Vec<u8>>> = [(31u8, payer_a), (32, payer_b)]
+        .into_iter()
+        .map(|(seed, from)| {
+            let executed = execute_batch_on(&genesis, &executor, &[pay(seed, from)]);
+            vault_cell(
+                executed[0]
+                    .consensus
+                    .database_updates()
+                    .expect("a completed payment commits updates"),
+                hot,
+            )
+        })
+        .collect();
+    assert_eq!(
+        shared,
+        vec![
+            Some(encode_amount(110).to_vec()),
+            Some(encode_amount(110).to_vec())
+        ],
+        "two batches on one baseline each write the same absolute — applying \
+         both leaves one credit, not two"
+    );
+}
+
 fn execute_on(
     accounts: &[([u8; 16], u128)],
     executor: &VmExecutor,
     transactions: &[Arc<Verified<RoutableTransaction>>],
 ) -> Vec<ExecutedTx> {
-    let snapshot_store = MapDb::genesis(accounts);
-    let snapshot = DynSnapshot(&snapshot_store);
+    execute_batch_on(&MapDb::genesis(accounts), executor, transactions)
+}
+
+/// Execute one batch against an explicit store, so a caller can thread
+/// committed state between batches the way the commit path does.
+fn execute_batch_on(
+    snapshot_store: &MapDb,
+    executor: &VmExecutor,
+    transactions: &[Arc<Verified<RoutableTransaction>>],
+) -> Vec<ExecutedTx> {
+    let snapshot = DynSnapshot(snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
     let ctx = WaveBatchContext {
