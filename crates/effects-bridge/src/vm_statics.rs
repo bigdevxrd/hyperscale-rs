@@ -428,10 +428,8 @@ impl BridgeStatics {
     /// exposure a call transaction avoids only because its own withdraw
     /// happens to name the same vault.
     fn derive_publish(vm: &VmTransaction, artifact: &[u8]) -> Result<VmDerived, VmStaticsError> {
-        if !vm.subintent_sigs.is_empty() || !vm.snapshot_pins.is_empty() {
-            return Err(VmStaticsError(
-                "a publish carries no subintents and no snapshot pins".into(),
-            ));
+        if !vm.subintent_sigs.is_empty() {
+            return Err(VmStaticsError("a publish carries no subintents".into()));
         }
         // The artifact has to describe itself before it is addressed:
         // what the address covers is code and signatures together, so an
@@ -459,7 +457,6 @@ impl BridgeStatics {
                 provision_keys: Vec::new(),
             },
             subintent_hashes: Vec::new(),
-            snapshot_targets: Vec::new(),
             fee_vault_local: vault.local.0,
         })
     }
@@ -524,9 +521,9 @@ impl VmStatics for BridgeStatics {
         )
         .map_err(|error| VmStaticsError(format!("routing: {error}")))?;
 
-        // Fresh reads share, mutations exclude, and snapshot reads are
-        // lock-free and client-proven — they take no admission key and
-        // make no participant. The provision set is the read set:
+        // Fresh reads share, mutations exclude, and a locked read takes
+        // no admission key and makes no participant — its target cannot
+        // change, so nothing can contend on it. The provision set is the read set:
         // fresh reads plus read-modify-write priors, the values a
         // counterpart shard cannot execute without.
         let mut read_keys = BTreeSet::new();
@@ -546,7 +543,7 @@ impl VmStatics for BridgeStatics {
                 Mode::Delta | Mode::Reserve { .. } => {
                     write_keys.insert(key);
                 }
-                Mode::Snapshot { .. } => {}
+                Mode::Locked => {}
             }
         }
         let prefixes = |keys: &BTreeSet<DeclaredKey>| -> Vec<[u8; 16]> {
@@ -570,16 +567,6 @@ impl VmStatics for BridgeStatics {
                 .iter()
                 .map(|record| record.subintent.0.0)
                 .collect(),
-            snapshot_targets: routing
-                .snapshot_obligations
-                .iter()
-                .map(|obligation| match obligation.target {
-                    EffectTarget::Point(key) => Ok((key.owner.0, key.local.0)),
-                    EffectTarget::Entry { .. } | EffectTarget::Range { .. } => Err(VmStaticsError(
-                        "collection snapshot obligations are unsupported".into(),
-                    )),
-                })
-                .collect::<Result<_, _>>()?,
             fee_vault_local: vault_key(vm.fee_payer, VM_XRD).local.0,
         })
     }
@@ -741,7 +728,6 @@ mod tests {
             fee_payer: composer_addr().0,
             max_fee: 1_000,
             gas_limit: 1_000_000,
-            snapshot_pins: Vec::new(),
             validity_start_ms: 0,
             validity_end_ms: 1_000_000,
             message: Vec::new().into(),

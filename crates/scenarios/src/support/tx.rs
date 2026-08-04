@@ -13,10 +13,9 @@ use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
     ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId, StakePoolId,
-    TimestampRange, VmBody, VmSnapshotPin, VmTransaction, WeightedTimestamp,
-    build_transfer_tx as build_transfer, ed25519_keypair_from_seed, encode_system_action,
-    routable_from_notarized_v1, sign_and_notarize, sign_and_notarize_with_options,
-    uniform_shard_for_node,
+    TimestampRange, VmBody, VmTransaction, WeightedTimestamp, build_transfer_tx as build_transfer,
+    ed25519_keypair_from_seed, encode_system_action, routable_from_notarized_v1, sign_and_notarize,
+    sign_and_notarize_with_options, uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -663,7 +662,7 @@ pub fn build_vm_stamp_tx(
             },
         ],
     };
-    RoutableTransaction::new_vm(vm_envelope(graph, payer, Vec::new(), validity))
+    RoutableTransaction::new_vm(vm_envelope(graph, payer, validity))
 }
 
 /// Build a VM transfer: the account guest's withdraw+deposit graph over
@@ -704,21 +703,7 @@ pub fn build_vm_transfer_tx(
             },
         ],
     };
-    RoutableTransaction::new_vm(vm_envelope(graph, payer, Vec::new(), validity))
-}
-
-/// The guarded account's funded genesis balance in the snapshot cast.
-pub const VM_SNAPSHOT_GUARD_BALANCE: u128 = 500;
-
-/// The snapshot cast: the payer's key with both transfer accounts on
-/// `leaf(1, 0)` and the guarded account on `leaf(1, 1)`.
-#[must_use]
-pub fn vm_snapshot_cast() -> (Ed25519PrivateKey, [u8; 16], [u8; 16], [u8; 16]) {
-    let mut taken = Vec::new();
-    let (payer, from) = vm_account_routing_to(ShardId::leaf(1, 0), &mut taken);
-    let (_to_key, to) = vm_account_routing_to(ShardId::leaf(1, 0), &mut taken);
-    let (_guard_key, guard) = vm_account_routing_to(ShardId::leaf(1, 1), &mut taken);
-    (payer, from, to, guard)
+    RoutableTransaction::new_vm(vm_envelope(graph, payer, validity))
 }
 
 /// Every VM account address any scenario in this crate transacts with.
@@ -738,70 +723,9 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     all.extend(vm_storm_genesis_accounts());
     all.extend(vm_cross_shard_genesis_accounts());
     all.extend(vm_insolvent_genesis_accounts());
-    all.extend(vm_snapshot_genesis_accounts());
     all.sort_unstable_by_key(|(address, _)| *address);
     all.dedup_by_key(|(address, _)| *address);
     all
-}
-
-/// Genesis funding for the snapshot cast: the payer funded, the local
-/// recipient registered with dust, and the guarded account holding
-/// [`VM_SNAPSHOT_GUARD_BALANCE`] on the other shard.
-#[must_use]
-pub fn vm_snapshot_genesis_accounts() -> Vec<([u8; 16], u128)> {
-    let (_payer, from, to, guard) = vm_snapshot_cast();
-    vec![(from, 10_000), (to, 10), (guard, VM_SNAPSHOT_GUARD_BALANCE)]
-}
-
-/// Build a guarded VM transfer: a local withdraw+deposit leg gated on an
-/// `assert-balance` bounded snapshot of `guard`'s [`VM_XRD`] vault,
-/// covered by the client-proven `pin` the envelope signs.
-#[must_use]
-#[allow(clippy::too_many_arguments)] // signing-time choices, all caller-owned
-pub fn build_vm_guarded_transfer_tx(
-    payer: &Ed25519PrivateKey,
-    from: [u8; 16],
-    to: [u8; 16],
-    amount: u128,
-    guard: [u8; 16],
-    min: u128,
-    window: u64,
-    pin: VmSnapshotPin,
-    validity: TimestampRange,
-) -> RoutableTransaction {
-    let graph = ManifestGraph {
-        nodes: vec![
-            GraphNode {
-                target: Address(guard),
-                method: "assert-balance".into(),
-                args: vec![
-                    GraphArg::Literal(Value::Address(VM_XRD)),
-                    GraphArg::Literal(Value::U128(min)),
-                    GraphArg::Literal(Value::U64(window)),
-                ],
-            },
-            GraphNode {
-                target: Address(from),
-                method: "withdraw".into(),
-                args: vec![
-                    GraphArg::Literal(Value::Address(VM_XRD)),
-                    GraphArg::Literal(Value::U128(amount)),
-                ],
-            },
-            GraphNode {
-                target: Address(to),
-                method: "deposit".into(),
-                args: vec![GraphArg::Edge {
-                    edge: EdgeRef {
-                        producer: 1,
-                        output: 0,
-                    },
-                    constraints: vec![Constraint::ResourceIs(VM_XRD)],
-                }],
-            },
-        ],
-    };
-    RoutableTransaction::new_vm(vm_envelope(graph, payer, vec![pin], validity))
 }
 
 /// The publishers a deploy storm spams from: one per depth-1 shard, so
@@ -867,7 +791,6 @@ pub fn build_vm_publish_tx(
             fee_payer: vm_account_address(&payer.public_key().0),
             max_fee: VM_PUBLISH_MAX_FEE,
             gas_limit: 1_000_000,
-            snapshot_pins: Vec::new(),
             validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
             validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
             message: Vec::new().into(),
@@ -883,7 +806,6 @@ pub fn build_vm_publish_tx(
 fn vm_envelope(
     graph: ManifestGraph,
     payer: &Ed25519PrivateKey,
-    snapshot_pins: Vec<VmSnapshotPin>,
     validity: TimestampRange,
 ) -> VmTransaction {
     let tree = EnvelopeTree {
@@ -903,7 +825,6 @@ fn vm_envelope(
         // so it must sit below the funded balances.
         max_fee: 1_000,
         gas_limit: 1_000_000,
-        snapshot_pins,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
         message: Vec::new().into(),

@@ -566,13 +566,6 @@ pub enum RoutableTransactionVerifyError {
     /// A subintent signature does not cover its declaration hash.
     #[error("vm subintent {0} signature is invalid")]
     InvalidSubintentSignature(u32),
-    /// A bounded snapshot read with no covering pin in the envelope.
-    #[error("vm snapshot target has no covering pin")]
-    MissingSnapshotPin,
-    /// A snapshot pin whose inclusion proof does not bind its leaf to
-    /// its root.
-    #[error("vm snapshot pin {0} proof is invalid")]
-    InvalidSnapshotPin(u32),
     /// VM static derivation refused the envelope.
     #[error(transparent)]
     VmDerivation(#[from] VmStaticsError),
@@ -637,26 +630,6 @@ impl Verify<&RoutableTransactionContext<'_>> for RoutableTransaction {
                         ));
                     }
                 }
-                // Every bounded snapshot read carries its client-proven
-                // pin: the proof binds leaf to root here; binding the
-                // root to the shard's attested root for that height
-                // rides the remote-header channel.
-                for target in &derived.snapshot_targets {
-                    if !vm
-                        .snapshot_pins
-                        .iter()
-                        .any(|pin| (pin.owner, pin.local) == *target)
-                    {
-                        return Err(RoutableTransactionVerifyError::MissingSnapshotPin);
-                    }
-                }
-                for (index, pin) in vm.snapshot_pins.iter().enumerate() {
-                    if !pin.verify_inclusion() {
-                        return Err(RoutableTransactionVerifyError::InvalidSnapshotPin(
-                            u32::try_from(index).unwrap_or(u32::MAX),
-                        ));
-                    }
-                }
             }
         }
         Ok(Verified::new_unchecked(self.clone()))
@@ -696,8 +669,7 @@ mod tests {
     use super::*;
     use crate::test_utils::{test_node, test_transaction_with_nodes, test_validity_range};
     use crate::{
-        Ed25519PrivateKey, MerkleInclusionProof, ShardId, VmBody, VmSnapshotPin, VmStatics,
-        VmSubintentSig, WeightedTimestamp, install_vm_statics,
+        Ed25519PrivateKey, VmBody, VmStatics, VmSubintentSig, WeightedTimestamp, install_vm_statics,
     };
 
     struct StubStatics;
@@ -716,13 +688,7 @@ mod tests {
             } else {
                 Vec::new()
             };
-            let snapshot_targets = if vm.call_tree().unwrap_or_default() == b"with-snapshot" {
-                vec![([0x33; 16], [0x44; 16])]
-            } else {
-                Vec::new()
-            };
             Ok(VmDerived {
-                snapshot_targets,
                 fee_vault_local: [0xEE; 16],
                 routing: VmRouting {
                     read_keys: vec![DeclaredKey::prefix([0x11; 16])],
@@ -746,7 +712,6 @@ mod tests {
             fee_payer: [0xAA; 16],
             max_fee: 1_000,
             gas_limit: 1_000_000,
-            snapshot_pins: Vec::new(),
             validity_start_ms: range.start_timestamp_inclusive.as_millis(),
             validity_end_ms: range.end_timestamp_exclusive.as_millis(),
             message: Vec::new().into(),
@@ -883,46 +848,6 @@ mod tests {
                 .verify(&ctx)
                 .unwrap_err(),
             RoutableTransactionVerifyError::InvalidSubintentSignature(0)
-        );
-    }
-
-    #[test]
-    fn snapshot_targets_demand_verified_pins() {
-        use radix_transactions::validation::TransactionValidator;
-        install_vm_statics(Box::new(StubStatics));
-        let validator = TransactionValidator::new_for_latest_simulator();
-        let ctx = RoutableTransactionContext {
-            validator: &validator,
-        };
-        let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
-
-        // A bounded snapshot target with no pin refuses.
-        let uncovered = test_envelope(b"with-snapshot");
-        assert_eq!(
-            RoutableTransaction::new_vm(uncovered)
-                .verify(&ctx)
-                .unwrap_err(),
-            RoutableTransactionVerifyError::MissingSnapshotPin
-        );
-
-        // A covering pin with a garbage proof refuses.
-        let mut forged = test_envelope(b"with-snapshot");
-        forged.snapshot_pins = vec![VmSnapshotPin {
-            shard: ShardId::leaf(1, 1),
-            height: 7,
-            version: 7,
-            root: [0; 32],
-            owner: [0x33; 16],
-            local: [0x44; 16],
-            value: Some(b"claimed".to_vec().into()),
-            proof: MerkleInclusionProof::new(vec![0xFF; 8]),
-        }];
-        let forged = forged.sign(&key);
-        assert_eq!(
-            RoutableTransaction::new_vm(forged)
-                .verify(&ctx)
-                .unwrap_err(),
-            RoutableTransactionVerifyError::InvalidSnapshotPin(0)
         );
     }
 

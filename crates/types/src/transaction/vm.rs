@@ -14,17 +14,11 @@
 use std::sync::OnceLock;
 
 use blake3::Hasher as Blake3;
-use hyperscale_jmt::{Blake3Hasher, MultiProof, Tree};
 use radix_common::crypto::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use sbor::prelude::*;
 use thiserror::Error;
 
-use crate::provisioning::proof::MerkleInclusionProof;
-use crate::state_key::{jmt_value_hash, vm_leaf_key};
-use crate::{
-    BoundedBytes, DeclaredKey, Hash, MAX_STATE_ENTRY_VALUE_LEN, MAX_TX_BYTES_LEN, ShardId,
-    TimestampRange, WeightedTimestamp,
-};
+use crate::{BoundedBytes, DeclaredKey, Hash, MAX_TX_BYTES_LEN, TimestampRange, WeightedTimestamp};
 
 /// Domain separator for the VM envelope signing hash.
 const SIGNING_DOMAIN: &[u8] = b"hyperscale-vm-envelope-v1";
@@ -41,48 +35,6 @@ pub struct VmSubintentSig {
     pub public_key: [u8; 32],
     /// The signature over the subintent's declaration hash.
     pub signature: [u8; 64],
-}
-
-/// A signed snapshot version pin: the client-proven form of a bounded
-/// snapshot read.
-///
-/// The pin names an attested `(shard, height, version)` and carries the
-/// read's identity leaf — key, value, and a JMT inclusion proof against
-/// `root`. [`VmSnapshotPin::verify_inclusion`] checks the proof at the
-/// transaction gate; binding `root` to the shard's actual attested root
-/// for that height rides the remote-header channel where attested roots
-/// live.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub struct VmSnapshotPin {
-    /// The shard whose attested root the pin names.
-    pub shard: ShardId,
-    /// The pinned block height.
-    pub height: u64,
-    /// The pinned state version.
-    pub version: u64,
-    /// The state root the proof verifies against.
-    pub root: [u8; 32],
-    /// The pinned key's owner half.
-    pub owner: [u8; 16],
-    /// The pinned key's local half.
-    pub local: [u8; 16],
-    /// The pinned value; `None` proves absence.
-    pub value: Option<BoundedBytes<MAX_STATE_ENTRY_VALUE_LEN>>,
-    /// The JMT inclusion proof of the identity leaf under `root`.
-    pub proof: MerkleInclusionProof,
-}
-
-impl VmSnapshotPin {
-    /// Whether the proof binds `(owner, local) → value` under `root`.
-    #[must_use]
-    pub fn verify_inclusion(&self) -> bool {
-        let Ok(proof) = MultiProof::decode(self.proof.as_bytes()) else {
-            return false;
-        };
-        let leaf = vm_leaf_key(self.owner, self.local);
-        let value_hash = self.value.as_ref().map(|value| jmt_value_hash(value));
-        <Tree<Blake3Hasher, 1>>::verify(&proof, self.root, &[(leaf, value_hash)]).is_ok()
-    }
 }
 
 /// What a VM envelope asks the chain for: a call graph to run, or a
@@ -119,8 +71,6 @@ pub struct VmTransaction {
     pub max_fee: u128,
     /// The signed execution gas limit.
     pub gas_limit: u64,
-    /// Signed snapshot version pins, one per snapshot leg.
-    pub snapshot_pins: Vec<VmSnapshotPin>,
     /// The signed validity window's inclusive start, in weighted-time
     /// milliseconds. The wire `validity_range` must mirror the window.
     pub validity_start_ms: u64,
@@ -201,23 +151,6 @@ impl VmTransaction {
         hasher.update(&self.fee_payer);
         hasher.update(&self.max_fee.to_le_bytes());
         hasher.update(&self.gas_limit.to_le_bytes());
-        hasher.update(&(self.snapshot_pins.len() as u64).to_le_bytes());
-        for pin in &self.snapshot_pins {
-            hasher.update(&pin.shard.depth().to_le_bytes());
-            hasher.update(&pin.shard.path().to_le_bytes());
-            hasher.update(&pin.height.to_le_bytes());
-            hasher.update(&pin.version.to_le_bytes());
-            hasher.update(&pin.root);
-            hasher.update(&pin.owner);
-            hasher.update(&pin.local);
-            match &pin.value {
-                Some(value) => frame(&mut hasher, value),
-                None => {
-                    hasher.update(&u64::MAX.to_le_bytes());
-                }
-            }
-            frame(&mut hasher, pin.proof.as_bytes());
-        }
         hasher.update(&self.validity_start_ms.to_le_bytes());
         hasher.update(&self.validity_end_ms.to_le_bytes());
         frame(&mut hasher, &self.message);
@@ -312,9 +245,6 @@ pub struct VmDerived {
     pub routing: VmRouting,
     /// One declaration hash per bound subintent, in tree order.
     pub subintent_hashes: Vec<[u8; 32]>,
-    /// Every bounded-window snapshot target, as `(owner, local)` halves —
-    /// each must be covered by a verified pin in the envelope.
-    pub snapshot_targets: Vec<([u8; 16], [u8; 16])>,
     /// The local half of the fee payer's native-resource vault cell —
     /// the substate the payer shard's reservation check reads and the
     /// fee settlement debits. The owner half is the envelope's
@@ -387,66 +317,4 @@ pub fn vm_statics() -> &'static dyn VmStatics {
         .get()
         .expect("VM statics not installed; node wiring installs the effects-bridge derivation")
         .as_ref()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use hyperscale_jmt::{LeafValue, MemoryStore, NodeKey};
-
-    use super::*;
-    use crate::state_key::{jmt_leaf_key, vm_flat_key};
-
-    type Jmt = Tree<Blake3Hasher, 1>;
-
-    /// Build a one-cell VM state and a pin proving it: the identity leaf
-    /// under a real JMT root, exactly what a wallet assembles.
-    fn proven_pin(owner: [u8; 16], local: [u8; 16], value: &[u8]) -> VmSnapshotPin {
-        let store = MemoryStore::new();
-        let storage_key = vm_flat_key(owner, local);
-        let leaf = jmt_leaf_key(&storage_key, None);
-        let updates: BTreeMap<[u8; 32], Option<LeafValue>> = [(
-            leaf,
-            Some(LeafValue::new(jmt_value_hash(value), value.len() as u64)),
-        )]
-        .into();
-        let result = Jmt::apply_updates(&store, None, 1, &updates).unwrap();
-        let mut store = store;
-        let root = result.root_hash;
-        store.apply(&result);
-        let proof = Jmt::prove(&store, &NodeKey::root(1), &[leaf]).unwrap();
-        VmSnapshotPin {
-            shard: ShardId::leaf(1, 1),
-            height: 7,
-            version: 7,
-            root,
-            owner,
-            local,
-            value: Some(value.to_vec().into()),
-            proof: MerkleInclusionProof::new(proof.encode()),
-        }
-    }
-
-    #[test]
-    fn a_proven_pin_verifies_and_tampering_refuses() {
-        let pin = proven_pin([0x11; 16], [0x22; 16], b"pinned-cell");
-        assert!(pin.verify_inclusion());
-
-        let mut wrong_value = pin.clone();
-        wrong_value.value = Some(b"other".to_vec().into());
-        assert!(!wrong_value.verify_inclusion());
-
-        let mut wrong_key = pin.clone();
-        wrong_key.local = [0x23; 16];
-        assert!(!wrong_key.verify_inclusion());
-
-        let mut wrong_root = pin.clone();
-        wrong_root.root[0] ^= 1;
-        assert!(!wrong_root.verify_inclusion());
-
-        let mut garbage_proof = pin;
-        garbage_proof.proof = MerkleInclusionProof::new(vec![0xFF; 8]);
-        assert!(!garbage_proof.verify_inclusion());
-    }
 }

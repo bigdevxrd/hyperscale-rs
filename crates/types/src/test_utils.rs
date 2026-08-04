@@ -987,7 +987,6 @@ impl VmStatics for StubVmStatics {
                 provision_prefixes: Vec::new(),
             },
             subintent_hashes: Vec::new(),
-            snapshot_targets: Vec::new(),
             fee_vault_local: [0xEE; 16],
         })
     }
@@ -1025,7 +1024,6 @@ pub fn stub_vm_transaction(
         fee_payer,
         max_fee,
         gas_limit: 1_000_000,
-        snapshot_pins: Vec::new(),
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
         message: Vec::new().into(),

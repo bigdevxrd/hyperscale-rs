@@ -145,7 +145,7 @@ impl ManifestRunner<'_> {
                     return Err(fail(session, "assert-balance argument shape", 0));
                 };
                 let vault = vault_key(node.target.0, *resource);
-                let Some(rep) = rep_of(&session, &Capability::Snapshot(vault)) else {
+                let Some(rep) = rep_of(&session, &Capability::Locked(vault)) else {
                     return Err(fail(session, "missing snapshot capability", 0));
                 };
                 let invoked = self.backend.invoke(

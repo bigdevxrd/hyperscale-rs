@@ -24,10 +24,9 @@ use hyperscale_vm_effects::package_hash;
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
-    VM_SNAPSHOT_GUARD_BALANCE, build_faucet_tx, build_vm_guarded_transfer_tx, build_vm_publish_tx,
-    build_vm_stamp_tx, build_vm_transfer_tx, contention_recipient, signer_from_seed,
-    validity_around, vm_cross_shard_cast, vm_recipient, vm_sender, vm_snapshot_cast,
-    vm_storm_artifact, vm_storm_publishers,
+    build_faucet_tx, build_vm_publish_tx, build_vm_stamp_tx, build_vm_transfer_tx,
+    contention_recipient, signer_from_seed, validity_around, vm_cross_shard_cast, vm_recipient,
+    vm_sender, vm_storm_artifact, vm_storm_publishers,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -118,8 +117,7 @@ pub fn vm_abort_converges(c: &mut impl Cluster) {
     );
 }
 
-/// A dependent VM transfer reads its own block's attested baseline — the
-/// consensus form of INV-VM-3's snapshot pinning.
+/// A dependent VM transfer reads its own block's attested baseline.
 ///
 /// The second transfer spends more than its payer's genesis balance and
 /// is covered only by the first transfer's committed deposit. It accepts
@@ -134,7 +132,7 @@ pub fn vm_abort_converges(c: &mut impl Cluster) {
 ///
 /// Panics if either transfer misses its budget, the dependent transfer
 /// does not accept, or the commit order is not strictly increasing.
-pub fn vm_snapshot_reads_committed_baseline(c: &mut impl Cluster) {
+pub fn vm_reads_the_committed_baseline(c: &mut impl Cluster) {
     let (alice_key, alice) = vm_sender(0);
     let (bob_key, bob) = vm_sender(1);
     let carol = vm_recipient(0);
@@ -532,9 +530,7 @@ pub fn vm_randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
     // trails the settling block by the persistence step.
     let read = |c: &C, shard: ShardId, owner: [u8; 16]| -> Option<Vec<u8>> {
         let key = entropy_key(owner);
-        c.vm_snapshot_pin(shard, key.owner.0, key.local.0)?
-            .value
-            .map(|bytes| bytes.to_vec())
+        c.vm_substate(shard, key.owner.0, key.local.0)
     };
     assert!(
         c.run_until(epochs(4), |c| read(c, ShardId::leaf(1, 0), left_owner)
@@ -548,76 +544,6 @@ pub fn vm_randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
     assert_eq!(
         left, right,
         "the two shards executed the transaction under different draws"
-    );
-}
-
-/// A transaction whose only remote touch is a bounded snapshot read
-/// settles its local leg while the guarded shard commits nothing.
-///
-/// With fresh reads the only shared admission class and snapshot targets
-/// taking no key at all, the guarded shard drops out of participation
-/// structurally: no lock, no wave slot, nothing to commit. The envelope
-/// carries the guarded cell's client-proven pin — key, value, and JMT
-/// inclusion proof under the guarded shard's committed root — so every
-/// replica of the executing committee reads the signed cell.
-///
-/// # Panics
-///
-/// Panics if the harness cannot serve the pin, the transfer does not
-/// accept, the local shard never commits it, the guarded shard's chain
-/// carries it, or the guarded shard's state root moves.
-pub fn vm_snapshot_only_commits_nothing(c: &mut impl Cluster) {
-    let (payer, from, to, guard) = vm_snapshot_cast();
-    let remote = ShardId::leaf(1, 1);
-    let vault = vault_key(guard, VM_XRD);
-    let pin = c
-        .vm_snapshot_pin(remote, vault.owner.0, vault.local.0)
-        .expect("the harness serves client-proven snapshot reads");
-    assert_eq!(
-        pin.value.as_deref().map(Vec::as_slice),
-        Some(VM_SNAPSHOT_GUARD_BALANCE.to_le_bytes().as_slice()),
-        "the pin must carry the guarded vault's genesis balance"
-    );
-    let root_before = c.committed_state_root(remote);
-
-    let tx = build_vm_guarded_transfer_tx(
-        &payer,
-        from,
-        to,
-        100,
-        guard,
-        VM_SNAPSHOT_GUARD_BALANCE - 100,
-        8,
-        pin,
-        validity_around(c.now()),
-    );
-    let hash = tx.hash();
-    c.submit(Arc::new(tx));
-
-    let status = await_tx_terminal(c, hash, epochs(16));
-    assert!(
-        matches!(
-            status,
-            Some(TransactionStatus::Completed(TransactionDecision::Accept))
-        ),
-        "guarded VM transfer did not accept; status = {status:?}"
-    );
-    let (local, _) = c.chain_fate(ShardId::leaf(1, 0), hash);
-    assert!(
-        local.is_some(),
-        "the local shard never committed the guarded transfer"
-    );
-    // The guarded shard is structurally not a participant: its chain
-    // never carries the transaction and its state never moves.
-    let (remote_inclusion, _) = c.chain_fate(remote, hash);
-    assert!(
-        remote_inclusion.is_none(),
-        "the guarded shard must not carry the transaction"
-    );
-    let root_after = c.committed_state_root(remote);
-    assert_eq!(
-        root_before, root_after,
-        "the guarded shard must commit nothing"
     );
 }
 
@@ -840,13 +766,11 @@ pub fn vm_failure_charges_its_payer(c: &mut impl Cluster) {
 /// harness's client-proven snapshot seam.
 fn vm_vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {
     let vault = vault_key(owner, VM_XRD);
-    let pin = c
-        .vm_snapshot_pin(shard, vault.owner.0, vault.local.0)
-        .expect("the harness serves client-proven reads");
-    pin.value.as_ref().map_or(0, |bytes| {
-        let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
-        u128::from_le_bytes(cell)
-    })
+    c.vm_substate(shard, vault.owner.0, vault.local.0)
+        .map_or(0, |bytes| {
+            let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
+            u128::from_le_bytes(cell)
+        })
 }
 
 /// The reported change to `owner`'s native vault.
@@ -1058,8 +982,7 @@ pub fn vm_deploy_storm_rides_out(c: &mut impl Cluster) {
     // collapse into one cell and the storm would be a single publish.
     for (shard, owner, local) in &cells {
         assert!(
-            c.vm_snapshot_pin(*shard, *owner, *local)
-                .is_some_and(|pin| pin.value.is_some()),
+            c.vm_substate(*shard, *owner, *local).is_some(),
             "{shard:?} does not hold the package cell the storm published"
         );
     }

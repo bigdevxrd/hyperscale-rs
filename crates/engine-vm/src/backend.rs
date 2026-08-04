@@ -56,7 +56,7 @@ pub struct InvokeOutcome {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use hyperscale_vm_runtime::{
-        DeltaCell, ReserveCell, SnapCell, WriteCell, add_kernel_to_linker, blessed_engine,
+        DeltaCell, LockedCell, ReserveCell, WriteCell, add_kernel_to_linker, blessed_engine,
         validate_component,
     };
     use wasmtime::component::{Component, InstancePre, Linker, Resource};
@@ -129,7 +129,10 @@ mod native {
                             .map(|()| None)
                     }),
                 Invocation::AssertBalance { vault_rep, min } => instance
-                    .get_typed_func::<(Resource<SnapCell>, &[u8]), ()>(&mut store, "assert-balance")
+                    .get_typed_func::<(Resource<LockedCell>, &[u8]), ()>(
+                        &mut store,
+                        "assert-balance",
+                    )
                     .map_err(|error| format!("typed export: {error:#}"))
                     .and_then(|func| {
                         func.call(&mut store, (Resource::new_borrow(*vault_rep), min))
@@ -213,7 +216,7 @@ mod reference {
                 Invocation::AssertBalance { vault_rep, min } => (
                     "assert-balance",
                     vec![
-                        CVal::Borrow(*vault_rep, ResourceKind::SnapCell),
+                        CVal::Borrow(*vault_rep, ResourceKind::LockedCell),
                         CVal::Bytes(min.to_vec()),
                     ],
                     false,

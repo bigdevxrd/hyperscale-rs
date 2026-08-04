@@ -25,7 +25,7 @@ pub use artifact::{METADATA_SECTION, admit_package, attach_metadata, extract_met
 use blake3::Hasher as Blake3;
 use hyperscale_types::{NodeId, RoutableTransaction, ShardId, TopologySnapshot};
 use hyperscale_vm_effects::{
-    Address, Effect, EffectSet, EffectTarget, Hash32, Hasher, LocalKey, Mode, SubstateKey, Window,
+    Address, Effect, EffectSet, EffectTarget, Hash32, Hasher, LocalKey, Mode, SubstateKey,
 };
 pub use vm_metadata::{MAX_PACKAGE_METADATA_BYTES, decode_metadata, encode_metadata};
 pub use vm_statics::{
@@ -164,15 +164,7 @@ fn encode_effect(bytes: &mut Vec<u8>, effect: &Effect) {
     }
     match effect.mode {
         Mode::Read => bytes.push(0),
-        Mode::Snapshot {
-            window: Window::Bounded(versions),
-        } => {
-            bytes.push(1);
-            bytes.extend_from_slice(&versions.to_le_bytes());
-        }
-        Mode::Snapshot {
-            window: Window::Unbounded,
-        } => bytes.push(2),
+        Mode::Locked => bytes.push(1),
         Mode::Delta => bytes.push(3),
         Mode::Reserve { amount } => {
             bytes.push(4);

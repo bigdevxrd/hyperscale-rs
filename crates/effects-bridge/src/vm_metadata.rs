@@ -25,7 +25,6 @@ use hyperscale_types::{MAX_TX_BYTES_LEN, MAX_VM_EVENT_TYPES, VmStaticsError};
 use hyperscale_vm_effects::{
     CallSite, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH,
     MAX_VALUE_DEPTH, MethodSignature, ModeExpr, PackageMetadata, ParamType, RoleId, TargetExpr,
-    WindowExpr,
 };
 use sbor::prelude::*;
 use sbor::{basic_decode_with_depth_limit, basic_encode_with_depth_limit};
@@ -95,18 +94,11 @@ enum WireExpr {
     },
 }
 
-/// Wire mirror of [`WindowExpr`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireWindow {
-    Bounded(WireExpr),
-    Unbounded,
-}
-
 /// Wire mirror of [`ModeExpr`].
 #[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
 enum WireMode {
     Read,
-    Snapshot(WireWindow),
+    Locked,
     Delta,
     Reserve(WireExpr),
     Write,
@@ -304,10 +296,7 @@ fn target(wire: WireTarget) -> TargetExpr {
 fn wire_mode(mode: &ModeExpr) -> WireMode {
     match mode {
         ModeExpr::Read => WireMode::Read,
-        ModeExpr::Snapshot(WindowExpr::Bounded(versions)) => {
-            WireMode::Snapshot(WireWindow::Bounded(wire_expr(versions)))
-        }
-        ModeExpr::Snapshot(WindowExpr::Unbounded) => WireMode::Snapshot(WireWindow::Unbounded),
+        ModeExpr::Locked => WireMode::Locked,
         ModeExpr::Delta => WireMode::Delta,
         ModeExpr::Reserve(amount) => WireMode::Reserve(wire_expr(amount)),
         ModeExpr::Write => WireMode::Write,
@@ -317,10 +306,7 @@ fn wire_mode(mode: &ModeExpr) -> WireMode {
 fn mode(wire: WireMode) -> ModeExpr {
     match wire {
         WireMode::Read => ModeExpr::Read,
-        WireMode::Snapshot(WireWindow::Bounded(versions)) => {
-            ModeExpr::Snapshot(WindowExpr::Bounded(expr(versions)))
-        }
-        WireMode::Snapshot(WireWindow::Unbounded) => ModeExpr::Snapshot(WindowExpr::Unbounded),
+        WireMode::Locked => ModeExpr::Locked,
         WireMode::Delta => ModeExpr::Delta,
         WireMode::Reserve(amount) => ModeExpr::Reserve(expr(amount)),
         WireMode::Write => ModeExpr::Write,
@@ -532,11 +518,7 @@ fn check_target(target: &TargetExpr) -> Result<(), VmStaticsError> {
 
 fn check_mode(mode: &ModeExpr) -> Result<(), VmStaticsError> {
     match mode {
-        ModeExpr::Read
-        | ModeExpr::Delta
-        | ModeExpr::Write
-        | ModeExpr::Snapshot(WindowExpr::Unbounded) => Ok(()),
-        ModeExpr::Snapshot(WindowExpr::Bounded(versions)) => check_expr(versions, 0),
+        ModeExpr::Read | ModeExpr::Delta | ModeExpr::Write | ModeExpr::Locked => Ok(()),
         ModeExpr::Reserve(amount) => check_expr(amount, 0),
     }
 }
@@ -732,7 +714,7 @@ mod tests {
                             lo: Box::new(Expr::FreshId { slot: 3 }),
                         },
                     },
-                    mode: ModeExpr::Snapshot(WindowExpr::Unbounded),
+                    mode: ModeExpr::Locked,
                 },
                 Clause::Effect {
                     target: TargetExpr::Range {
@@ -742,7 +724,7 @@ mod tests {
                         hi: Expr::Literal(Value::U128(u128::MAX)),
                         cap: 64,
                     },
-                    mode: ModeExpr::Snapshot(WindowExpr::Bounded(Expr::Arg(0))),
+                    mode: ModeExpr::Locked,
                 },
                 Clause::ForEach {
                     list: Expr::Arg(2),
@@ -879,7 +861,7 @@ mod tests {
                 hi: deepest,
                 cap: 1,
             },
-            mode: ModeExpr::Snapshot(WindowExpr::Bounded(Expr::Arg(0))),
+            mode: ModeExpr::Locked,
         };
         for _ in 0..MAX_CLAUSE_DEPTH {
             clause = Clause::ForEach {

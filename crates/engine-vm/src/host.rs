@@ -16,8 +16,8 @@ macro_rules! delegate {
             fn read_cell(&mut self, rep: u32) -> Result<Vec<u8>, String> {
                 self.0.read_cell(rep).map_err(|t| t.to_string())
             }
-            fn snap_cell(&mut self, rep: u32) -> Result<Vec<u8>, String> {
-                self.0.snap_cell(rep).map_err(|t| t.to_string())
+            fn locked_cell(&mut self, rep: u32) -> Result<Vec<u8>, String> {
+                self.0.locked_cell(rep).map_err(|t| t.to_string())
             }
             fn write_cell_get(&mut self, rep: u32) -> Result<Vec<u8>, String> {
                 self.0.write_cell_get(rep).map_err(|t| t.to_string())

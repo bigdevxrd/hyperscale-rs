@@ -8,7 +8,7 @@ use hyperscale_engine_vm::{PreviewGrants, PreviewReport};
 use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
     BeaconState, BlockHeight, RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision,
-    TransactionStatus, TxHash, VmEvent, VmSnapshotPin,
+    TransactionStatus, TxHash, VmEvent,
 };
 
 use super::Budget;
@@ -86,16 +86,13 @@ pub trait Cluster {
         None
     }
 
-    /// The client-proven form of a bounded snapshot read: the cell's
-    /// value and its JMT inclusion proof under `shard`'s latest committed
-    /// root — what a wallet assembles before signing an envelope with a
-    /// snapshot leg. `None` when no hosted store can serve the read.
-    fn vm_snapshot_pin(
-        &self,
-        shard: ShardId,
-        owner: [u8; 16],
-        local: [u8; 16],
-    ) -> Option<VmSnapshotPin> {
+    /// The committed value of a VM cell on `shard`, read straight from a
+    /// hosted store. `None` when no host serves `shard` or the cell is
+    /// absent.
+    ///
+    /// An observation seam, not a protocol one: scenarios assert against
+    /// committed state, and nothing a transaction carries comes from here.
+    fn vm_substate(&self, shard: ShardId, owner: [u8; 16], local: [u8; 16]) -> Option<Vec<u8>> {
         let _ = (shard, owner, local);
         None
     }

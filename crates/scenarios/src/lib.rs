@@ -66,8 +66,8 @@ pub use vm::{
     vm_cross_shard_transfer, vm_deploy_storm_rides_out,
     vm_events_land_on_their_emitters_home_shard, vm_failure_charges_its_payer, vm_hot_recipient,
     vm_insolvent_payer_engages_nothing, vm_preview_reports_resource_changes,
-    vm_randomness_draw_agrees_across_shards, vm_single_transfer, vm_snapshot_only_commits_nothing,
-    vm_snapshot_reads_committed_baseline, vm_zipf_payments,
+    vm_randomness_draw_agrees_across_shards, vm_reads_the_committed_baseline, vm_single_transfer,
+    vm_zipf_payments,
 };
 pub use witnesses::{
     pool_capacity_caps_registrations, re_registration_of_a_live_validator_is_a_no_op,

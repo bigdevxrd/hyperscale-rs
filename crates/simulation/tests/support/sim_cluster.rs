@@ -27,11 +27,10 @@ use hyperscale_scenarios::{
 };
 use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner};
 use hyperscale_storage::{ShardChainReader, SubstateStore};
-use hyperscale_types::state_key::vm_flat_key;
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds,
     RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision, TransactionStatus,
-    TxHash, ValidatorId, VmEvent, VmSnapshotPin,
+    TxHash, ValidatorId, VmEvent,
 };
 use radix_common::math::Decimal;
 use radix_common::types::ComponentAddress;
@@ -451,33 +450,13 @@ impl Cluster for SimCluster {
         Some(total)
     }
 
-    fn vm_snapshot_pin(
-        &self,
-        shard: ShardId,
-        owner: [u8; 16],
-        local: [u8; 16],
-    ) -> Option<VmSnapshotPin> {
+    fn vm_substate(&self, shard: ShardId, owner: [u8; 16], local: [u8; 16]) -> Option<Vec<u8>> {
         let store = self
             .live_committee_hosts(shard)
             .into_iter()
             .find_map(|host| self.runner.hosts_shard(host, shard))?;
         let height = store.jmt_height();
-        let value = store.get_vm_substate_at_height(owner, local, height)?;
-        let proof = store.generate_merkle_proofs(
-            &[vm_flat_key(owner, local)],
-            &std::collections::HashMap::new(),
-            height,
-        )?;
-        Some(VmSnapshotPin {
-            shard,
-            height: height.inner(),
-            version: height.inner(),
-            root: *store.state_root().as_bytes(),
-            owner,
-            local,
-            value: value.map(Into::into),
-            proof,
-        })
+        store.get_vm_substate_at_height(owner, local, height)?
     }
 
     fn vm_preview(

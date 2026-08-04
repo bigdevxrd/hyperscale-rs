@@ -24,7 +24,7 @@ use std::sync::Arc;
 use hyperscale_effects_bridge::admit_package;
 use hyperscale_engine::DynSnapshot;
 use hyperscale_types::{RevealChain, RoutableTransaction, VmEvent, WeightedTimestamp};
-use hyperscale_vm_effects::{Address, EffectTarget, Hash32, LocalKey, SubstateKey};
+use hyperscale_vm_effects::{EffectTarget, Hash32, SubstateKey};
 use hyperscale_vm_kernel::{
     Base, BatchTx, Locality, Outcome, Receipt, TxHash as VmTxHash, decode_amount, execute_batch,
 };
@@ -276,22 +276,6 @@ impl VmExecutor {
         // its committed amount to say what the charge would leave.
         if let Some(value) = read_cell(snapshot, payer.vault) {
             cells.insert(payer.vault, value);
-        }
-        // Pinned values override the snapshot, exactly as they do in a
-        // wave: the read is version-pinned to what the signer proved.
-        for pin in &vm.snapshot_pins {
-            let key = SubstateKey {
-                owner: Address(pin.owner),
-                local: LocalKey(pin.local),
-            };
-            match &pin.value {
-                Some(value) => {
-                    cells.insert(key, value.to_vec());
-                }
-                None => {
-                    cells.remove(&key);
-                }
-            }
         }
         let base = Arc::new(VmBase { cells });
 
