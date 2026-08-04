@@ -27,8 +27,8 @@ use hyperscale_types::{
     absorb_committed_vm_cells,
 };
 use hyperscale_vm_effects::{
-    Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
-    Value, package_hash,
+    AbiParam, Address, Constraint, EdgeRef, EnvelopeTree, Expr, GraphArg, GraphNode, IntentDecl,
+    ManifestGraph, Value, package_hash,
 };
 use hyperscale_vm_kernel::encode_amount;
 use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
@@ -667,6 +667,24 @@ fn a_publish_writes_the_artifact_under_its_publisher() {
     assert!(
         executed[0].attested_work > 0,
         "judging the artifact is attested work"
+    );
+}
+
+/// The stdlib artifact's ABI bindings survive the round trip through the
+/// metadata section, which is what makes the account guest callable
+/// through them rather than through a table that knows its method names.
+#[test]
+fn the_stdlib_artifact_carries_resolvable_bindings() {
+    let metadata = admit_package(account_artifact()).expect("the stdlib artifact admits");
+    assert_eq!(
+        metadata.methods["withdraw"].abi,
+        vec![AbiParam::Handle(0), AbiParam::Derived(Expr::Arg(1))],
+        "the binding decoded is the binding authored"
+    );
+    assert_eq!(
+        metadata.methods["deposit"].abi,
+        vec![AbiParam::Handle(0), AbiParam::Bucket(0)],
+        "a bucket's amount is the one argument a signature cannot derive"
     );
 }
 

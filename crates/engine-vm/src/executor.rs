@@ -430,7 +430,11 @@ pub const fn charge_for(outcome: &Outcome, payer: PayerFee) -> Option<u128> {
         // A lost deterministic race. The sender did nothing wrong and
         // could not have avoided it, so it pays only the floor covering
         // the declaration work its attempt really did consume.
-        Outcome::Infeasible { .. } => Some(payer.floor),
+        //
+        // A signed edge bound the produced amount missed is the same
+        // class: the sender declared what it would accept and the world
+        // moved between signing and execution.
+        Outcome::Infeasible { .. } | Outcome::ConstraintUnmet { .. } => Some(payer.floor),
         // The kernel's own defect. `materialize_abort` refuses to price
         // it to the sender, and the burn agrees.
         Outcome::ProtocolError { .. } => None,
@@ -676,6 +680,13 @@ fn assemble_executed_tx(
             Outcome::UserError { reason } | Outcome::ProtocolError { reason } => reason.clone(),
             Outcome::Infeasible { key, amount } => {
                 format!("infeasible: {amount} uncovered on {key:?}")
+            }
+            Outcome::ConstraintUnmet {
+                node,
+                param,
+                amount,
+            } => {
+                format!("constraint unmet: node {node} parameter {param} carried {amount}")
             }
             Outcome::Completed { .. } => unreachable!("aborts only"),
         };

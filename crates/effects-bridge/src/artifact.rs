@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 
 use hyperscale_types::VmStaticsError;
-use hyperscale_vm_effects::PackageMetadata;
+use hyperscale_vm_effects::{AbiParam, MethodSignature, PackageMetadata, ParamType};
 use hyperscale_vm_runtime::validate_component;
 use wasmparser::{BinaryReaderError, ComponentExternalKind, Parser, Payload};
 
@@ -157,14 +157,69 @@ pub fn admit_package(artifact: &[u8]) -> Result<PackageMetadata, VmStaticsError>
     let metadata = extract_metadata(artifact)?
         .ok_or_else(|| VmStaticsError("artifact declares no effect metadata section".into()))?;
     let exports = component_func_exports(artifact)?;
-    for method in metadata.methods.keys() {
+    for (method, signature) in &metadata.methods {
         if !exports.contains(method.as_str()) {
             return Err(VmStaticsError(format!(
                 "metadata declares method {method:?}, which the component does not export"
             )));
         }
+        check_abi(method, signature)?;
     }
     Ok(metadata)
+}
+
+/// Check a method's ABI binding against the declaration it is a binding
+/// for.
+///
+/// A binding says where each of the guest's arguments comes from, and a
+/// caller that cannot resolve one cannot invoke the method at all — so an
+/// unresolvable binding is a package that publishes and then traps for
+/// everyone. Every clause of this is a pure function of the metadata,
+/// which is what lets it be a publish-time refusal.
+fn check_abi(method: &str, signature: &MethodSignature) -> Result<(), VmStaticsError> {
+    let refuse = |what: String| Err(VmStaticsError(format!("method {method:?}: {what}")));
+    for (position, binding) in signature.abi.iter().enumerate() {
+        match binding {
+            AbiParam::Handle(clause) => {
+                if *clause as usize >= signature.effects.len() {
+                    return refuse(format!(
+                        "ABI parameter {position} names effect clause {clause}, past the {} \
+                         the signature declares",
+                        signature.effects.len()
+                    ));
+                }
+            }
+            AbiParam::Bucket(param) => {
+                match signature.params.get(*param as usize) {
+                    // A bucket's amount is the one value a signature
+                    // cannot derive, which is the whole reason this
+                    // variant exists; naming any other parameter through
+                    // it asks for bytes that are already static.
+                    Some(ParamType::Bucket) => {}
+                    Some(other) => {
+                        return refuse(format!(
+                            "ABI parameter {position} takes the amount of parameter {param}, \
+                             which is declared {other:?} rather than a bucket"
+                        ));
+                    }
+                    None => {
+                        return refuse(format!(
+                            "ABI parameter {position} names parameter {param}, past the {} \
+                             the signature declares",
+                            signature.params.len()
+                        ));
+                    }
+                }
+            }
+            // A derived binding is an expression over the same inputs
+            // the effect clauses read, so its argument and configuration
+            // references are bounded by the same evaluation — which every
+            // node runs at routing, before anything executes. Repeating
+            // that walk here would be a second opinion on it.
+            AbiParam::Derived(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// The component's own function exports, by name.
@@ -238,6 +293,38 @@ fn read_uleb128(bytes: &[u8], pos: &mut usize) -> Result<usize, VmStaticsError> 
 
 #[cfg(test)]
 mod tests {
+
+    /// A binding a caller cannot resolve is refused where it is cheapest
+    /// to refuse: the artifact's own bytes, before a block carries it.
+    ///
+    /// Both arms name something the signature does not have, which is the
+    /// authoring mistake the binding makes possible — it is the one part
+    /// of a signature whose indices point at other parts of it.
+    #[test]
+    fn an_unresolvable_abi_binding_refuses() {
+        use hyperscale_vm_effects::{Clause, Expr, ModeExpr, TargetExpr};
+
+        let signature = |abi: Vec<AbiParam>| MethodSignature {
+            params: vec![ParamType::U128],
+            abi,
+            outputs: Vec::new(),
+            effects: vec![Clause::Effect {
+                target: TargetExpr::Point(Expr::Arg(0)),
+                mode: ModeExpr::Read,
+            }],
+            calls: Vec::new(),
+        };
+
+        // The one clause is index 0; there is no clause 1.
+        assert!(check_abi("m", &signature(vec![AbiParam::Handle(1)])).is_err());
+        assert!(check_abi("m", &signature(vec![AbiParam::Handle(0)])).is_ok());
+
+        // The one parameter is a `U128`, so its amount is already static —
+        // a bucket binding on it asks for bytes that do not exist.
+        assert!(check_abi("m", &signature(vec![AbiParam::Bucket(0)])).is_err());
+        assert!(check_abi("m", &signature(vec![AbiParam::Bucket(7)])).is_err());
+    }
+
     use hyperscale_vm_effects::stdlib::{account_metadata, book_metadata};
     use hyperscale_vm_effects::{MethodSignature, PackageMetadata};
     use wat::parse_str;

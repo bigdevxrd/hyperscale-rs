@@ -64,6 +64,7 @@ impl ManifestRunner<'_> {
     /// Invoke one node's export. `Err` carries the session back with a
     /// deterministic reason; the whole transaction aborts as a user
     /// error.
+    #[allow(clippy::too_many_lines)] // one arm per stdlib method
     fn invoke_node(
         &self,
         entry: &PreparedVmTx,
@@ -107,7 +108,10 @@ impl ManifestRunner<'_> {
                 }
             }
             "deposit" => {
-                let NodeInput::Edge { source, resource } = &node.inputs[0] else {
+                let NodeInput::Edge {
+                    source, resource, ..
+                } = &node.inputs[0]
+                else {
                     return Err(fail(session, "deposit argument shape", 0));
                 };
                 // The lowered edge names only its producer; the account

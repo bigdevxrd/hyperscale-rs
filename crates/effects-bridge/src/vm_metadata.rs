@@ -23,7 +23,7 @@
 
 use hyperscale_types::{MAX_TX_BYTES_LEN, MAX_VM_EVENT_TYPES, VmStaticsError};
 use hyperscale_vm_effects::{
-    CallSite, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH,
+    AbiParam, CallSite, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH,
     MAX_VALUE_DEPTH, MethodSignature, ModeExpr, PackageMetadata, ParamType, RoleId, TargetExpr,
 };
 use sbor::prelude::*;
@@ -137,12 +137,21 @@ struct WireCall {
     args: Vec<WireExpr>,
 }
 
+/// Wire mirror of [`AbiParam`].
+#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
+enum WireAbiParam {
+    Handle(u32),
+    Bucket(u32),
+    Derived(WireExpr),
+}
+
 /// Wire mirror of [`MethodSignature`], carrying the name it is filed
 /// under: the table is a vector so its order is part of the encoding.
 #[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
 struct WireMethod {
     name: String,
     params: Vec<WireParamType>,
+    abi: Vec<WireAbiParam>,
     outputs: Vec<WireExpr>,
     effects: Vec<WireClause>,
     calls: Vec<WireCall>,
@@ -293,6 +302,22 @@ fn target(wire: WireTarget) -> TargetExpr {
     }
 }
 
+fn wire_abi_param(binding: &AbiParam) -> WireAbiParam {
+    match binding {
+        AbiParam::Handle(clause) => WireAbiParam::Handle(*clause),
+        AbiParam::Bucket(param) => WireAbiParam::Bucket(*param),
+        AbiParam::Derived(expr) => WireAbiParam::Derived(wire_expr(expr)),
+    }
+}
+
+fn abi_param(wire: WireAbiParam) -> AbiParam {
+    match wire {
+        WireAbiParam::Handle(clause) => AbiParam::Handle(clause),
+        WireAbiParam::Bucket(param) => AbiParam::Bucket(param),
+        WireAbiParam::Derived(wire) => AbiParam::Derived(expr(wire)),
+    }
+}
+
 fn wire_mode(mode: &ModeExpr) -> WireMode {
     match mode {
         ModeExpr::Read => WireMode::Read,
@@ -366,6 +391,7 @@ fn wire_metadata(metadata: &PackageMetadata) -> WireMetadata {
             .map(|(name, signature)| WireMethod {
                 name: name.clone(),
                 params: signature.params.iter().copied().map(wire_param).collect(),
+                abi: signature.abi.iter().map(wire_abi_param).collect(),
                 outputs: signature.outputs.iter().map(wire_expr).collect(),
                 effects: signature.effects.iter().map(wire_clause).collect(),
                 calls: signature.calls.iter().map(wire_call).collect(),
@@ -427,6 +453,7 @@ pub fn decode_metadata(bytes: &[u8]) -> Result<PackageMetadata, VmStaticsError> 
             method.name,
             MethodSignature {
                 params: method.params.into_iter().map(param).collect(),
+                abi: method.abi.into_iter().map(abi_param).collect(),
                 outputs: method.outputs.into_iter().map(expr).collect(),
                 effects: method.effects.into_iter().map(clause).collect(),
                 calls: method.calls.into_iter().map(call).collect(),
@@ -672,6 +699,7 @@ mod tests {
         // each expression form, each target form, each mode, a nested
         // for-each body, a call site, and a deep literal.
         let signature = MethodSignature {
+            abi: Vec::new(),
             params: vec![
                 ParamType::U64,
                 ParamType::U128,
@@ -822,6 +850,7 @@ mod tests {
             .expect("wire encodes")
         };
         let entry = |name: &str| WireMethod {
+            abi: Vec::new(),
             name: name.into(),
             params: Vec::new(),
             outputs: Vec::new(),

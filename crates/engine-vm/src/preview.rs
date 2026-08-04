@@ -382,5 +382,12 @@ fn preview_outcome(outcome: &Outcome) -> PreviewOutcome {
         Outcome::Infeasible { key, amount } => PreviewOutcome::Aborted {
             reason: format!("infeasible: {amount} uncovered on {key:?}"),
         },
+        Outcome::ConstraintUnmet {
+            node,
+            param,
+            amount,
+        } => PreviewOutcome::Aborted {
+            reason: format!("constraint unmet: node {node} parameter {param} carried {amount}"),
+        },
     }
 }
