@@ -52,11 +52,23 @@ Every capacity decision is the same solvency test at the current price: a pool m
 - **Withdrawal maturation.** When a withdrawal completes, the pool's capacity is recomputed; if it now supports fewer seats than it has, surplus validators are moved to `InsufficientStake` — deactivated, off committees, no longer consuming capacity, but still bound to the pool (and still retroactively accountable for equivocation evidence).
 - **Auto-reactivation.** Each epoch, a sweep promotes `InsufficientStake` validators back to `Pooled` wherever capacity has reappeared. Each promotion changes an active count, which can change `t_no_eject`, which can change the global price — so the sweep refreshes `min_stake` after every flip and runs to a fixpoint. Recovery is automatic; there is no manual re-activation transaction.
 
-The incentive side is a fixed per-epoch emission (`EMISSIONS_PER_EPOCH`, sized against an annual issuance target) rewarding active participation; its distribution mechanics live shard-side with the staking contracts.
+The incentive side is a fixed per-epoch emission (`EMISSIONS_PER_EPOCH`, sized against an annual issuance target) rewarding active participation; its distribution mechanics live shard-side with the staking contracts, and §4 covers how it is divided.
 
 The result is a closed loop with no exogenous inputs: **topology decides demand; demand and pooled stake decide the price; the price gates activation; activation replenishes the pool the topology draws on.** Every quantity in the loop is a deterministic function of `BeaconState`, so every replica prices every transition identically (INV-ECON-5). The economic layer inherits INV-BEACON-2's replay property, and a light client can recompute the price history from the chain.
 
-## 4. Vnodes: amortizing the hardware cost of a seat
+## 4. Fees burn where they are signed; the emission is what pays
+
+A transaction's fee is a claim against one account on one shard — the fee payer named in its signed envelope — and it never becomes a claim anywhere else. The payer's shard treats the signed ceiling as a **block-validity condition**: a block committing a transaction whose payer cannot cover its ceiling, counting every other ceiling that block and its uncommitted ancestors already engage, is not a valid block (INV-VM-9). An honest proposer therefore never selects an uncoverable transaction, and a Byzantine one is refused by the same predicate on the vote side, reading the same balances at the same pinned height.
+
+That reservation is an accounting entry over the payer shard's own committed chain, not a hold on the vault. Nothing is moved when it engages, and it resolves exactly once when the wave finalizes: the attested actual burns on success and the class floor on abort, both written **inside the settling receipt** rather than beside it, so a replica that reconstructs state by replaying receipts reconstructs the burn with it. The remainder is released by the entry ceasing to be derivable (INV-VM-10). Every fee burns; none is paid to anyone.
+
+**Nothing crosses a shard boundary, which is the property worth having.** A cross-shard transaction is executed by every participant, but only the payer's shard debits anything, so no shard's revenue depends on another shard's honesty and there is no cross-shard fee flow to arbitrate, dispute, or lose. What it costs is that a counterpart shard does real work — admission, routing, exclusivity, execution — for a fee it never sees.
+
+The fixed emission is what settles that account, and it settles it by measurement rather than by transfer. Each shard's committed blocks carry two running claims every verifier recomputes: the **attested work** its own certificates report, which is a flow, and the **stored bytes** behind the block, which is a level. Both ride the epoch-crossing header onto the shard's boundary record, and the epoch's fold reweights the same fixed issuance by them — a participation floor per ready validator, plus each shard's normalised share of the epoch's work and of committed storage. The floor is not decoration: weighting on work alone pays an idle shard nothing, which would make a new shard unfundable and reward abandoning quiet ones, and with the work weights at zero the floor alone reproduces the plain per-validator split. The work terms are shares rather than rates, so their constants are dimensionless ratios against the floor and magnitudes cancel.
+
+Work is the measure the compensation argument wants and storage is the measure the duty argument wants. A counterpart burns real fuel and holds real exclusivity executing a leg whose fee burned elsewhere, and it records that in its own receipts, so per-shard work tracks exactly the uncompensated execution; stored bytes track the storage a committee stands behind. Neither is a fee, and no weight redirects one: the emission is a fixed issuance and the weights only divide it.
+
+## 5. Vnodes: amortizing the hardware cost of a seat
 
 The stake price governs *who may* operate seats; vnodes govern what a seat *costs to run*. A **vnode** is one validator identity — its own BLS key, its own `NodeStateMachine`, its own votes, proposals, and accountability record — and one host process (`NodeHost`) runs any number of them across any set of shards. What is duplicated per identity is exactly the consensus-relevant part; everything expensive is shared:
 
@@ -76,6 +88,6 @@ Co-hosting is safe by construction, not by trust in the operator:
 - **No store fights.** Lock arbitration between vnode duties (a reshape duty building a child store versus a supervisor join on the same shard) is explicit, so co-hosted duties yield rather than deadlock.
 - **No protocol special-casing.** Committee sampling, shuffling, and quorum math are identity-only — the protocol neither knows nor cares about host placement. The corollary is a deliberate, documented trade: co-hosted identities share a fault domain (one machine failing takes all its vnodes offline), and nothing in committee selection spreads a host's identities apart. The BFT math is unaffected — an operator's weight in any committee is bounded by the identities (and thus the stake) they place there, which is exactly what the stake price meters — but operational host-spread is left to deployment tooling rather than the protocol.
 
-## 5. Properties
+## 6. Properties
 
 The economic invariants this document motivates — INV-ECON-1 through INV-ECON-6 — are stated precisely in [08-invariants.md](08-invariants.md).

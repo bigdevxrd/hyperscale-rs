@@ -49,6 +49,22 @@
 //     the reservation it inherited; the sweep is modeled atomic with the
 //     terminal stamp.
 //
+// Where this abstraction is stricter than the implementation, and why
+// that is the safe direction: the model treats a reservation as a
+// substate that moves with the subtree, so a successor must sweep what it
+// inherits and the `fee_unswept` twin exhibits the wedge when it does
+// not. The implementation gives a reservation no on-chain existence at
+// all — it is an accounting entry derived from the payer shard's own
+// committed chain, and a successor's chain begins at its seeded genesis,
+// so nothing is inherited and there is nothing to sweep. The model
+// therefore verifies a requirement the code discharges by construction.
+// Two consequences of that gap are worth naming rather than reading off
+// the model: a terminal that leaves a wave unfinalized settles no receipt
+// and so burns nothing, where the model burns FLOOR; and the abstraction
+// cannot see that a payer's own withdraw declares the vault its fee burns
+// from, which is what makes a reservation's encumbrance indistinguishable
+// from a conflict lock in any end-to-end test.
+//
 // Code anchors (intended seams — the echo and vote-gating machinery is
 // milestone 3 unit 4b; anchors firm up as it lands):
 //   - Reservation as block validity: the `VerifyVmReservations`
