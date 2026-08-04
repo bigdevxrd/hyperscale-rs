@@ -59,10 +59,12 @@ pub const MAX_STATE_ENTRY_KEY_LEN: usize = 4 * 1024;
 /// Decode cap on a raw substate value, shared by the same wire objects
 /// as [`MAX_STATE_ENTRY_KEY_LEN`].
 ///
-/// Radix substates have an engine-side ceiling well below this; the cap
-/// exists to bound the SBOR `Vec<u8>` pre-allocation a peer can force on
-/// a single `value` field.
-pub const MAX_STATE_ENTRY_VALUE_LEN: usize = 1024 * 1024;
+/// Bounds the SBOR `Vec<u8>` pre-allocation a peer can force on a single
+/// `value` field, and sets the largest thing state can hold in one cell.
+/// Twice [`crate::MAX_TX_BYTES_LEN`], so anything a transaction can carry
+/// still fits a cell with the framing around it — which is what lets a
+/// published package artifact be one value rather than a chunked set.
+pub const MAX_STATE_ENTRY_VALUE_LEN: usize = 2 * 1024 * 1024;
 
 /// The VM `db_node_key` for `owner`: `VM_BODY_TAG || owner`.
 #[must_use]

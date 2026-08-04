@@ -8,11 +8,15 @@
 /// Cap on `RoutableTransaction.tx_bytes` length at decode time.
 ///
 /// Bounds the manifest payload a peer can pre-allocate via the SBOR
-/// `Vec<u8>` fast path. Realistic transactions sit comfortably below
-/// this; it exists to reject obviously malformed or oversized payloads
-/// early instead of admitting them and stressing mempool / commit
-/// pipelines.
-pub const MAX_TX_BYTES_LEN: usize = 256 * 1024;
+/// `Vec<u8>` fast path. Realistic transactions sit far below this; it
+/// exists to reject obviously malformed or oversized payloads early
+/// instead of admitting them and stressing mempool / commit pipelines.
+///
+/// It is also the ceiling on a published package: an artifact travels
+/// inside the transaction that publishes it and lands in a single
+/// substate, so this bound and [`crate::MAX_STATE_ENTRY_VALUE_LEN`]
+/// together are why no artifact is ever split across cells.
+pub const MAX_TX_BYTES_LEN: usize = 1024 * 1024;
 
 /// Cap on a transaction's declared read or write set length at decode
 /// time.

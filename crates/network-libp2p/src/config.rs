@@ -209,7 +209,10 @@ impl Libp2pConfig {
                     .unwrap(),
             ],
             bootstrap_peers: vec![],
-            max_message_size: 1024 * 1024, // 1MB
+            // Matches the production default: a maximal transaction is
+            // exactly the transaction cap, so a message budget equal to
+            // it cannot carry one once the gossip envelope is added.
+            max_message_size: 1024 * 1024 * 10, // 10MB
             gossipsub_heartbeat: Duration::from_millis(500),
             gossipsub_history_length: 12,
             idle_connection_timeout: Duration::from_secs(30),
