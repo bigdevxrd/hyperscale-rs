@@ -119,6 +119,45 @@ fn signed_transfer(seed: u8, from: [u8; 16], to: [u8; 16], amount: u128) -> Rout
     signed_transfer_with_fee(seed, from, to, amount, 1_000_000)
 }
 
+/// A transfer whose recipient signs a floor the withdrawal cannot meet.
+fn signed_transfer_under_bound(
+    seed: u8,
+    from: [u8; 16],
+    to: [u8; 16],
+    amount: u128,
+    min: u128,
+    max_fee: u128,
+) -> RoutableTransaction {
+    let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
+    let mut graph = transfer_graph(from, to, amount);
+    let GraphArg::Edge { constraints, .. } = &mut graph.nodes[1].args[0] else {
+        panic!("the deposit consumes an edge");
+    };
+    constraints.push(Constraint::MinAmount(min));
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph,
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    let vm = VmTransaction {
+        body: VmBody::Call(encode_tree(&tree).into()),
+        subintent_sigs: Vec::new(),
+        fee_payer: vm_account_address(&key.public_key().0),
+        max_fee,
+        gas_limit: 1_000_000,
+        validity_start_ms: 0,
+        validity_end_ms: u64::MAX,
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(&key);
+    RoutableTransaction::new_vm(vm)
+}
+
 fn signed_transfer_with_fee(
     seed: u8,
     from: [u8; 16],
@@ -172,6 +211,7 @@ fn world_accounts() -> Vec<([u8; 16], u128)> {
         (BOB, 50),
         (fee_payer(7), 1_000),
         (fee_payer(11), 110),
+        (fee_payer(23), 1_000),
     ]
 }
 
@@ -488,6 +528,53 @@ fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
     assert_eq!(
         vault_cell(database_updates, BOB),
         Some(encode_amount(150).to_vec())
+    );
+}
+
+/// A missed edge bound is an infeasibility, not a defect: the sender
+/// declared what it would accept and the world moved between signing and
+/// execution, so nothing but the class floor leaves its vault.
+#[test]
+fn a_missed_edge_bound_charges_its_payer_the_floor() {
+    let payer = fee_payer(23);
+    let funded = 1_000;
+    let accounts = [(payer, funded), (BOB, 50)];
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    // The withdrawal is covered and the guest is honest — it returns the
+    // 100 it reserved. What fails is the recipient's signed floor.
+    let tx = signed_transfer_under_bound(23, payer, BOB, 100, 150, 1_000);
+    let floor = tx.vm().expect("a VM envelope").abort_floor();
+    let executed = execute_on(
+        &accounts,
+        &executor,
+        &[Arc::new(Verified::<RoutableTransaction>::from_persisted(
+            tx,
+        ))],
+    );
+    assert_eq!(executed.len(), 1);
+    assert!(
+        matches!(executed[0].consensus, ConsensusReceipt::Failed),
+        "a missed bound must not apply: {:?}",
+        executed[0].consensus
+    );
+
+    // The charge stands in for the receipt the execution never produced,
+    // which is what keeps state moving through receipts alone.
+    let Some(ConsensusReceipt::Succeeded {
+        database_updates, ..
+    }) = executed[0].fee_receipt.as_ref()
+    else {
+        panic!("a charged abort settles a fee receipt");
+    };
+    assert_eq!(
+        vault_cell(database_updates, payer),
+        Some(encode_amount(funded - floor).to_vec()),
+        "the floor and nothing else"
+    );
+    assert_eq!(
+        vault_cell(database_updates, BOB),
+        None,
+        "the transfer's own effects are discarded"
     );
 }
 
