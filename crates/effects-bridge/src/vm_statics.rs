@@ -331,6 +331,19 @@ pub struct BridgeStatics {
 
 impl VmStatics for BridgeStatics {
     fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
+        // The payer is the composer, and this is what makes that true.
+        // Every fee rule debits the account this field names — the
+        // reservation a payer shard enforces as block validity, the
+        // burn a completed transaction writes, the floor an abort
+        // settles — and the composer's signature is the only authority
+        // in the envelope. An unbound payer field is therefore a debit
+        // on an account that authorised nothing, spendable by anyone
+        // who knows its address.
+        if vm_account_address(&vm.signer) != vm.fee_payer {
+            return Err(VmStaticsError(
+                "fee payer is not the composer's own account".into(),
+            ));
+        }
         let tree = decode_tree(&vm.tree)?;
         if vm.subintent_sigs.len() != tree.subintents.len() {
             return Err(VmStaticsError(format!(
@@ -646,6 +659,29 @@ mod tests {
                 .write_keys
                 .contains(&DeclaredKey::substate(bob_addr().0, nullifier.local.0))
         );
+    }
+
+    #[test]
+    fn a_fee_payer_the_composer_does_not_own_is_refused() {
+        // The whole fee path debits whatever this field names, and the
+        // composer's signature is the only authority in the envelope —
+        // so naming someone else's account has to be refused before any
+        // of it runs, or that account is spendable by a stranger.
+        let tree = single_intent_tree(vec![
+            withdraw(composer_addr(), RES_X, 100),
+            deposit_edge(bob_addr(), 0, RES_X),
+        ]);
+        let mut stolen = envelope(&tree, &[]);
+        stolen.fee_payer = bob_addr().0;
+        let stolen = stolen.sign(&key(7));
+
+        assert!(stolen.signature_is_valid(), "the composer signed it");
+        let refused = statics().derive(&stolen).expect_err("refuses");
+        assert!(refused.0.contains("fee payer"), "{}", refused.0);
+
+        // The composer paying from their own account is the admitted
+        // case, so the check bites on ownership and not on fees at all.
+        assert!(statics().derive(&envelope(&tree, &[])).is_ok());
     }
 
     #[test]
