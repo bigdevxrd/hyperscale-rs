@@ -15,7 +15,9 @@ use std::sync::Arc;
 use hyperscale_effects_bridge::ProtocolHasher;
 use hyperscale_effects_bridge::vm_statics::package_key;
 use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
-use hyperscale_engine_vm::{PreviewGrants, PreviewOutcome, PreviewReport, ResourceChange, VM_XRD};
+use hyperscale_engine_vm::{
+    PreviewGrants, PreviewOutcome, PreviewReport, ResourceChange, VM_XRD, vm_account_address,
+};
 use hyperscale_types::{
     BlockHeight, NetworkDefinition, ShardId, TransactionDecision, TransactionStatus, TxHash,
 };
@@ -24,15 +26,112 @@ use hyperscale_vm_effects::package_hash;
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
-    build_faucet_tx, build_vm_publish_tx, build_vm_stamp_tx, build_vm_transfer_tx,
-    contention_recipient, signer_from_seed, validity_around, vm_cross_shard_cast, vm_recipient,
-    vm_sender, vm_storm_artifact, vm_storm_publishers,
+    build_faucet_tx, build_vm_composed_tx, build_vm_publish_tx, build_vm_stamp_tx,
+    build_vm_transfer_tx, contention_recipient, signer_from_seed, validity_around,
+    vm_cross_shard_cast, vm_nullifier_race_cast, vm_payment_request, vm_recipient, vm_sender,
+    vm_storm_artifact, vm_storm_publishers,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
 
 /// Per-payment amount of the VM contention scenarios.
 const PAYMENT: u128 = 5;
+
+/// The payment a nullifier race contends over.
+const REQUEST: u128 = 100;
+
+/// Two compositions carrying one signed subintent: exactly one commits.
+///
+/// The request is a declaration and nothing else — its hash covers its
+/// own graph and parameters, no envelope — so both composers bind the
+/// identical one and both derive the same nullifier key under its
+/// signer's prefix. That shared declared write is what puts them in one
+/// conflict group, where the spent check sees the winner's cell.
+///
+/// The loser is charged as a lost race rather than as a defect: canonical
+/// order picked the winner, and nothing a composer could read at signing
+/// time would have told it which way.
+///
+/// # Panics
+///
+/// Panics if both compositions settle the same way, if the request is
+/// filled more than once, or if either payer is charged the wrong class.
+pub fn vm_nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
+    let shard = ShardId::ROOT;
+    let (first_key, second_key, requester_key) = vm_nullifier_race_cast();
+    let first = vm_account_address(&first_key.public_key().0);
+    let second = vm_account_address(&second_key.public_key().0);
+    let requester = vm_account_address(&requester_key.public_key().0);
+
+    let before = [
+        vm_vault_balance(c, shard, first),
+        vm_vault_balance(c, shard, second),
+        vm_vault_balance(c, shard, requester),
+    ];
+
+    let request = vm_payment_request(requester, REQUEST);
+    let window = validity_around(c.now());
+    let mut hashes = Vec::new();
+    let mut floors = Vec::new();
+    for (composer, from) in [(&first_key, first), (&second_key, second)] {
+        let tx = build_vm_composed_tx(composer, from, &requester_key, &request, REQUEST, window);
+        floors.push(tx.vm().expect("a VM envelope").abort_floor());
+        hashes.push(tx.hash());
+        c.submit(Arc::new(tx));
+    }
+
+    let verdicts: Vec<Option<TransactionStatus>> = hashes
+        .iter()
+        .map(|hash| await_tx_terminal(c, *hash, epochs(8)))
+        .collect();
+    let accepted = verdicts
+        .iter()
+        .filter(|status| {
+            matches!(
+                status,
+                Some(TransactionStatus::Completed(TransactionDecision::Accept))
+            )
+        })
+        .count();
+    assert_eq!(
+        accepted, 1,
+        "exactly one composition may fill a once-only request; verdicts = {verdicts:?}"
+    );
+
+    // The request was filled once, so the requester banked one payment.
+    let after_requester = vm_vault_balance(c, shard, requester);
+    assert_eq!(
+        after_requester - before[2],
+        REQUEST,
+        "the request must be filled exactly once"
+    );
+
+    // The winner paid the payment and its fee; the loser paid the class
+    // floor and nothing more.
+    let won = matches!(
+        verdicts[0],
+        Some(TransactionStatus::Completed(TransactionDecision::Accept))
+    );
+    let (winner_spent, loser_spent) = if won {
+        (
+            before[0] - vm_vault_balance(c, shard, first),
+            before[1] - vm_vault_balance(c, shard, second),
+        )
+    } else {
+        (
+            before[1] - vm_vault_balance(c, shard, second),
+            before[0] - vm_vault_balance(c, shard, first),
+        )
+    };
+    assert!(
+        winner_spent > REQUEST,
+        "the winner paid the request plus a fee; spent = {winner_spent}"
+    );
+    assert_eq!(
+        loser_spent, floors[0],
+        "a lost race settles the class floor, not the ceiling"
+    );
+}
 
 /// Submit one VM transfer between genesis-funded VM accounts and assert
 /// it accepts and lands state.
@@ -217,6 +316,7 @@ pub fn vm_zipf_payments(
 /// payments commit at one height.
 pub fn vm_hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport, u64) {
     let hot = vm_recipient(0);
+    let before = vm_vault_balance(c, ShardId::ROOT, hot);
     let mut submissions = Vec::with_capacity(senders as usize);
     for index in 0..senders {
         let (payer, from) = vm_sender(index);
@@ -244,6 +344,17 @@ pub fn vm_hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport,
         distinct,
         heights.len(),
         "two hot VM payments committed at one height — the serialization bound is broken",
+    );
+
+    // Every payment has to be *in* the hot vault. Counting commit
+    // heights says they were serialized; only the balance says none was
+    // overwritten by another executing against the same baseline —
+    // `settle_and_report` has already asserted all of them accepted.
+    let settled = u128::try_from(report.submitted).expect("bounded");
+    assert_eq!(
+        vm_vault_balance(c, ShardId::ROOT, hot) - before,
+        settled * PAYMENT,
+        "the hot vault must hold every accepted payment: {settled} settled",
     );
     (report, span)
 }

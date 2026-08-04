@@ -14,7 +14,8 @@ use hyperscale_scenarios::tx::{
     contention_genesis_balances, cross_contention_genesis_balances, halt_recovery_genesis_balances,
     halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
     split_straddler_setup, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
-    vm_insolvent_genesis_accounts, vm_storm_genesis_accounts, witness_genesis_balances,
+    vm_insolvent_genesis_accounts, vm_nullifier_race_genesis_accounts, vm_storm_genesis_accounts,
+    witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, ScenarioConfig, beacon_lag_drops_skipped_epochs_reveal_chains,
@@ -41,9 +42,10 @@ use hyperscale_scenarios::{
     vm_abort_converges, vm_abort_floor_settles_on_deadline, vm_attested_load_reaches_the_beacon,
     vm_cross_shard_transfer, vm_deploy_storm_rides_out,
     vm_events_land_on_their_emitters_home_shard, vm_failure_charges_its_payer, vm_hot_recipient,
-    vm_insolvent_payer_engages_nothing, vm_preview_reports_resource_changes,
-    vm_randomness_draw_agrees_across_shards, vm_reads_the_committed_baseline, vm_single_transfer,
-    vm_zipf_payments, withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
+    vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
+    vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,
+    vm_reads_the_committed_baseline, vm_single_transfer, vm_zipf_payments,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_simulation::ExecutionMode;
 use hyperscale_storage::ShardChainReader;
@@ -155,6 +157,16 @@ fn vm_single_transfer_sim() {
     let mut cluster =
         SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(1, 1));
     vm_single_transfer(&mut cluster);
+}
+
+#[test]
+fn vm_nullifier_race_admits_exactly_one_sim() {
+    let mut cluster = SimCluster::with_vm_accounts(
+        &liveness_config(),
+        42,
+        &vm_nullifier_race_genesis_accounts(),
+    );
+    vm_nullifier_race_admits_exactly_one(&mut cluster);
 }
 
 #[test]
