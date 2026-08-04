@@ -15,6 +15,7 @@
 //! artifact or an admission input.
 
 pub mod artifact;
+pub mod staking;
 pub mod vm_metadata;
 pub mod vm_statics;
 mod wire;
@@ -27,6 +28,7 @@ use hyperscale_types::{NodeId, RoutableTransaction, ShardId, TopologySnapshot};
 use hyperscale_vm_effects::{
     Address, Effect, EffectSet, EffectTarget, Hash32, Hasher, LocalKey, Mode, SubstateKey,
 };
+pub use staking::{PoolRegistry, witness_from_event};
 pub use vm_metadata::{MAX_PACKAGE_METADATA_BYTES, decode_metadata, encode_metadata};
 pub use vm_statics::{
     BridgeStatics, VM_XRD, decode_tree, encode_tree, entropy_key, envelope_identity, vault_key,
