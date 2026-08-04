@@ -26,14 +26,14 @@ use hyperscale_engine::DynSnapshot;
 use hyperscale_types::{RevealChain, RoutableTransaction, VmEvent, WeightedTimestamp};
 use hyperscale_vm_effects::{EffectTarget, Hash32, SubstateKey};
 use hyperscale_vm_kernel::{
-    Base, BatchTx, Locality, Outcome, Receipt, TxHash as VmTxHash, decode_amount, execute_batch,
+    Base, BatchTx, Locality, ManifestWalk, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
+    execute_batch,
 };
 
 use crate::executor::{
     PayerFee, VmBase, charge_for, protocol_hash, publish_work, read_cell, tx_randomness,
 };
 use crate::genesis::vault_key;
-use crate::runner::{ManifestRunner, PreparedVmTx};
 use crate::{VM_XRD, VmExecutor};
 
 /// What a preview run is permitted that a committed execution is not.
@@ -260,12 +260,12 @@ impl VmExecutor {
             return preview_publish(snapshot, artifact, payer, inputs.grants);
         }
 
-        let (manifest, identity, declaration, nullifiers) = match self.prepare(tx) {
+        let prepared = match self.prepare(tx) {
             Ok(derived) => derived,
             Err(reason) => return PreviewReport::refused(reason),
         };
         let mut cells: BTreeMap<SubstateKey, Vec<u8>> = BTreeMap::new();
-        for effect in declaration.set.iter() {
+        for effect in prepared.declaration.set.iter() {
             if let EffectTarget::Point(key) = effect.target
                 && let Some(value) = read_cell(snapshot, key)
             {
@@ -280,26 +280,16 @@ impl VmExecutor {
         let base = Arc::new(VmBase { cells });
 
         let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
-        let prepared = BTreeMap::from([(
+        let batch = [BatchTx::new(
             vm_tx,
-            PreparedVmTx {
-                manifest,
-                identity,
-                declaration: declaration.clone(),
-                nullifiers: nullifiers.clone(),
-            },
-        )]);
-        let batch = [BatchTx {
-            tx: vm_tx,
-            declared: declaration.set,
-            ordered: declaration.ordered,
-            nullifiers,
-            clock_ms: inputs.clock.as_millis(),
-            randomness: tx_randomness(inputs.randomness, tx.hash()),
-        }];
-        let runner = ManifestRunner {
+            prepared.declaration,
+            inputs.clock.as_millis(),
+            tx_randomness(inputs.randomness, tx.hash()),
+        )
+        .with_calls(prepared.calls)
+        .with_nullifiers(prepared.nullifiers)];
+        let walk = ManifestWalk {
             backend: &self.backend,
-            prepared: &prepared,
         };
         // Total locality: the report covers every cell the envelope
         // touches, and the kernel judges each against whatever the
@@ -307,7 +297,7 @@ impl VmExecutor {
         let outcome = match execute_batch(
             Arc::clone(&base) as Arc<dyn Base>,
             &batch,
-            &runner,
+            &walk,
             protocol_hash,
             self.mode,
             &Locality::All,

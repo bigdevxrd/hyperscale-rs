@@ -37,21 +37,39 @@ use hyperscale_types::{
     VmEvent, compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, Declaration, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
-    PrefixShardResolver, RoleId, SubstateKey, admit_tree, package_hash, route_tree,
+    Address, Declaration, EffectTarget, Hash32, LocalKey, NodeCall, PrefixShardResolver, RoleId,
+    SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
-    Base, BatchTx, EnvInputs, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash,
-    amount_cell, decode_amount, encode_amount, execute_batch,
+    Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
+    TxHash as VmTxHash, amount_cell, decode_amount, encode_amount, execute_batch,
 };
 use indexmap::IndexMap;
 use radix_common::math::Decimal;
 use radix_common::prelude::DbSubstateValue;
 use radix_substate_store_interface::interface::{DatabaseUpdates, DbPartitionKey};
 
-use crate::backend::GuestBackend;
+use crate::backend::EngineBackend;
 use crate::genesis::{VmWorld, genesis_world};
-use crate::runner::{ManifestRunner, PreparedVmTx};
+
+/// One derived transaction, as the batch consumes it.
+///
+/// The walk itself is the kernel's: routing lowers each manifest node to
+/// the invocation its package's ABI binding describes, and
+/// [`ManifestWalk`] performs them over the engine backend. Nothing on
+/// this side names a method.
+pub struct PreparedVmTx {
+    /// The lowered invocations the kernel walks, in manifest node order.
+    /// Envelope trees lower into one flat list, so nothing downstream
+    /// sees intent structure.
+    pub calls: Vec<NodeCall>,
+    /// The routed declaration, both views: the folded set scheduling
+    /// reads, and the clause order the capability table is built in —
+    /// which is what a lowered call's handle positions index.
+    pub declaration: Declaration,
+    /// The subintent nullifier keys the batch entry enforces.
+    pub nullifiers: Vec<SubstateKey>,
+}
 
 /// The protocol crypto hash behind the kernel's hashing host function
 /// and fresh-ID derivation.
@@ -126,7 +144,7 @@ impl Base for VmBase {
 /// and the batch scheduling mode.
 pub struct VmExecutor {
     pub(crate) world: VmWorld,
-    pub(crate) backend: GuestBackend,
+    pub(crate) backend: EngineBackend,
     pub(crate) mode: ExecutionMode,
 }
 
@@ -148,7 +166,7 @@ impl VmExecutor {
         }));
         Self {
             world,
-            backend: GuestBackend::new(),
+            backend: EngineBackend::new(),
             mode,
         }
     }
@@ -163,14 +181,11 @@ impl VmExecutor {
         &self.world.cache
     }
 
-    /// Derive one transaction's manifest, effect set, and nullifiers —
-    /// the same `decode → admit → route` admission ran; refusal here
+    /// Derive one transaction's invocations, effect set, and nullifiers
+    /// — the same `decode → admit → route` admission ran; refusal here
     /// means the transaction bypassed admission and fails
     /// deterministically.
-    pub(crate) fn prepare(
-        &self,
-        tx: &RoutableTransaction,
-    ) -> Result<(Manifest, ManifestHash, Declaration, Vec<SubstateKey>), String> {
+    pub(crate) fn prepare(&self, tx: &RoutableTransaction) -> Result<PreparedVmTx, String> {
         let vm = tx
             .vm()
             .ok_or_else(|| "Radix body in a VM sub-batch".to_string())?;
@@ -204,17 +219,15 @@ impl VmExecutor {
         let declaration = routing
             .declaration()
             .map_err(|error| format!("declaration: {error:?}"))?;
-        let nullifiers = admitted
-            .subintents
-            .iter()
-            .map(|record| record.nullifier)
-            .collect();
-        Ok((
-            admitted.admitted.manifest().clone(),
-            admitted.admitted.identity(),
+        Ok(PreparedVmTx {
+            calls: routing.calls,
             declaration,
-            nullifiers,
-        ))
+            nullifiers: admitted
+                .subintents
+                .iter()
+                .map(|record| record.nullifier)
+                .collect(),
+        })
     }
 }
 
@@ -755,17 +768,9 @@ impl VmExecutor {
                 continue;
             }
             match self.prepare(tx) {
-                Ok((manifest, identity, declaration, nullifiers)) => {
+                Ok(entry) => {
                     record_transaction_executed();
-                    prepared.insert(
-                        vm_tx,
-                        PreparedVmTx {
-                            manifest,
-                            identity,
-                            declaration,
-                            nullifiers,
-                        },
-                    );
+                    prepared.insert(vm_tx, entry);
                 }
                 Err(reason) => {
                     tracing::warn!(tx_hash = ?tx.hash(), reason, "VM transaction refused at execution");
@@ -839,25 +844,23 @@ impl VmExecutor {
                     .get(vm_tx)
                     .copied()
                     .expect("every prepared transaction has an environment");
-                let declaration = entry.declaration.clone();
-                BatchTx {
-                    tx: *vm_tx,
-                    declared: declaration.set,
-                    ordered: declaration.ordered,
-                    nullifiers: entry.nullifiers.clone(),
-                    clock_ms: env.clock_ms,
-                    randomness: env.randomness,
-                }
+                BatchTx::new(
+                    *vm_tx,
+                    entry.declaration.clone(),
+                    env.clock_ms,
+                    env.randomness,
+                )
+                .with_calls(entry.calls.clone())
+                .with_nullifiers(entry.nullifiers.clone())
             })
             .collect();
-        let runner = ManifestRunner {
+        let walk = ManifestWalk {
             backend: &self.backend,
-            prepared: &prepared,
         };
         let outcome = execute_batch(
             Arc::clone(&base) as Arc<dyn Base>,
             &batch,
-            &runner,
+            &walk,
             protocol_hash,
             self.mode,
             &locality,

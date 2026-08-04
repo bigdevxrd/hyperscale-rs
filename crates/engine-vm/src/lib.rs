@@ -19,7 +19,6 @@ mod backend;
 mod executor;
 mod host;
 mod preview;
-mod runner;
 
 /// VM genesis seeding: the stdlib world and funded-account cells.
 pub mod genesis;
