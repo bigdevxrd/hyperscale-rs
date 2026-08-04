@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use hyperscale_effects_bridge::vm_statics::package_key;
-use hyperscale_effects_bridge::{ProtocolHasher, admit_package, encode_tree, vm_account_address};
+use hyperscale_effects_bridge::{
+    ProtocolHasher, admit_package, attach_metadata, encode_tree, vm_account_address,
+};
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
 };
@@ -19,12 +21,14 @@ use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, RoutableTransaction,
     ShardId, ShardTrie, Verified, VmBody, VmTransaction, WeightedTimestamp,
+    absorb_committed_vm_cells,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
     Value, package_hash,
 };
 use hyperscale_vm_kernel::encode_amount;
+use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 use radix_common::prelude::DbSubstateValue;
 use radix_substate_store_interface::interface::{DbPartitionKey, PartitionEntry};
 
@@ -679,5 +683,93 @@ fn a_publish_that_is_not_a_package_never_reaches_execution() {
     assert!(
         admit_package(account_artifact()).is_ok(),
         "the stdlib artifact is one"
+    );
+}
+
+#[test]
+fn a_committed_publish_grows_the_cache_that_routing_reads() {
+    let payer = fee_payer(7);
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+
+    // A package the world has never seen: the stdlib artifact with its
+    // metadata attached a second time under a different publisher would
+    // be the same bytes, so vary the metadata to vary the address.
+    let mut metadata = account_metadata();
+    metadata.events.push("republished".into());
+    let artifact = attach_metadata(ACCOUNT_COMPONENT, &metadata).expect("attaches");
+    let package = package_hash(&ProtocolHasher, &artifact);
+
+    let cache = executor.packages();
+    assert!(
+        cache.load().get(package).is_none(),
+        "the package is unknown before its block commits"
+    );
+
+    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        signed_publish(7, artifact),
+    ));
+    let executed = execute_on(&[(payer, 1_000_000)], &executor, &[tx]);
+    let ConsensusReceipt::Succeeded { .. } = &executed[0].consensus else {
+        panic!("the publish must succeed: {:?}", executed[0].consensus);
+    };
+
+    // Executing is not committing: the cache learns the package from the
+    // committed receipt, which is what a synced replica also replays.
+    assert!(
+        cache.load().get(package).is_none(),
+        "execution alone does not publish"
+    );
+    absorb_committed_vm_cells([&executed[0].consensus]);
+    assert_eq!(
+        cache.load().get(package),
+        Some(&metadata),
+        "the committed cell published exactly the metadata the artifact declares"
+    );
+}
+
+#[test]
+fn only_a_cell_that_addresses_its_own_contents_publishes() {
+    // A package cell is self-identifying: its key is the content address
+    // of the value it holds. Without that check, any committed cell
+    // whose bytes happened to parse as an artifact would publish a
+    // package — no publish transaction, no fee, no cell of its own.
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let cache = executor.packages();
+
+    let mut metadata = account_metadata();
+    metadata.events.push("smuggled".into());
+    let artifact = attach_metadata(ACCOUNT_COMPONENT, &metadata).expect("attaches");
+    let package = package_hash(&ProtocolHasher, &artifact);
+    let publisher = fee_payer(11);
+
+    // The right bytes at the wrong key: a vault slot, not the content
+    // address. Refused.
+    let vault = vault_key(publisher, VM_XRD);
+    cache.absorb_cell(publisher, vault.local.0, &artifact);
+    assert!(
+        cache.load().get(package).is_none(),
+        "an artifact stored anywhere but its own address is not a package"
+    );
+
+    // The same bytes at the key their own hash builds. Published.
+    let cell = package_key(publisher, package);
+    cache.absorb_cell(publisher, cell.local.0, &artifact);
+    assert_eq!(cache.load().get(package), Some(&metadata));
+}
+
+#[test]
+fn a_committed_cell_that_is_not_a_package_is_ignored() {
+    // The other half: ordinary traffic cannot grow the cache by
+    // accident, whatever it writes.
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        signed_transfer(7, ALICE, BOB, 100),
+    ));
+    let executed = execute(&executor, &[tx]);
+    let bogus = package_hash(&ProtocolHasher, encode_amount(900).as_ref());
+    absorb_committed_vm_cells([&executed[0].consensus]);
+    assert!(
+        executor.packages().load().get(bogus).is_none(),
+        "vault writes are not packages"
     );
 }

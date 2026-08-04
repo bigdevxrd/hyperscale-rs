@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use blake3::hash as blake3_hash;
-use hyperscale_effects_bridge::vm_statics::package_key;
+use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
 use hyperscale_effects_bridge::{
     BridgeStatics, ProtocolHasher, admit_package, decode_tree, envelope_identity,
 };
@@ -153,6 +153,16 @@ impl VmExecutor {
         }
     }
 
+    /// The published-package cache this engine routes against.
+    ///
+    /// Shared with the installed statics rather than copied, so a package
+    /// a committed block publishes is visible to admission and to
+    /// execution at the same instant.
+    #[must_use]
+    pub const fn packages(&self) -> &PackageCache {
+        &self.world.cache
+    }
+
     /// Derive one transaction's manifest, effect set, and nullifiers —
     /// the same `decode → admit → route` admission ran; refusal here
     /// means the transaction bypassed admission and fails
@@ -164,6 +174,7 @@ impl VmExecutor {
         let vm = tx
             .vm()
             .ok_or_else(|| "Radix body in a VM sub-batch".to_string())?;
+        let packages = self.world.cache.load();
         let tree = decode_tree(
             vm.call_tree()
                 .ok_or_else(|| "publish body in a call sub-batch".to_string())?,
@@ -172,14 +183,14 @@ impl VmExecutor {
         let admitted = admit_tree(
             &tree,
             envelope_identity(vm),
-            &self.world.cache,
+            &packages,
             &self.world.instances,
             &ProtocolHasher,
         )
         .map_err(|error| format!("admission: {error}"))?;
         let routing = route_tree(
             &admitted,
-            &self.world.cache,
+            &packages,
             &self.world.instances,
             &ProtocolHasher,
             &PrefixShardResolver { bits: 0 },

@@ -25,10 +25,10 @@ use hyperscale_types::{
     SplitChildRoots, StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout,
     TimeoutContext, TopologySnapshot, TransactionRoot, TransactionRootContext, ValidatorId,
     Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
-    block_header_message, block_vote_message, certified_block_header_message,
-    commit_witness_window, compute_waves, derive_leaves, local_settled_wave_ids,
-    missed_proposals_since_prev_commit, next_reveal_chain, ready_signal_message, shard_reveal_sign,
-    vrf_output_from_proof, work_over_certificates,
+    absorb_committed_vm_cells, block_header_message, block_vote_message,
+    certified_block_header_message, commit_witness_window, compute_waves, derive_leaves,
+    local_settled_wave_ids, missed_proposals_since_prev_commit, next_reveal_chain,
+    ready_signal_message, shard_reveal_sign, vrf_output_from_proof, work_over_certificates,
 };
 
 /// Result of QC verification and assembly.
@@ -387,10 +387,14 @@ fn split_child_roots_for_header(
 fn collect_finalized_receipts(
     waves: &[Arc<Verifiable<FinalizedWave>>],
 ) -> Vec<Arc<ConsensusReceipt>> {
-    waves
+    let receipts: Vec<Arc<ConsensusReceipt>> = waves
         .iter()
         .flat_map(|fw| fw.consensus_receipts())
-        .collect()
+        .collect();
+    // A package published in this block is usable by transactions
+    // admitted after it commits, and this is where that becomes true.
+    absorb_committed_vm_cells(receipts.iter().map(AsRef::as_ref));
+    receipts
 }
 
 /// Handle the shard-owned delegated [`Action`] variants.

@@ -5,6 +5,7 @@ edition.workspace = true
 description = "The workspace's binding to the VM effect vocabulary: protocol hasher and declared-effects adapter"
 
 [dependencies]
+arc-swap.workspace = true
 blake3.workspace = true
 hyperscale-types.workspace = true
 hyperscale-vm-effects.workspace = true

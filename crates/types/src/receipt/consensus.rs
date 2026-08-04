@@ -13,6 +13,7 @@
 
 use std::sync::LazyLock;
 
+use radix_common::prelude::DatabaseUpdate;
 use radix_substate_store_interface::interface::PartitionDatabaseUpdates;
 use sbor::prelude::basic_encode;
 use sbor::{
@@ -21,6 +22,8 @@ use sbor::{
 };
 
 use crate::sbor_codec::decode_bounded_vec;
+use crate::state_key::{VM_PARTITION, vm_db_node_key_owner};
+use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
     ApplicationEvent, BeaconWitnessEvent, BeaconWitnessRoot, BoundedVec, DatabaseUpdates,
     EventRoot, GlobalReceipt, GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX,
@@ -129,6 +132,48 @@ pub fn has_partition_reset(updates: &DatabaseUpdates) -> bool {
             .values()
             .any(|p| matches!(p, PartitionDatabaseUpdates::Reset { .. }))
     })
+}
+
+/// Offer every VM cell these committed receipts write to the installed
+/// VM statics, so the published-package cache grows with the chain.
+///
+/// Called on both the live commit path and the sync path, which is the
+/// point: a block's receipts are block content, so a replica that
+/// replayed the block reaches the same cache as one that executed it.
+/// Receipts are also the only thing that moves VM state, so nothing a
+/// package cell could arrive through is missed here.
+pub fn absorb_committed_vm_cells<'a>(receipts: impl IntoIterator<Item = &'a ConsensusReceipt>) {
+    if !vm_statics_installed() {
+        return;
+    }
+    let statics = vm_statics();
+    for receipt in receipts {
+        let ConsensusReceipt::Succeeded {
+            database_updates, ..
+        } = receipt
+        else {
+            continue;
+        };
+        for (node_key, node) in &database_updates.node_updates {
+            let Some(owner) = vm_db_node_key_owner(node_key) else {
+                continue;
+            };
+            let Some(PartitionDatabaseUpdates::Delta { substate_updates }) =
+                node.partition_updates.get(&VM_PARTITION)
+            else {
+                continue;
+            };
+            for (sort_key, update) in substate_updates {
+                let DatabaseUpdate::Set(value) = update else {
+                    continue;
+                };
+                let Ok(local) = <[u8; 16]>::try_from(sort_key.0.as_slice()) else {
+                    continue;
+                };
+                statics.absorb_committed_cell(owner, local, value);
+            }
+        }
+    }
 }
 
 impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusReceipt {

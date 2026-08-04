@@ -14,7 +14,9 @@
 //! other exclusive key.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use hyperscale_types::{
     DeclaredKey, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction,
 };
@@ -22,8 +24,8 @@ use hyperscale_vm_effects::stdlib::{ENTROPY, VAULT};
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg, GraphNode,
     Hash32, InstanceRegistry, IntentDecl, ManifestGraph, ManifestHash, MetadataCache, Mode,
-    PackageHash, PrefixShardResolver, RoleId, Subintent, SubstateKey, Value, YieldBinding,
-    YieldParam, admit_tree, child_key, package_hash, route_tree,
+    PackageHash, PackageMetadata, PrefixShardResolver, RoleId, Subintent, SubstateKey, Value,
+    YieldBinding, YieldParam, admit_tree, child_key, package_hash, route_tree,
 };
 use sbor::prelude::*;
 
@@ -348,10 +350,71 @@ pub fn envelope_identity(vm: &VmTransaction) -> ManifestHash {
 /// The bridge's [`VmStatics`]: `decode → admit → route` over the
 /// process's genesis-static metadata.
 pub struct BridgeStatics {
-    /// Published package metadata, genesis-static this phase.
-    pub cache: MetadataCache,
+    /// Published package metadata, growing as blocks commit.
+    pub cache: PackageCache,
     /// Instance registrations, genesis-static this phase.
     pub instances: InstanceRegistry,
+}
+
+/// The published-package cache: content-addressed, shared process-wide,
+/// and grown from committed state.
+///
+/// One cache per process rather than one per shard, because a package is
+/// immutable and named by the hash of its own bytes — two shards holding
+/// it hold the same thing, and a node running several vnodes has no
+/// reason to hold it twice.
+///
+/// Reads are lock-free because every admission derivation takes one:
+/// swapping a whole new map in on the rare publish costs a clone that
+/// nothing waits on, where a lock would put every derivation behind the
+/// commit path.
+#[derive(Clone, Debug)]
+pub struct PackageCache(Arc<ArcSwap<MetadataCache>>);
+
+impl PackageCache {
+    /// A cache seeded with the packages a cold start already knows.
+    #[must_use]
+    pub fn new(seed: MetadataCache) -> Self {
+        Self(Arc::new(ArcSwap::from_pointee(seed)))
+    }
+
+    /// The current published set.
+    #[must_use]
+    pub fn load(&self) -> Arc<MetadataCache> {
+        self.0.load_full()
+    }
+
+    /// Publish `metadata` under `package` unless it is already there.
+    ///
+    /// First-write-wins by content address, which is what makes
+    /// republishing idempotent: equal hash means equal artifact, so the
+    /// entry can never need replacing.
+    pub fn publish(&self, package: PackageHash, metadata: PackageMetadata) {
+        if self.load().get(package).is_some() {
+            return;
+        }
+        let mut next = (*self.load()).clone();
+        next.publish(package, metadata);
+        self.0.store(Arc::new(next));
+    }
+
+    /// Publish the package a committed cell holds, if it holds one.
+    ///
+    /// A package cell is self-identifying: its key is the content
+    /// address of the very bytes it stores, so recomputing the address
+    /// from the value and rebuilding the key answers whether this cell
+    /// is a package without any side channel, any tag, and any trust in
+    /// what wrote it. A cell of any other kind cannot match except by
+    /// finding a hash collision.
+    pub fn absorb_cell(&self, owner: [u8; 16], local: [u8; 16], value: &[u8]) {
+        let package = package_hash(&ProtocolHasher, value);
+        if package_key(owner, package).local.0 != local {
+            return;
+        }
+        if let Ok(metadata) = admit_package(value) {
+            self.publish(package, metadata);
+        }
+    }
 }
 
 impl BridgeStatics {
@@ -403,6 +466,10 @@ impl BridgeStatics {
 }
 
 impl VmStatics for BridgeStatics {
+    fn absorb_committed_cell(&self, owner: [u8; 16], local: [u8; 16], value: &[u8]) {
+        self.cache.absorb_cell(owner, local, value);
+    }
+
     fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
         // The payer is the composer, and this is what makes that true.
         // Every fee rule debits the account this field names — the
@@ -439,17 +506,18 @@ impl VmStatics for BridgeStatics {
                 )));
             }
         }
+        let packages = self.cache.load();
         let admitted = admit_tree(
             &tree,
             envelope_identity(vm),
-            &self.cache,
+            &packages,
             &self.instances,
             &ProtocolHasher,
         )
         .map_err(|error| VmStaticsError(format!("admission: {error}")))?;
         let routing = route_tree(
             &admitted,
-            &self.cache,
+            &packages,
             &self.instances,
             &ProtocolHasher,
             &PrefixShardResolver { bits: 0 },
@@ -556,7 +624,10 @@ mod tests {
                 },
             );
         }
-        BridgeStatics { cache, instances }
+        BridgeStatics {
+            cache: PackageCache::new(cache),
+            instances,
+        }
     }
 
     fn withdraw(target: Address, resource: Address, amount: u128) -> GraphNode {

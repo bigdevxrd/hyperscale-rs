@@ -8,6 +8,7 @@
 
 use std::sync::LazyLock;
 
+use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
 use hyperscale_effects_bridge::{ProtocolHasher, admit_package, attach_metadata};
 pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
@@ -34,6 +35,12 @@ static ACCOUNT_ARTIFACT: LazyLock<Vec<u8>> = LazyLock::new(|| {
         .expect("the stdlib account metadata attaches to its committed blob")
 });
 
+/// The prefix genesis publishes the stdlib package under.
+///
+/// No key derives it, so nothing can ever publish beside it or spend
+/// from it: the protocol's own packages sit where no signer reaches.
+pub const GENESIS_PUBLISHER: [u8; 16] = [0; 16];
+
 /// The stdlib account artifact: what the engine compiles and what the
 /// package's content address covers.
 #[must_use]
@@ -45,8 +52,8 @@ pub fn account_artifact() -> &'static [u8] {
 /// accounts' instance registrations.
 #[derive(Debug, Clone)]
 pub struct VmWorld {
-    /// Published package metadata.
-    pub cache: MetadataCache,
+    /// Published package metadata, growing as blocks commit.
+    pub cache: PackageCache,
     /// Instance registrations.
     pub instances: InstanceRegistry,
     /// The stdlib account package's content address.
@@ -71,8 +78,9 @@ pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
     let account_package = package_hash(&ProtocolHasher, artifact);
     let metadata =
         admit_package(artifact).expect("the stdlib account artifact publishes as a package");
-    let mut cache = MetadataCache::new();
-    cache.publish(account_package, metadata);
+    let mut seed = MetadataCache::new();
+    seed.publish(account_package, metadata);
+    let cache = PackageCache::new(seed);
     let mut instances = InstanceRegistry::new();
     for (address, _) in accounts {
         instances.register(
@@ -95,6 +103,28 @@ pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
 #[must_use]
 pub fn vm_genesis_updates(accounts: &[([u8; 16], u128)]) -> DatabaseUpdates {
     let mut updates = DatabaseUpdates::default();
+    // The stdlib package as a committed cell, under the same content
+    // address a publish would place it at. Genesis is then the cache's
+    // cold start in the literal sense — the same projection of committed
+    // state every later block extends, rather than a second source the
+    // cache would have to be told about separately.
+    let artifact = account_artifact();
+    let package = package_hash(&ProtocolHasher, artifact);
+    let cell = package_key(GENESIS_PUBLISHER, package);
+    updates
+        .node_updates
+        .entry(vm_db_node_key(cell.owner.0))
+        .or_default()
+        .partition_updates
+        .insert(
+            VM_PARTITION,
+            PartitionDatabaseUpdates::Delta {
+                substate_updates: IndexMap::from([(
+                    DbSortKey(cell.local.0.to_vec()),
+                    DatabaseUpdate::Set(artifact.to_vec()),
+                )]),
+            },
+        );
     for (address, balance) in accounts {
         let key = vault_key(*address, VM_XRD);
         let mut substate_updates = IndexMap::new();
@@ -127,7 +157,14 @@ mod tests {
         let alice = [0x11u8; 16];
         let bob = [0x22u8; 16];
         let updates = vm_genesis_updates(&[(alice, 500), (bob, 700)]);
-        assert_eq!(updates.node_updates.len(), 2);
+        // Two funded accounts, plus the stdlib package under the
+        // publisher no key derives.
+        assert_eq!(updates.node_updates.len(), 3);
+        assert!(
+            updates
+                .node_updates
+                .contains_key(&vm_db_node_key(GENESIS_PUBLISHER))
+        );
 
         for (owner, balance) in [(alice, 500u128), (bob, 700)] {
             let key = vault_key(owner, VM_XRD);
@@ -179,7 +216,10 @@ mod tests {
         let declared = admit_package(artifact).expect("publishes as a package");
         assert_eq!(declared, account_metadata());
         let world = genesis_world(&[]);
-        assert_eq!(world.cache.get(world.account_package), Some(&declared));
+        assert_eq!(
+            world.cache.load().get(world.account_package),
+            Some(&declared)
+        );
         assert_eq!(
             world.account_package,
             package_hash(&ProtocolHasher, artifact)
@@ -202,7 +242,7 @@ mod tests {
     #[test]
     fn the_world_binds_every_funded_account_to_the_stdlib_package() {
         let world = genesis_world(&[([0x11; 16], 1), ([0x22; 16], 2)]);
-        assert!(world.cache.get(world.account_package).is_some());
+        assert!(world.cache.load().get(world.account_package).is_some());
         for address in [[0x11; 16], [0x22; 16]] {
             assert_eq!(
                 world.instances.get(Address(address)).map(|m| m.package),

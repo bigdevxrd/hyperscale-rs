@@ -343,6 +343,22 @@ pub trait VmStatics: Send + Sync {
     /// a subintent signature list that does not match the tree, or a
     /// bound signer address the matching public key does not derive.
     fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError>;
+
+    /// Offer one committed VM cell to the published-package cache.
+    ///
+    /// Called for every VM cell a block commits, on the commit path and
+    /// on the sync path alike, because both derive their state from the
+    /// same block content. What makes a cell a package is a property of
+    /// its own bytes, so the implementation decides — this seam carries
+    /// no VM vocabulary and no notion of what a package is.
+    ///
+    /// Feeding the cache from committed state rather than from execution
+    /// is what keeps routing identical across replicas: a package is
+    /// usable by transactions admitted after its block commits, and a
+    /// validator whose cache lagged would refuse what its peers admit.
+    fn absorb_committed_cell(&self, owner: [u8; 16], local: [u8; 16], value: &[u8]) {
+        let _ = (owner, local, value);
+    }
 }
 
 static VM_STATICS: OnceLock<Box<dyn VmStatics>> = OnceLock::new();
