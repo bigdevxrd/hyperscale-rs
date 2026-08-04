@@ -9,18 +9,25 @@
 //! here the assertions are consensus-shaped: acceptance, deterministic
 //! aborts, ordering, and committed state roots.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use hyperscale_effects_bridge::ProtocolHasher;
+use hyperscale_effects_bridge::vm_statics::package_key;
 use hyperscale_engine_vm::VM_XRD;
 use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
-use hyperscale_types::{NetworkDefinition, ShardId, TransactionDecision, TransactionStatus};
+use hyperscale_types::{
+    BlockHeight, NetworkDefinition, ShardId, TransactionDecision, TransactionStatus, TxHash,
+};
+use hyperscale_vm_effects::package_hash;
 
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
-    VM_SNAPSHOT_GUARD_BALANCE, build_faucet_tx, build_vm_guarded_transfer_tx, build_vm_stamp_tx,
-    build_vm_transfer_tx, contention_recipient, signer_from_seed, validity_around,
-    vm_cross_shard_cast, vm_recipient, vm_sender, vm_snapshot_cast,
+    VM_SNAPSHOT_GUARD_BALANCE, build_faucet_tx, build_vm_guarded_transfer_tx, build_vm_publish_tx,
+    build_vm_stamp_tx, build_vm_transfer_tx, contention_recipient, signer_from_seed,
+    validity_around, vm_cross_shard_cast, vm_recipient, vm_sender, vm_snapshot_cast,
+    vm_storm_artifact, vm_storm_publishers,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -840,4 +847,96 @@ fn vm_vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {
         let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
         u128::from_le_bytes(cell)
     })
+}
+
+/// An adversarial deploy storm rides out: throughput degrades, no shard
+/// stalls.
+///
+/// Every publisher spams distinct packages at its own shard at once, so
+/// both committees are simultaneously carrying the heaviest transaction
+/// the protocol admits — a full artifact each, validated at admission and
+/// written whole into state. This is the probe the commit-fed cache has
+/// to survive: if publishing could wedge a committee, or if the cache
+/// feed could make a shard's commit path fall behind its consensus, this
+/// is where it would show.
+///
+/// The assertion is deliberately about liveness rather than latency.
+/// Every publish reaching a terminal decision is itself the anti-stall
+/// proof — a wedged committee settles nothing — and both shards' heights
+/// advancing past the storm says the chains never stopped.
+///
+/// # Panics
+///
+/// Panics if any publish fails to settle, if a publish did not commit on
+/// its publisher's shard, or if either shard's chain failed to advance.
+pub fn vm_deploy_storm_rides_out(c: &mut impl Cluster) {
+    const PER_PUBLISHER: u16 = 6;
+
+    let publishers = vm_storm_publishers();
+    let shards = [ShardId::leaf(1, 0), ShardId::leaf(1, 1)];
+    let before: Vec<Option<BlockHeight>> = shards
+        .iter()
+        .map(|shard| c.committed_height(*shard))
+        .collect();
+
+    let validity = validity_around(c.now());
+    let mut submitted: Vec<(TxHash, ShardId)> = Vec::new();
+    let mut cells: Vec<(ShardId, [u8; 16], [u8; 16])> = Vec::new();
+    for (index, (key, publisher)) in (0u16..).zip(publishers.iter()) {
+        for nonce in 0..PER_PUBLISHER {
+            // Distinct per publisher as well as per nonce, so the two
+            // shards never race to publish one content address.
+            let artifact = vm_storm_artifact(nonce + index * 1_000);
+            let cell = package_key(*publisher, package_hash(&ProtocolHasher, &artifact));
+            let tx = build_vm_publish_tx(key, artifact, validity);
+            let shard = shards[usize::from(index)];
+            submitted.push((tx.hash(), shard));
+            cells.push((shard, cell.owner.0, cell.local.0));
+            c.submit(Arc::new(tx));
+        }
+    }
+    assert_eq!(
+        cells
+            .iter()
+            .map(|(_, owner, local)| (*owner, *local))
+            .collect::<BTreeSet<_>>()
+            .len(),
+        cells.len(),
+        "the storm must deploy distinct packages, or it is one publish repeated"
+    );
+
+    for (hash, shard) in &submitted {
+        let status = await_tx_terminal(c, *hash, epochs(24));
+        assert!(
+            matches!(
+                status,
+                Some(TransactionStatus::Completed(TransactionDecision::Accept))
+            ),
+            "a publish in the storm did not accept; status = {status:?}"
+        );
+        let (fate, _) = c.chain_fate(*shard, *hash);
+        assert!(
+            fate.is_some(),
+            "the publisher's shard never committed its own publish"
+        );
+    }
+
+    // Every package the storm deployed is in state, which is what makes
+    // the distinctness above load-bearing: idempotent duplicates would
+    // collapse into one cell and the storm would be a single publish.
+    for (shard, owner, local) in &cells {
+        assert!(
+            c.vm_snapshot_pin(*shard, *owner, *local)
+                .is_some_and(|pin| pin.value.is_some()),
+            "{shard:?} does not hold the package cell the storm published"
+        );
+    }
+
+    for (shard, height) in shards.iter().zip(before) {
+        let after = c.committed_height(*shard);
+        assert!(
+            after > height,
+            "{shard:?} did not advance through the storm: {height:?} -> {after:?}"
+        );
+    }
 }

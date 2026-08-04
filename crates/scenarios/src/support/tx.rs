@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use hyperscale_effects_bridge::encode_tree;
+use hyperscale_effects_bridge::{attach_metadata, encode_tree};
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
@@ -22,6 +22,7 @@ use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
     Value,
 };
+use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
 use radix_common::types::ComponentAddress;
@@ -734,6 +735,7 @@ pub fn vm_snapshot_cast() -> (Ed25519PrivateKey, [u8; 16], [u8; 16], [u8; 16]) {
 #[must_use]
 pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     let mut all = vm_genesis_accounts(24, 6);
+    all.extend(vm_storm_genesis_accounts());
     all.extend(vm_cross_shard_genesis_accounts());
     all.extend(vm_insolvent_genesis_accounts());
     all.extend(vm_snapshot_genesis_accounts());
@@ -800,6 +802,80 @@ pub fn build_vm_guarded_transfer_tx(
         ],
     };
     RoutableTransaction::new_vm(vm_envelope(graph, payer, vec![pin], validity))
+}
+
+/// The publishers a deploy storm spams from: one per depth-1 shard, so
+/// the storm lands on both committees at once.
+#[must_use]
+pub fn vm_storm_publishers() -> Vec<(Ed25519PrivateKey, [u8; 16])> {
+    let mut taken = Vec::new();
+    vec![
+        vm_account_routing_to(ShardId::leaf(1, 0), &mut taken),
+        vm_account_routing_to(ShardId::leaf(1, 1), &mut taken),
+    ]
+}
+
+/// Genesis funding for the storm publishers.
+///
+/// Publishing is priced per artifact byte, so a publisher needs orders
+/// more than a payment sender: the balances the transfer scenarios use
+/// would not cover one deploy.
+#[must_use]
+pub fn vm_storm_genesis_accounts() -> Vec<([u8; 16], u128)> {
+    vm_storm_publishers()
+        .into_iter()
+        .map(|(_, address)| (address, VM_STORM_FUNDING))
+        .collect()
+}
+
+/// What a storm publisher is funded with, and the ceiling each publish
+/// signs. Placeholder pricing, sized to cover the stdlib-shaped artifact
+/// the storm deploys.
+pub const VM_STORM_FUNDING: u128 = 100_000_000;
+const VM_PUBLISH_MAX_FEE: u128 = 1_000_000;
+
+/// The `nonce`-th distinct publishable artifact.
+///
+/// The stdlib guest carrying a metadata section that differs only in one
+/// event name, so every variant is a different content address and
+/// therefore a different package — which is what makes a storm a storm
+/// rather than one publish repeated idempotently.
+///
+/// # Panics
+///
+/// Panics if the metadata does not attach, which would be a defect in
+/// the codec rather than a runtime condition.
+#[must_use]
+pub fn vm_storm_artifact(nonce: u16) -> Vec<u8> {
+    let mut metadata = account_metadata();
+    metadata.events.push(format!("storm-{nonce}"));
+    attach_metadata(ACCOUNT_COMPONENT, &metadata).expect("storm metadata attaches")
+}
+
+/// Build a signed publish of `artifact`, paid for by `payer` from their
+/// own account — the publisher and the payer are the same signer.
+#[must_use]
+pub fn build_vm_publish_tx(
+    payer: &Ed25519PrivateKey,
+    artifact: Vec<u8>,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    RoutableTransaction::new_vm(
+        VmTransaction {
+            body: VmBody::Publish(artifact.into()),
+            subintent_sigs: Vec::new(),
+            fee_payer: vm_account_address(&payer.public_key().0),
+            max_fee: VM_PUBLISH_MAX_FEE,
+            gas_limit: 1_000_000,
+            snapshot_pins: Vec::new(),
+            validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
+            validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
+            message: Vec::new().into(),
+            signer: [0; 32],
+            signature: [0; 64],
+        }
+        .sign(payer),
+    )
 }
 
 /// Wrap a single-intent graph in a signed envelope with placeholder fee
