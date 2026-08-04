@@ -31,7 +31,8 @@ use hyperscale_vm_kernel::{
 };
 
 use crate::executor::{
-    PayerFee, VmBase, charge_for, protocol_hash, publish_work, read_cell, tx_randomness,
+    PayerFee, VmBase, abort_reason, charge_for, protocol_hash, publish_work, read_cell,
+    tx_randomness,
 };
 use crate::genesis::vault_key;
 use crate::{VM_XRD, VmExecutor};
@@ -361,23 +362,14 @@ fn preview_publish(
 }
 
 /// The kernel's verdict as a preview reports it.
+///
+/// The reason is the one a wave would record, so a wallet reads the same
+/// text the chain would.
 fn preview_outcome(outcome: &Outcome) -> PreviewOutcome {
     match outcome {
         Outcome::Completed { .. } => PreviewOutcome::Completed,
-        Outcome::UserError { reason } | Outcome::ProtocolError { reason } => {
-            PreviewOutcome::Aborted {
-                reason: reason.clone(),
-            }
-        }
-        Outcome::Infeasible { key, amount } => PreviewOutcome::Aborted {
-            reason: format!("infeasible: {amount} uncovered on {key:?}"),
-        },
-        Outcome::ConstraintUnmet {
-            node,
-            param,
-            amount,
-        } => PreviewOutcome::Aborted {
-            reason: format!("constraint unmet: node {node} parameter {param} carried {amount}"),
+        aborted => PreviewOutcome::Aborted {
+            reason: abort_reason(aborted),
         },
     }
 }

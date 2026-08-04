@@ -8,18 +8,19 @@
 
 use std::time::Duration;
 
-use hyperscale_effects_bridge::{attach_metadata, encode_tree};
+use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, encode_tree};
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
     ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId, StakePoolId,
-    TimestampRange, VmBody, VmTransaction, WeightedTimestamp, build_transfer_tx as build_transfer,
-    ed25519_keypair_from_seed, encode_system_action, routable_from_notarized_v1, sign_and_notarize,
-    sign_and_notarize_with_options, uniform_shard_for_node,
+    TimestampRange, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
+    build_transfer_tx as build_transfer, ed25519_keypair_from_seed, encode_system_action,
+    routable_from_notarized_v1, sign_and_notarize, sign_and_notarize_with_options,
+    uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
-    Value,
+    Subintent, Value, YieldBinding, YieldParam,
 };
 use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 use radix_common::math::Decimal;
@@ -625,6 +626,32 @@ pub fn vm_cross_shard_genesis_accounts() -> Vec<([u8; 16], u128)> {
     vec![(from, 10_000), (to, 10)]
 }
 
+/// The nullifier race's cast: two composers who each fund a request, and
+/// the account that signed it.
+///
+/// Distinct seeds from every other VM scenario's, so the shared statics
+/// registry admits them all without collision.
+#[must_use]
+pub fn vm_nullifier_race_cast() -> (Ed25519PrivateKey, Ed25519PrivateKey, Ed25519PrivateKey) {
+    (
+        signer_from_seed(191),
+        signer_from_seed(192),
+        signer_from_seed(193),
+    )
+}
+
+/// Genesis funding for the nullifier race: both composers covered for
+/// the payment and its fee ceiling, the requesting account holding dust.
+#[must_use]
+pub fn vm_nullifier_race_genesis_accounts() -> Vec<([u8; 16], u128)> {
+    let (first, second, requester) = vm_nullifier_race_cast();
+    vec![
+        (vm_account_address(&first.public_key().0), 10_000),
+        (vm_account_address(&second.public_key().0), 10_000),
+        (vm_account_address(&requester.public_key().0), 10),
+    ]
+}
+
 /// Genesis funding for the insolvent-payer scenario: the same cast as
 /// [`vm_cross_shard_genesis_accounts`], but the payer holds dust — below
 /// any transfer's signed fee ceiling.
@@ -723,6 +750,7 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     all.extend(vm_storm_genesis_accounts());
     all.extend(vm_cross_shard_genesis_accounts());
     all.extend(vm_insolvent_genesis_accounts());
+    all.extend(vm_nullifier_race_genesis_accounts());
     all.sort_unstable_by_key(|(address, _)| *address);
     all.dedup_by_key(|(address, _)| *address);
     all
@@ -799,6 +827,101 @@ pub fn build_vm_publish_tx(
         }
         .sign(payer),
     )
+}
+
+/// The one-time payment request `signer` puts their name to: whoever
+/// hands them at least `amount` XRD, they will bank it.
+///
+/// A declaration and nothing else — no envelope, no fee terms, no
+/// composer. Its hash is a function of this content alone, which is what
+/// lets the signer sign it before any composer exists and lets two
+/// composers bind the identical declaration afterwards.
+#[must_use]
+pub fn vm_payment_request(signer: [u8; 16], amount: u128) -> IntentDecl {
+    IntentDecl {
+        graph: ManifestGraph {
+            nodes: vec![GraphNode {
+                target: Address(signer),
+                method: "deposit".into(),
+                args: vec![GraphArg::Param(0)],
+            }],
+        },
+        params: vec![YieldParam {
+            resource: VM_XRD,
+            constraints: vec![Constraint::MinAmount(amount)],
+        }],
+    }
+}
+
+/// Compose `request` — signed by `signer_key`, whose account is the
+/// request's target — into a transaction that fills it from `from`.
+///
+/// The composer withdraws the funds and yields them to the request; the
+/// request deposits them. Committing spends the request's nullifier
+/// under its signer's prefix, so two compositions carrying one request
+/// contend on that key and exactly one settles.
+///
+/// # Panics
+///
+/// Panics if the composed envelope does not derive, which would be a
+/// defect in the builder rather than a runtime condition.
+#[must_use]
+pub fn build_vm_composed_tx(
+    composer: &Ed25519PrivateKey,
+    from: [u8; 16],
+    signer_key: &Ed25519PrivateKey,
+    request: &IntentDecl,
+    amount: u128,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph: ManifestGraph {
+                nodes: vec![GraphNode {
+                    target: Address(from),
+                    method: "withdraw".into(),
+                    args: vec![
+                        GraphArg::Literal(Value::Address(VM_XRD)),
+                        GraphArg::Literal(Value::U128(amount)),
+                    ],
+                }],
+            },
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: vec![Subintent {
+            decl: request.clone(),
+            signer: Address(vm_account_address(&signer_key.public_key().0)),
+            bindings: vec![YieldBinding {
+                intent: 0,
+                edge: EdgeRef {
+                    producer: 0,
+                    output: 0,
+                },
+            }],
+        }],
+    };
+    // The signer signs its own declaration's hash, which no part of the
+    // envelope enters — the composer binds it afterwards and signs the
+    // whole, subintent signatures included.
+    let signed = signer_key.sign(request.hash(&ProtocolHasher).0.0);
+    let vm = VmTransaction {
+        body: VmBody::Call(encode_tree(&tree).into()),
+        subintent_sigs: vec![VmSubintentSig {
+            public_key: signer_key.public_key().0,
+            signature: signed.0,
+        }],
+        fee_payer: vm_account_address(&composer.public_key().0),
+        max_fee: 1_000,
+        gas_limit: 1_000_000,
+        validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
+        validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(composer);
+    RoutableTransaction::new_vm(vm)
 }
 
 /// Wrap a single-intent graph in a signed envelope with placeholder fee

@@ -332,6 +332,31 @@ fn writes_to_updates(writes: &BTreeMap<SubstateKey, Option<Vec<u8>>>) -> Databas
 }
 
 /// Fuel and the abort reason (if any) as node-local metadata.
+/// How an abort reads in a diagnostic: the kernel's own verdict, or the
+/// deterministic text a trap carried.
+///
+/// One derivation, because a preview quotes the same verdict a wave
+/// records and two copies would drift apart silently. Never
+/// consensus-critical — it lands in the node-local metadata, which a
+/// syncing replica does not carry.
+///
+/// # Panics
+///
+/// Panics on a completed outcome, which is not an abort.
+pub fn abort_reason(outcome: &Outcome) -> String {
+    match outcome {
+        Outcome::UserError { reason } | Outcome::ProtocolError { reason } => reason.clone(),
+        Outcome::Infeasible { key, amount } => format!("infeasible: {amount} uncovered on {key:?}"),
+        Outcome::ConstraintUnmet {
+            node,
+            param,
+            amount,
+        } => format!("constraint unmet: node {node} parameter {param} carried {amount}"),
+        Outcome::NullifierSpent { key } => format!("subintent already spent at {key:?}"),
+        Outcome::Completed { .. } => unreachable!("aborts only"),
+    }
+}
+
 fn vm_metadata(fuel: u64, error: Option<String>) -> ExecutionMetadata {
     ExecutionMetadata::new(
         FeeSummary {
@@ -446,8 +471,12 @@ pub const fn charge_for(outcome: &Outcome, payer: PayerFee) -> Option<u128> {
         //
         // A signed edge bound the produced amount missed is the same
         // class: the sender declared what it would accept and the world
-        // moved between signing and execution.
-        Outcome::Infeasible { .. } | Outcome::ConstraintUnmet { .. } => Some(payer.floor),
+        // moved between signing and execution. So is a spent subintent —
+        // a conflict tiebreak or a stale declaration, neither of which a
+        // composer can see at signing time.
+        Outcome::Infeasible { .. }
+        | Outcome::ConstraintUnmet { .. }
+        | Outcome::NullifierSpent { .. } => Some(payer.floor),
         // The kernel's own defect. `materialize_abort` refuses to price
         // it to the sender, and the burn agrees.
         Outcome::ProtocolError { .. } => None,
@@ -689,21 +718,10 @@ fn assemble_executed_tx(
             vm_events,
         )
     } else {
-        let reason = match &receipt.outcome {
-            Outcome::UserError { reason } | Outcome::ProtocolError { reason } => reason.clone(),
-            Outcome::Infeasible { key, amount } => {
-                format!("infeasible: {amount} uncovered on {key:?}")
-            }
-            Outcome::ConstraintUnmet {
-                node,
-                param,
-                amount,
-            } => {
-                format!("constraint unmet: node {node} parameter {param} carried {amount}")
-            }
-            Outcome::Completed { .. } => unreachable!("aborts only"),
-        };
-        CachedVmOutput::vm_failed(vm_metadata(receipt.fuel, Some(reason)))
+        CachedVmOutput::vm_failed(vm_metadata(
+            receipt.fuel,
+            Some(abort_reason(&receipt.outcome)),
+        ))
     };
     let mut executed = project_to_shard(
         &cached,
