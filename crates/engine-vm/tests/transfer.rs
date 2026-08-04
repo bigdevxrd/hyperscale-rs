@@ -5,11 +5,12 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use hyperscale_effects_bridge::{encode_tree, vm_account_address};
+use hyperscale_effects_bridge::vm_statics::package_key;
+use hyperscale_effects_bridge::{ProtocolHasher, admit_package, encode_tree, vm_account_address};
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
 };
-use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
+use hyperscale_engine_vm::genesis::{account_artifact, entropy_key, vault_key};
 use hyperscale_engine_vm::{ExecutionMode, VM_XRD, VmExecutor, vm_genesis_updates};
 use hyperscale_storage::{
     DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,
@@ -17,11 +18,11 @@ use hyperscale_storage::{
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, RoutableTransaction,
-    ShardId, ShardTrie, Verified, VmTransaction, WeightedTimestamp,
+    ShardId, ShardTrie, Verified, VmBody, VmTransaction, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
-    Value,
+    Value, package_hash,
 };
 use hyperscale_vm_kernel::encode_amount;
 use radix_common::prelude::DbSubstateValue;
@@ -128,7 +129,7 @@ fn signed_transfer_with_fee(
         subintents: Vec::new(),
     };
     let vm = VmTransaction {
-        tree: encode_tree(&tree).into(),
+        body: VmBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&key.public_key().0),
         max_fee,
@@ -194,7 +195,7 @@ fn signed_stamp(seed: u8, owner: [u8; 16]) -> RoutableTransaction {
         subintents: Vec::new(),
     };
     let vm = VmTransaction {
-        tree: encode_tree(&tree).into(),
+        body: VmBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&key.public_key().0),
         max_fee: 1_000_000,
@@ -585,5 +586,98 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
         hash_of(&sender_side[0]),
         hash_of(&recipient_side[0]),
         "the receipt hash covers the union, so it cannot differ by shard",
+    );
+}
+
+/// A signed publish of `artifact`, paid for by `seed`'s account.
+fn signed_publish(seed: u8, artifact: Vec<u8>) -> RoutableTransaction {
+    let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
+    let vm = VmTransaction {
+        body: VmBody::Publish(artifact.into()),
+        subintent_sigs: Vec::new(),
+        fee_payer: vm_account_address(&key.public_key().0),
+        max_fee: 1_000_000,
+        gas_limit: 1_000_000,
+        snapshot_pins: Vec::new(),
+        validity_start_ms: 0,
+        validity_end_ms: u64::MAX,
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(&key);
+    RoutableTransaction::new_vm(vm)
+}
+
+/// The raw update a batch made to a package's cell under `publisher`.
+fn package_cell(
+    updates: &DatabaseUpdates,
+    publisher: [u8; 16],
+    artifact: &[u8],
+) -> Option<Vec<u8>> {
+    let key = package_key(publisher, package_hash(&ProtocolHasher, artifact));
+    let node = updates.node_updates.get(&vm_db_node_key(publisher))?;
+    let PartitionDatabaseUpdates::Delta { substate_updates } =
+        node.partition_updates.get(&VM_PARTITION)?
+    else {
+        return None;
+    };
+    match substate_updates.get(&DbSortKey(key.local.0.to_vec()))? {
+        DatabaseUpdate::Set(value) => Some(value.clone()),
+        DatabaseUpdate::Delete => None,
+    }
+}
+
+#[test]
+fn a_publish_writes_the_artifact_under_its_publisher() {
+    let payer = fee_payer(7);
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let artifact = account_artifact().to_vec();
+    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        signed_publish(7, artifact.clone()),
+    ));
+    // Funded well above the burn: at the placeholder rate of one unit
+    // per artifact byte, publishing the stdlib guest costs more than the
+    // balances the transfer fixtures use.
+    let executed = execute_on(&[(payer, 1_000_000)], &executor, &[tx]);
+
+    let ConsensusReceipt::Succeeded {
+        database_updates, ..
+    } = &executed[0].consensus
+    else {
+        panic!("a publish must succeed: {:?}", executed[0].consensus);
+    };
+    assert_eq!(
+        package_cell(database_updates, payer, &artifact).as_deref(),
+        Some(artifact.as_slice()),
+        "the artifact lands whole in its content-addressed cell"
+    );
+    // The publisher paid: the vault carries the burn, and the fee is the
+    // only other thing a publish writes.
+    let paid = vault_cell(database_updates, payer).expect("the payer's vault was written");
+    assert_eq!(
+        paid,
+        encode_amount(1_000_000 - artifact.len() as u128).to_vec(),
+        "the publisher paid exactly what judging its artifact cost"
+    );
+    assert!(
+        executed[0].attested_work > 0,
+        "judging the artifact is attested work"
+    );
+}
+
+#[test]
+fn a_publish_that_is_not_a_package_never_reaches_execution() {
+    // The whole publish verdict is a function of the artifact's bytes,
+    // so it is reached at admission: derivation refuses, the transaction
+    // is never included, and nobody pays for it or stores it.
+    let junk = b"\0asm\x01\0\0\0".to_vec();
+    assert!(
+        admit_package(&junk).is_err(),
+        "well-formed wasm framing is not a package"
+    );
+    assert!(
+        admit_package(account_artifact()).is_ok(),
+        "the stdlib artifact is one"
     );
 }

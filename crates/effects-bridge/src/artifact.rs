@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 
 use hyperscale_types::VmStaticsError;
 use hyperscale_vm_effects::PackageMetadata;
+use hyperscale_vm_runtime::validate_component;
 use wasmparser::{BinaryReaderError, ComponentExternalKind, Parser, Payload};
 
 use crate::vm_metadata::{decode_metadata, encode_metadata};
@@ -128,22 +129,31 @@ fn find_section(artifact: &[u8]) -> Result<Option<&[u8]>, VmStaticsError> {
 
 /// The metadata a publish admits from an artifact, or why it does not.
 ///
-/// Three things are checkable today, and they are checked: the artifact
-/// declares a metadata section at all, the section decodes canonically
-/// and within the bounds the vocabulary fixes, and every method it
-/// describes is a function the component actually exports. Whether a
-/// signature over-approximates the code it describes is a compiler's
-/// judgement, and this is not one — an under-declaration is harmless
-/// because the capability gate never materialises a handle the
-/// declaration did not ask for, so a wrong signature costs its author a
-/// trap rather than costing anyone else safety.
+/// Four things are checkable today, and they are checked: the artifact
+/// clears the deterministic profile, it declares a metadata section at
+/// all, the section decodes canonically and within the bounds the
+/// vocabulary fixes, and every method it describes is a function the
+/// component actually exports. Whether a signature over-approximates the
+/// code it describes is a compiler's judgement, and this is not one — an
+/// under-declaration is harmless because the capability gate never
+/// materialises a handle the declaration did not ask for, so a wrong
+/// signature costs its author a trap rather than costing anyone else
+/// safety.
+///
+/// Every one of these is a pure function of the artifact's bytes, which
+/// is what lets the whole verdict be reached at admission rather than
+/// split across admission and execution. A publish that cannot be
+/// admitted never enters a block, so nobody pays for it and nobody
+/// stores it.
 ///
 /// # Errors
 ///
-/// [`VmStaticsError`] on an unparseable artifact, an absent or
+/// [`VmStaticsError`] on an artifact outside the profile, an absent or
 /// non-canonical metadata section, or a declared method the component
 /// does not export.
 pub fn admit_package(artifact: &[u8]) -> Result<PackageMetadata, VmStaticsError> {
+    validate_component(artifact)
+        .map_err(|error| VmStaticsError(format!("artifact is outside the profile: {error}")))?;
     let metadata = extract_metadata(artifact)?
         .ok_or_else(|| VmStaticsError("artifact declares no effect metadata section".into()))?;
     let exports = component_func_exports(artifact)?;

@@ -13,7 +13,7 @@ use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
     ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId, StakePoolId,
-    TimestampRange, VmSnapshotPin, VmTransaction, WeightedTimestamp,
+    TimestampRange, VmBody, VmSnapshotPin, VmTransaction, WeightedTimestamp,
     build_transfer_tx as build_transfer, ed25519_keypair_from_seed, encode_system_action,
     routable_from_notarized_v1, sign_and_notarize, sign_and_notarize_with_options,
     uniform_shard_for_node,
@@ -819,7 +819,7 @@ fn vm_envelope(
         subintents: Vec::new(),
     };
     VmTransaction {
-        tree: encode_tree(&tree).into(),
+        body: VmBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&payer.public_key().0),
         // Placeholder fee terms under the genesis funding: the payer

@@ -85,13 +85,32 @@ impl VmSnapshotPin {
     }
 }
 
-/// A VM transaction: the bound envelope tree and the signing-time
-/// choices, under the composer's signature.
+/// What a VM envelope asks the chain for: a call graph to run, or a
+/// package to publish.
+///
+/// Wholly one or the other. Every other field of the envelope — the fee
+/// terms, the window, the message, the composer's signature — means the
+/// same thing for both, which is why publishing rides this envelope
+/// rather than a body of its own: fee assurance, engagement, and wave
+/// settlement are the same machinery either way.
 #[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub struct VmTransaction {
+pub enum VmBody {
     /// The bound envelope tree, canonically encoded; the effects bridge
     /// owns the encoding.
-    pub tree: BoundedBytes<MAX_TX_BYTES_LEN>,
+    Call(BoundedBytes<MAX_TX_BYTES_LEN>),
+    /// A component artifact to publish under the composer's own prefix,
+    /// its effect metadata section included. Content addressing covers
+    /// the whole artifact, so the code and the signatures it declares
+    /// cannot drift apart.
+    Publish(BoundedBytes<MAX_TX_BYTES_LEN>),
+}
+
+/// A VM transaction: what it asks for and the signing-time choices,
+/// under the composer's signature.
+#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+pub struct VmTransaction {
+    /// The call graph or the package.
+    pub body: VmBody,
     /// One signature per bound subintent, in tree order.
     pub subintent_sigs: Vec<VmSubintentSig>,
     /// The fee-paying account — the composer's.
@@ -123,6 +142,24 @@ pub struct VmTransaction {
 const ABORT_FLOOR_DIVISOR: u128 = 10;
 
 impl VmTransaction {
+    /// The bound envelope tree, for a call.
+    #[must_use]
+    pub fn call_tree(&self) -> Option<&[u8]> {
+        match &self.body {
+            VmBody::Call(tree) => Some(tree),
+            VmBody::Publish(_) => None,
+        }
+    }
+
+    /// The component artifact, for a publish.
+    #[must_use]
+    pub fn artifact(&self) -> Option<&[u8]> {
+        match &self.body {
+            VmBody::Publish(artifact) => Some(artifact),
+            VmBody::Call(_) => None,
+        }
+    }
+
     /// What an abort of this transaction burns from the payer's vault.
     ///
     /// Derived from signed content alone, so every payer-shard voter
@@ -144,7 +181,18 @@ impl VmTransaction {
             hasher.update(bytes);
         };
         hasher.update(SIGNING_DOMAIN);
-        frame(&mut hasher, &self.tree);
+        // The discriminant is signed content: the same bytes read as a
+        // call graph and as an artifact are different transactions.
+        match &self.body {
+            VmBody::Call(tree) => {
+                hasher.update(&[0u8]);
+                frame(&mut hasher, tree);
+            }
+            VmBody::Publish(artifact) => {
+                hasher.update(&[1u8]);
+                frame(&mut hasher, artifact);
+            }
+        }
         hasher.update(&(self.subintent_sigs.len() as u64).to_le_bytes());
         for sig in &self.subintent_sigs {
             hasher.update(&sig.public_key);

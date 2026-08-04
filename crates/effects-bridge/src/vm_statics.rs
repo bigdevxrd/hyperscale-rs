@@ -22,12 +22,13 @@ use hyperscale_vm_effects::stdlib::{ENTROPY, VAULT};
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg, GraphNode,
     Hash32, InstanceRegistry, IntentDecl, ManifestGraph, ManifestHash, MetadataCache, Mode,
-    PrefixShardResolver, Subintent, SubstateKey, Value, YieldBinding, YieldParam, admit_tree,
-    child_key, route_tree,
+    PackageHash, PrefixShardResolver, RoleId, Subintent, SubstateKey, Value, YieldBinding,
+    YieldParam, admit_tree, child_key, package_hash, route_tree,
 };
 use sbor::prelude::*;
 
 use crate::ProtocolHasher;
+use crate::artifact::admit_package;
 use crate::wire::{WireValue, value, wire_value};
 
 const DOMAIN_VM_ACCOUNT: &[u8] = b"hyperscale/engine-vm/account-address";
@@ -53,6 +54,30 @@ pub fn vault_key(owner: [u8; 16], resource: Address) -> SubstateKey {
 #[must_use]
 pub fn entropy_key(owner: [u8; 16]) -> SubstateKey {
     child_key(&ProtocolHasher, Address(owner), ENTROPY, &[])
+}
+
+/// The role a published package's artifact sits under, in the reserved
+/// band the vocabulary's nullifier role occupies the top of.
+///
+/// A package cell lives under its publisher's own prefix, and no
+/// package's metadata can declare an effect on this role — the account
+/// signatures name vault, claims, config and entropy — so the cell is
+/// reachable by the publish path and by nothing else.
+pub const PACKAGE_ROLE: RoleId = RoleId(0xFFFE);
+
+/// Where `publisher`'s copy of the package addressed by `package` lives.
+///
+/// Keyed by content address under the publisher, so republishing the
+/// same artifact is the same cell — which is what makes publishing
+/// idempotent rather than a conflict.
+#[must_use]
+pub fn package_key(publisher: [u8; 16], package: PackageHash) -> SubstateKey {
+    child_key(
+        &ProtocolHasher,
+        Address(publisher),
+        PACKAGE_ROLE,
+        &[package.0.0.to_vec()],
+    )
 }
 
 /// The VM account address owned by an ed25519 public key: the protocol
@@ -329,6 +354,54 @@ pub struct BridgeStatics {
     pub instances: InstanceRegistry,
 }
 
+impl BridgeStatics {
+    /// A publish's routing: an exclusive write on the package cell, and
+    /// one on the publisher's fee vault.
+    ///
+    /// The vault is declared even though no signature asks for it. A
+    /// completed transaction burns its fee there, and declaring it is
+    /// what makes two publishes by one payer conflict — without it they
+    /// share a block and settle two burns against one cell, which is the
+    /// exposure a call transaction avoids only because its own withdraw
+    /// happens to name the same vault.
+    fn derive_publish(vm: &VmTransaction, artifact: &[u8]) -> Result<VmDerived, VmStaticsError> {
+        if !vm.subintent_sigs.is_empty() || !vm.snapshot_pins.is_empty() {
+            return Err(VmStaticsError(
+                "a publish carries no subintents and no snapshot pins".into(),
+            ));
+        }
+        // The artifact has to describe itself before it is addressed:
+        // what the address covers is code and signatures together, so an
+        // artifact that declares nothing is not a package.
+        admit_package(artifact)?;
+
+        let publisher = vm.fee_payer;
+        let package = package_hash(&ProtocolHasher, artifact);
+        let cell = package_key(publisher, package);
+        let vault = vault_key(publisher, VM_XRD);
+        let mut write_keys = vec![
+            DeclaredKey::substate(cell.owner.0, cell.local.0),
+            DeclaredKey::substate(vault.owner.0, vault.local.0),
+        ];
+        write_keys.sort_unstable();
+        write_keys.dedup();
+
+        Ok(VmDerived {
+            routing: VmRouting {
+                read_prefixes: Vec::new(),
+                write_prefixes: vec![publisher],
+                provision_prefixes: Vec::new(),
+                read_keys: Vec::new(),
+                write_keys,
+                provision_keys: Vec::new(),
+            },
+            subintent_hashes: Vec::new(),
+            snapshot_targets: Vec::new(),
+            fee_vault_local: vault.local.0,
+        })
+    }
+}
+
 impl VmStatics for BridgeStatics {
     fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
         // The payer is the composer, and this is what makes that true.
@@ -344,7 +417,10 @@ impl VmStatics for BridgeStatics {
                 "fee payer is not the composer's own account".into(),
             ));
         }
-        let tree = decode_tree(&vm.tree)?;
+        if let Some(artifact) = vm.artifact() {
+            return Self::derive_publish(vm, artifact);
+        }
+        let tree = decode_tree(vm.call_tree().unwrap_or_default())?;
         if vm.subintent_sigs.len() != tree.subintents.len() {
             return Err(VmStaticsError(format!(
                 "envelope binds {} subintents but carries {} signatures",
@@ -443,7 +519,7 @@ impl VmStatics for BridgeStatics {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::{Ed25519PrivateKey, VmSubintentSig};
+    use hyperscale_types::{Ed25519PrivateKey, VmBody, VmSubintentSig};
     use hyperscale_vm_effects::stdlib::{VAULT, account_metadata};
     use hyperscale_vm_effects::{
         Hasher, InstanceMeta, PackageHash, SubintentHash, child_key, nullifier_key,
@@ -589,7 +665,7 @@ mod tests {
             })
             .collect();
         VmTransaction {
-            tree: encode_tree(tree).into(),
+            body: VmBody::Call(encode_tree(tree).into()),
             subintent_sigs,
             fee_payer: composer_addr().0,
             max_fee: 1_000,

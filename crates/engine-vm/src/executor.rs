@@ -19,7 +19,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use blake3::hash as blake3_hash;
-use hyperscale_effects_bridge::{BridgeStatics, ProtocolHasher, decode_tree, envelope_identity};
+use hyperscale_effects_bridge::vm_statics::package_key;
+use hyperscale_effects_bridge::{
+    BridgeStatics, ProtocolHasher, admit_package, decode_tree, envelope_identity,
+};
 use hyperscale_engine::sharding::{compute_writes_root, sort_database_updates};
 use hyperscale_engine::{
     CachedVmOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, Executor, WaveBatchContext,
@@ -35,7 +38,7 @@ use hyperscale_types::{
 };
 use hyperscale_vm_effects::{
     Address, Declaration, EffectTarget, Hash32, LocalKey, Manifest, ManifestHash,
-    PrefixShardResolver, RoleId, SubstateKey, admit_tree, route_tree,
+    PrefixShardResolver, RoleId, SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
     Base, BatchTx, EnvInputs, ExecutionMode, Locality, Outcome, Receipt, TxHash as VmTxHash,
@@ -161,7 +164,11 @@ impl VmExecutor {
         let vm = tx
             .vm()
             .ok_or_else(|| "Radix body in a VM sub-batch".to_string())?;
-        let tree = decode_tree(&vm.tree).map_err(|error| error.to_string())?;
+        let tree = decode_tree(
+            vm.call_tree()
+                .ok_or_else(|| "publish body in a call sub-batch".to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
         let admitted = admit_tree(
             &tree,
             envelope_identity(vm),
@@ -483,6 +490,102 @@ fn build_fee_receipt(
     )
 }
 
+/// Settle one publish: the artifact lands in its content-addressed cell
+/// under the publisher, and the fee burns from the publisher's vault.
+///
+/// A publish never enters the kernel — there is no manifest to run — so
+/// it settles outside the batch fold rather than inside it. That is
+/// sound because a publish declares exactly two keys, its own package
+/// cell and its own fee vault, and both are exclusive: no sibling in the
+/// block can be touching either, so there are no earlier burns to layer
+/// on and nothing for the kernel differential to check.
+fn assemble_published_tx(
+    ctx: &WaveBatchContext<'_>,
+    base: &VmBase,
+    vm_tx: VmTxHash,
+    publisher: [u8; 16],
+    artifact: &[u8],
+    fee: Option<PayerFee>,
+    locality: &Locality,
+) -> ExecutedTx {
+    let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
+    // Priced whatever the verdict, because judging the artifact is work
+    // the shard did before it knew the answer. One unit per byte is a
+    // placeholder against phase 6's measured baselines, like every other
+    // number in the fee model.
+    let work = artifact.len() as u64;
+
+    // Admission reached the whole verdict from these same bytes, so a
+    // refusal here means the transaction bypassed admission — the same
+    // condition `prepare` treats as a deterministic failure.
+    let refusal = admit_package(artifact).err().map(|error| error.0);
+
+    let mut fold = FoldState {
+        running: BTreeMap::new(),
+        fees_applied: BTreeMap::new(),
+    };
+    let cached = if let Some(reason) = &refusal {
+        CachedVmOutput::vm_failed(vm_metadata(work, Some(reason.clone())))
+    } else {
+        {
+            let mut writes: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
+            if locality.is_local(Address(publisher)) {
+                let package = package_hash(&ProtocolHasher, artifact);
+                // Content-addressed, so republishing the same artifact
+                // writes the same bytes to the same cell: idempotent by
+                // construction rather than by a first-write-wins branch.
+                writes.insert(package_key(publisher, package), Some(artifact.to_vec()));
+            }
+            apply_fee_burn(
+                &mut writes,
+                &fold.running,
+                base,
+                &mut fold.fees_applied,
+                fee,
+                work,
+            );
+            let mut updates = writes_to_updates(&writes);
+            sort_database_updates(&mut updates);
+            let writes_root = compute_writes_root(&updates);
+            let receipt_hash = GlobalReceipt::new(
+                true,
+                EventRoot::ZERO,
+                BeaconWitnessRoot::ZERO,
+                writes_root,
+                OwnershipRoot::ZERO,
+            )
+            .receipt_hash();
+            CachedVmOutput::vm_succeeded(
+                updates,
+                receipt_hash,
+                vm_metadata(work, None),
+                work,
+                Vec::new(),
+            )
+        }
+    };
+    // A refused artifact is the sender's own defect — they chose what to
+    // publish — so it pays the ceiling, exactly as a trap does. Charging
+    // less would leave a rejected publish cheaper than an accepted one.
+    let fee_receipt = match (&refusal, fee) {
+        (Some(_), Some(payer)) => {
+            build_fee_receipt(ctx, base, &fold, tx_hash, payer.vault, payer.max_fee)
+        }
+        _ => None,
+    };
+
+    let mut executed = project_to_shard(
+        &cached,
+        tx_hash,
+        ctx.local_shard,
+        ctx.shard_trie,
+        &HashMap::new(),
+    );
+    executed.fee_receipt = fee_receipt;
+    executed.attested_work = work;
+    executed
+}
+
 /// What the kernel reported for one transaction: the effect record every
 /// participant derives identically, and this shard's own attested share.
 #[derive(Clone, Copy)]
@@ -601,12 +704,29 @@ impl VmExecutor {
         } else {
             Locality::All
         };
+        // Publishes carry no manifest, so they never reach the kernel;
+        // they settle in their own pass below.
+        let publishes: BTreeMap<VmTxHash, ([u8; 16], Vec<u8>)> = transactions
+            .iter()
+            .filter_map(|tx| {
+                let vm = tx.vm()?;
+                let artifact = vm.artifact()?;
+                Some((
+                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    (vm.fee_payer, artifact.to_vec()),
+                ))
+            })
+            .collect();
+
         // Derive every transaction; refusals become deterministic
         // failures without touching the batch.
         let mut prepared: BTreeMap<VmTxHash, PreparedVmTx> = BTreeMap::new();
         let mut refused: BTreeMap<TxHash, String> = BTreeMap::new();
         for tx in transactions {
             let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+            if publishes.contains_key(&vm_tx) {
+                continue;
+            }
             match self.prepare(tx) {
                 Ok((manifest, identity, declaration, nullifiers)) => {
                     record_transaction_executed();
@@ -653,6 +773,27 @@ impl VmExecutor {
             for effect in entry.declaration.set.iter() {
                 if let EffectTarget::Point(key) = effect.target
                     && locality.is_local(key.owner)
+                    && let Some(value) = read_cell(snapshot, key)
+                {
+                    cells.insert(key, value);
+                }
+            }
+        }
+        // A publish declares no effects for the loop above to walk, but
+        // its burn still has to read the vault it debits: an absent
+        // baseline value is indistinguishable from an absent cell, and
+        // the burn would silently apply to nothing.
+        for tx in transactions {
+            let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+            if !publishes.contains_key(&vm_tx) {
+                continue;
+            }
+            if let Some((owner, local)) = tx.vm_fee_vault() {
+                let key = SubstateKey {
+                    owner: Address(owner),
+                    local: LocalKey(local),
+                };
+                if locality.is_local(key.owner)
                     && let Some(value) = read_cell(snapshot, key)
                 {
                     cells.insert(key, value);
@@ -770,6 +911,21 @@ impl VmExecutor {
                 &locality,
             );
             folded.insert(*vm_tx, executed);
+        }
+
+        for (vm_tx, (publisher, artifact)) in &publishes {
+            folded.insert(
+                *vm_tx,
+                assemble_published_tx(
+                    ctx,
+                    &base,
+                    *vm_tx,
+                    *publisher,
+                    artifact,
+                    fee_by_tx.get(vm_tx).copied(),
+                    &locality,
+                ),
+            );
         }
 
         // The differential: every folded key's end value must equal the

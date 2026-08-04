@@ -26,9 +26,9 @@ use crate::{
     QuorumCertificate, RevealChain, Round, RoutableTransaction, ShardForkProof, ShardId, ShardLoad,
     SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, TransactionDecision,
     TransactionRoot, TxHash, TxOutcome, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
-    Verified, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction, WaveCertificate,
-    WaveId, WeightedTimestamp, WitnessSources, block_vote_message, install_vm_statics,
-    vm_statics_installed,
+    Verified, VmBody, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction,
+    WaveCertificate, WaveId, WeightedTimestamp, WitnessSources, block_vote_message,
+    install_vm_statics, vm_statics_installed,
 };
 
 /// Create a test `NodeId` from a seed byte.
@@ -958,13 +958,13 @@ struct StubVmStatics;
 
 impl VmStatics for StubVmStatics {
     fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
-        if !vm.tree.len().is_multiple_of(16) {
+        let tree = vm.call_tree().unwrap_or_default();
+        if !tree.len().is_multiple_of(16) {
             return Err(VmStaticsError(
                 "stub tree must be concatenated 16-byte owner prefixes".into(),
             ));
         }
-        let mut write_prefixes: Vec<[u8; 16]> = vm
-            .tree
+        let mut write_prefixes: Vec<[u8; 16]> = tree
             .chunks_exact(16)
             .map(|chunk| {
                 let mut owner = [0u8; 16];
@@ -1020,7 +1020,7 @@ pub fn stub_vm_transaction(
 ) -> RoutableTransaction {
     let key = Ed25519PrivateKey::from_bytes(&[0x5A; 32]).expect("fixture key");
     let vm = VmTransaction {
-        tree: owner_prefixes.concat().into(),
+        body: VmBody::Call(owner_prefixes.concat().into()),
         subintent_sigs: Vec::new(),
         fee_payer,
         max_fee,

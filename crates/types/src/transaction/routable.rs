@@ -696,8 +696,8 @@ mod tests {
     use super::*;
     use crate::test_utils::{test_node, test_transaction_with_nodes, test_validity_range};
     use crate::{
-        Ed25519PrivateKey, MerkleInclusionProof, ShardId, VmSnapshotPin, VmStatics, VmSubintentSig,
-        WeightedTimestamp, install_vm_statics,
+        Ed25519PrivateKey, MerkleInclusionProof, ShardId, VmBody, VmSnapshotPin, VmStatics,
+        VmSubintentSig, WeightedTimestamp, install_vm_statics,
     };
 
     struct StubStatics;
@@ -708,15 +708,15 @@ mod tests {
 
     impl VmStatics for StubStatics {
         fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
-            if vm.tree.as_slice() == b"inadmissible" {
+            if vm.call_tree().unwrap_or_default() == b"inadmissible" {
                 return Err(VmStaticsError("stub refusal".into()));
             }
-            let subintent_hashes = if vm.tree.as_slice() == b"with-subintent" {
+            let subintent_hashes = if vm.call_tree().unwrap_or_default() == b"with-subintent" {
                 vec![STUB_SUBINTENT_HASH]
             } else {
                 Vec::new()
             };
-            let snapshot_targets = if vm.tree.as_slice() == b"with-snapshot" {
+            let snapshot_targets = if vm.call_tree().unwrap_or_default() == b"with-snapshot" {
                 vec![([0x33; 16], [0x44; 16])]
             } else {
                 Vec::new()
@@ -741,7 +741,7 @@ mod tests {
         let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
         let range = test_validity_range();
         VmTransaction {
-            tree: tree.to_vec().into(),
+            body: VmBody::Call(tree.to_vec().into()),
             subintent_sigs: Vec::new(),
             fee_payer: [0xAA; 16],
             max_fee: 1_000,
