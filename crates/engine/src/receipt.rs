@@ -79,6 +79,14 @@ enum CachedVmOutputBody {
         /// `beacon_witness_events` only on the shard owning that node, so a
         /// committed system transaction reports the action exactly once.
         system_witness: Option<(NodeId, BeaconWitnessEvent)>,
+        /// Beacon facts the VM arm lifted from a recognised stake pool's
+        /// events, each beside the emitter that produced it.
+        ///
+        /// A pair rather than an anchor node, because a VM emitter is a
+        /// substate prefix: which shard keeps the fact is the same
+        /// question — and the same answer — as which shard keeps the
+        /// event it was read from.
+        vm_witnesses: Vec<([u8; 16], BeaconWitnessEvent)>,
         /// Gas the engine consumed — VM fuel, or the Radix engine's
         /// execution plus finalization cost units. Shard-invariant here
         /// and filtered to nothing by projection: every participant that
@@ -107,9 +115,13 @@ impl CachedVmOutput {
 
     /// VM-engine success output: the folded absolute updates and the
     /// receipt hash over their canonical encoding. VM keys carry their
-    /// shard placement in the owner prefix, so no declared node set,
-    /// ownership map, or system witness exists; events wait for the
-    /// VM event surface.
+    /// shard placement in the owner prefix, so no declared node set or
+    /// ownership map exists.
+    ///
+    /// `system_witness` stays `None` on this arm: a VM beacon fact is not
+    /// asserted by the transaction that triggered it, it is emitted by the
+    /// code that did the thing, so it arrives beside its emitter in
+    /// `vm_witnesses` rather than anchored to a declared write.
     #[must_use]
     pub fn vm_succeeded(
         raw_updates: DatabaseUpdates,
@@ -117,6 +129,7 @@ impl CachedVmOutput {
         metadata: ExecutionMetadata,
         gas_consumed: u64,
         vm_events: Vec<VmEvent>,
+        vm_witnesses: Vec<([u8; 16], BeaconWitnessEvent)>,
     ) -> Self {
         Self {
             metadata,
@@ -127,6 +140,7 @@ impl CachedVmOutput {
                 vm_events,
                 receipt_hash,
                 system_witness: None,
+                vm_witnesses,
                 gas_consumed,
             },
         }
@@ -272,6 +286,7 @@ pub fn compute_vm_output(
             vm_events: Vec::new(),
             receipt_hash,
             system_witness,
+            vm_witnesses: Vec::new(),
             gas_consumed,
         },
     }
@@ -312,6 +327,7 @@ pub fn project_to_shard(
             vm_events,
             receipt_hash,
             system_witness,
+            vm_witnesses,
             gas_consumed,
         } => {
             let mut database_updates = filter_updates_for_shard(
@@ -339,12 +355,24 @@ pub fn project_to_shard(
             let owned_nodes = owned_nodes_in_updates(&database_updates, ownership).into();
             // The shard owning the action's anchor node emits its witness; every
             // other participating shard emits none, so the beacon folds it once.
-            let beacon_witness_events = match system_witness {
+            //
+            // The VM arm needs no anchor: a fact's emitter is a substate
+            // prefix, so the shard that keeps the fact is the one that keeps
+            // the event it was read from, by the same rule applied a few
+            // lines below. One arm or the other is empty — a receipt has one
+            // engine — so the two concatenate rather than compete.
+            let mut beacon_witness_events = match system_witness {
                 Some((anchor, event)) if shard_trie.shard_for(anchor) == local_shard => {
                     vec![event.clone()]
                 }
                 _ => Vec::new(),
             };
+            beacon_witness_events.extend(
+                vm_witnesses
+                    .iter()
+                    .filter(|(emitter, _)| shard_trie.shard_for_prefix(*emitter) == local_shard)
+                    .map(|(_, event)| event.clone()),
+            );
             // An event is stored where its emitter lives, so each shard
             // keeps its own and the rest are another shard's to hold. The
             // receipt hash covers the whole union, so dropping them here

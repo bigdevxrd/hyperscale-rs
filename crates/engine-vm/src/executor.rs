@@ -21,7 +21,8 @@ use std::sync::Arc;
 use blake3::hash as blake3_hash;
 use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
 use hyperscale_effects_bridge::{
-    BridgeStatics, ProtocolHasher, admit_package, decode_tree, envelope_identity,
+    BridgeStatics, PoolRegistry, ProtocolHasher, admit_package, decode_tree, envelope_identity,
+    witness_from_event,
 };
 use hyperscale_engine::sharding::{compute_writes_root, sort_database_updates};
 use hyperscale_engine::{
@@ -32,13 +33,13 @@ use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
-    BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata, FeeSummary, GlobalReceipt,
-    Hash, OwnershipRoot, RevealChain, RoutableTransaction, SubstateEntry, TxHash, Verified,
-    VmEvent, compute_merkle_root, install_vm_statics,
+    BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata,
+    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, RoutableTransaction, StakePoolId,
+    SubstateEntry, TxHash, Verified, VmEvent, compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, Declaration, EffectTarget, Hash32, LocalKey, NodeCall, PrefixShardResolver, RoleId,
-    SubstateKey, admit_tree, package_hash, route_tree,
+    Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
+    PrefixShardResolver, RoleId, SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
     Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
@@ -50,7 +51,7 @@ use radix_common::prelude::DbSubstateValue;
 use radix_substate_store_interface::interface::{DatabaseUpdates, DbPartitionKey};
 
 use crate::backend::EngineBackend;
-use crate::genesis::{VmWorld, genesis_world};
+use crate::genesis::{VmWorld, genesis_world_with_pools};
 
 /// One derived transaction, as the batch consumes it.
 ///
@@ -159,7 +160,22 @@ impl VmExecutor {
     /// compilation — a build defect surfaced at boot, not in a wave.
     #[must_use]
     pub fn new(accounts: &[([u8; 16], u128)], mode: ExecutionMode) -> Self {
-        let world = genesis_world(accounts);
+        Self::with_pools(accounts, &[], mode)
+    }
+
+    /// [`Self::new`] seating `pools` as the stake pools the beacon folds
+    /// for: `(instance address, the identifier it is folded under)`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::new`].
+    #[must_use]
+    pub fn with_pools(
+        accounts: &[([u8; 16], u128)],
+        pools: &[([u8; 16], StakePoolId)],
+        mode: ExecutionMode,
+    ) -> Self {
+        let world = genesis_world_with_pools(accounts, pools);
         install_vm_statics(Box::new(BridgeStatics {
             cache: world.cache.clone(),
             instances: world.instances.clone(),
@@ -533,8 +549,14 @@ fn build_fee_receipt(
     // work is unattested — a failed outcome carries no gas either — so an
     // abort contributes nothing to its shard's emission weight. Pricing
     // aborted work is the floor's job, not the weight's.
-    let cached =
-        CachedVmOutput::vm_succeeded(updates, receipt_hash, vm_metadata(0, None), 0, Vec::new());
+    let cached = CachedVmOutput::vm_succeeded(
+        updates,
+        receipt_hash,
+        vm_metadata(0, None),
+        0,
+        Vec::new(),
+        Vec::new(),
+    );
     Some(
         project_to_shard(
             &cached,
@@ -623,6 +645,7 @@ fn assemble_published_tx(
                 vm_metadata(work, None),
                 work,
                 Vec::new(),
+                Vec::new(),
             )
         }
     };
@@ -656,15 +679,29 @@ struct KernelOutput<'a> {
     work: u64,
 }
 
+/// What every transaction in a batch assembles against: the pre-read
+/// baseline its receipts fold over, the share of the world this shard
+/// applies, and what the witness lift needs to decide whether an emitted
+/// event is a beacon fact — the pools the network recognises, what code
+/// each instance runs, and the code a pool must be running.
+#[derive(Clone, Copy)]
+struct BatchInputs<'a> {
+    base: &'a VmBase,
+    locality: &'a Locality,
+    pools: &'a PoolRegistry,
+    instances: &'a InstanceRegistry,
+    staking_package: PackageHash,
+}
+
 fn assemble_executed_tx(
     ctx: &WaveBatchContext<'_>,
-    base: &VmBase,
+    inputs: BatchInputs<'_>,
     fold: &mut FoldState,
     vm_tx: VmTxHash,
     kernel: KernelOutput<'_>,
     fee: Option<PayerFee>,
-    locality: &Locality,
 ) -> ExecutedTx {
+    let BatchInputs { base, locality, .. } = inputs;
     let KernelOutput {
         receipt,
         work: attested_work,
@@ -701,6 +738,24 @@ fn assemble_executed_tx(
                 payload: event.payload.clone(),
             })
             .collect();
+        // The beacon facts among them. Read here rather than at
+        // projection because this is where the world that decides is in
+        // reach, and read from the whole union rather than one shard's
+        // share so every participant derives the same set — which shard
+        // keeps a fact is settled once, at projection, by the same rule
+        // that settles which shard keeps the event.
+        let vm_witnesses: Vec<([u8; 16], BeaconWitnessEvent)> = vm_events
+            .iter()
+            .filter_map(|event| {
+                witness_from_event(
+                    event,
+                    inputs.pools,
+                    inputs.instances,
+                    inputs.staking_package,
+                )
+                .map(|witness| (event.emitter, witness))
+            })
+            .collect();
         let event_hashes: Vec<Hash> = vm_events.iter().map(VmEvent::hash).collect();
         let receipt_hash = GlobalReceipt::new(
             true,
@@ -716,6 +771,7 @@ fn assemble_executed_tx(
             vm_metadata(receipt.fuel, None),
             receipt.fuel,
             vm_events,
+            vm_witnesses,
         )
     } else {
         CachedVmOutput::vm_failed(vm_metadata(
@@ -930,12 +986,17 @@ impl VmExecutor {
             };
             let executed = assemble_executed_tx(
                 ctx,
-                &base,
+                BatchInputs {
+                    base: &base,
+                    locality: &locality,
+                    pools: &self.world.pools,
+                    instances: &self.world.instances,
+                    staking_package: self.world.staking_package,
+                },
                 &mut fold,
                 *vm_tx,
                 kernel,
                 fee_by_tx.get(vm_tx).copied(),
-                &locality,
             );
             folded.insert(*vm_tx, executed);
         }

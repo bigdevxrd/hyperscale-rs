@@ -9,15 +9,18 @@
 use std::sync::LazyLock;
 
 use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
-use hyperscale_effects_bridge::{ProtocolHasher, admit_package, attach_metadata};
+use hyperscale_effects_bridge::{PoolRegistry, ProtocolHasher, admit_package, attach_metadata};
 pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
+use hyperscale_types::StakePoolId;
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_vm_effects::{
-    Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, package_hash,
+    Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, Value, package_hash,
 };
 use hyperscale_vm_kernel::encode_amount;
-use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
+use hyperscale_vm_stdlib::{
+    ACCOUNT_COMPONENT, STAKING_COMPONENT, account_metadata, staking_metadata,
+};
 use indexmap::IndexMap;
 use radix_substate_store_interface::interface::DatabaseUpdates;
 
@@ -35,6 +38,13 @@ static ACCOUNT_ARTIFACT: LazyLock<Vec<u8>> = LazyLock::new(|| {
         .expect("the stdlib account metadata attaches to its committed blob")
 });
 
+/// The stdlib stake pool package as a publishable artifact, assembled the
+/// same way and for the same reason as the account's.
+static STAKING_ARTIFACT: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    attach_metadata(STAKING_COMPONENT, &staking_metadata())
+        .expect("the stdlib stake pool metadata attaches to its committed blob")
+});
+
 /// The prefix genesis publishes the stdlib package under.
 ///
 /// No key derives it, so nothing can ever publish beside it or spend
@@ -48,6 +58,12 @@ pub fn account_artifact() -> &'static [u8] {
     &ACCOUNT_ARTIFACT
 }
 
+/// The stdlib stake pool artifact.
+#[must_use]
+pub fn staking_artifact() -> &'static [u8] {
+    &STAKING_ARTIFACT
+}
+
 /// The genesis-static VM world: published stdlib metadata and the funded
 /// accounts' instance registrations.
 #[derive(Debug, Clone)]
@@ -58,6 +74,13 @@ pub struct VmWorld {
     pub instances: InstanceRegistry,
     /// The stdlib account package's content address.
     pub account_package: PackageHash,
+    /// The stdlib stake pool package's content address — the code a
+    /// recognised pool must be running for its events to be read as
+    /// beacon facts.
+    pub staking_package: PackageHash,
+    /// The stake pools the beacon folds for. Empty on a network with no
+    /// staking surface, which is every network until genesis seats one.
+    pub pools: PoolRegistry,
 }
 
 /// Build the world for `accounts` (owner prefix, balance): the account
@@ -74,12 +97,40 @@ pub struct VmWorld {
 /// package — a build defect, not a runtime condition.
 #[must_use]
 pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
+    genesis_world_with_pools(accounts, &[])
+}
+
+/// [`genesis_world`] seating `pools` as the stake pools the beacon folds
+/// for: `(instance address, the identifier it is folded under)`.
+///
+/// A pool is an instance of the stdlib stake pool package configured with
+/// the resource it stakes and the resource it issues. Seating it here is
+/// what makes its events beacon facts — the package alone never does,
+/// because anyone may run the package.
+///
+/// # Panics
+///
+/// Panics if a stdlib artifact would not be admissible as a published
+/// package — a build defect, not a runtime condition.
+#[must_use]
+pub fn genesis_world_with_pools(
+    accounts: &[([u8; 16], u128)],
+    pools: &[([u8; 16], StakePoolId)],
+) -> VmWorld {
     let artifact = account_artifact();
     let account_package = package_hash(&ProtocolHasher, artifact);
     let metadata =
         admit_package(artifact).expect("the stdlib account artifact publishes as a package");
     let mut seed = MetadataCache::new();
     seed.publish(account_package, metadata);
+
+    let staking_package = package_hash(&ProtocolHasher, staking_artifact());
+    seed.publish(
+        staking_package,
+        admit_package(staking_artifact())
+            .expect("the stdlib stake pool artifact publishes as a package"),
+    );
+
     let cache = PackageCache::new(seed);
     let mut instances = InstanceRegistry::new();
     for (address, _) in accounts {
@@ -91,11 +142,37 @@ pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
             },
         );
     }
+    let mut registry = PoolRegistry::new();
+    for (address, id) in pools {
+        instances.register(
+            Address(*address),
+            InstanceMeta {
+                package: staking_package,
+                // The resource a delegation is denominated in, and the one
+                // the pool issues against it. The pool's own identity is
+                // its address, so nothing here names it.
+                config: vec![Value::Address(VM_XRD), Value::Address(stake_unit(*address))],
+            },
+        );
+        registry.register(*address, *id);
+    }
     VmWorld {
         cache,
         instances,
         account_package,
+        staking_package,
+        pools: registry,
     }
+}
+
+/// The resource a pool at `address` issues against delegations.
+///
+/// Derived from the pool rather than configured, so two pools can never be
+/// seated on one stake-unit resource and a holder's units always name the
+/// pool that owes them.
+#[must_use]
+pub fn stake_unit(pool: [u8; 16]) -> Address {
+    Address(vault_key(pool, VM_XRD).local.0)
 }
 
 /// The funded accounts' genesis substate writes: one [`VM_XRD`] vault

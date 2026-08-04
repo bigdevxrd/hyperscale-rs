@@ -15,6 +15,10 @@ use crate::host::HostState;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
+    use std::collections::BTreeMap;
+
+    use hyperscale_effects_bridge::ProtocolHasher;
+    use hyperscale_vm_effects::{PackageHash, package_hash};
     use hyperscale_vm_kernel::{
         CellKind, GuestArg, GuestBackend as Backend, GuestCall, InvokeResult, KernelSession,
     };
@@ -26,7 +30,7 @@ mod native {
     use wasmtime::{Engine, Store};
 
     use super::HostState;
-    use crate::genesis::account_artifact;
+    use crate::genesis::{account_artifact, staking_artifact};
 
     /// Per-invocation fuel budget. Exhaustion is a deterministic trap:
     /// the metering schedule is pinned by the blessed engine's
@@ -36,7 +40,12 @@ mod native {
     /// The compiled account guest, pre-linked for cheap instantiation.
     pub struct EngineBackend {
         engine: Engine,
-        account: InstancePre<HostState>,
+        /// Compiled code by content address. A lowered call names the
+        /// package it runs, never the instance, because code is what a
+        /// backend resolves and code is what a content address covers —
+        /// so two instances of one package share one compilation and two
+        /// packages in one transaction each get their own.
+        packages: BTreeMap<PackageHash, InstancePre<HostState>>,
     }
 
     impl EngineBackend {
@@ -52,16 +61,21 @@ mod native {
         /// compilation — a build defect, not a runtime condition.
         pub fn new() -> Self {
             let engine = blessed_engine().expect("blessed engine configuration is pinned");
-            let artifact = account_artifact();
-            validate_component(artifact).expect("the stdlib account artifact clears the profile");
-            let component =
-                Component::new(&engine, artifact).expect("the stdlib account artifact compiles");
             let mut linker = Linker::<HostState>::new(&engine);
             add_kernel_to_linker(&mut linker).expect("kernel world wiring");
-            let account = linker
-                .instantiate_pre(&component)
-                .expect("account component links against the kernel world");
-            Self { engine, account }
+            let mut packages = BTreeMap::new();
+            for artifact in [account_artifact(), staking_artifact()] {
+                validate_component(artifact).expect("a stdlib artifact clears the profile");
+                let component =
+                    Component::new(&engine, artifact).expect("a stdlib artifact compiles");
+                packages.insert(
+                    package_hash(&ProtocolHasher, artifact),
+                    linker
+                        .instantiate_pre(&component)
+                        .expect("a stdlib component links against the kernel world"),
+                );
+            }
+            Self { engine, packages }
         }
     }
 
@@ -69,7 +83,14 @@ mod native {
         fn invoke(&self, session: KernelSession, call: &GuestCall<'_>) -> InvokeResult {
             let mut store = Store::new(&self.engine, HostState(session));
             store.set_fuel(FUEL).expect("fuel metering is enabled");
-            let instance = match self.account.instantiate(&mut store) {
+            let Some(pre) = self.packages.get(&call.package) else {
+                return InvokeResult {
+                    session: store.into_data().0,
+                    fuel: 0,
+                    result: Err("no compiled code for the called package".to_string()),
+                };
+            };
+            let instance = match pre.instantiate(&mut store) {
                 Ok(instance) => instance,
                 Err(error) => {
                     return InvokeResult {
@@ -120,6 +141,10 @@ pub use native::EngineBackend;
 
 #[cfg(target_arch = "wasm32")]
 mod reference {
+    use std::collections::BTreeMap;
+
+    use hyperscale_effects_bridge::ProtocolHasher;
+    use hyperscale_vm_effects::{PackageHash, package_hash};
     use hyperscale_vm_kernel::{
         CellKind, GuestArg, GuestBackend as Backend, GuestCall, InvokeResult, KernelSession,
     };
@@ -127,11 +152,11 @@ mod reference {
     use hyperscale_vm_runtime::validate_component;
 
     use super::HostState;
-    use crate::genesis::account_artifact;
+    use crate::genesis::{account_artifact, staking_artifact};
 
-    /// The decoded account guest under the reference interpreter.
+    /// The decoded stdlib guests under the reference interpreter.
     pub struct EngineBackend {
-        account: RefComponent,
+        packages: BTreeMap<PackageHash, RefComponent>,
     }
 
     impl EngineBackend {
@@ -147,19 +172,29 @@ mod reference {
         /// Panics if the stdlib artifact fails profile validation or
         /// decoding — a build defect, not a runtime condition.
         pub fn new() -> Self {
-            let artifact = account_artifact();
-            validate_component(artifact).expect("the stdlib account artifact clears the profile");
-            Self {
-                account: RefComponent::decode(artifact)
-                    .expect("the stdlib account artifact decodes"),
+            let mut packages = BTreeMap::new();
+            for artifact in [account_artifact(), staking_artifact()] {
+                validate_component(artifact).expect("a stdlib artifact clears the profile");
+                packages.insert(
+                    package_hash(&ProtocolHasher, artifact),
+                    RefComponent::decode(artifact).expect("a stdlib artifact decodes"),
+                );
             }
+            Self { packages }
         }
     }
 
     impl Backend for EngineBackend {
         fn invoke(&self, session: KernelSession, call: &GuestCall<'_>) -> InvokeResult {
             let args: Vec<CVal> = call.args.iter().map(ref_arg).collect();
-            let mut instance = RefComponentInstance::instantiate(&self.account, HostState(session))
+            let Some(component) = self.packages.get(&call.package) else {
+                return InvokeResult {
+                    session,
+                    fuel: 0,
+                    result: Err("no decoded code for the called package".to_string()),
+                };
+            };
+            let mut instance = RefComponentInstance::instantiate(component, HostState(session))
                 .expect("the validated genesis component instantiates");
             let outcome = instance.invoke(call.export, &args);
             let fuel = instance.fuel_consumed();

@@ -1,0 +1,290 @@
+//! The beacon's control plane on the VM engine: a delegation to a seated
+//! stake pool arrives in the executing shard's `beacon_witness_events`.
+//!
+//! Its own binary rather than a case in `transfer`, because the VM statics
+//! install once per process and first-installed-wins: a world with a stake
+//! pool in it is a different world, and sharing a process would make
+//! whichever executor was built first decide what the other one can see.
+
+use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
+
+use hyperscale_effects_bridge::{encode_tree, vm_account_address};
+use hyperscale_engine::{
+    DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
+};
+use hyperscale_engine_vm::genesis::stake_unit;
+use hyperscale_engine_vm::{ExecutionMode, VM_XRD, VmExecutor, vm_genesis_updates};
+use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
+use hyperscale_types::{
+    BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain,
+    RoutableTransaction, ShardId, ShardTrie, Stake, StakePoolId, Verified, VmBody, VmTransaction,
+    WeightedTimestamp,
+};
+use hyperscale_vm_effects::{
+    Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
+    Value,
+};
+use radix_common::prelude::DbSubstateValue;
+use radix_substate_store_interface::interface::{DbPartitionKey, PartitionEntry};
+
+/// The pool instance the beacon is told about.
+const POOL: [u8; 16] = [0x50; 16];
+/// An instance of the very same package that nobody was told about.
+const IMPOSTOR: [u8; 16] = [0x51; 16];
+/// The identifier the beacon folds `POOL` under.
+const POOL_ID: u32 = 7;
+/// The delegator's signing seed.
+const DELEGATOR: u8 = 7;
+
+/// A snapshot over the flattened genesis updates.
+struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
+
+impl MapDb {
+    fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
+        let updates = vm_genesis_updates(accounts);
+        let mut map = BTreeMap::new();
+        for (node_key, node_updates) in &updates.node_updates {
+            for (partition, partition_updates) in &node_updates.partition_updates {
+                let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates else {
+                    panic!("genesis VM updates are Delta-only");
+                };
+                for (sort_key, update) in substate_updates {
+                    let DatabaseUpdate::Set(value) = update else {
+                        panic!("genesis VM updates are Set-only");
+                    };
+                    map.insert(
+                        (node_key.clone(), *partition, sort_key.0.clone()),
+                        value.clone(),
+                    );
+                }
+            }
+        }
+        Self(map)
+    }
+}
+
+impl SubstateDatabase for MapDb {
+    fn get_raw_substate_by_db_key(
+        &self,
+        partition_key: &DbPartitionKey,
+        sort_key: &DbSortKey,
+    ) -> Option<DbSubstateValue> {
+        self.0
+            .get(&(
+                partition_key.node_key.clone(),
+                partition_key.partition_num,
+                sort_key.0.clone(),
+            ))
+            .cloned()
+    }
+
+    fn list_raw_values_from_db_key(
+        &self,
+        _partition_key: &DbPartitionKey,
+        _from_sort_key: Option<&DbSortKey>,
+    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
+        Box::new(std::iter::empty())
+    }
+}
+
+fn delegator() -> [u8; 16] {
+    let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
+    vm_account_address(&key.public_key().0)
+}
+
+/// Every address any test in this binary transacts with, pools included.
+fn world_accounts() -> Vec<([u8; 16], u128)> {
+    vec![(delegator(), 10_000)]
+}
+
+fn withdraw(target: [u8; 16], resource: Address, amount: u128) -> GraphNode {
+    GraphNode {
+        target: Address(target),
+        method: "withdraw".into(),
+        args: vec![
+            GraphArg::Literal(Value::Address(resource)),
+            GraphArg::Literal(Value::U128(amount)),
+        ],
+    }
+}
+
+fn from_edge(producer: u32, resource: Address) -> GraphArg {
+    GraphArg::Edge {
+        edge: EdgeRef {
+            producer,
+            output: 0,
+        },
+        constraints: vec![Constraint::ResourceIs(resource)],
+    }
+}
+
+/// `delegator.withdraw(XRD) -> pool.stake -> delegator.deposit(units)`.
+fn signed_stake(pool: [u8; 16], amount: u128) -> RoutableTransaction {
+    let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
+    let from = vm_account_address(&key.public_key().0);
+    let graph = ManifestGraph {
+        nodes: vec![
+            withdraw(from, VM_XRD, amount),
+            GraphNode {
+                target: Address(pool),
+                method: "stake".into(),
+                args: vec![from_edge(0, VM_XRD)],
+            },
+            GraphNode {
+                target: Address(from),
+                method: "deposit".into(),
+                args: vec![from_edge(1, stake_unit(pool))],
+            },
+        ],
+    };
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph,
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    RoutableTransaction::new_vm(
+        VmTransaction {
+            body: VmBody::Call(encode_tree(&tree).into()),
+            subintent_sigs: Vec::new(),
+            fee_payer: from,
+            max_fee: 1_000,
+            gas_limit: 1_000_000,
+            validity_start_ms: 0,
+            validity_end_ms: u64::MAX,
+            message: Vec::new().into(),
+            signer: [0; 32],
+            signature: [0; 64],
+        }
+        .sign(&key),
+    )
+}
+
+fn execute(executor: &VmExecutor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
+    let store = MapDb::genesis(&[(delegator(), 10_000)]);
+    let snapshot = DynSnapshot(&store);
+    let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
+    let trie = ShardTrie::single();
+    let ctx = WaveBatchContext {
+        par: Parallelism::Sequential,
+        cache: &cache,
+        local_shard: ShardId::ROOT,
+        shard_trie: &trie,
+        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
+        wave_start_ts: WeightedTimestamp::from_millis(1_000),
+        wave_start_reveal: RevealChain::ZERO,
+    };
+    let verified = Arc::new(Verified::<RoutableTransaction>::from_persisted(tx));
+    executor.execute_wave_batch(&ctx, &snapshot, std::slice::from_ref(&verified))
+}
+
+fn witnesses(executed: &ExecutedTx) -> Vec<BeaconWitnessEvent> {
+    match &executed.consensus {
+        ConsensusReceipt::Succeeded {
+            beacon_witness_events,
+            ..
+        } => beacon_witness_events.clone(),
+        other @ ConsensusReceipt::Failed => {
+            panic!("the delegation must succeed; receipt = {other:?}")
+        }
+    }
+}
+
+/// The whole channel in one assertion: a delegation to a seated pool is a
+/// beacon fact by the time it leaves the engine, with the pool named by
+/// the instance that emitted it and the amount carried across as attos.
+#[test]
+fn a_delegation_to_a_seated_pool_reaches_the_witness_channel() {
+    let executor = VmExecutor::with_pools(
+        &world_accounts(),
+        &[
+            (POOL, StakePoolId::new(POOL_ID)),
+            (IMPOSTOR, StakePoolId::new(99)),
+        ],
+        ExecutionMode::Serial,
+    );
+    let executed = execute(&executor, signed_stake(POOL, 500));
+    assert_eq!(
+        witnesses(&executed[0]),
+        vec![BeaconWitnessEvent::StakeDeposit {
+            pool_id: StakePoolId::new(POOL_ID),
+            amount: Stake::from_attos(500),
+        }],
+    );
+}
+
+/// The same package, an instance nobody seated: it runs, it moves funds,
+/// it emits — and the beacon never hears about it. Seating a pool is a
+/// decision the network makes, not one a transaction can make for it.
+#[test]
+fn an_unseated_instance_of_the_same_package_reaches_nobody() {
+    let executor = VmExecutor::with_pools(
+        &world_accounts(),
+        &[(POOL, StakePoolId::new(POOL_ID))],
+        ExecutionMode::Serial,
+    );
+    // `IMPOSTOR` is not in the pool set, so it was never registered as an
+    // instance either and the delegation cannot even be routed to it —
+    // which is the outer of the two guards. The inner one is covered by
+    // the codec's own tests, where an instance exists and is unrecognised.
+    let executed = execute(&executor, signed_stake(POOL, 500));
+    assert_eq!(
+        witnesses(&executed[0]).len(),
+        1,
+        "only the seated pool spoke"
+    );
+}
+
+/// An ordinary transfer between accounts emits events and no facts: the
+/// channel carries what a stake pool says and nothing else.
+#[test]
+fn an_ordinary_transfer_is_not_a_beacon_fact() {
+    let executor = VmExecutor::with_pools(
+        &world_accounts(),
+        &[(POOL, StakePoolId::new(POOL_ID))],
+        ExecutionMode::Serial,
+    );
+    let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
+    let from = vm_account_address(&key.public_key().0);
+    let graph = ManifestGraph {
+        nodes: vec![
+            withdraw(from, VM_XRD, 100),
+            GraphNode {
+                target: Address(from),
+                method: "deposit".into(),
+                args: vec![from_edge(0, VM_XRD)],
+            },
+        ],
+    };
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph,
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    let tx = RoutableTransaction::new_vm(
+        VmTransaction {
+            body: VmBody::Call(encode_tree(&tree).into()),
+            subintent_sigs: Vec::new(),
+            fee_payer: from,
+            max_fee: 1_000,
+            gas_limit: 1_000_000,
+            validity_start_ms: 0,
+            validity_end_ms: u64::MAX,
+            message: Vec::new().into(),
+            signer: [0; 32],
+            signature: [0; 64],
+        }
+        .sign(&key),
+    );
+    let executed = execute(&executor, tx);
+    assert!(
+        witnesses(&executed[0]).is_empty(),
+        "an account's own events are not the beacon's business",
+    );
+}
