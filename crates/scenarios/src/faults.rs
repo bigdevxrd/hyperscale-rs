@@ -7,16 +7,14 @@ use hyperscale_types::{
     BlockHeight, Epoch, HALT_THRESHOLD_EPOCHS, ShardId, StateRoot, TransactionDecision,
     TransactionStatus, TxHash,
 };
-use radix_common::network::NetworkDefinition;
 
 use crate::reshape::split_lifecycle;
 use crate::straddler::{chain_settled, submit_straddler};
 use crate::support::faultable::FaultableCluster;
 use crate::support::query::beacon_epoch;
 use crate::support::tx::{
-    HALT_STRADDLER_BATCH, account_from_seed, build_faucet_tx, build_vm_transfer_tx,
-    cross_shard_fault_cast, halt_straddler_setup, signer_from_seed, validity_around,
-    vm_account_shard,
+    HALT_STRADDLER_BATCH, build_probe_transfer_tx, build_vm_transfer_tx, cross_shard_fault_cast,
+    halt_straddler_setup, validity_around, vm_account_shard,
 };
 use crate::support::wait::{await_beacon_epoch, await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -37,15 +35,7 @@ pub fn gossip_drop_engages_fetch_fallback(c: &mut impl FaultableCluster) {
     let fetch_before = c.metric("fetch_items_sent", Some("transaction"));
     let dropped = c.drop_type("transaction.gossip");
 
-    let signer = signer_from_seed(1);
-    let to = account_from_seed(2);
-    let transfer = build_faucet_tx(
-        to,
-        &signer,
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
+    let transfer = build_probe_transfer_tx(validity_around(c.now()));
     let hash = transfer.hash();
     c.submit(Arc::new(transfer));
 
@@ -127,15 +117,7 @@ pub fn isolated_validator_still_settles(c: &mut impl FaultableCluster) {
     );
     c.isolate(3);
 
-    let signer = signer_from_seed(1);
-    let to = account_from_seed(2);
-    let transfer = build_faucet_tx(
-        to,
-        &signer,
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
+    let transfer = build_probe_transfer_tx(validity_around(c.now()));
     let hash = transfer.hash();
     c.submit(Arc::new(transfer));
 

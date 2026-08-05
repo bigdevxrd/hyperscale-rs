@@ -713,6 +713,51 @@ pub fn vm_genesis_accounts(senders: u8, recipients: u8) -> Vec<([u8; 16], u128)>
         .collect()
 }
 
+/// The conflicting pair the livelock probe submits: one account on each
+/// child of the root split.
+///
+/// Ground onto opposite children so the two transfers are genuinely
+/// cross-shard and share their whole account set — each is the other's
+/// mirror, which is the shape that would livelock if conflicting waves
+/// could starve each other.
+#[must_use]
+pub fn vm_livelock_pair() -> Vec<(Ed25519PrivateKey, [u8; 16])> {
+    let mut taken = Vec::new();
+    vec![
+        vm_account_routing_to(ShardId::leaf(1, 0), &mut taken),
+        vm_account_routing_to(ShardId::leaf(1, 1), &mut taken),
+    ]
+}
+
+/// Genesis funding for [`vm_livelock_pair`]: both sides pay and receive,
+/// so both need a payer's balance.
+#[must_use]
+pub fn vm_livelock_genesis_accounts() -> Vec<([u8; 16], u128)> {
+    vm_livelock_pair()
+        .into_iter()
+        .map(|(_, account)| (account, 10_000u128))
+        .collect()
+}
+
+/// The transaction a scenario submits when it needs real traffic and does
+/// not care what the traffic does.
+///
+/// A transfer between the first genesis-funded sender and recipient, so
+/// any cluster funding [`vm_genesis_accounts`] can carry it. Scenarios
+/// use it to keep a committee busy, to give a drop rule something to
+/// drop, or to have one settlement to watch — none of which depends on
+/// the payment itself.
+#[must_use]
+pub fn build_probe_transfer_tx(validity: TimestampRange) -> RoutableTransaction {
+    let (payer, from) = vm_sender(0);
+    build_vm_transfer_tx(&payer, from, vm_recipient(0), PROBE_PAYMENT, validity)
+}
+
+/// What [`build_probe_transfer_tx`] moves: enough to be a real credit,
+/// far under the sender's genesis funding so a scenario can submit
+/// several.
+pub const PROBE_PAYMENT: u128 = 100;
+
 /// Grind a signing key whose VM account routes to `shard` under the
 /// depth-1 partition. Seeds in `taken` are skipped, so successive calls
 /// yield distinct accounts.

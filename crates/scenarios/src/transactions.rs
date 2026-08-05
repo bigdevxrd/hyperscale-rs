@@ -8,7 +8,8 @@ use radix_common::network::NetworkDefinition;
 
 use crate::reshape::split_lifecycle;
 use crate::support::tx::{
-    account_from_seed, build_faucet_tx, build_transfer_tx, signer_from_seed, validity_around,
+    PROBE_PAYMENT, account_from_seed, build_faucet_tx, build_transfer_tx, build_vm_transfer_tx,
+    signer_from_seed, validity_around, vm_livelock_pair,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -91,75 +92,73 @@ pub fn cross_shard_tx(c: &mut impl Cluster) {
 /// Grow to two shards, then submit a conflicting cross-shard pair (`31 → 30`
 /// and `30 → 31`, across the two children) and assert it resolves promptly.
 ///
-/// The two transactions contend on the same accounts across both shards. The
-/// system resolves the contention — cycle detection aborts a deadlocked loser,
-/// or the pair admits sequentially — so both reach a terminal outcome within a
-/// bounded budget, never livelocking. At most one aborts: a double-abort would
-/// mean a timeout, not prompt resolution. (Whether the cross-shard cycle
-/// deadlocks at all is timing-dependent, so the loser-abort is not asserted —
-/// prompt non-livelocked resolution is.) Composes [`split_lifecycle`] for the
-/// grow.
+/// Each transfer is the other's mirror across the two children, so the
+/// pair shares its whole account set and each engages the shard the other
+/// pays from. Both reach a terminal outcome within a bounded budget and
+/// the contention clears behind them — which is what "no livelock" means
+/// here.
+///
+/// **A symmetric pair resolves by deadline, not by a loser.** There is no
+/// cycle detector: each payer's shard holds a lock the other's wave needs,
+/// neither can engage, and the deadline abort is what breaks it — the
+/// backstop D21 names, doing the job it exists for. So both aborting is
+/// the expected shape rather than the failure the Radix path called it,
+/// and asserting "at most one aborts" would be asserting a mechanism this
+/// engine does not have.
+///
+/// What that leaves worth asserting is that the deadlock was transient:
+/// the pair moves nothing, and a single transfer submitted afterwards
+/// settles, which it could not if either shard were still holding a lock.
+/// Composes [`split_lifecycle`] for the grow.
 ///
 /// # Panics
 ///
-/// Panics if either transaction fails to resolve promptly, or if both abort.
+/// Panics if either transaction fails to reach a terminal outcome, or if
+/// the contention does not clear behind them.
 pub fn livelock_resolves_promptly(c: &mut impl Cluster) {
     split_lifecycle(c);
 
-    let network = NetworkDefinition::simulator();
     let validity = validity_around(c.now());
-    let key_a = signer_from_seed(31);
-    let key_b = signer_from_seed(30);
-    let acc_a = account_from_seed(31);
-    let acc_b = account_from_seed(30);
+    let pair = vm_livelock_pair();
+    let (key_a, acc_a) = &pair[0];
+    let (key_b, acc_b) = &pair[1];
 
-    let tx_a = build_transfer_tx(
-        &key_a,
-        acc_a,
-        acc_b,
-        Decimal::from(100),
-        &network,
-        200,
-        validity,
-    );
-    let tx_b = build_transfer_tx(
-        &key_b,
-        acc_b,
-        acc_a,
-        Decimal::from(100),
-        &network,
-        201,
-        validity,
-    );
+    let tx_a = build_vm_transfer_tx(key_a, *acc_a, *acc_b, PROBE_PAYMENT, validity);
+    let tx_b = build_vm_transfer_tx(key_b, *acc_b, *acc_a, PROBE_PAYMENT, validity);
     let hash_a = tx_a.hash();
     let hash_b = tx_b.hash();
     c.submit(Arc::new(tx_a));
     c.submit(Arc::new(tx_b));
 
-    // The pair shares an account set, so the ready-set invariant serializes it
-    // into two back-to-back waves rather than running them together. Each
-    // transaction gets the settlement budget a single cross-shard transfer needs
-    // (`cross_shard_tx`), well above one wave on wall-clock. A genuine livelock
-    // never resolves, so the assertion below still catches it — the budget only
-    // has to outlast honest sequential settlement.
+    // The budget has to outlast a payer's deadline, which is its signed
+    // window's end plus the evidence margin — wall-clock, and longer than
+    // the wave a settlement would take. A genuine livelock never resolves
+    // at all, so the assertion still catches one.
     let status_a = await_tx_terminal(c, hash_a, epochs(8));
     let status_b = await_tx_terminal(c, hash_b, epochs(8));
     assert!(
         matches!(status_a, Some(TransactionStatus::Completed(_)))
             && matches!(status_b, Some(TransactionStatus::Completed(_))),
-        "conflicting pair must resolve promptly without livelocking; a = {status_a:?}, b = {status_b:?}"
+        "conflicting pair must resolve without livelocking; a = {status_a:?}, b = {status_b:?}"
     );
-    let aborted = [&status_a, &status_b]
-        .into_iter()
-        .filter(|s| {
-            matches!(
-                s,
-                Some(TransactionStatus::Completed(TransactionDecision::Aborted))
-            )
-        })
-        .count();
+
+    // The control on that: whatever the pair did, neither shard is still
+    // encumbered. A lock the deadlock left behind would refuse this.
+    let after = build_vm_transfer_tx(
+        key_a,
+        *acc_a,
+        *acc_b,
+        PROBE_PAYMENT,
+        validity_around(c.now()),
+    );
+    let hash = after.hash();
+    c.submit(Arc::new(after));
+    let status = await_tx_terminal(c, hash, epochs(8));
     assert!(
-        aborted <= 1,
-        "a conflicting pair aborts at most its loser, never both; a = {status_a:?}, b = {status_b:?}"
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "the contention must clear behind the pair; status = {status:?}",
     );
 }

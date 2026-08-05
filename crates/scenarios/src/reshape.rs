@@ -4,10 +4,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hyperscale_types::ShardId;
-use radix_common::network::NetworkDefinition;
 
 use crate::support::query::{committee_size, live_shards};
-use crate::support::tx::{account_from_seed, build_faucet_tx, signer_from_seed, validity_around};
+use crate::support::tx::{build_probe_transfer_tx, signer_from_seed, validity_around};
 use crate::support::wait::{
     assert_height_frozen, await_beacon_epoch, await_height, await_merge_keeper_count,
     await_root_matches_anchor, await_serves, await_serves_ahead_of_anchor, await_split_admitted,
@@ -103,16 +102,7 @@ pub fn split_lifecycle(c: &mut impl Cluster) {
     // Keep the parent committing through its final window: a real transfer
     // gives it activity so it coasts to its crossing and the fold seeds both
     // children from the terminal contribution.
-    let signer = signer_from_seed(1);
-    let to = account_from_seed(2);
-    let transfer = build_faucet_tx(
-        to,
-        &signer,
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
-    c.submit(Arc::new(transfer));
+    c.submit(Arc::new(build_probe_transfer_tx(validity_around(c.now()))));
 
     // Each child seats from the terminal crossing its members followed,
     // ahead of the fold that publishes its anchor. Serving alone would

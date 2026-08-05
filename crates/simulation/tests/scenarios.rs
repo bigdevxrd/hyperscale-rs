@@ -15,8 +15,9 @@ use hyperscale_scenarios::tx::{
     cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances, halt_straddler_setup,
     intershard_partition_genesis_balances, merge_straddler_setup, split_straddler_setup,
     straddler_genesis_balances, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
-    vm_insolvent_genesis_accounts, vm_nullifier_race_genesis_accounts, vm_staking_genesis_accounts,
-    vm_staking_pools, vm_storm_genesis_accounts, witness_genesis_balances,
+    vm_insolvent_genesis_accounts, vm_livelock_genesis_accounts,
+    vm_nullifier_race_genesis_accounts, vm_staking_genesis_accounts, vm_staking_pools,
+    vm_storm_genesis_accounts, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, ScenarioConfig, beacon_lag_drops_skipped_epochs_reveal_chains,
@@ -83,7 +84,8 @@ fn single_shard_tx_sim() {
 
 #[test]
 fn gossip_drop_engages_fetch_fallback_sim() {
-    let mut cluster = SimCluster::new(&liveness_config(), 42);
+    let mut cluster =
+        SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(1, 1));
     cluster.run_faultable(gossip_drop_engages_fetch_fallback);
 }
 
@@ -95,8 +97,18 @@ fn partition_halts_and_heals_sim() {
 
 #[test]
 fn isolated_validator_still_settles_sim() {
-    let mut cluster = SimCluster::new(&liveness_config(), 42);
+    let mut cluster =
+        SimCluster::with_vm_accounts(&liveness_config(), 42, &vm_genesis_accounts(1, 1));
     cluster.run_faultable(isolated_validator_still_settles);
+}
+
+/// Everything `livelock_resolves_promptly` needs funded: it composes
+/// `split_lifecycle`, so the probe transfer's accounts come along with
+/// the conflicting pair's.
+fn livelock_accounts() -> Vec<([u8; 16], u128)> {
+    let mut accounts = vm_genesis_accounts(1, 1);
+    accounts.extend(vm_livelock_genesis_accounts());
+    accounts
 }
 
 /// Seven-host single-shard config: quorum is five, so a connected two-host
@@ -139,7 +151,7 @@ const fn split_config() -> ScenarioConfig {
 
 #[test]
 fn split_lifecycle_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_accounts(&split_config(), 11, &vm_genesis_accounts(1, 1));
     split_lifecycle(&mut cluster);
 }
 
@@ -960,7 +972,7 @@ fn cross_shard_provisions_fetch_with_request_loss_seed_2026_sim() {
 
 #[test]
 fn livelock_resolves_promptly_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster = SimCluster::with_vm_accounts(&split_config(), 11, &livelock_accounts());
     livelock_resolves_promptly(&mut cluster);
 }
 

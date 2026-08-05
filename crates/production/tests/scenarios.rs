@@ -15,8 +15,8 @@ use hyperscale_scenarios::tx::{
     contention_genesis_balances, cross_contention_genesis_balances,
     cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances, halt_straddler_setup,
     intershard_partition_genesis_balances, merge_straddler_setup, split_straddler_setup,
-    straddler_genesis_balances, vm_genesis_accounts, vm_staking_genesis_accounts, vm_staking_pools,
-    witness_genesis_balances,
+    straddler_genesis_balances, vm_genesis_accounts, vm_livelock_genesis_accounts,
+    vm_staking_genesis_accounts, vm_staking_pools, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
     ScenarioConfig, beacon_pool_partition_stalls_epoch_production,
@@ -120,6 +120,15 @@ fn vm_abort_converges_prod() {
     vm_abort_converges(&mut cluster);
 }
 
+/// Everything `livelock_resolves_promptly` needs funded: it composes
+/// `split_lifecycle`, so the probe transfer's accounts come along with
+/// the conflicting pair's.
+fn livelock_accounts() -> Vec<([u8; 16], u128)> {
+    let mut accounts = vm_genesis_accounts(1, 1);
+    accounts.extend(vm_livelock_genesis_accounts());
+    accounts
+}
+
 /// Fault-scenario config: four single-vnode hosts, so a `transaction.gossip`
 /// drop forces the remote hosts to fetch the transaction rather than receive it
 /// on a co-hosted mempool.
@@ -141,7 +150,13 @@ const fn fault_config() -> ScenarioConfig {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn gossip_drop_engages_fetch_fallback_prod() {
-    let mut cluster = ProdCluster::start(&fault_config(), 7, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &fault_config(),
+        7,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        vm_genesis_accounts(1, 1),
+    );
     cluster.run_faultable(gossip_drop_engages_fetch_fallback);
 }
 
@@ -163,7 +178,13 @@ fn partition_halts_and_heals_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn isolated_validator_still_settles_prod() {
-    let mut cluster = ProdCluster::start(&fault_config(), 7, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &fault_config(),
+        7,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        vm_genesis_accounts(1, 1),
+    );
     cluster.run_faultable(isolated_validator_still_settles);
 }
 
@@ -224,7 +245,13 @@ const fn split_config() -> ScenarioConfig {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn split_lifecycle_prod() {
-    let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &split_config(),
+        11,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        vm_genesis_accounts(1, 1),
+    );
     split_lifecycle(&mut cluster);
 }
 
@@ -504,7 +531,13 @@ fn cross_shard_provisions_fetch_with_request_loss_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn livelock_resolves_promptly_prod() {
-    let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &split_config(),
+        11,
+        EPOCH_MS,
+        straddler_genesis_balances(),
+        livelock_accounts(),
+    );
     livelock_resolves_promptly(&mut cluster);
 }
 
