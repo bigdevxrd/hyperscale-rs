@@ -177,8 +177,6 @@ pub fn project_to_shard(
             let consensus = ConsensusReceipt::Succeeded {
                 receipt_hash: *receipt_hash,
                 database_updates,
-                owned_nodes: Vec::new().into(),
-                application_events: Vec::new(),
                 beacon_witness_events,
                 vm_events,
             };

@@ -1,22 +1,13 @@
-//! Application events, fee summary, log levels, and node-local execution metadata.
+//! Fee summary, log levels, and node-local execution metadata.
 
-use radix_common::data::scrypto::{scrypto_decode, scrypto_encode};
 use radix_common::math::Decimal;
-use radix_engine_interface::types::EventTypeIdentifier;
 use sbor::prelude::*;
 use sbor::{
     Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
     NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
 };
 
-use crate::sbor_codec::decode_bounded_bytes;
-use crate::{BoundedString, BoundedVec, Hash};
-
-/// Cap on `ApplicationEvent.type_id` and `ApplicationEvent.data` at decode
-/// time. Events are short user-defined strings + SBOR payloads; 64 KiB is
-/// far above any legitimate event and rejects oversized arrivals before
-/// allocation.
-const MAX_APPLICATION_EVENT_FIELD_LEN: usize = 64 * 1024;
+use crate::{BoundedString, BoundedVec};
 
 /// Cap on `ExecutionMetadata.log_messages` count at decode time. Receipts
 /// emit a handful of log lines per tx; 1024 is far above any legitimate
@@ -33,99 +24,6 @@ pub const MAX_DIAGNOSTIC_STRING_LEN: usize = 4 * 1024;
 /// as exactly this many little-endian bytes — fixed-size, no length
 /// prefix from a peer, no scrypto SBOR round-trip.
 const DECIMAL_BYTE_LEN: usize = Decimal::BITS / 8;
-
-/// SBOR-encoded event payload.
-///
-/// Opaque on the receiving end — the encoder handed us the bytes, we do not
-/// inspect them. Distinct from [`EventTypeIdentifier`] so an argument-order
-/// swap when constructing an [`ApplicationEvent`] fails to compile.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EventData(pub Vec<u8>);
-
-/// An application-level event emitted by Scrypto component logic.
-///
-/// Events are identical across shards for the same transaction (they come from
-/// user logic which sees the same merged state on all shards).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApplicationEvent {
-    /// Schema identifier for the event (emitter + event name).
-    pub type_id: EventTypeIdentifier,
-    /// SBOR-encoded event payload.
-    pub data: EventData,
-}
-
-impl ApplicationEvent {
-    /// Compute a deterministic hash of this event.
-    ///
-    /// # Panics
-    ///
-    /// Panics if scrypto-encoding `type_id` fails — the type is a closed
-    /// Radix struct and encoding is infallible in practice.
-    #[must_use]
-    pub fn hash(&self) -> Hash {
-        let type_id_bytes = scrypto_encode(&self.type_id)
-            .expect("scrypto_encode(EventTypeIdentifier) is infallible for a valid struct");
-        Hash::from_parts(&[&type_id_bytes, &self.data.0])
-    }
-}
-
-impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ApplicationEvent {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
-
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        // `type_id` is scrypto-encoded to bytes and written as a `Vec<u8>` —
-        // basic-SBOR can't reach into the scrypto custom value kinds, so
-        // bytes is the universal carrier. `EventTypeIdentifier` is a closed
-        // Radix struct (address + strings), so encoding is infallible in
-        // practice; matches the `expect` in `ConsensusReceipt::local_receipt_hash`.
-        let type_id_bytes = scrypto_encode(&self.type_id)
-            .expect("scrypto_encode(EventTypeIdentifier) is infallible for a valid struct");
-        encoder.write_size(2)?;
-        encoder.encode(&type_id_bytes)?;
-        encoder.encode(&self.data.0)?;
-        Ok(())
-    }
-}
-
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ApplicationEvent {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 2 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: length,
-            });
-        }
-        let type_id_bytes = decode_bounded_bytes(decoder, MAX_APPLICATION_EVENT_FIELD_LEN)?;
-        let type_id = scrypto_decode::<EventTypeIdentifier>(&type_id_bytes)
-            .map_err(|_| DecodeError::InvalidCustomValue)?;
-        let data = EventData(decode_bounded_bytes(
-            decoder,
-            MAX_APPLICATION_EVENT_FIELD_LEN,
-        )?);
-        Ok(Self { type_id, data })
-    }
-}
-
-impl Categorize<NoCustomValueKind> for ApplicationEvent {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl Describe<NoCustomTypeKind> for ApplicationEvent {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("ApplicationEvent", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
-    }
-}
 
 /// Fee metrics from transaction execution.
 ///
@@ -339,39 +237,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::test_utils::test_event_type_identifier;
-
-    #[test]
-    fn application_event_roundtrip() {
-        let ev = ApplicationEvent {
-            type_id: test_event_type_identifier(7),
-            data: EventData(vec![4, 5, 6, 7]),
-        };
-        let bytes = basic_encode(&ev).unwrap();
-        let decoded: ApplicationEvent = basic_decode(&bytes).unwrap();
-        assert_eq!(decoded, ev);
-    }
-
-    #[test]
-    fn application_event_decode_rejects_oversized_type_id() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(2).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ValueKind::U8).unwrap();
-        enc.write_size(MAX_APPLICATION_EVENT_FIELD_LEN + 1).unwrap();
-        let err = basic_decode::<ApplicationEvent>(&buf).unwrap_err();
-        assert!(matches!(
-            err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_APPLICATION_EVENT_FIELD_LEN,
-                actual,
-            } if actual == MAX_APPLICATION_EVENT_FIELD_LEN + 1
-        ));
-    }
 
     #[test]
     fn fee_summary_roundtrip_some() {

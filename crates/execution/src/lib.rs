@@ -15,16 +15,7 @@
 //! Resolved waves are finalized into a `FinalizedWave` receipt that lives
 //! in the corresponding block.
 //!
-//! # Conflict handling
-//!
-//! When two transactions in flight contend on overlapping state, the
-//! conflict detector ([`crate::conflict`]) deterministically aborts one
-//! using `committed_at` ordering and replays the survivor. The
-//! `WAVE_TIMEOUT` floor bounds how long detector entries are retained
-//! past commit; see the prune call in the coordinator for the rationale.
-
 pub mod action_handlers;
-pub mod conflict;
 pub mod wave_state;
 
 mod coordinator;

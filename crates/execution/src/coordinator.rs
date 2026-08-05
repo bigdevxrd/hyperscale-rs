@@ -18,17 +18,12 @@
 //! state provisions (with merkle inclusion proofs) to target shards. Provisions are
 //! committed in blocks via `provision_root` — all validators have the same data.
 //!
-//! ## Phase 2: Conflict Detection
-//! At commit time, the [`ConflictDetector`](crate::conflict::ConflictDetector) checks
-//! committed provisions for node-ID overlap with local cross-shard transactions.
-//! Overlapping transactions are aborted (lower hash wins) deterministically.
-//!
-//! ## Phase 3: Wave-Atomic Execution
+//! ## Phase 2: Wave-Atomic Execution
 //! Once every tx in a wave is provisioned (or at block commit for single-shard
 //! waves), the whole wave dispatches atomically via
 //! `ExecuteTransactions` / `ExecuteCrossShardTransactions`.
 //!
-//! ## Phase 4: Vote Aggregation
+//! ## Phase 3: Vote Aggregation
 //! Validators send execution votes to the wave leader. When the leader collects
 //! 2f+1 voting power agreeing on the same receipt hash, it aggregates an
 //! execution certificate and broadcasts it to local peers and remote shards.
@@ -47,7 +42,7 @@ use hyperscale_types::{
     FinalizedWave, FinalizedWaveVerifyError, GlobalReceiptRoot, Hash, Provisions,
     RETENTION_HORIZON, RevealChain, RoutableTransaction, ScheduleLookup, SettledSetVerdict,
     SettledWaveSet, ShardId, StoredReceipt, TopologySchedule, TopologySnapshot, TxHash, TxOutcome,
-    ValidatorId, Verifiable, Verified, WAVE_TIMEOUT, WaveCertificate, WaveId, WeightedTimestamp,
+    ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
     settled_set_verdict, wave_leader, wave_leader_at,
 };
 use tracing::instrument;
@@ -833,10 +828,9 @@ impl ExecutionCoordinator {
 
     /// Apply provisions committed in a block.
     ///
-    /// Two phases — absorb all batches first, then detect conflicts. If
-    /// interleaved, the `already_provisioned` guard in phase 2 reads a
-    /// partially-absorbed map whose contents depend on provisions iteration order,
-    /// which diverges abort decisions across validators.
+    /// Absorbs every batch before touching wave readiness: interleaving
+    /// would let a wave's dispatch decision read a partially-absorbed map
+    /// whose contents depend on provisions iteration order.
     ///
     /// Each batch is peeked for its [`Verifiable::verified`] marker before
     /// re-wrapping. Same-process upstream paths leave the marker live, so
@@ -847,14 +841,13 @@ impl ExecutionCoordinator {
     fn apply_committed_provisions(
         &mut self,
         batches: &[Arc<Verifiable<Provisions>>],
-        committed_height: BlockHeight,
         committed_ts: WeightedTimestamp,
     ) -> Vec<Action> {
-        // Sort for deterministic phase-2 iteration (logs, action vector order).
+        // Sort for deterministic iteration (logs, action vector order).
         let mut ordered: Vec<&Arc<Verifiable<Provisions>>> = batches.iter().collect();
         ordered.sort_by_key(|b| b.hash());
 
-        // Phase 1: absorb all provisions. Populated unconditionally so
+        // Absorb all provisions first. Populated unconditionally so
         // `setup_waves_and_dispatch` can replay them at wave-creation time.
         let mut affected_waves: BTreeSet<WaveId> = BTreeSet::new();
         for provisions in &ordered {
@@ -873,41 +866,7 @@ impl ExecutionCoordinator {
             }
         }
 
-        // Phase 2: detect node-ID overlap conflicts against the fully-absorbed
-        // provisioned set. A conflict is skipped if the loser is already
-        // fully provisioned (execution can proceed) or its wave has already
-        // dispatched (inert to mid-flight input).
-        for provisions in &ordered {
-            let source_shard = provisions.source_shard();
-            for conflict in self
-                .provisioning
-                .detect_conflicts(provisions.as_unverified(), committed_ts)
-            {
-                let loser = conflict.loser_tx;
-                if self.provisioning.is_fully_provisioned(loser) {
-                    continue;
-                }
-                let Some(wave_id) = self.waves.wave_assignment(loser) else {
-                    continue;
-                };
-                let Some(wave) = self.waves.get_wave_mut(&wave_id) else {
-                    continue;
-                };
-                if wave.dispatched() {
-                    continue;
-                }
-                wave.record_abort(loser, conflict.committed_at);
-                affected_waves.insert(wave_id);
-                tracing::debug!(
-                    loser_tx = %loser,
-                    source_shard = source_shard.inner(),
-                    committed_at = committed_height.inner(),
-                    "Node-ID overlap conflict — aborting loser"
-                );
-            }
-        }
-
-        // Phase 3: for each affected wave, drain engagement coverage, then
+        // Then, for each affected wave, drain engagement coverage and
         // mark newly-ready txs provisioned. If a wave transitions from
         // partial → fully provisioned, emit the one-shot dispatch action.
         // Dispatch is left alone once fired, but engagement coverage keeps
@@ -1910,33 +1869,6 @@ impl ExecutionCoordinator {
             wave.log_if_overdue(self.committed_ts);
         }
 
-        // Drop conflict-detector entries past `WAVE_TIMEOUT` from their
-        // commit. `register_tx` iterates over these per cross-shard tx;
-        // left unbounded they drive quadratic TPS decay. Past the bound
-        // the remote tx is provably terminal (its wave has either
-        // finalized or hit the deterministic abort path), so the detector
-        // entry can no longer flag a meaningful conflict.
-        //
-        // `MAX_VALIDITY_RANGE` is *not* the right bound here — that
-        // governs admission, not post-inclusion lifetime. Once a remote
-        // tx is in a block, the wave/execution timeout owns its
-        // termination. This mirrors `RETENTION_HORIZON`'s
-        // `MAX_VALIDITY_RANGE + WAVE_TIMEOUT` split, applied
-        // per-stored-provision: each entry's `committed_at` already
-        // accounts for the admission window, so only the post-inclusion
-        // `WAVE_TIMEOUT` portion remains.
-        let cutoff = self.committed_ts.minus(WAVE_TIMEOUT);
-        if cutoff.as_millis() > 0 {
-            let dropped = self.provisioning.prune_old_provisions(cutoff);
-            if dropped > 0 {
-                tracing::debug!(
-                    dropped,
-                    cutoff_ms = cutoff.as_millis(),
-                    "Pruned aged conflict-detector provisions"
-                );
-            }
-        }
-
         match block {
             Block::Live {
                 header,
@@ -2032,7 +1964,7 @@ impl ExecutionCoordinator {
         // Apply this block's provisions after wave setup so newly-created
         // waves can transition to provisioned from the same block's batches.
         if !provisions.is_empty() {
-            actions.extend(self.apply_committed_provisions(provisions, height, self.committed_ts));
+            actions.extend(self.apply_committed_provisions(provisions, self.committed_ts));
         }
 
         actions
@@ -2843,8 +2775,8 @@ mod tests {
         certify as test_certify, make_live_block as helpers_make_live_block, test_transaction,
     };
     use hyperscale_types::{
-        AggregateSignature, BoundedVec, ConsensusPublicKey, ConsensusReceipt, ConsensusSignature,
-        Epoch, ExecutionOutcome, GlobalReceiptHash, Hash, NetworkDefinition, QuorumCertificate,
+        AggregateSignature, ConsensusPublicKey, ConsensusReceipt, ConsensusSignature, Epoch,
+        ExecutionOutcome, GlobalReceiptHash, Hash, NetworkDefinition, QuorumCertificate,
         RecoveryCause, ShardRecovery, Signer, SignerBitfield, ValidatorInfo, ValidatorSet,
     };
 
@@ -4689,8 +4621,6 @@ mod tests {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     #[allow(clippy::default_trait_access)]
                     database_updates: Default::default(),
-                    owned_nodes: BoundedVec::new(),
-                    application_events: vec![],
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }),

@@ -409,18 +409,16 @@ impl WaveState {
                 .provisions_for(tx_hash)
                 .map(<[_]>::to_vec)
                 .unwrap_or_default();
-            let ownership = provisioning.ownership_for(tx_hash);
-            // The transaction environment: a remote-payer VM leg executes
+            // The transaction environment: a remote-payer leg executes
             // under the anchor its payer bundle carried — the payer shard
             // sits in `required`, so the fully-provisioned gate guarantees
-            // the bundle was absorbed. Every other leg (payer-local VM,
-            // Radix) anchors on this wave's own committing block.
+            // the bundle was absorbed. A payer-local leg anchors on this
+            // wave's own committing block.
             let anchor = provisioning.payer_anchor(tx_hash);
             requests.push(CrossShardExecutionRequest {
                 tx_hash,
                 transaction: Arc::clone(tx),
                 provisions,
-                ownership,
                 clock: anchor.map_or(self.wave_start_ts, |a| a.clock),
                 randomness: anchor.map_or(self.wave_start_reveal, |a| a.randomness),
             });
@@ -1122,7 +1120,7 @@ impl WaveState {
 mod tests {
     use hyperscale_types::test_utils::{test_prefix, test_transaction_with_prefixes};
     use hyperscale_types::{
-        AggregateSignature, BoundedVec, ConsensusReceipt, DatabaseUpdates, GlobalReceiptHash, Hash,
+        AggregateSignature, ConsensusReceipt, DatabaseUpdates, GlobalReceiptHash, Hash,
         MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, SignerBitfield,
         SubstateEntry, tx_outcome_leaf,
     };
@@ -1214,8 +1212,6 @@ mod tests {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     #[allow(clippy::default_trait_access)]
                     database_updates: Default::default(),
-                    owned_nodes: BoundedVec::new(),
-                    application_events: vec![],
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }
@@ -1283,10 +1279,8 @@ mod tests {
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"fee-receipt")),
                 database_updates: DatabaseUpdates::default(),
-                application_events: Vec::new(),
                 beacon_witness_events: Vec::new(),
                 vm_events: Vec::new(),
-                owned_nodes: Vec::new().into(),
             }),
         )
     }
@@ -1861,7 +1855,7 @@ mod tests {
             ts_for(WAVE_START + 1),
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
-            vec![ProvisionEntry::new(tx, vec![], vec![], vec![])],
+            vec![ProvisionEntry::new(tx, vec![])],
         ))
     }
 
@@ -1987,7 +1981,7 @@ mod tests {
             payer_clock,
             payer_reveal,
             MerkleInclusionProof::dummy(),
-            vec![ProvisionEntry::new(remote_payer_tx, vec![], vec![], vec![])],
+            vec![ProvisionEntry::new(remote_payer_tx, vec![])],
         )));
 
         match w.dispatch_if_ready(&provisioning) {

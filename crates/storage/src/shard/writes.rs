@@ -29,21 +29,6 @@ pub fn merge_updates_from_receipts(receipts: &[StoredReceipt]) -> DatabaseUpdate
     merged
 }
 
-/// Merge every receipt's `owned_nodes` into one `internal_node → owner` map
-/// for the block's JMT build.
-///
-/// State locking guarantees no two receipts in a block resolve the same
-/// internal node to different owners, so a flat collect is unambiguous.
-/// Failed receipts contribute nothing.
-pub fn merge_owned_nodes<'a>(
-    receipts: impl IntoIterator<Item = &'a StoredReceipt>,
-) -> HashMap<NodeId, NodeId> {
-    receipts
-        .into_iter()
-        .flat_map(|r| r.consensus.owned_nodes().iter().copied())
-        .collect()
-}
-
 /// Restrict `updates` to the entities whose JMT leaves fall under
 /// `prefix` — the subset of a followed chain's block writes that
 /// belongs to a store rooted there.

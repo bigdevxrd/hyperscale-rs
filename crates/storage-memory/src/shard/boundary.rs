@@ -6,6 +6,7 @@
 //! that version. Retention mirrors the production checkpoint ring so
 //! eviction behaviour is exercised in simulation too.
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use hyperscale_jmt::{Key, NibblePath, Node, NodeKey, TreeReader};
@@ -13,7 +14,7 @@ use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::import_leaf_updates;
 use hyperscale_storage::{
     AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportLeaf, ImportProgress, ResolveLeaf,
-    WitnessSeed, filter_updates_to_prefix, merge_owned_nodes, merge_updates_from_receipts,
+    WitnessSeed, filter_updates_to_prefix, merge_updates_from_receipts,
 };
 use hyperscale_types::{Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt};
 
@@ -201,7 +202,6 @@ impl BoundaryStore for SimShardStorage {
         height: BlockHeight,
         receipts: &[StoredReceipt],
     ) -> Result<StateRoot, String> {
-        let owner_map = merge_owned_nodes(receipts);
         let merged = merge_updates_from_receipts(receipts);
         let mut state = write_or_recover(&self.state);
         if height <= state.current_block_height {
@@ -210,11 +210,12 @@ impl BoundaryStore for SimShardStorage {
                 state.current_block_height,
             ));
         }
-        let filtered = filter_updates_to_prefix(&merged, &owner_map, &state.tree_store.root_path());
+        let filtered =
+            filter_updates_to_prefix(&merged, &HashMap::new(), &state.tree_store.root_path());
         if filtered.node_updates.is_empty() {
             return Ok(state.current_root_hash);
         }
-        let root = apply_state_writes(&mut state, &filtered, &owner_map, height);
+        let root = apply_state_writes(&mut state, &filtered, &HashMap::new(), height);
         drop(state);
         Ok(root)
     }
@@ -243,8 +244,8 @@ mod tests {
     use hyperscale_storage::{DatabaseUpdates, SubstateStore};
     use hyperscale_types::state_key::node_routing_hash;
     use hyperscale_types::{
-        BoundedVec, ConsensusReceipt, GlobalReceiptHash, Hash, NodeId, ShardId, SplitChildRoots,
-        TxHash, shard_prefix_path,
+        ConsensusReceipt, GlobalReceiptHash, Hash, NodeId, ShardId, SplitChildRoots, TxHash,
+        shard_prefix_path,
     };
 
     use super::*;
@@ -360,8 +361,6 @@ mod tests {
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: updates.clone(),
-                owned_nodes: BoundedVec::new(),
-                application_events: Vec::new(),
                 beacon_witness_events: Vec::new(),
                 vm_events: Vec::new(),
             }),

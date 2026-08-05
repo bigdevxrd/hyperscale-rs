@@ -43,7 +43,7 @@ mod tests {
 
     use crate::test_utils::test_transaction_with_prefixes;
     use crate::{
-        AggregateSignature, Attempt, BlockHeight, BoundedVec, ConsensusReceipt, DatabaseUpdates,
+        AggregateSignature, Attempt, BlockHeight, ConsensusReceipt, DatabaseUpdates,
         ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
         GlobalReceiptRoot, Hash, NetworkDefinition, ProvisionTxRoot, ProvisionTxRootsMap,
         RETENTION_HORIZON, ReceiptValidationError, ShardId, SignerBitfield, StoredReceipt,
@@ -590,8 +590,6 @@ mod tests {
         Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: DatabaseUpdates::default(),
-            owned_nodes: BoundedVec::new(),
-            application_events: vec![],
             beacon_witness_events: Vec::new(),
             vm_events: Vec::new(),
         })
@@ -735,8 +733,6 @@ mod tests {
                     consensus: Arc::new(ConsensusReceipt::Succeeded {
                         receipt_hash: GlobalReceiptHash::ZERO,
                         database_updates: DatabaseUpdates::default(),
-                        owned_nodes: BoundedVec::new(),
-                        application_events: vec![],
                         beacon_witness_events: Vec::new(),
                         vm_events: Vec::new(),
                     }),
@@ -796,8 +792,6 @@ mod tests {
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     database_updates: DatabaseUpdates::default(),
-                    owned_nodes: BoundedVec::new(),
-                    application_events: vec![],
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }),
@@ -833,8 +827,6 @@ mod tests {
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash,
                     database_updates: DatabaseUpdates::default(),
-                    owned_nodes: BoundedVec::new(),
-                    application_events: vec![],
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }),
@@ -886,8 +878,6 @@ mod tests {
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     database_updates: DatabaseUpdates::default(),
-                    owned_nodes: BoundedVec::new(),
-                    application_events: vec![],
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }),
@@ -921,8 +911,6 @@ mod tests {
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     database_updates: DatabaseUpdates::default(),
-                    owned_nodes: BoundedVec::new(),
-                    application_events: vec![],
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }),

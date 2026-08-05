@@ -133,8 +133,6 @@ mod tests {
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"tx")),
                 vec![],
-                vec![],
-                vec![],
             )],
         ));
         let header = BlockHeader::new(

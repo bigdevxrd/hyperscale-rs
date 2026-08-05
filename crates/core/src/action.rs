@@ -10,15 +10,15 @@ use hyperscale_types::{
     BlockHash, BlockHeader, BlockHeight, BlockManifest, BlockVote, CandidateBeaconBlock,
     CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, CertifiedBlockHeader,
     ConsensusPublicKey, Epoch, ExecutionCertificate, ExecutionVote, FinalizedWave,
-    GlobalReceiptRoot, Hash, HeaderFetchCount, InFlightCount, LocalReceiptRoot, NodeId, PcQc1,
-    PcQc2, PcVector, PcVote1, PcVote2, PcVote3, PcVoteEquivocation, ProposerTimestamp,
-    ProvisionHash, ProvisionTxRootsMap, Provisions, ProvisionsRoot, QuorumCertificate, RatifyPhase,
-    RatifyRound, RatifyVote, ReadySignal, ReshapeThresholds, ReshapeTrigger, ResolvedCommittee,
-    RevealChain, Round, RoutableTransaction, RoutingCommittees, SafeVoteRegisters,
-    SettledWavesRoot, ShardForkProof, ShardId, ShardLoad, ShardVoteEquivocation,
-    SharedCertificates, SharedTransactions, SharedWitnessSources, SpcEmptyViewMsg, SpcHighTriple,
-    SpcNewCommitMsg, SpcProposalObject, SpcView, SplitChildRoots, StateRoot, SubstateEntry,
-    Timeout, TopologySnapshot, TransactionRoot, TransactionStatus, TxHash, TxOutcome, ValidatorId,
+    GlobalReceiptRoot, Hash, HeaderFetchCount, InFlightCount, LocalReceiptRoot, PcQc1, PcQc2,
+    PcVector, PcVote1, PcVote2, PcVote3, PcVoteEquivocation, ProposerTimestamp, ProvisionHash,
+    ProvisionTxRootsMap, Provisions, ProvisionsRoot, QuorumCertificate, RatifyPhase, RatifyRound,
+    RatifyVote, ReadySignal, ReshapeThresholds, ReshapeTrigger, ResolvedCommittee, RevealChain,
+    Round, RoutableTransaction, RoutingCommittees, SafeVoteRegisters, SettledWavesRoot,
+    ShardForkProof, ShardId, ShardLoad, ShardVoteEquivocation, SharedCertificates,
+    SharedTransactions, SharedWitnessSources, SpcEmptyViewMsg, SpcHighTriple, SpcNewCommitMsg,
+    SpcProposalObject, SpcView, SplitChildRoots, StateRoot, SubstateEntry, Timeout,
+    TopologySnapshot, TransactionRoot, TransactionStatus, TxHash, TxOutcome, ValidatorId,
     Verifiable, Verified, VoteCount, WaveId, WeightedTimestamp,
 };
 
@@ -34,13 +34,6 @@ pub struct CrossShardExecutionRequest {
     /// State entries provisioned by other shards (one `Arc` per source shard
     /// contribution). Engine layers them on top of the local snapshot.
     pub provisions: Vec<Arc<Vec<SubstateEntry>>>,
-    /// Authoritative `vault → owning_account` map for this tx's declared
-    /// accounts, assembled by merging each source shard's
-    /// `ProvisionEntry::owned_nodes`. The executor uses this directly
-    /// instead of rediscovering ownership by walking the merged view —
-    /// whose coverage depends on which partitions each source shipped
-    /// and is therefore not shard-invariant.
-    pub ownership: HashMap<NodeId, NodeId>,
     /// The transaction clock: the payer-shard committing block's
     /// parent-QC weighted timestamp. On the payer's own shard this is
     /// the wave-start anchor; elsewhere it is the value the payer's
@@ -151,20 +144,14 @@ pub struct ParticipationChange {
 pub struct ProvisionsRequest {
     /// Transaction hash (for correlation).
     pub tx_hash: TxHash,
-    /// Nodes owned by our shard whose state we need to provision.
-    pub local_nodes: Vec<NodeId>,
-    /// Per-target-shard nodes this tx reads from each remote shard.
-    /// Used to populate `ProvisionEntry::target_nodes` for conflict detection.
-    pub target_nodes: Vec<(ShardId, Vec<NodeId>)>,
-    /// VM arm: the locally owned flat keys of the transaction's read set
-    /// (fresh reads and read-modify-write priors) to serve, as
-    /// `(owner, local)` halves. Empty for Radix transactions, whose
-    /// state travels node-granular through `local_nodes`.
-    pub vm_local_keys: Vec<([u8; 16], [u8; 16])>,
-    /// Whether this is a VM leg. A VM request stages its transaction
-    /// even with no locally owned keys: the payer shard's bundle is the
-    /// engagement evidence and flows with empty entries.
-    pub vm: bool,
+    /// The shards this request serves a bundle to.
+    pub targets: Vec<ShardId>,
+    /// The locally owned flat keys of the transaction's read set (fresh
+    /// reads and read-modify-write priors) to serve, as `(owner, local)`
+    /// halves. A request with none still stages its transaction: the
+    /// payer shard's bundle is the engagement evidence and flows with
+    /// empty entries.
+    pub local_keys: Vec<([u8; 16], [u8; 16])>,
 }
 
 /// One payer's fee-reservation demand, verified against its vault

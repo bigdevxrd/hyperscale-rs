@@ -61,8 +61,6 @@ mod tests {
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"tx1")),
                 vec![],
-                vec![],
-                vec![],
             )],
         );
 

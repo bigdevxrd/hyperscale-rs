@@ -9,8 +9,7 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, DatabaseUpdates, JmtSnapshot, ShardChainWriter, merge_owned_nodes,
-    merge_updates_from_receipts,
+    BaseReadCache, DatabaseUpdates, JmtSnapshot, ShardChainWriter, merge_updates_from_receipts,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, Block, BlockHeight, CertifiedBlock, FinalizedWave, PreparedCommit,
@@ -82,7 +81,6 @@ impl ShardChainWriter for SimShardStorage {
             .iter()
             .filter_map(|r| r.consensus.database_updates())
             .collect();
-        let owner_map = merge_owned_nodes(&receipts);
 
         let (result_root, collected) = if pending_snapshots.is_empty() {
             put_at_version(
@@ -91,7 +89,7 @@ impl ShardChainWriter for SimShardStorage {
                 block_height.inner(),
                 &per_receipt_updates,
                 &HashMap::new(),
-                &owner_map,
+                &HashMap::new(),
             )
         } else {
             let overlay = OverlayTreeReader::new(&s.tree_store, pending_snapshots);
@@ -101,7 +99,7 @@ impl ShardChainWriter for SimShardStorage {
                 block_height.inner(),
                 &per_receipt_updates,
                 &HashMap::new(),
-                &owner_map,
+                &HashMap::new(),
             )
         };
 
@@ -266,8 +264,7 @@ impl SimShardStorage {
             s.current_block_height
         );
 
-        let owner_map = merge_owned_nodes(receipts);
-        let new_root = apply_state_writes(&mut s, merged_updates, &owner_map, block_height);
+        let new_root = apply_state_writes(&mut s, merged_updates, &HashMap::new(), block_height);
 
         drop(s);
 

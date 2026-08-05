@@ -105,9 +105,7 @@ pub use primitives::positional_bundle::PositionalBundle;
 pub use primitives::randomness::{RANDOMNESS_BYTES, Randomness};
 pub use primitives::signer_bitfield::SignerBitfield;
 pub use provisioning::entry::ProvisionEntry;
-pub use provisioning::limits::{
-    MAX_MERKLE_PROOF_LEN, MAX_OWNED_NODES_PER_TX, MAX_STATE_ENTRIES_PER_TX,
-};
+pub use provisioning::limits::{MAX_MERKLE_PROOF_LEN, MAX_STATE_ENTRIES_PER_TX};
 pub use provisioning::proof::MerkleInclusionProof;
 pub use provisioning::provisions::{Provisions, ProvisionsContext, ProvisionsVerifyError};
 pub use provisioning::substate::SubstateEntry;
@@ -117,7 +115,7 @@ pub use receipt::consensus::{
     ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_vm_cells, has_partition_reset,
 };
 pub use receipt::global::GlobalReceipt;
-pub use receipt::metadata::{ApplicationEvent, EventData, ExecutionMetadata, FeeSummary, LogLevel};
+pub use receipt::metadata::{ExecutionMetadata, FeeSummary, LogLevel};
 pub use receipt::stored::StoredReceipt;
 pub use receipt::vm_event::{
     MAX_VM_EVENT_PAYLOAD_LEN, MAX_VM_EVENT_TYPES, MAX_VM_EVENTS_PER_TX, VmEvent,
@@ -200,7 +198,7 @@ pub use topology::snapshot::{
 pub use topology::trie::ShardTrie;
 pub use topology::validator::{ValidatorInfo, ValidatorSet};
 pub use transaction::declared_key::DeclaredKey;
-pub use transaction::limits::{MAX_DECLARED_NODES_PER_TX, MAX_TX_BYTES_LEN};
+pub use transaction::limits::MAX_TX_BYTES_LEN;
 pub use transaction::routable::{RoutableTransaction, RoutableTransactionVerifyError};
 pub use transaction::status::{
     TransactionDecision, TransactionError, TransactionStatus, TransactionStatusParseError,

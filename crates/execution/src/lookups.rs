@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_types::{
-    BlockHeight, ConsensusPublicKey, ExecutionCertificate, NodeId, RoutableTransaction, ShardId,
+    BlockHeight, ConsensusPublicKey, ExecutionCertificate, RoutableTransaction, ShardId,
     TopologySnapshot, ValidatorId, Verifiable, VoteCount, WaveId,
 };
 
@@ -137,7 +137,7 @@ fn provision_request(
     local_shard: ShardId,
 ) -> Option<ProvisionsRequest> {
     let trie = topology_snapshot.shard_trie();
-    let vm_local_keys: Vec<([u8; 16], [u8; 16])> = tx
+    let local_keys: Vec<([u8; 16], [u8; 16])> = tx
         .routing()
         .provision_keys
         .iter()
@@ -148,30 +148,25 @@ fn provision_request(
         })
         .collect();
     let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
-    let target_nodes: Vec<(ShardId, Vec<NodeId>)> =
-        if vm_local_keys.is_empty() && payer_shard != local_shard {
-            // The engagement echo: a counterpart with nothing to serve
-            // still owes the payer its commitment of the transaction —
-            // the evidence the payer's vote waits for — and owes nobody
-            // else anything.
-            vec![(payer_shard, Vec::new())]
-        } else {
-            topology_snapshot
-                .all_shards_for_transaction(tx)
-                .into_iter()
-                .filter(|&s| s != local_shard)
-                .map(|s| (s, Vec::new()))
-                .collect()
-        };
-    if target_nodes.is_empty() {
+    let targets: Vec<ShardId> = if local_keys.is_empty() && payer_shard != local_shard {
+        // The engagement echo: a counterpart with nothing to serve still
+        // owes the payer its commitment of the transaction — the evidence
+        // the payer's vote waits for — and owes nobody else anything.
+        vec![payer_shard]
+    } else {
+        topology_snapshot
+            .all_shards_for_transaction(tx)
+            .into_iter()
+            .filter(|&s| s != local_shard)
+            .collect()
+    };
+    if targets.is_empty() {
         return None;
     }
     Some(ProvisionsRequest {
         tx_hash: tx.hash(),
-        local_nodes: Vec::new(),
-        target_nodes,
-        vm_local_keys,
-        vm: true,
+        targets,
+        local_keys,
     })
 }
 
@@ -202,7 +197,7 @@ pub fn build_provision_requests(
 
     let mut shard_recipients = HashMap::new();
     for req in &provision_requests {
-        for &(target_shard, _) in &req.target_nodes {
+        for &target_shard in &req.targets {
             shard_recipients.entry(target_shard).or_insert_with(|| {
                 topology_snapshot
                     .committee_for_shard(target_shard)

@@ -45,16 +45,13 @@ impl StoredReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::test_event_type_identifier;
-    use crate::{
-        ApplicationEvent, BoundedVec, DatabaseUpdates, EventData, FeeSummary, GlobalReceiptHash,
-        Hash,
-    };
+    use crate::{DatabaseUpdates, FeeSummary, GlobalReceiptHash, Hash, VmEvent};
 
-    fn make_event(seed: u8) -> ApplicationEvent {
-        ApplicationEvent {
-            type_id: test_event_type_identifier(seed),
-            data: EventData(vec![seed, seed + 1]),
+    fn make_event(seed: u8) -> VmEvent {
+        VmEvent {
+            emitter: [seed; 16],
+            event_type: u32::from(seed),
+            payload: vec![seed, seed + 1],
         }
     }
 
@@ -65,10 +62,8 @@ mod tests {
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: DatabaseUpdates::default(),
-                owned_nodes: BoundedVec::new(),
-                application_events: vec![make_event(1)],
+                vm_events: vec![make_event(1)],
                 beacon_witness_events: Vec::new(),
-                vm_events: Vec::new(),
             }),
         );
         assert!(synced.metadata.is_none());

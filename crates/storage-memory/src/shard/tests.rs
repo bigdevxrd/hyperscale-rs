@@ -15,11 +15,11 @@ use hyperscale_storage::{
 };
 use hyperscale_types::test_utils::test_transaction;
 use hyperscale_types::{
-    BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHeight, BoundedVec, CertifiedBlock,
-    ChainOrigin, ConsensusReceipt, FinalizedWave, GlobalReceiptHash, Hash, NodeId,
-    ProposerTimestamp, QuorumCertificate, Round, SafeVoteRegisters, ShardId, StateRoot,
-    StoredReceipt, SyncHint, TxHash, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId,
-    WeightedTimestamp, WitnessSources,
+    BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHeight, CertifiedBlock, ChainOrigin,
+    ConsensusReceipt, FinalizedWave, GlobalReceiptHash, Hash, NodeId, ProposerTimestamp,
+    QuorumCertificate, Round, SafeVoteRegisters, ShardId, StateRoot, StoredReceipt, SyncHint,
+    TxHash, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
+    WitnessSources,
 };
 
 fn no_witness() -> BeaconWitnessCommit {
@@ -125,8 +125,6 @@ fn commit_with(
             consensus: Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: updates.clone(),
-                owned_nodes: BoundedVec::new(),
-                application_events: vec![],
                 beacon_witness_events: Vec::new(),
                 vm_events: Vec::new(),
             }),

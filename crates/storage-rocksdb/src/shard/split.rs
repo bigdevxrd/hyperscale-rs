@@ -701,7 +701,7 @@ mod tests {
         use hyperscale_storage::test_helpers::{db_node_key, make_database_update};
         use hyperscale_types::state_key::node_routing_hash;
         use hyperscale_types::{
-            BoundedVec, ConsensusReceipt, GlobalReceiptHash, Hash, NodeId, StoredReceipt, TxHash,
+            ConsensusReceipt, GlobalReceiptHash, Hash, NodeId, StoredReceipt, TxHash,
         };
 
         let dirs: Vec<TempDir> = (0..3).map(|_| TempDir::new().unwrap()).collect();
@@ -718,8 +718,6 @@ mod tests {
                 Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     database_updates: updates,
-                    owned_nodes: BoundedVec::new(),
-                    application_events: Vec::new(),
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }),

@@ -1408,8 +1408,6 @@ mod tests {
         Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: updates,
-            owned_nodes: BoundedVec::new(),
-            application_events: vec![],
             beacon_witness_events: Vec::new(),
             vm_events: Vec::new(),
         })

@@ -8,7 +8,7 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, JmtSnapshot, ShardChainWriter, merge_database_updates, merge_owned_nodes,
+    BaseReadCache, JmtSnapshot, ShardChainWriter, merge_database_updates,
     merge_updates_from_receipts,
 };
 use hyperscale_types::{
@@ -83,7 +83,6 @@ impl ShardChainWriter for RocksDbShardStorage {
             .iter()
             .filter_map(|r| r.consensus.database_updates())
             .collect();
-        let owner_map = merge_owned_nodes(receipts.iter().copied());
 
         let (computed_root, collected) = if pending_snapshots.is_empty() {
             put_at_version(
@@ -92,7 +91,7 @@ impl ShardChainWriter for RocksDbShardStorage {
                 block_height.inner(),
                 &per_receipt_updates,
                 &HashMap::new(),
-                &owner_map,
+                &HashMap::new(),
             )
         } else {
             let overlay = OverlayTreeReader::new(&snapshot_store, pending_snapshots);
@@ -102,7 +101,7 @@ impl ShardChainWriter for RocksDbShardStorage {
                 block_height.inner(),
                 &per_receipt_updates,
                 &HashMap::new(),
-                &owner_map,
+                &HashMap::new(),
             )
         };
 
@@ -317,14 +316,13 @@ impl RocksDbShardStorage {
         // Compute JMT update.
         let parent_version =
             jmt_parent_height(BlockHeight::new(base_version), base_root).map(BlockHeight::inner);
-        let owner_map = merge_owned_nodes(receipts);
         let (new_root, collected) = put_at_version(
             &snapshot_store,
             parent_version,
             block_height,
             &[merged_updates],
             &reset_old_keys,
-            &owner_map,
+            &HashMap::new(),
         );
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,

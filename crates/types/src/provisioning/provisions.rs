@@ -4,7 +4,7 @@
 //! `Verified<Provisions>`; predicate at
 //! [`impl Verify<&ProvisionsContext<'_>>`](Verify::verify) below.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::OnceLock;
 
@@ -12,9 +12,7 @@ use hyperscale_jmt::{Blake3Hasher, MultiProof, Tree};
 use sbor::prelude::*;
 use thiserror::Error;
 
-use crate::state_key::{
-    DB_NODE_KEY_LEN, db_node_key_to_node_id, jmt_leaf_key, jmt_value_hash, vm_flat_key_parts,
-};
+use crate::state_key::{DB_NODE_KEY_LEN, jmt_leaf_key, jmt_value_hash, vm_flat_key_parts};
 use crate::{
     BlockHeight, BoundedVec, CertifiedBlockHeader, Hash, MAX_TXS_PER_BLOCK, MerkleInclusionProof,
     NodeId, ProvisionEntry, ProvisionHash, RETENTION_HORIZON, RevealChain, ShardId, SubstateEntry,
@@ -267,20 +265,6 @@ impl Provisions {
         entries
     }
 
-    /// Merged `internal_node → owning_global_ancestor` map across every
-    /// transaction in the bundle.
-    ///
-    /// Used to owner-prefix each entry's JMT leaf key on the verify path so
-    /// the recomputed keys match the owner-prefixed keys the source shard
-    /// committed. Globals are absent (they key under themselves).
-    #[must_use]
-    pub fn ownership_map(&self) -> HashMap<NodeId, NodeId> {
-        self.transactions
-            .iter()
-            .flat_map(|tx| tx.owned_nodes.iter().copied())
-            .collect()
-    }
-
     /// Get the transaction hashes in these provisions.
     #[must_use]
     pub fn tx_hashes(&self) -> Vec<TxHash> {
@@ -398,16 +382,13 @@ impl Verify<&ProvisionsContext<'_>> for Provisions {
         let multi_proof =
             MultiProof::decode(proof_bytes).map_err(|_| ProvisionsVerifyError::MalformedProof)?;
 
-        let owner_map = self.ownership_map();
         let mut expected: Vec<([u8; 32], Option<[u8; 32]>)> = Vec::with_capacity(entries.len());
         for e in &entries {
             if vm_flat_key_parts(&e.storage_key).is_none() && e.storage_key.len() < DB_NODE_KEY_LEN
             {
                 return Err(ProvisionsVerifyError::MalformedStorageKey);
             }
-            let owner =
-                db_node_key_to_node_id(&e.storage_key).and_then(|n| owner_map.get(&n).copied());
-            let key = jmt_leaf_key(&e.storage_key, owner);
+            let key = jmt_leaf_key(&e.storage_key, None);
             let value_hash = e.value.as_ref().map(|v| jmt_value_hash(v));
             expected.push((key, value_hash));
         }
@@ -500,20 +481,6 @@ mod tests {
     }
 
     #[test]
-    fn test_provision_entry_node_ids() {
-        let tx = ProvisionEntry::new(
-            TxHash::from_raw(Hash::from_bytes(b"tx")),
-            vec![test_entry(1), test_entry(2)],
-            vec![],
-            vec![],
-        );
-        let nodes = tx.node_ids();
-        assert_eq!(nodes.len(), 2);
-        assert!(nodes.contains(&NodeId([1; 30])));
-        assert!(nodes.contains(&NodeId([2; 30])));
-    }
-
-    #[test]
     fn test_provisions_roundtrip() {
         let provisions = Provisions::new(
             ShardId::leaf(1, 0),
@@ -525,8 +492,6 @@ mod tests {
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"tx1")),
                 vec![test_entry(1)],
-                vec![],
-                vec![],
             )],
         );
 
@@ -549,14 +514,10 @@ mod tests {
                 ProvisionEntry::new(
                     TxHash::from_raw(Hash::from_bytes(b"tx1")),
                     vec![entry.clone()],
-                    vec![],
-                    vec![],
                 ),
                 ProvisionEntry::new(
                     TxHash::from_raw(Hash::from_bytes(b"tx2")),
                     vec![entry, test_entry(2)],
-                    vec![],
-                    vec![],
                 ),
             ],
         );
@@ -637,12 +598,7 @@ mod tests {
                 .map(|(i, (storage_key, value))| {
                     let tx_hash =
                         TxHash::from_raw(Hash::from_bytes(&[u8::try_from(i).unwrap(); 4]));
-                    ProvisionEntry::new(
-                        tx_hash,
-                        vec![SubstateEntry::new(storage_key, Some(value))],
-                        vec![],
-                        vec![],
-                    )
+                    ProvisionEntry::new(tx_hash, vec![SubstateEntry::new(storage_key, Some(value))])
                 })
                 .collect();
             Provisions::new(
@@ -754,8 +710,6 @@ mod tests {
                         items[0].0.clone(),
                         Some(items[0].1.clone()),
                     )],
-                    vec![],
-                    vec![],
                 )],
             );
             let ctx = ProvisionsContext {
@@ -788,8 +742,6 @@ mod tests {
                         items[0].0.clone(),
                         Some(items[0].1.clone()),
                     )],
-                    vec![],
-                    vec![],
                 )],
             );
             let ctx = ProvisionsContext {

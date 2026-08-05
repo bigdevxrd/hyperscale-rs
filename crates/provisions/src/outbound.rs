@@ -251,7 +251,7 @@ mod tests {
     fn make_provisions(source_block: BlockHeight, txs: &[TxHash]) -> Arc<Verified<Provisions>> {
         let transactions = txs
             .iter()
-            .map(|h| ProvisionEntry::new(*h, vec![], vec![], vec![]))
+            .map(|h| ProvisionEntry::new(*h, vec![]))
             .collect();
         Arc::new(Verified::new_unchecked_for_test(Provisions::new(
             ShardId::leaf(2, 0),

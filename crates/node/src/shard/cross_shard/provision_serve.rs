@@ -48,7 +48,7 @@ pub fn serve_provision_request<S: ShardStorage>(
         // The same read-set keys the gossip emit path serves, re-derived
         // from the envelope.
         let routing = tx.routing();
-        let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
+        let local_keys: Vec<([u8; 16], [u8; 16])> = routing
             .provision_keys
             .iter()
             .filter_map(|key| {
@@ -66,7 +66,7 @@ pub fn serve_provision_request<S: ShardStorage>(
         // nothing owned serves its empty bundle to the payer alone:
         // the engagement echo. Both mirror the emit path.
         let payer_shard = shard_trie.shard_for_prefix(tx.body().fee_payer);
-        if vm_local_keys.is_empty() && payer_shard != local_shard {
+        if local_keys.is_empty() && payer_shard != local_shard {
             if payer_shard != req.target_shard {
                 continue;
             }
@@ -75,10 +75,8 @@ pub fn serve_provision_request<S: ShardStorage>(
         }
         requests.push(ProvisionsRequest {
             tx_hash: tx.hash(),
-            local_nodes: Vec::new(),
-            target_nodes: vec![(req.target_shard, Vec::new())],
-            vm_local_keys,
-            vm: true,
+            targets: vec![req.target_shard],
+            local_keys,
         });
     }
 

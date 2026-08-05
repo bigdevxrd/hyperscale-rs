@@ -8,8 +8,8 @@
 //! not the local metadata.
 //!
 //! The variant tag IS the outcome — there's no separate `Success/Failure`
-//! flag and no zero-padded `database_updates`/`application_events` for
-//! failed transactions.
+//! flag and no zero-padded `database_updates`/`vm_events` for failed
+//! transactions.
 
 use std::sync::LazyLock;
 
@@ -25,19 +25,10 @@ use crate::sbor_codec::decode_bounded_vec;
 use crate::state_key::{VM_PARTITION, vm_db_node_key_owner};
 use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
-    ApplicationEvent, BeaconWitnessEvent, BeaconWitnessRoot, BoundedVec, DatabaseUpdates,
-    EventRoot, GlobalReceipt, GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX,
-    MAX_OWNED_NODES_PER_TX, MAX_VM_EVENTS_PER_TX, NodeId, OwnershipRoot, VmEvent, WritesRoot,
-    compute_merkle_root,
+    BeaconWitnessEvent, BeaconWitnessRoot, DatabaseUpdates, EventRoot, GlobalReceipt,
+    GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_VM_EVENTS_PER_TX, OwnershipRoot,
+    VmEvent, WritesRoot, compute_merkle_root,
 };
-
-/// Cap on `ConsensusReceipt::Succeeded.application_events` count at decode
-/// time. Each event is bounded internally
-/// (`MAX_APPLICATION_EVENT_FIELD_LEN`); this cap bounds how many a peer
-/// can claim per receipt before iteration begins. Real receipts emit a
-/// handful of events; 4096 is far above any legitimate workload and
-/// rejects obviously oversized arrivals before allocation.
-const MAX_APPLICATION_EVENTS_PER_TX: usize = 4_096;
 
 // Variant tag bytes for SBOR encoding. Explicit rather than relying on
 // derive so future additions don't renumber existing variants silently.
@@ -82,29 +73,16 @@ pub enum ConsensusReceipt {
         /// `writes_root` on `receipt_hash` covers writes for all shards;
         /// this field is only what the local shard needs to apply.
         database_updates: DatabaseUpdates,
-        /// `(internal_node, owning_global_ancestor)` pairs for the
-        /// internal nodes (vaults, KV stores) appearing in
-        /// `database_updates`. The JMT build owner-prefixes those nodes'
-        /// leaves under their owner so the shard stays a clean prefix
-        /// subtree; shipping the map (rather than rediscovering it at
-        /// commit) keeps the keying identical on executor, verifier, and
-        /// syncer. Canonical key order. Globals are absent (they key
-        /// under themselves).
-        owned_nodes: BoundedVec<(NodeId, NodeId), MAX_OWNED_NODES_PER_TX>,
-        /// Identical across shards for the same tx — events come from
-        /// user logic, which sees the same merged state on every shard.
-        application_events: Vec<ApplicationEvent>,
         /// Beacon-witness events the engine surfaced for this tx. Folded
         /// into the shard's beacon-witness accumulator at block-assembly
         /// time; the root of those events is bound into `receipt_hash`
         /// via [`GlobalReceipt::beacon_witness_root`].
         beacon_witness_events: Vec<BeaconWitnessEvent>,
-        /// VM events whose emitting instance lives on this shard. Unlike
-        /// `application_events`, these differ per shard by design: an
-        /// event is stored where its emitter lives, while `receipt_hash`
-        /// binds the canonical union through
-        /// [`GlobalReceipt::event_root`], so committees still agree on
-        /// what the transaction emitted. Empty on the Radix path.
+        /// Events whose emitting instance lives on this shard. These
+        /// differ per shard by design: an event is stored where its
+        /// emitter lives, while `receipt_hash` binds the canonical union
+        /// through [`GlobalReceipt::event_root`], so committees still
+        /// agree on what the transaction emitted.
         vm_events: Vec<VmEvent>,
     },
     /// All failures collapse to one variant — the canonical
@@ -186,17 +164,13 @@ impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusRe
             Self::Succeeded {
                 receipt_hash,
                 database_updates,
-                owned_nodes,
-                application_events,
                 beacon_witness_events,
                 vm_events,
             } => {
                 encoder.write_discriminator(RECEIPT_VARIANT_SUCCEEDED)?;
-                encoder.write_size(6)?;
+                encoder.write_size(4)?;
                 encoder.encode(receipt_hash)?;
                 encoder.encode(database_updates)?;
-                encoder.encode(owned_nodes)?;
-                encoder.encode(application_events)?;
                 encoder.encode(beacon_witness_events)?;
                 encoder.encode(vm_events)?;
             }
@@ -219,9 +193,9 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
         let length = decoder.read_size()?;
         match discriminator {
             RECEIPT_VARIANT_SUCCEEDED => {
-                if length != 6 {
+                if length != 4 {
                     return Err(DecodeError::UnexpectedSize {
-                        expected: 6,
+                        expected: 4,
                         actual: length,
                     });
                 }
@@ -232,12 +206,6 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
                 if has_partition_reset(&database_updates) {
                     return Err(DecodeError::InvalidCustomValue);
                 }
-                let owned_nodes: BoundedVec<(NodeId, NodeId), MAX_OWNED_NODES_PER_TX> =
-                    decoder.decode()?;
-                let application_events = decode_bounded_vec::<_, ApplicationEvent>(
-                    decoder,
-                    MAX_APPLICATION_EVENTS_PER_TX,
-                )?;
                 let beacon_witness_events = decode_bounded_vec::<_, BeaconWitnessEvent>(
                     decoder,
                     MAX_BEACON_WITNESS_EVENTS_PER_TX,
@@ -246,8 +214,6 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
                 Ok(Self::Succeeded {
                     receipt_hash,
                     database_updates,
-                    owned_nodes,
-                    application_events,
                     beacon_witness_events,
                     vm_events,
                 })
@@ -309,69 +275,40 @@ impl ConsensusReceipt {
         }
     }
 
-    /// The `(internal_node, owning_global_ancestor)` pairs for the internal
-    /// nodes in this receipt's `database_updates`, or empty for `Failed`.
-    ///
-    /// The JMT build merges these across a block's receipts to owner-prefix
-    /// each internal node's leaf.
-    #[must_use]
-    pub fn owned_nodes(&self) -> &[(NodeId, NodeId)] {
-        match self {
-            Self::Succeeded { owned_nodes, .. } => &owned_nodes.0,
-            Self::Failed => &[],
-        }
-    }
-
     /// Per-shard receipt hash used as a leaf in `local_receipt_root`.
     ///
-    /// Hashes `outcome_byte || event_root || database_updates_hash ||
-    /// owned_nodes_hash`. Folding the ownership map binds the keying used
-    /// for this shard's owner-prefixed leaves into the block's
-    /// `local_receipt_root`. `Failed` produces the same hash as a
-    /// no-write/no-event/no-ownership failure.
+    /// Hashes `outcome_byte || event_root || database_updates_hash` over
+    /// what this shard keeps: its own writes and the events whose
+    /// emitters it owns. `Failed` produces the same hash as a
+    /// no-write/no-event failure.
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding of `database_updates` or `owned_nodes`
-    /// fails — both are closed SBOR types and encoding is infallible in
-    /// practice.
+    /// Panics if SBOR encoding of `database_updates` fails — it is a
+    /// closed SBOR type and encoding is infallible in practice.
     #[must_use]
     pub fn local_receipt_hash(&self) -> Hash {
-        let (outcome_byte, event_root, database_updates, owned_nodes) = match self {
+        let (outcome_byte, event_root, database_updates) = match self {
             Self::Succeeded {
                 database_updates,
-                owned_nodes,
-                application_events,
+                vm_events,
                 ..
             } => {
-                let event_hashes: Vec<Hash> = application_events
-                    .iter()
-                    .map(ApplicationEvent::hash)
-                    .collect();
-                let event_root = compute_merkle_root(&event_hashes);
+                let event_hashes: Vec<Hash> = vm_events.iter().map(VmEvent::hash).collect();
                 (
                     [1u8],
-                    event_root,
+                    compute_merkle_root(&event_hashes),
                     database_updates.clone(),
-                    owned_nodes.clone(),
                 )
             }
-            Self::Failed => (
-                [0u8],
-                Hash::ZERO,
-                DatabaseUpdates::default(),
-                BoundedVec::new(),
-            ),
+            Self::Failed => ([0u8], Hash::ZERO, DatabaseUpdates::default()),
         };
         let updates_bytes = basic_encode(&database_updates).expect("encode should not fail");
         let updates_hash = Hash::from_bytes(&updates_bytes);
-        let owned_bytes = basic_encode(&owned_nodes).expect("encode should not fail");
-        let owned_hash = Hash::from_bytes(&owned_bytes);
         Hash::from_parts(&[
             &outcome_byte,
             event_root.as_bytes(),
             updates_hash.as_bytes(),
-            owned_hash.as_bytes(),
         ])
     }
 }
@@ -382,20 +319,17 @@ mod tests {
     use sbor::{BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, VecEncoder};
 
     use super::*;
-    use crate::EventData;
-    use crate::test_utils::test_event_type_identifier;
 
     fn sample_succeeded() -> ConsensusReceipt {
         ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")),
             database_updates: DatabaseUpdates::default(),
-            owned_nodes: BoundedVec::new(),
-            application_events: vec![ApplicationEvent {
-                type_id: test_event_type_identifier(1),
-                data: EventData(vec![4, 5, 6]),
-            }],
             beacon_witness_events: Vec::new(),
-            vm_events: Vec::new(),
+            vm_events: vec![VmEvent {
+                emitter: [7; 16],
+                event_type: 1,
+                payload: vec![4, 5, 6],
+            }],
         }
     }
 
@@ -415,39 +349,9 @@ mod tests {
         assert_eq!(decoded, receipt);
     }
 
-    /// Hand-roll a `Succeeded` payload whose `application_events` count
-    /// exceeds the cap and verify decode rejects it before iterating.
-    #[test]
-    fn decode_rejects_oversized_application_events() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Enum).unwrap();
-        enc.write_discriminator(RECEIPT_VARIANT_SUCCEEDED).unwrap();
-        enc.write_size(6).unwrap();
-        enc.encode(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")))
-            .unwrap();
-        enc.encode(&DatabaseUpdates::default()).unwrap();
-        enc.encode(&BoundedVec::<(NodeId, NodeId), MAX_OWNED_NODES_PER_TX>::new())
-            .unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ApplicationEvent::value_kind())
-            .unwrap();
-        enc.write_size(MAX_APPLICATION_EVENTS_PER_TX + 1).unwrap();
-        let err = basic_decode::<ConsensusReceipt>(&buf).unwrap_err();
-        assert!(matches!(
-            err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_APPLICATION_EVENTS_PER_TX,
-                actual,
-            } if actual == MAX_APPLICATION_EVENTS_PER_TX + 1
-        ));
-    }
-
     /// Hand-roll a `Succeeded` payload whose `beacon_witness_events`
     /// count exceeds the cap and verify decode rejects it before
-    /// iterating. Mirrors the application-events bound check.
+    /// iterating.
     #[test]
     fn decode_rejects_oversized_beacon_witness_events() {
         let mut buf = Vec::with_capacity(64);
@@ -456,13 +360,10 @@ mod tests {
             .unwrap();
         enc.write_value_kind(ValueKind::Enum).unwrap();
         enc.write_discriminator(RECEIPT_VARIANT_SUCCEEDED).unwrap();
-        enc.write_size(6).unwrap();
+        enc.write_size(4).unwrap();
         enc.encode(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")))
             .unwrap();
         enc.encode(&DatabaseUpdates::default()).unwrap();
-        enc.encode(&BoundedVec::<(NodeId, NodeId), MAX_OWNED_NODES_PER_TX>::new())
-            .unwrap();
-        enc.encode(&Vec::<ApplicationEvent>::new()).unwrap();
         enc.write_value_kind(ValueKind::Array).unwrap();
         enc.write_value_kind(BeaconWitnessEvent::value_kind())
             .unwrap();
@@ -501,8 +402,6 @@ mod tests {
         let receipt = ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")),
             database_updates,
-            owned_nodes: BoundedVec::new(),
-            application_events: Vec::new(),
             beacon_witness_events: Vec::new(),
             vm_events: Vec::new(),
         };

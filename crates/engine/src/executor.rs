@@ -19,57 +19,17 @@
 use std::sync::Arc;
 
 use hyperscale_dispatch::Parallelism;
-use hyperscale_storage::{SubstateDatabase, SubstateStore};
+use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
-    BlockHash, BlockHeight, NodeId, RevealChain, RoutableTransaction, ShardId, ShardTrie,
-    SubstateEntry, Verified, WeightedTimestamp,
+    BlockHash, RevealChain, RoutableTransaction, ShardId, ShardTrie, SubstateEntry, Verified,
+    WeightedTimestamp,
 };
 use radix_common::prelude::DbSubstateValue;
-use radix_common::types::NodeId as RadixNodeId;
 use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey, PartitionEntry};
 
 use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 use crate::output::ExecutedTx;
 use crate::receipt::CachedVmOutput;
-
-/// Fetch state entries for the given nodes from storage at a specific block height.
-///
-/// Reads substates at the given `block_height` using historical JMT traversal
-/// and the leaf association table. Both data and proofs must come from the same
-/// version to pass verification against the block header's `state_root`.
-///
-/// Returns `None` if the requested version is unavailable (GC'd or not yet
-/// committed). Returns `Some(entries)` on success with pre-computed storage
-/// keys for efficient cross-shard provisioning.
-pub fn fetch_state_entries<S: SubstateStore>(
-    storage: &S,
-    nodes: &[NodeId],
-    block_height: BlockHeight,
-) -> Option<Vec<SubstateEntry>> {
-    use radix_substate_store_interface::db_key_mapper::{DatabaseKeyMapper, SpreadPrefixKeyMapper};
-
-    let mut entries = Vec::new();
-
-    for node in nodes {
-        // Compute the db_node_key once per node (expensive hash computation).
-        let radix_node_id = RadixNodeId(node.0);
-        let db_node_key = SpreadPrefixKeyMapper::to_db_node_key(&radix_node_id);
-
-        let substates = storage.list_substates_for_node_at_height(node, block_height)?;
-
-        for (partition_num, db_sort_key, value) in substates {
-            // Storage key: db_node_key || partition_num || sort_key
-            let mut storage_key = Vec::with_capacity(db_node_key.len() + 1 + db_sort_key.0.len());
-            storage_key.extend_from_slice(&db_node_key);
-            storage_key.push(partition_num);
-            storage_key.extend_from_slice(&db_sort_key.0);
-
-            entries.push(SubstateEntry::new(storage_key, Some(value)));
-        }
-    }
-
-    Some(entries)
-}
 
 /// Object-safe borrow of the wave's state snapshot, so the batch seam
 /// stays dyn-dispatchable while the concrete snapshot type remains

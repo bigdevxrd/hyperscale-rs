@@ -749,8 +749,6 @@ mod partition_tests {
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"asked")),
                 vec![],
-                vec![],
-                vec![],
             )],
         ));
         let extra = Arc::new(Provisions::new(
@@ -762,8 +760,6 @@ mod partition_tests {
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"extra")),
-                vec![],
-                vec![],
                 vec![],
             )],
         ));

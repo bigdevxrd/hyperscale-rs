@@ -263,8 +263,6 @@ mod tests {
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(&[seed])),
                 vec![],
-                vec![],
-                vec![],
             )],
         )
     }

@@ -225,7 +225,7 @@ mod tests {
             WeightedTimestamp::ZERO,
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
-            vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
+            vec![ProvisionEntry::new(tx_hash, vec![])],
         ))
     }
 

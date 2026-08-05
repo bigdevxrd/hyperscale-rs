@@ -516,14 +516,12 @@ fn a_transfer_folds_to_identity_keyed_absolute_updates() {
     assert_eq!(executed.len(), 1);
     let ConsensusReceipt::Succeeded {
         database_updates,
-        owned_nodes,
         receipt_hash,
         ..
     } = &executed[0].consensus
     else {
         panic!("transfer must succeed: {:?}", executed[0].consensus);
     };
-    assert!(owned_nodes.is_empty());
     assert_ne!(receipt_hash.as_raw(), &Hash::ZERO);
     // Withdraw settled 100 off the sender and the fee another 100 —
     // the sender signs, so the sender pays. Deposit credited the

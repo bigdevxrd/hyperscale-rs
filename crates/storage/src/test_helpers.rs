@@ -8,20 +8,18 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hyperscale_jmt::TreeReader;
-use hyperscale_types::test_utils::test_event_type_identifier;
 use hyperscale_types::{
-    AggregateSignature, ApplicationEvent, BeaconBlock, BeaconBlockHash, BeaconCert,
-    BeaconChainConfig, BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot,
-    Block, BlockHash, BlockHeader, BlockHeight, BoundedVec, CertificateRoot, CertifiedBeaconBlock,
-    CertifiedBlock, ChainOrigin, ConsensusReceipt, Epoch, EventData, ExecutionCertificate,
-    ExecutionMetadata, ExecutionOutcome, FeeSummary, FinalizedWave, GlobalReceiptHash,
-    GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot, LogLevel, NodeId, PcQc2, PcQc3,
-    PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp, ProvisionsRoot, QuorumCertificate,
-    Randomness, RatifyCert, RatifyRound, RevealChain, Round, ShardAnchor, ShardId, ShardLoad,
-    ShardWitnessPayload, SignerBitfield, SpcCert, SpcView, Stake, StakePoolId, StateRoot,
-    StoredReceipt, TransactionRoot, TxHash, TxOutcome, ValidatorId, Verifiable, Verified,
-    WaveCertificate, WaveId, WeightedTimestamp, WitnessSources, compute_global_receipt_root,
-    compute_merkle_root,
+    AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert, BeaconChainConfig, BeaconState,
+    BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
+    BlockHeight, BoundedVec, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, ChainOrigin,
+    ConsensusReceipt, Epoch, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome, FeeSummary,
+    FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot,
+    LogLevel, NodeId, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp,
+    ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound, RevealChain, Round,
+    ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield, SpcCert, SpcView, Stake,
+    StakePoolId, StateRoot, StoredReceipt, TransactionRoot, TxHash, TxOutcome, ValidatorId,
+    Verifiable, Verified, VmEvent, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
+    compute_global_receipt_root, compute_merkle_root,
 };
 use indexmap::IndexMap;
 use radix_common::math::Decimal;
@@ -348,21 +346,20 @@ pub fn make_test_block_and_state(
 }
 
 /// Build a deterministic locally-executed `StoredReceipt` from `seed`
-/// — succeeded, with a single application event and a non-empty fee
-/// summary so equality checks across seeds distinguish entries.
+/// — succeeded, with a single event and a non-empty fee summary so
+/// equality checks across seeds distinguish entries.
 #[must_use]
 pub fn make_test_receipt(seed: u8) -> StoredReceipt {
     let tx_hash = TxHash::from_raw(Hash::from_bytes(&[seed; 32]));
     let consensus = ConsensusReceipt::Succeeded {
         receipt_hash: GlobalReceiptHash::ZERO,
         database_updates: DatabaseUpdates::default(),
-        owned_nodes: BoundedVec::new(),
-        application_events: vec![ApplicationEvent {
-            type_id: test_event_type_identifier(seed),
-            data: EventData(vec![seed, seed + 1]),
-        }],
         beacon_witness_events: Vec::new(),
-        vm_events: Vec::new(),
+        vm_events: vec![VmEvent {
+            emitter: [seed; 16],
+            event_type: u32::from(seed),
+            payload: vec![seed, seed + 1],
+        }],
     };
     let metadata = Some(ExecutionMetadata::new(
         FeeSummary {
@@ -497,8 +494,6 @@ pub fn commit_block_with_updates(
         consensus: Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: updates.clone(),
-            owned_nodes: BoundedVec::new(),
-            application_events: vec![],
             beacon_witness_events: Vec::new(),
             vm_events: Vec::new(),
         }),

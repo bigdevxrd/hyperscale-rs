@@ -550,8 +550,6 @@ mod tests {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     #[allow(clippy::default_trait_access)]
                     database_updates: Default::default(),
-                    owned_nodes: BoundedVec::new(),
-                    application_events: vec![],
                     beacon_witness_events: Vec::new(),
                     vm_events: Vec::new(),
                 }

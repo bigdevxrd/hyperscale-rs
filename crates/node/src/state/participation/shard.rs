@@ -777,8 +777,6 @@ mod tests {
             vec![ProvisionEntry::new(
                 TxHash::from_raw(Hash::from_bytes(b"outbound-tx")),
                 vec![],
-                vec![],
-                vec![],
             )],
         )));
         let _ = node.handle(

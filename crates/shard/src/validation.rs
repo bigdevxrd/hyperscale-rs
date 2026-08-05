@@ -1353,7 +1353,7 @@ mod tests {
             WeightedTimestamp::ZERO,
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
-            vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
+            vec![ProvisionEntry::new(tx_hash, vec![])],
         ))
     }
 
@@ -1614,7 +1614,7 @@ mod tests {
                 WeightedTimestamp::ZERO,
                 RevealChain::ZERO,
                 MerkleInclusionProof::dummy(),
-                vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
+                vec![ProvisionEntry::new(tx_hash, vec![])],
             ))
             .into(),
         );
@@ -1638,7 +1638,7 @@ mod tests {
                 WeightedTimestamp::ZERO,
                 RevealChain::ZERO,
                 MerkleInclusionProof::dummy(),
-                vec![ProvisionEntry::new(tx_hash, vec![], vec![], vec![])],
+                vec![ProvisionEntry::new(tx_hash, vec![])],
             ))
             .into(),
         );

@@ -19,27 +19,25 @@ pub mod vm_event;
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::test_event_type_identifier;
     use crate::{
-        ApplicationEvent, BeaconWitnessRoot, BoundedVec, ConsensusReceipt, DatabaseUpdates,
-        EventData, EventRoot, GlobalReceipt, GlobalReceiptHash, Hash, OwnershipRoot, WritesRoot,
+        BeaconWitnessRoot, ConsensusReceipt, DatabaseUpdates, EventRoot, GlobalReceipt,
+        GlobalReceiptHash, Hash, OwnershipRoot, VmEvent, WritesRoot,
     };
 
-    fn make_event(seed: u8) -> ApplicationEvent {
-        ApplicationEvent {
-            type_id: test_event_type_identifier(seed),
-            data: EventData(vec![seed, seed + 1]),
+    fn make_event(seed: u8) -> VmEvent {
+        VmEvent {
+            emitter: [seed; 16],
+            event_type: u32::from(seed),
+            payload: vec![seed, seed + 1],
         }
     }
 
-    fn make_succeeded(events: Vec<ApplicationEvent>) -> ConsensusReceipt {
+    fn make_succeeded(events: Vec<VmEvent>) -> ConsensusReceipt {
         ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: DatabaseUpdates::default(),
-            owned_nodes: BoundedVec::new(),
-            application_events: events,
             beacon_witness_events: Vec::new(),
-            vm_events: Vec::new(),
+            vm_events: events,
         }
     }
 
@@ -120,15 +118,11 @@ mod tests {
     }
 
     #[test]
-    fn test_application_event_hash_deterministic() {
+    fn test_event_hash_deterministic() {
         let event = make_event(42);
         assert_eq!(event.hash(), event.hash());
-
-        let same_event = ApplicationEvent {
-            type_id: test_event_type_identifier(42),
-            data: EventData(vec![42, 43]),
-        };
-        assert_eq!(event.hash(), same_event.hash());
+        assert_eq!(event.hash(), make_event(42).hash());
+        assert_ne!(event.hash(), make_event(43).hash());
     }
 
     #[test]

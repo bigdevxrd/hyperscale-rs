@@ -61,8 +61,6 @@ fn updates_to_receipts(updates: &DatabaseUpdates) -> Vec<StoredReceipt> {
         consensus: Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: updates.clone(),
-            owned_nodes: BoundedVec::new(),
-            application_events: vec![],
             beacon_witness_events: Vec::new(),
             vm_events: Vec::new(),
         }),
@@ -1145,8 +1143,6 @@ fn rocks_commit_with(
             consensus: Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: updates.clone(),
-                owned_nodes: BoundedVec::new(),
-                application_events: vec![],
                 beacon_witness_events: Vec::new(),
                 vm_events: Vec::new(),
             }),

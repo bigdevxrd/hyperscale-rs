@@ -1474,7 +1474,7 @@ mod tests {
     ) -> Provisions {
         let transactions = tx_hashes
             .into_iter()
-            .map(|tx_hash| ProvisionEntry::new(tx_hash, vec![], vec![], vec![]))
+            .map(|tx_hash| ProvisionEntry::new(tx_hash, vec![]))
             .collect();
         Provisions::new(
             source_shard,

@@ -12,6 +12,7 @@
 //! dot-prefixed temporary name and a rename, so a crash mid-create
 //! leaves only a `.tmp-*` directory, swept on the next creation.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use hyperscale_jmt::{Key, NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, Tr
 use hyperscale_storage::tree::{import_leaf_updates, jmt_parent_height, put_at_version};
 use hyperscale_storage::{
     AdoptSource, BoundaryStore, ImportLeaf, ImportProgress, JmtSnapshot, ResolveLeaf, WitnessSeed,
-    filter_updates_to_prefix, merge_owned_nodes, merge_updates_from_receipts,
+    filter_updates_to_prefix, merge_updates_from_receipts,
 };
 use hyperscale_types::{Block, BlockHeight, ChainOrigin, Hash, StateRoot, StoredReceipt};
 use rocksdb::checkpoint::Checkpoint;
@@ -583,9 +584,8 @@ impl BoundaryStore for RocksDbShardStorage {
             ));
         }
 
-        let owner_map = merge_owned_nodes(receipts);
         let merged = merge_updates_from_receipts(receipts);
-        let filtered = filter_updates_to_prefix(&merged, &owner_map, &self.root_path);
+        let filtered = filter_updates_to_prefix(&merged, &HashMap::new(), &self.root_path);
         if filtered.node_updates.is_empty() {
             return Ok(base_root);
         }
@@ -604,7 +604,7 @@ impl BoundaryStore for RocksDbShardStorage {
             height.inner(),
             &[&filtered],
             &reset_old_keys,
-            &owner_map,
+            &HashMap::new(),
         );
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,

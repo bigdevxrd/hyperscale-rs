@@ -66,10 +66,10 @@
 
 use std::collections::HashMap;
 
-use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates, SubstateStore};
+use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates};
 pub use hyperscale_types::state_key::db_node_key_to_node_id;
 use hyperscale_types::state_key::vm_db_node_key_owner;
-use hyperscale_types::{BlockHeight, NodeId, ShardId, ShardTrie, WritesRoot};
+use hyperscale_types::{NodeId, ShardId, ShardTrie, WritesRoot};
 use radix_common::prelude::{DatabaseUpdate, basic_encode};
 use radix_common::types::NodeId as RadixNodeId;
 
@@ -154,59 +154,6 @@ fn extract_owned_node_ids(value: &[u8], owner: NodeId, ownership: &mut HashMap<N
             ownership.entry(NodeId(id)).or_insert(owner);
         }
     }
-}
-
-/// Expand declared `NodeId`s to include owned internal nodes (vaults) at a
-/// specific block height, returning both the expanded list and the
-/// `vault → owner` map that produced it.
-///
-/// Reads substates via JMT historical traversal. This is critical for provision
-/// generation:
-/// the expanded node list must match the state at the committed block height,
-/// not the current tip, otherwise the merkle proof will cover keys that don't
-/// exist at the proof's version and verification will fail on the remote shard.
-///
-/// The returned ownership map is what the source shard authoritatively knows
-/// about its own declared accounts. It is shipped alongside the substate
-/// entries so the receiver doesn't have to rediscover ownership by walking
-/// a partial view (which would diverge whenever the source shipped only a
-/// subset of the account's partitions).
-pub fn expand_nodes_with_owned_at_height<S: SubstateStore>(
-    storage: &S,
-    nodes: &[NodeId],
-    block_height: BlockHeight,
-) -> Option<(Vec<NodeId>, HashMap<NodeId, NodeId>)> {
-    let ownership = resolve_owned_nodes_at_height(storage, nodes, block_height)?;
-    let mut expanded: Vec<NodeId> = nodes.to_vec();
-    for internal_id in ownership.keys() {
-        if !expanded.contains(internal_id) {
-            expanded.push(*internal_id);
-        }
-    }
-    expanded.sort();
-    expanded.dedup();
-    Some((expanded, ownership))
-}
-
-/// Historical version of [`resolve_owned_nodes`].
-///
-/// Reads substates at `block_height` using `list_substates_for_node_at_height`.
-/// Returns `None` if the version is unavailable (GC'd or not yet committed).
-pub fn resolve_owned_nodes_at_height<S: SubstateStore>(
-    storage: &S,
-    declared_nodes: &[NodeId],
-    block_height: BlockHeight,
-) -> Option<HashMap<NodeId, NodeId>> {
-    let mut ownership: HashMap<NodeId, NodeId> = HashMap::new();
-
-    for account in declared_nodes {
-        let substates = storage.list_substates_for_node_at_height(account, block_height)?;
-        for (_partition_num, _sort_key, value) in substates {
-            extract_owned_node_ids(&value, *account, &mut ownership);
-        }
-    }
-
-    Some(ownership)
 }
 
 /// Filter genesis `DatabaseUpdates` to the nodes whose owner-prefixed key
@@ -350,13 +297,10 @@ pub fn node_entity_key(node_id: &NodeId) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use hyperscale_storage::{
-        DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, NodeDatabaseUpdates,
-        PartitionDatabaseUpdates, SubstateDatabase, SubstateStore,
+        DatabaseUpdate, DatabaseUpdates, DbSortKey, NodeDatabaseUpdates, PartitionDatabaseUpdates,
     };
     use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
-    use hyperscale_types::{
-        BlockHeight, MerkleInclusionProof, NodeId, ShardTrie, StateRoot, WritesRoot,
-    };
+    use hyperscale_types::{NodeId, ShardTrie, WritesRoot};
     use radix_substate_store_interface::db_key_mapper::{DatabaseKeyMapper, SpreadPrefixKeyMapper};
 
     use super::*;
@@ -607,116 +551,5 @@ mod tests {
         let filtered =
             filter_updates_for_shard(&updates, ShardId::ROOT, &ShardTrie::uniform_from_count(1));
         assert!(filtered.node_updates.is_empty());
-    }
-
-    // ── expand_nodes_with_owned_at_height ────────────────────────────────────
-
-    type HeightSubstates = Vec<(u8, DbSortKey, Vec<u8>)>;
-    type SubstateHistory = HashMap<(NodeId, BlockHeight), HeightSubstates>;
-
-    #[derive(Clone, Default)]
-    struct MockStore {
-        substates_at_height: SubstateHistory,
-        missing_height: bool,
-    }
-
-    impl SubstateDatabase for MockStore {
-        fn get_raw_substate_by_db_key(&self, _: &DbPartitionKey, _: &DbSortKey) -> Option<Vec<u8>> {
-            None
-        }
-        fn list_raw_values_from_db_key(
-            &self,
-            _: &DbPartitionKey,
-            _: Option<&DbSortKey>,
-        ) -> Box<dyn Iterator<Item = (DbSortKey, Vec<u8>)> + '_> {
-            Box::new(std::iter::empty())
-        }
-    }
-
-    impl SubstateStore for MockStore {
-        fn get_vm_substate_at_height(
-            &self,
-            _owner: [u8; 16],
-            _local: [u8; 16],
-            _block_height: BlockHeight,
-        ) -> Option<Option<Vec<u8>>> {
-            None
-        }
-        type Snapshot<'a> = Self;
-        fn snapshot(&self) -> Self::Snapshot<'_> {
-            self.clone()
-        }
-        fn jmt_height(&self) -> BlockHeight {
-            BlockHeight::GENESIS
-        }
-        fn state_root(&self) -> StateRoot {
-            StateRoot::ZERO
-        }
-        fn list_substates_for_node_at_height(
-            &self,
-            node_id: &NodeId,
-            block_height: BlockHeight,
-        ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>> {
-            if self.missing_height {
-                return None;
-            }
-            Some(
-                self.substates_at_height
-                    .get(&(*node_id, block_height))
-                    .cloned()
-                    .unwrap_or_default(),
-            )
-        }
-        fn generate_merkle_proofs(
-            &self,
-            _: &[Vec<u8>],
-            _: &HashMap<NodeId, NodeId>,
-            _: BlockHeight,
-        ) -> Option<MerkleInclusionProof> {
-            None
-        }
-    }
-
-    #[test]
-    fn expand_at_height_returns_none_when_unavailable() {
-        let store = MockStore {
-            missing_height: true,
-            ..Default::default()
-        };
-        assert!(
-            expand_nodes_with_owned_at_height(&store, &[account_id(1)], BlockHeight::new(5))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn expand_at_height_includes_owned_vaults_sorted_dedup() {
-        let account = account_id(1);
-        let vault = fungible_vault_id(2);
-        let height = BlockHeight::new(5);
-        let mut store = MockStore::default();
-        store.substates_at_height.insert(
-            (account, height),
-            vec![(64, DbSortKey(vec![0]), own_bytes(&vault))],
-        );
-
-        // Pass `vault` in declared list too — must not duplicate after dedup.
-        let (expanded, ownership) =
-            expand_nodes_with_owned_at_height(&store, &[account, vault], height).expect("present");
-        let mut expected = vec![account, vault];
-        expected.sort();
-        assert_eq!(expanded, expected);
-        assert_eq!(ownership.get(&vault), Some(&account));
-    }
-
-    #[test]
-    fn expand_at_height_returns_declared_when_no_ownership() {
-        let account = account_id(1);
-        let store = MockStore::default(); // no substates at any height
-        let (expanded, ownership) =
-            expand_nodes_with_owned_at_height(&store, &[account], BlockHeight::new(5))
-                .expect("present");
-        assert_eq!(expanded, vec![account]);
-        assert!(ownership.is_empty());
     }
 }

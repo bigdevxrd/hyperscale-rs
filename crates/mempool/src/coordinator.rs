@@ -1504,7 +1504,7 @@ mod tests {
     ) -> CertifiedBlock {
         let transactions = tx_hashes
             .iter()
-            .map(|h| ProvisionEntry::new(*h, vec![], vec![], vec![]))
+            .map(|h| ProvisionEntry::new(*h, vec![]))
             .collect();
         let provision = Provisions::new(
             source_shard,
