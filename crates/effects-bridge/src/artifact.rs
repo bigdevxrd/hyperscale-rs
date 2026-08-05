@@ -246,7 +246,7 @@ fn read_uleb128(bytes: &[u8], pos: &mut usize) -> Result<usize, VmStaticsError> 
 mod tests {
 
     use hyperscale_vm_effects::stdlib::{account_metadata, book_metadata};
-    use hyperscale_vm_effects::{AbiParam, MethodSignature, PackageMetadata};
+    use hyperscale_vm_effects::{AbiParam, Accessibility, MethodSignature, PackageMetadata};
     use wat::parse_str;
 
     use super::*;
@@ -467,6 +467,42 @@ mod tests {
         // an export nothing declares is an export nothing can call.
         let partial = attach_metadata(&component, &declaring(&["deposit"])).expect("attaches");
         assert!(admit_package(&partial).is_ok());
+    }
+
+    /// What a publish admits is what the package declared, down to who
+    /// may call each method.
+    ///
+    /// The gate at admission reads this field and nothing else to decide
+    /// whether a node needs its target's signature, so a codec that
+    /// dropped it would not fail loudly — it would publish every method
+    /// as public and leave the gate agreeing.
+    #[test]
+    fn a_publish_admits_the_accessibility_the_package_declares() {
+        let component = component_exporting(&["deposit", "withdraw"]);
+        let mut metadata = declaring(&["deposit", "withdraw"]);
+        metadata
+            .methods
+            .get_mut("withdraw")
+            .expect("declared")
+            .accessibility = Accessibility::RequiresTargetAuth;
+        let artifact = attach_metadata(&component, &metadata).expect("attaches");
+
+        let admitted = admit_package(&artifact).expect("admits");
+        assert_eq!(
+            admitted.methods["withdraw"].accessibility,
+            Accessibility::RequiresTargetAuth
+        );
+        assert_eq!(
+            admitted.methods["deposit"].accessibility,
+            Accessibility::Public
+        );
+
+        // And the two declarations are two artifacts: the field is
+        // content-addressed with the code, so nothing can republish the
+        // same address under a weaker claim.
+        let public =
+            attach_metadata(&component, &declaring(&["deposit", "withdraw"])).expect("attaches");
+        assert_ne!(artifact, public);
     }
 
     #[test]

@@ -4,9 +4,10 @@
 //! The effect vocabulary is wire-free, so every encoding of it belongs
 //! here beside the envelope tree's, which is what makes the format the
 //! workspace's to freeze. The shape it freezes is the whole signature
-//! tree: a method's parameter kinds, its output resource expressions, its
-//! effect clauses down through nested `for-each` bodies, its static call
-//! sites, and the package's event table.
+//! tree: a method's declared accessibility, its parameter kinds, its
+//! output resource expressions, its effect clauses down through nested
+//! `for-each` bodies, its static call sites, and the package's event
+//! table.
 //!
 //! Decode is canonical and bounded. Canonical because the format admits
 //! exactly one byte string per value: SBOR's own sizes are minimal
@@ -23,8 +24,9 @@
 
 use hyperscale_types::{MAX_TX_BYTES_LEN, MAX_VM_EVENT_TYPES, VmStaticsError};
 use hyperscale_vm_effects::{
-    AbiParam, CallSite, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH,
-    MAX_VALUE_DEPTH, MethodSignature, ModeExpr, PackageMetadata, ParamType, RoleId, TargetExpr,
+    AbiParam, Accessibility, CallSite, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE,
+    MAX_EXPR_DEPTH, MAX_VALUE_DEPTH, MethodSignature, ModeExpr, PackageMetadata, ParamType, RoleId,
+    TargetExpr,
 };
 use sbor::prelude::*;
 use sbor::{basic_decode_with_depth_limit, basic_encode_with_depth_limit};
@@ -145,11 +147,19 @@ enum WireAbiParam {
     Derived(WireExpr),
 }
 
+/// Wire mirror of [`Accessibility`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BasicSbor)]
+enum WireAccessibility {
+    Public,
+    RequiresTargetAuth,
+}
+
 /// Wire mirror of [`MethodSignature`], carrying the name it is filed
 /// under: the table is a vector so its order is part of the encoding.
 #[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
 struct WireMethod {
     name: String,
+    accessibility: WireAccessibility,
     params: Vec<WireParamType>,
     abi: Vec<WireAbiParam>,
     outputs: Vec<WireExpr>,
@@ -302,6 +312,20 @@ fn target(wire: WireTarget) -> TargetExpr {
     }
 }
 
+const fn wire_accessibility(accessibility: Accessibility) -> WireAccessibility {
+    match accessibility {
+        Accessibility::Public => WireAccessibility::Public,
+        Accessibility::RequiresTargetAuth => WireAccessibility::RequiresTargetAuth,
+    }
+}
+
+const fn accessibility(wire: WireAccessibility) -> Accessibility {
+    match wire {
+        WireAccessibility::Public => Accessibility::Public,
+        WireAccessibility::RequiresTargetAuth => Accessibility::RequiresTargetAuth,
+    }
+}
+
 fn wire_abi_param(binding: &AbiParam) -> WireAbiParam {
     match binding {
         AbiParam::Handle(clause) => WireAbiParam::Handle(*clause),
@@ -390,6 +414,7 @@ fn wire_metadata(metadata: &PackageMetadata) -> WireMetadata {
             .iter()
             .map(|(name, signature)| WireMethod {
                 name: name.clone(),
+                accessibility: wire_accessibility(signature.accessibility),
                 params: signature.params.iter().copied().map(wire_param).collect(),
                 abi: signature.abi.iter().map(wire_abi_param).collect(),
                 outputs: signature.outputs.iter().map(wire_expr).collect(),
@@ -452,6 +477,7 @@ pub fn decode_metadata(bytes: &[u8]) -> Result<PackageMetadata, VmStaticsError> 
         metadata.methods.insert(
             method.name,
             MethodSignature {
+                accessibility: accessibility(method.accessibility),
                 params: method.params.into_iter().map(param).collect(),
                 abi: method.abi.into_iter().map(abi_param).collect(),
                 outputs: method.outputs.into_iter().map(expr).collect(),
@@ -699,6 +725,7 @@ mod tests {
         // each expression form, each target form, each mode, a nested
         // for-each body, a call site, and a deep literal.
         let signature = MethodSignature {
+            accessibility: Accessibility::RequiresTargetAuth,
             abi: Vec::new(),
             params: vec![
                 ParamType::U64,
@@ -850,6 +877,7 @@ mod tests {
             .expect("wire encodes")
         };
         let entry = |name: &str| WireMethod {
+            accessibility: WireAccessibility::Public,
             abi: Vec::new(),
             name: name.into(),
             params: Vec::new(),
