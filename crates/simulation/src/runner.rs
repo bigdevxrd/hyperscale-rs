@@ -153,6 +153,12 @@ pub struct SimConfig {
     /// Stake pools the beacon folds facts for: the pool instance's owner
     /// prefix and the identifier it is folded under.
     pub vm_pools: Vec<([u8; 16], StakePoolId)>,
+    /// Pool instances the process's VM statics must resolve, when that is
+    /// wider than what this cluster seats — the pool counterpart of
+    /// [`SimConfig::vm_world_accounts`], installed for the same
+    /// first-wins reason. Empty means "the same pools this cluster
+    /// seats".
+    pub vm_world_pools: Vec<([u8; 16], StakePoolId)>,
     /// The VM batch executor's group scheduling. Receipts are
     /// schedule-invariant, so this cannot change any outcome — the
     /// serial-vs-parallel A/B constructs one cluster per mode and
@@ -177,6 +183,7 @@ impl Default for SimConfig {
             vm_accounts: Vec::new(),
             vm_world_accounts: Vec::new(),
             vm_pools: Vec::new(),
+            vm_world_pools: Vec::new(),
             vm_execution_mode: ExecutionMode::Serial,
         }
     }
@@ -394,9 +401,14 @@ impl SimulationRunner {
         } else {
             &network_config.vm_world_accounts
         };
+        let world_pools = if network_config.vm_world_pools.is_empty() {
+            &network_config.vm_pools
+        } else {
+            &network_config.vm_world_pools
+        };
         let vm_engine = Arc::new(VmExecutor::with_pools(
             world_accounts,
-            &network_config.vm_pools,
+            world_pools,
             network_config.vm_execution_mode,
         ));
         let shared_vm_executor: Arc<dyn Executor> = Arc::clone(&vm_engine) as Arc<dyn Executor>;

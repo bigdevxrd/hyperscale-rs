@@ -1035,6 +1035,19 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     all
 }
 
+/// Every stake pool any scenario in this crate seats.
+///
+/// The companion to [`vm_world_accounts`], for the same reason: a pool is
+/// an instance the statics must resolve, so a shared-process binary whose
+/// first cluster seats none would leave every later delegation failing
+/// admission with `no instance`. Seating a pool writes no genesis state
+/// and a pool nobody delegates to emits nothing, so recognising one
+/// everywhere costs a registry entry.
+#[must_use]
+pub fn vm_world_pools() -> Vec<([u8; 16], StakePoolId)> {
+    vm_staking_pools()
+}
+
 /// The publishers a deploy storm spams from: one per depth-1 shard, so
 /// the storm lands on both committees at once.
 #[must_use]

@@ -58,7 +58,8 @@ use hyperscale_storage::{BeaconStorage, ShardChainReader};
 use hyperscale_storage_rocksdb::{RocksDbShardStorage, SharedStorage};
 use hyperscale_types::{
     BeaconChainConfig, BlockHeight, GenesisValidators, InFlightCount, LocalTimestamp,
-    MAX_TX_IN_FLIGHT, RoutableTransaction, ShardId, Signer, ValidatorId, ValidatorStatus, Verifier,
+    MAX_TX_IN_FLIGHT, RoutableTransaction, ShardId, Signer, StakePoolId, ValidatorId,
+    ValidatorStatus, Verifier,
 };
 use libp2p::identity::Keypair;
 use thiserror::Error;
@@ -210,6 +211,9 @@ pub struct ProductionRunnerBuilder {
     /// VM addresses the process-wide statics register, when that set must
     /// be wider than this cluster's own genesis funding.
     vm_world_accounts: Vec<([u8; 16], u128)>,
+    /// Pool instances the process-wide statics seat, when that set must be
+    /// wider than this cluster's own genesis seating.
+    vm_world_pools: Vec<([u8; 16], StakePoolId)>,
     /// Radix network definition for transaction validation.
     /// Defaults to simulator network if not set.
     network_definition: Option<NetworkDefinition>,
@@ -256,6 +260,7 @@ impl ProductionRunnerBuilder {
             publishers: RpcPublishers::default(),
             genesis_config: None,
             vm_world_accounts: Vec::new(),
+            vm_world_pools: Vec::new(),
             network_definition: None,
             // Harness default: the routing overlay runs in production
             // tests; the validator binary always overrides this from its
@@ -356,6 +361,17 @@ impl ProductionRunnerBuilder {
     #[must_use]
     pub fn vm_world_accounts(mut self, accounts: Vec<([u8; 16], u128)>) -> Self {
         self.vm_world_accounts = accounts;
+        self
+    }
+
+    /// Seat `pools` in the process VM statics instead of this cluster's
+    /// own genesis seating — [`Self::vm_world_accounts`] for pool
+    /// instances, and installed for the same first-wins reason. A pool
+    /// nobody delegates to emits nothing, so recognising one everywhere
+    /// costs a registry entry.
+    #[must_use]
+    pub fn vm_world_pools(mut self, pools: Vec<([u8; 16], StakePoolId)>) -> Self {
+        self.vm_world_pools = pools;
         self
     }
 
@@ -562,9 +578,14 @@ impl ProductionRunnerBuilder {
         } else {
             &self.vm_world_accounts
         };
+        let world_pools = if self.vm_world_pools.is_empty() {
+            &engine_bootstrap.config.vm_pools
+        } else {
+            &self.vm_world_pools
+        };
         let vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::with_pools(
             world_accounts,
-            &engine_bootstrap.config.vm_pools,
+            world_pools,
             ExecutionMode::Serial,
         ));
 

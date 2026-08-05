@@ -20,6 +20,7 @@ use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::query::{chain_fate, status_rank};
 use hyperscale_scenarios::tx::{
     merge_vote_payer, merge_vote_payer_account, straddler_genesis_balances, vm_world_accounts,
+    vm_world_pools,
 };
 use hyperscale_scenarios::{
     Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
@@ -263,6 +264,7 @@ impl SimCluster {
             vm_world_accounts: vm_world_accounts(),
             vm_execution_mode: args.vm_execution_mode,
             vm_pools: args.vm_pools.to_vec(),
+            vm_world_pools: vm_world_pools(),
             ..SimConfig::default()
         };
         let mut runner = SimulationRunner::new(&sim_config, args.seed);

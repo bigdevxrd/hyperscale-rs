@@ -22,7 +22,7 @@ use hyperscale_scenarios::{
 };
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
-    StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
+    StakePoolId, StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
 };
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
@@ -36,6 +36,17 @@ use super::harness::{ClusterSpec, Harness, HostSpec};
 /// Poll cadence between predicate samples in `run_until`, matching the
 /// harness's own `await_*` interval.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The full constructor input, so the VM knobs don't fan out across every
+/// legacy constructor's signature.
+struct StartArgs<'a> {
+    config: &'a ScenarioConfig,
+    seed: u64,
+    epoch_ms: u64,
+    balances: Vec<(ComponentAddress, Decimal)>,
+    vm_accounts: Vec<([u8; 16], u128)>,
+    vm_pools: Vec<([u8; 16], StakePoolId)>,
+}
 
 /// The production adaptor: a [`Cluster`] over the real QUIC + `RocksDB` harness.
 pub struct ProdCluster {
@@ -80,6 +91,40 @@ impl ProdCluster {
         balances: Vec<(ComponentAddress, Decimal)>,
         vm_accounts: Vec<([u8; 16], u128)>,
     ) -> Self {
+        Self::start_full(&StartArgs {
+            config,
+            seed,
+            epoch_ms,
+            balances,
+            vm_accounts,
+            vm_pools: Vec::new(),
+        })
+    }
+
+    /// [`Self::start_with_vm_accounts`] seating `vm_pools` as the stake
+    /// pools the beacon folds facts for — the mirror of
+    /// `SimCluster::with_vm_pools`, so the control plane's scenarios run
+    /// identically on both harnesses.
+    #[must_use]
+    pub fn start_with_vm_pools(
+        config: &ScenarioConfig,
+        seed: u64,
+        epoch_ms: u64,
+        balances: Vec<(ComponentAddress, Decimal)>,
+        vm_accounts: Vec<([u8; 16], u128)>,
+        vm_pools: Vec<([u8; 16], StakePoolId)>,
+    ) -> Self {
+        Self::start_full(&StartArgs {
+            config,
+            seed,
+            epoch_ms,
+            balances,
+            vm_accounts,
+            vm_pools,
+        })
+    }
+
+    fn start_full(args: &StartArgs<'_>) -> Self {
         // `RUST_LOG` steers per-crate levels when set (diagnosing a long
         // real-network run); the default stays plain info.
         let _ = fmt()
@@ -93,7 +138,8 @@ impl ProdCluster {
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let spec = Self::spec(config, seed, epoch_ms, balances, vm_accounts);
+        let spec = Self::spec(args);
+        let epoch_ms = args.epoch_ms;
         // Claim the global recorder before the runner installs its Prometheus one
         // (`set_global_recorder` is first-wins), so `metric()` reads node counters.
         // Every `ProdCluster` claims it, so all prod scenario tests — fault or
@@ -153,14 +199,10 @@ impl ProdCluster {
     /// followers (the reshape cohort), chunked `vnodes_per_host` per host. At one
     /// vnode per host each validator lands on its own host, the layout the
     /// reshape flip needs (each seat its own store).
-    fn spec(
-        config: &ScenarioConfig,
-        seed: u64,
-        epoch_ms: u64,
-        balances: Vec<(ComponentAddress, Decimal)>,
-        vm_accounts: Vec<([u8; 16], u128)>,
-    ) -> ClusterSpec {
-        let fixtures = TestFixtures::with_surplus(seed, config.shard_size, config.pool_surplus);
+    fn spec(args: &StartArgs<'_>) -> ClusterSpec {
+        let config = args.config;
+        let fixtures =
+            TestFixtures::with_surplus(args.seed, config.shard_size, config.pool_surplus);
         let total = config.shard_size + config.pool_surplus;
         let validators: Vec<LocalValidator> = (0..total)
             .map(|i| LocalValidator {
@@ -177,7 +219,7 @@ impl ProdCluster {
             genesis: fixtures.genesis_validators(),
             hosts,
             beacon_chain_config: BeaconChainConfig {
-                epoch_duration_ms: epoch_ms,
+                epoch_duration_ms: args.epoch_ms,
                 shard_size: config.shard_size,
                 reshape_thresholds: ReshapeThresholds {
                     split_bytes: config.split_bytes,
@@ -190,8 +232,9 @@ impl ProdCluster {
             // identically on both harnesses. The production default leaves the
             // faucet empty and seeds no accounts.
             genesis_config: Some(GenesisConfig {
-                xrd_balances: balances,
-                vm_accounts,
+                xrd_balances: args.balances.clone(),
+                vm_accounts: args.vm_accounts.clone(),
+                vm_pools: args.vm_pools.clone(),
                 ..GenesisConfig::test_default()
             }),
             simulated_outbound_latency: config.latency,
