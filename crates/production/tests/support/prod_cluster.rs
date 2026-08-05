@@ -16,7 +16,9 @@ use hyperscale_network_libp2p::fault::{DropSpec, HostId, RuleHandle};
 use hyperscale_network_libp2p::test_utils::TestFixtures;
 use hyperscale_production::LocalValidator;
 use hyperscale_scenarios::query::status_rank;
-use hyperscale_scenarios::tx::{merge_vote_payer, straddler_genesis_balances};
+use hyperscale_scenarios::tx::{
+    straddler_genesis_balances, vm_staking_genesis_accounts, vm_world_pools,
+};
 use hyperscale_scenarios::{
     Budget, Cluster, FaultHandle, FaultableCluster, ScenarioConfig, grow_to, vote_reshape_threshold,
 };
@@ -189,7 +191,7 @@ impl ProdCluster {
         let mut cluster =
             Self::start_with_vm_accounts(&grow_config, seed, epoch_ms, balances, vm_accounts);
         grow_to(&mut cluster, config.num_shards);
-        vote_reshape_threshold(&mut cluster, &merge_vote_payer(), config.split_bytes);
+        vote_reshape_threshold(&mut cluster, config.split_bytes);
         cluster
     }
 
@@ -233,8 +235,16 @@ impl ProdCluster {
             // faucet empty and seeds no accounts.
             genesis_config: Some(GenesisConfig {
                 xrd_balances: args.balances.clone(),
-                vm_accounts: args.vm_accounts.clone(),
-                vm_pools: args.vm_pools.clone(),
+                // Every cluster funds the pool operator and seats the
+                // pools: the founding pool's vote is how any cluster
+                // retunes a network parameter.
+                vm_accounts: args
+                    .vm_accounts
+                    .iter()
+                    .copied()
+                    .chain(vm_staking_genesis_accounts())
+                    .collect(),
+                vm_pools: vm_world_pools(),
                 ..GenesisConfig::test_default()
             }),
             simulated_outbound_latency: config.latency,

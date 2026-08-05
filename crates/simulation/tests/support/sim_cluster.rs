@@ -19,8 +19,8 @@ use hyperscale_network_memory::NodeIndex;
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::query::{chain_fate, status_rank};
 use hyperscale_scenarios::tx::{
-    merge_vote_payer, merge_vote_payer_account, straddler_genesis_balances, vm_world_accounts,
-    vm_world_pools,
+    merge_vote_payer_account, straddler_genesis_balances, vm_staking_genesis_accounts,
+    vm_world_accounts, vm_world_pools,
 };
 use hyperscale_scenarios::{
     Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
@@ -274,7 +274,17 @@ impl SimCluster {
             intra_shard_latency: config.latency,
             cross_shard_latency: config.latency,
             share_declared_reads: args.share_declared_reads,
-            vm_accounts: args.vm_accounts.to_vec(),
+            // Every cluster funds the pool operator and seats the pools,
+            // because the founding pool's vote is how any cluster retunes
+            // a network parameter — the same reason the statics register
+            // every pool rather than only the ones a scenario delegates
+            // to.
+            vm_accounts: args
+                .vm_accounts
+                .iter()
+                .copied()
+                .chain(vm_staking_genesis_accounts())
+                .collect(),
             // Unconditional, including for clusters that fund no VM
             // accounts at all: the statics install once per process and the
             // first cluster built wins, and a scenario that never touches
@@ -283,7 +293,7 @@ impl SimCluster {
             // nothing transacts with costs nothing.
             vm_world_accounts: vm_world_accounts(),
             vm_execution_mode: args.vm_execution_mode,
-            vm_pools: args.vm_pools.to_vec(),
+            vm_pools: vm_world_pools(),
             vm_world_pools: vm_world_pools(),
             ..SimConfig::default()
         };
@@ -327,7 +337,7 @@ impl SimCluster {
             ExecutionMode::Serial,
         );
         grow_to(&mut cluster, config.num_shards);
-        vote_reshape_threshold(&mut cluster, &merge_vote_payer(), config.split_bytes);
+        vote_reshape_threshold(&mut cluster, config.split_bytes);
         cluster
     }
 
@@ -376,7 +386,7 @@ impl SimCluster {
             ExecutionMode::Serial,
         );
         grow_to(&mut cluster, config.num_shards);
-        vote_reshape_threshold(&mut cluster, &merge_vote_payer(), config.split_bytes);
+        vote_reshape_threshold(&mut cluster, config.split_bytes);
         cluster
     }
 

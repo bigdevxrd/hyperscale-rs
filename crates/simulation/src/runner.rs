@@ -49,7 +49,6 @@ use crate::event_queue::EventKey;
 
 pub mod membership;
 pub mod reshape;
-pub mod system_action;
 
 /// Consensus crypto scheme the simulated validators run.
 ///

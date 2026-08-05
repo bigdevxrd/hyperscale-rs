@@ -73,5 +73,4 @@ pub use witnesses::{
     register_validator_pools_a_node, register_without_capacity_is_rejected,
     registered_validator_activates_onto_a_shard, stake_withdraw_drops_effective_stake,
     vm_delegation_folds_into_beacon_state,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
 };

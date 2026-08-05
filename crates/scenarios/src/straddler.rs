@@ -14,7 +14,6 @@ use hyperscale_engine_vm::genesis::vault_key;
 use hyperscale_types::{
     BlockHeight, Ed25519PrivateKey, Epoch, ShardId, TransactionDecision, TransactionStatus, TxHash,
 };
-use radix_common::network::NetworkDefinition;
 
 use crate::reshape::split_lifecycle;
 use crate::support::query::{
@@ -23,8 +22,8 @@ use crate::support::query::{
 use crate::support::tx::{
     MERGE_STRADDLER_LEFT, MERGE_STRADDLER_RIGHT, MERGE_STRADDLER_SURVIVOR, STRADDLER_SPLITTER,
     STRADDLER_SUCCESSOR, STRADDLER_SURVIVOR, SplitStraddlerSetup, TERMINATING_PAYER_FUNDING,
-    build_reshape_threshold_vote_tx, build_vm_transfer_tx, merge_straddler_setup, merge_vote_payer,
-    split_straddler_setup, validity_around,
+    build_reshape_threshold_vote_tx, build_vm_transfer_tx, merge_straddler_setup,
+    split_straddler_setup, validity_around, vm_pool_operator,
 };
 use crate::support::wait::{
     await_anchor_seeded, await_beacon_epoch, await_merge_keeper_count, await_root_matches_anchor,
@@ -153,7 +152,6 @@ pub fn arm_splitter_termination<C: Cluster>(c: &mut C) {
         "the grow must seat both the splitter and the survivor",
     );
 
-    let payer = merge_vote_payer();
     let current = beacon_epoch(c).expect("post-grow beacon epoch");
     let epoch_ms = c
         .beacon_state()
@@ -161,11 +159,9 @@ pub fn arm_splitter_termination<C: Cluster>(c: &mut C) {
         .chain_config
         .epoch_duration_ms;
     let vote = build_reshape_threshold_vote_tx(
-        &payer,
+        &vm_pool_operator().0,
         STRADDLER_SPLIT_BYTES,
         Epoch::new(current.inner() + vote_activate_lead(c.vote_fold_budget_ms(), epoch_ms)),
-        &NetworkDefinition::simulator(),
-        1,
         validity_around(c.now()),
     );
     c.submit(Arc::new(vote));

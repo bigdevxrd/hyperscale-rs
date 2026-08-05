@@ -16,9 +16,9 @@
 use std::sync::Arc;
 
 use hyperscale_types::{
-    BeaconWitnessEvent, ConsensusPublicKey, MIN_STAKE_FLOOR, RoutableTransaction, Stake,
-    StakePoolId, TransactionDecision, TransactionStatus, UNBONDING_WINDOW_EPOCHS, ValidatorId,
-    ValidatorStatus, validator_possession_proof_sign,
+    ConsensusPublicKey, MIN_STAKE_FLOOR, RoutableTransaction, Stake, StakePoolId,
+    TransactionDecision, TransactionStatus, ValidatorId, ValidatorStatus,
+    validator_possession_proof_sign,
 };
 use radix_common::network::NetworkDefinition;
 
@@ -28,14 +28,12 @@ use crate::support::query::{
 use crate::support::tx::{
     VM_GENESIS_POOL, VM_SECOND_POOL, VM_SECOND_POOL_ID, VM_STAKE_POOL, VM_STAKE_POOL_ID,
     build_vm_deactivate_tx, build_vm_register_tx, build_vm_stake_tx, build_vm_unstake_tx,
-    build_witness_tx, validity_around, vm_delegator, vm_pool_operator, witness_payer,
+    validity_around, vm_delegator, vm_pool_operator,
 };
 use crate::support::wait::{await_beacon_epoch, await_tx_terminal};
 use crate::support::{Cluster, epochs};
 
 /// The single genesis stake pool every genesis validator belongs to.
-const GENESIS_POOL: StakePoolId = StakePoolId::new(0);
-
 /// Warm the cluster until the beacon folds its first epoch — the precondition a
 /// system action needs to land on a live shard and witness through.
 fn warm_up<C: Cluster>(c: &mut C) {
@@ -43,18 +41,6 @@ fn warm_up<C: Cluster>(c: &mut C) {
         await_beacon_epoch(c, 1, epochs(6)),
         "beacon never folded its first epoch",
     );
-}
-
-/// Build and submit a system action from the witness payer at `nonce`.
-fn submit_action<C: Cluster>(c: &mut C, nonce: u32, event: &BeaconWitnessEvent) {
-    let tx = build_witness_tx(
-        &witness_payer(),
-        event,
-        &NetworkDefinition::simulator(),
-        nonce,
-        validity_around(c.now()),
-    );
-    c.submit(Arc::new(tx));
 }
 
 /// A well-formed consensus pubkey for a registration, derived under the
@@ -379,64 +365,6 @@ pub fn registered_validator_activates_onto_a_shard(c: &mut impl Cluster) {
             Some(ValidatorStatus::OnShard { .. })
         )),
         "newcomer never drew onto the shard after a slot freed",
-    );
-}
-
-/// A matured withdrawal ejects an over-capacity validator; a later deposit
-/// reactivates it once capacity returns.
-///
-/// Requires a committee with enough slack to keep quorum while a member ejects
-/// (the harness seats a seven-validator committee).
-///
-/// # Panics
-///
-/// Panics if the ejection or the reactivation misses its budget.
-pub fn withdrawal_ejects_a_validator_that_a_deposit_reactivates(c: &mut impl Cluster) {
-    // The highest-id genesis validator is the first the over-capacity sweep
-    // ejects, so it is the one to watch.
-    let victim = ValidatorId::new(6);
-    assert!(
-        c.run_until(epochs(6), |c| matches!(
-            validator_status(c, victim),
-            Some(ValidatorStatus::OnShard { .. } | ValidatorStatus::Pooled)
-        )),
-        "victim should start active",
-    );
-
-    // The withdrawal blocks new support immediately but only releases stake —
-    // and forces the over-capacity ejection — once it unbonds, an
-    // UNBONDING_WINDOW_EPOCHS later.
-    submit_action(
-        c,
-        1,
-        &BeaconWitnessEvent::StakeWithdraw {
-            pool_id: GENESIS_POOL,
-            amount: Stake::from_whole_tokens(1_500_000),
-        },
-    );
-    let unbond_budget = u32::try_from(UNBONDING_WINDOW_EPOCHS).expect("unbonding window fits u32");
-    assert!(
-        c.run_until(epochs(unbond_budget + 10), |c| validator_status(c, victim)
-            == Some(ValidatorStatus::InsufficientStake)),
-        "the matured withdrawal never ejected the over-capacity validator",
-    );
-
-    // Top the pool back up; `auto_reactivate` promotes the ejected validator
-    // back into service once capacity returns.
-    submit_action(
-        c,
-        2,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: GENESIS_POOL,
-            amount: Stake::from_whole_tokens(3_000_000),
-        },
-    );
-    assert!(
-        c.run_until(epochs(8), |c| matches!(
-            validator_status(c, victim),
-            Some(ValidatorStatus::Pooled | ValidatorStatus::OnShard { .. })
-        )),
-        "the deposit never reactivated the ejected validator",
     );
 }
 

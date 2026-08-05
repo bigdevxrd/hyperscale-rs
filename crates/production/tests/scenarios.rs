@@ -38,7 +38,6 @@ use hyperscale_scenarios::{
     split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
     surviving_sibling_split_seats_full_committees, vm_abort_converges,
     vm_delegation_folds_into_beacon_state, vm_hot_recipient, vm_single_transfer, vm_zipf_payments,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
 };
 use serial_test::serial;
 use support::ProdCluster;
@@ -770,26 +769,6 @@ fn registered_validator_activates_onto_a_shard_prod() {
         vm_staking_pools(),
     );
     registered_validator_activates_onto_a_shard(&mut cluster);
-}
-
-#[test]
-#[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
-fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_prod() {
-    // Seven validators give the committee slack to keep quorum while a couple
-    // eject.
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(7),
-        0xE1EC,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates(&mut cluster);
 }
 
 #[test]

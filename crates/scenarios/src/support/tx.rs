@@ -12,12 +12,10 @@ use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, encode_tree};
 use hyperscale_engine_vm::genesis::stake_unit;
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
-    BeaconWitnessEvent, ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch,
-    MIN_STAKE_FLOOR, NetworkParams, NodeId, NotarizeOptions, ParamProposal, ParamVote,
-    ReshapeThresholds, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
+    ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR,
+    NetworkParams, NodeId, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
     TimestampRange, ValidatorId, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
-    build_transfer_tx as build_transfer, ed25519_keypair_from_seed, encode_system_action,
-    routable_from_notarized_v1, sign_and_notarize_with_options, uniform_shard_for_node,
+    build_transfer_tx as build_transfer, ed25519_keypair_from_seed, uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -27,8 +25,6 @@ use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
 use radix_common::types::ComponentAddress;
-use radix_transactions::builder::ManifestBuilder;
-use radix_transactions::model::{MessageContentsV1, MessageV1, PlaintextMessageV1};
 
 /// A deterministic Ed25519 signer from a one-byte seed. A faucet transaction's
 /// fee comes from the faucet, so any key notarizes it.
@@ -1599,80 +1595,33 @@ pub fn build_transfer_tx(
     build_transfer(payer, from, to, amount, network, nonce, validity).expect("transfer builds")
 }
 
-/// Build a system-action transaction reporting `event` to the beacon.
-///
-/// A system action is a `lock_fee` no-op paid from `payer`'s account, carrying
-/// the [`BeaconWitnessEvent`] in its plaintext message. It routes to the shard
-/// owning that account; once committed, that shard witnesses the event to the
-/// beacon over the usual rail and the beacon folds it. This is the path an
-/// operator stakes, registers a validator, or votes through — the portable
-/// counterpart of those flows.
-///
-/// `payer` must control a genesis-funded account so the fee lock succeeds — a
-/// transaction whose fee fails witnesses nothing.
-///
-/// # Panics
-///
-/// Panics if signing or the routability conversion fails (malformed manifest).
-#[must_use]
-pub fn build_witness_tx(
-    payer: &Ed25519PrivateKey,
-    event: &BeaconWitnessEvent,
-    network: &NetworkDefinition,
-    nonce: u32,
-    validity: TimestampRange,
-) -> RoutableTransaction {
-    let account = ComponentAddress::preallocated_account_from_public_key(&payer.public_key());
-    let manifest = ManifestBuilder::new()
-        .lock_fee(account, Decimal::from(10))
-        .build();
-    let message = MessageV1::Plaintext(PlaintextMessageV1 {
-        mime_type: "application/octet-stream".to_string(),
-        message: MessageContentsV1::Bytes(encode_system_action(event)),
-    });
-    let notarized = sign_and_notarize_with_options(
-        manifest,
-        network,
-        nonce,
-        NotarizeOptions {
-            message,
-            ..Default::default()
-        },
-        payer,
-    )
-    .expect("witness transaction signs");
-    routable_from_notarized_v1(notarized, validity).expect("witness transaction is routable")
-}
-
-/// Build a stake-pool parameter vote that retunes the reshape `split_bytes`,
+/// Cast the founding pool's vote to retune the reshape `split_bytes`,
 /// activating at `activate_at`.
 ///
-/// Rides the system-action rail via [`build_witness_tx`]: the single genesis
-/// stake pool (id 0) holds all stake, so one vote is a majority. Raising
-/// `split_bytes` lifts the derived `merge_bytes` above a grown topology's
-/// children so they fall under the merge threshold.
+/// The founding pool holds every genesis validator's stake, so one vote
+/// is a majority. Raising `split_bytes` lifts the derived `merge_bytes`
+/// above a grown topology's children so they fall under the merge
+/// threshold.
 ///
-/// # Panics
-///
-/// Panics if signing or the routability conversion fails (malformed manifest).
+/// Every governed parameter travels, not just the one being changed: a
+/// vote is a whole proposal, and the tally buckets by the exact pair, so
+/// a vote that omitted the others would be voting to reset them.
 #[must_use]
 pub fn build_reshape_threshold_vote_tx(
-    payer: &Ed25519PrivateKey,
+    operator: &Ed25519PrivateKey,
     split_bytes: u64,
     activate_at: Epoch,
-    network: &NetworkDefinition,
-    nonce: u32,
     validity: TimestampRange,
 ) -> RoutableTransaction {
-    let vote = BeaconWitnessEvent::ParamVote(ParamVote {
-        pool: StakePoolId::new(0),
-        proposal: Some(ParamProposal {
-            params: NetworkParams {
-                reshape_thresholds: ReshapeThresholds { split_bytes },
-                ..NetworkParams::default()
-            },
-            activate_at,
-        }),
-    });
-    build_witness_tx(payer, &vote, network, nonce, validity)
+    build_vm_operator_tx(
+        operator,
+        VM_GENESIS_POOL,
+        "cast-param-vote",
+        vec![
+            GraphArg::Literal(Value::U64(split_bytes)),
+            GraphArg::Literal(Value::U64(NetworkParams::default().impound_epochs)),
+            GraphArg::Literal(Value::U64(activate_at.inner())),
+        ],
+        validity,
+    )
 }

@@ -46,7 +46,6 @@ use hyperscale_scenarios::{
     vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
     vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,
     vm_reads_the_committed_baseline, vm_single_transfer, vm_zipf_payments,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
 };
 use hyperscale_simulation::ExecutionMode;
 use hyperscale_storage::ShardChainReader;
@@ -1143,20 +1142,6 @@ fn registered_validator_activates_onto_a_shard_sim() {
         &vm_staking_pools(),
     );
     registered_validator_activates_onto_a_shard(&mut cluster);
-}
-
-#[test]
-fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_sim() {
-    // Seven validators give the committee slack to keep quorum while a couple
-    // eject; `pool_surplus = 0` keeps the shuffle dormant.
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(7),
-        0xE1EC,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates(&mut cluster);
 }
 
 #[test]

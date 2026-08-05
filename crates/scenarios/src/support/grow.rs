@@ -9,11 +9,10 @@
 
 use std::sync::Arc;
 
-use hyperscale_types::{BlockHeight, Ed25519PrivateKey, Epoch, ShardId};
-use radix_common::network::NetworkDefinition;
+use hyperscale_types::{BlockHeight, Epoch, ShardId};
 
 use super::query::beacon_epoch;
-use super::tx::{build_reshape_threshold_vote_tx, validity_around};
+use super::tx::{build_reshape_threshold_vote_tx, validity_around, vm_pool_operator};
 use super::{Budget, Cluster, epochs};
 
 /// Epochs of lead before the threshold vote activates — enough for the vote
@@ -78,28 +77,26 @@ pub fn grow_to(c: &mut impl Cluster, target: u32) {
 /// A grown topology can't merge under the frozen threshold that split it, and a
 /// cold child re-splits if the threshold stays at zero; raising it stabilizes the
 /// grown leaves and brackets a later merge's derived threshold above their byte
-/// totals. `payer` must control a genesis-funded account seated on a live shard,
-/// so the system-action fee is payable.
+/// totals. The vote is the founding pool's, cast by the operator its seat
+/// names, so the cluster has to seat that pool and fund its operator.
 ///
 /// # Panics
 ///
 /// Panics if the threshold does not activate within budget.
-pub fn vote_reshape_threshold(c: &mut impl Cluster, payer: &Ed25519PrivateKey, split_bytes: u64) {
+pub fn vote_reshape_threshold(c: &mut impl Cluster, split_bytes: u64) {
     // Re-submit the vote each activation window until the beacon folds and
     // applies it. A single vote carries a fixed `VOTE_ACTIVATE_LEAD` lead and is
     // dropped if its witness folds at or after `activate_at`; at a long epoch
     // that lead is only a few minutes of slack, so a fold delayed by a committee
     // hiccup can miss it. Retrying past the miss with a fresh window keeps the
     // step robust without widening the lead (which would just defer activation).
-    for nonce in 1..=VOTE_ATTEMPTS {
+    for _ in 1..=VOTE_ATTEMPTS {
         let current = beacon_epoch(c).expect("a beacon epoch is committed");
         let activate_at = Epoch::new(current.inner() + VOTE_ACTIVATE_LEAD);
         let vote = build_reshape_threshold_vote_tx(
-            payer,
+            &vm_pool_operator().0,
             split_bytes,
             activate_at,
-            &NetworkDefinition::simulator(),
-            nonce,
             validity_around(c.now()),
         );
         c.submit(Arc::new(vote));

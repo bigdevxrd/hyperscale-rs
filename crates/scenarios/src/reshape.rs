@@ -6,7 +6,7 @@ use std::sync::Arc;
 use hyperscale_types::ShardId;
 
 use crate::support::query::{committee_size, live_shards};
-use crate::support::tx::{build_probe_transfer_tx, signer_from_seed, validity_around};
+use crate::support::tx::{build_probe_transfer_tx, validity_around};
 use crate::support::wait::{
     assert_height_frozen, await_beacon_epoch, await_height, await_merge_keeper_count,
     await_root_matches_anchor, await_serves, await_serves_ahead_of_anchor, await_split_admitted,
@@ -151,7 +151,7 @@ pub fn merge_lifecycle(c: &mut impl Cluster) {
     // Vote the reshape threshold up so the cold grown children fall under the
     // derived merge threshold. The straddler account `31`, funded at genesis and
     // seated on a child by the grow, pays the system-action fee.
-    vote_reshape_threshold(c, &signer_from_seed(31), MERGE_VOTE_SPLIT_BYTES);
+    vote_reshape_threshold(c, MERGE_VOTE_SPLIT_BYTES);
 
     // The vote activates, both children assert the merge, and the beacon pairs
     // it — drawing a quorum (2f+1 of the four-validator merged committee).
