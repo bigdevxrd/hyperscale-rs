@@ -14,10 +14,10 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::OnceLock;
 
 use blake3::Hasher;
-use radix_common::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use sbor::prelude::*;
 use thiserror::Error;
 
+use crate::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use crate::transaction::vm::vm_statics;
 use crate::{
     BoundedBytes, DeclaredKey, Derived, Hash, MAX_TX_BYTES_LEN, Routing, ShardTrie, TimestampRange,

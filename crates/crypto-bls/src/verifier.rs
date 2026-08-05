@@ -5,12 +5,12 @@ use blst::{BLST_ERROR, blst_scalar, blst_scalar_from_bendian};
 use hyperscale_crypto::{
     AggregateError, AggregateSignature, ConsensusPublicKey, ConsensusSignature, Verifier, VrfProof,
 };
-use radix_common::crypto::{
-    BLS12381_CIPHERSITE_V1, Bls12381G1PublicKey, Bls12381G2Signature, aggregate_verify_bls12381_v1,
-    verify_bls12381_v1,
-};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng, rng};
+
+use crate::bls12381::{
+    CIPHERSUITE, PublicKey as BlsPublicKey, Signature as BlsSignature, aggregate_verify, verify,
+};
 
 /// BLS verification.
 ///
@@ -21,24 +21,24 @@ use rand::{Rng, SeedableRng, rng};
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BlsVerifier;
 
-const fn pk(key: &ConsensusPublicKey) -> Bls12381G1PublicKey {
-    Bls12381G1PublicKey(*key.as_bytes())
+const fn pk(key: &ConsensusPublicKey) -> BlsPublicKey {
+    BlsPublicKey(*key.as_bytes())
 }
 
-const fn sig(s: &ConsensusSignature) -> Bls12381G2Signature {
-    Bls12381G2Signature(*s.as_bytes())
+const fn sig(s: &ConsensusSignature) -> BlsSignature {
+    BlsSignature(*s.as_bytes())
 }
 
-const fn agg(a: &AggregateSignature) -> Bls12381G2Signature {
-    Bls12381G2Signature(*a.as_bytes())
+const fn agg(a: &AggregateSignature) -> BlsSignature {
+    BlsSignature(*a.as_bytes())
 }
 
 /// All-or-nothing batch verification over distinct messages via blst's
 /// random linear combination (~2 pairings for the whole batch).
 fn batch_all_or_nothing(
     messages: &[&[u8]],
-    signatures: &[Bls12381G2Signature],
-    pubkeys: &[Bls12381G1PublicKey],
+    signatures: &[BlsSignature],
+    pubkeys: &[BlsPublicKey],
 ) -> bool {
     let mut bls_sigs = Vec::with_capacity(signatures.len());
     let mut bls_pks = Vec::with_capacity(pubkeys.len());
@@ -75,7 +75,7 @@ fn batch_all_or_nothing(
 
     let result = BlstSignature::verify_multiple_aggregate_signatures(
         messages,
-        BLS12381_CIPHERSITE_V1, // DST must match sign_v1/verify_bls12381_v1
+        CIPHERSUITE, // DST must match sign_v1/verify_bls12381_v1
         &pk_refs,
         false, // pks_validate - possession-proven or genesis-trusted
         &sig_refs,
@@ -91,35 +91,35 @@ fn batch_all_or_nothing(
 /// run a single pairing check.
 fn batch_same_message(
     message: &[u8],
-    signatures: &[Bls12381G2Signature],
-    pubkeys: &[Bls12381G1PublicKey],
+    signatures: &[BlsSignature],
+    pubkeys: &[BlsPublicKey],
 ) -> bool {
-    let Ok(agg_sig) = Bls12381G2Signature::aggregate(signatures, true) else {
+    let Some(agg_sig) = BlsSignature::aggregate(signatures, true) else {
         return false;
     };
     // Pubkey aggregation skips G1 subgroup validation: every topology key
     // is possession-proven at registration (or genesis-trusted), which
     // both guarantees real G1 points and forecloses rogue-key
     // constructions.
-    let Ok(agg_pk) = Bls12381G1PublicKey::aggregate(pubkeys, false) else {
+    let Some(agg_pk) = BlsPublicKey::aggregate(pubkeys, false) else {
         return false;
     };
-    verify_bls12381_v1(message, &agg_pk, &agg_sig)
+    verify(message, &agg_pk, &agg_sig)
 }
 
 impl Verifier for BlsVerifier {
     fn verify(&self, key: &ConsensusPublicKey, message: &[u8], s: &ConsensusSignature) -> bool {
-        verify_bls12381_v1(message, &pk(key), &sig(s))
+        verify(message, &pk(key), &sig(s))
     }
 
     fn aggregate(&self, sigs: &[ConsensusSignature]) -> Result<AggregateSignature, AggregateError> {
         if sigs.is_empty() {
             return Err(AggregateError::Empty);
         }
-        let bls: Vec<Bls12381G2Signature> = sigs.iter().map(sig).collect();
-        Bls12381G2Signature::aggregate(&bls, true)
+        let bls: Vec<BlsSignature> = sigs.iter().map(sig).collect();
+        BlsSignature::aggregate(&bls, true)
             .map(|a| AggregateSignature::new(a.0))
-            .map_err(|_| AggregateError::InvalidSignature)
+            .ok_or(AggregateError::InvalidSignature)
     }
 
     fn verify_aggregate_same_message(
@@ -131,12 +131,12 @@ impl Verifier for BlsVerifier {
         if keys.is_empty() {
             return false;
         }
-        let pks: Vec<Bls12381G1PublicKey> = keys.iter().map(pk).collect();
+        let pks: Vec<BlsPublicKey> = keys.iter().map(pk).collect();
         // Unvalidated aggregation: see `batch_same_message`.
-        let Ok(agg_pk) = Bls12381G1PublicKey::aggregate(&pks, false) else {
+        let Some(agg_pk) = BlsPublicKey::aggregate(&pks, false) else {
             return false;
         };
-        verify_bls12381_v1(message, &agg_pk, &agg(aggregate))
+        verify(message, &agg_pk, &agg(aggregate))
     }
 
     fn verify_aggregate_different_messages(
@@ -148,12 +148,12 @@ impl Verifier for BlsVerifier {
         if messages.len() != keys.len() || messages.is_empty() {
             return false;
         }
-        let pairs: Vec<(Bls12381G1PublicKey, Vec<u8>)> = keys
+        let pairs: Vec<(BlsPublicKey, Vec<u8>)> = keys
             .iter()
             .zip(messages.iter())
             .map(|(k, m)| (pk(k), m.to_vec()))
             .collect();
-        aggregate_verify_bls12381_v1(&pairs, &agg(aggregate))
+        aggregate_verify(&pairs, &agg(aggregate))
     }
 
     fn batch_verify(
@@ -168,8 +168,8 @@ impl Verifier for BlsVerifier {
         if messages.is_empty() {
             return vec![];
         }
-        let bls_sigs: Vec<Bls12381G2Signature> = sigs.iter().map(sig).collect();
-        let bls_pks: Vec<Bls12381G1PublicKey> = keys.iter().map(pk).collect();
+        let bls_sigs: Vec<BlsSignature> = sigs.iter().map(sig).collect();
+        let bls_pks: Vec<BlsPublicKey> = keys.iter().map(pk).collect();
 
         // Fast path; blst's different-messages combination requires
         // distinct messages, so uniform batches take the aggregate route.
@@ -188,12 +188,12 @@ impl Verifier for BlsVerifier {
             .iter()
             .zip(bls_sigs.iter())
             .zip(bls_pks.iter())
-            .map(|((m, s), p)| verify_bls12381_v1(m, p, s))
+            .map(|((m, s), p)| verify(m, p, s))
             .collect()
     }
 
     fn verify_vrf(&self, key: &ConsensusPublicKey, message: &[u8], proof: &VrfProof) -> bool {
-        verify_bls12381_v1(message, &pk(key), &Bls12381G2Signature(*proof.as_bytes()))
+        verify(message, &pk(key), &BlsSignature(*proof.as_bytes()))
     }
 }
 
@@ -204,23 +204,23 @@ mod tests {
         blst_p1_from_affine, blst_p1_uncompress,
     };
     use hyperscale_crypto::run_conformance_suite;
-    use radix_common::crypto::Bls12381G1PrivateKey;
 
     use super::*;
+    use crate::bls12381::PrivateKey;
     use crate::{BlsSigner, bls_keypair_from_seed};
 
-    fn keypair(seed: u64) -> Bls12381G1PrivateKey {
+    fn keypair(seed: u64) -> PrivateKey {
         let mut s = [0u8; 32];
         s[..8].copy_from_slice(&seed.to_le_bytes());
         bls_keypair_from_seed(&s)
     }
 
-    fn consensus_key(key: &Bls12381G1PublicKey) -> ConsensusPublicKey {
+    fn consensus_key(key: &BlsPublicKey) -> ConsensusPublicKey {
         ConsensusPublicKey::new(key.0)
     }
 
     /// Decompress a pubkey to a G1 point.
-    fn g1(pk: &Bls12381G1PublicKey) -> blst_p1 {
+    fn g1(pk: &BlsPublicKey) -> blst_p1 {
         // SAFETY: `affine` and `point` are valid zero-initialised blst
         // structs and `pk.0` is a 48-byte compressed G1 encoding;
         // `blst_p1_uncompress` reads exactly 48 bytes from the pointer.
@@ -240,10 +240,7 @@ mod tests {
     /// registered key `pk_H` — the classical rogue-key construction. In
     /// min-pk BLS `g^r` is exactly `r`'s public key, so the rogue key is
     /// `r.public_key() − pk_H` in the G1 group.
-    fn rogue_key_against(
-        honest_pk: &Bls12381G1PublicKey,
-        r: &Bls12381G1PrivateKey,
-    ) -> Bls12381G1PublicKey {
+    fn rogue_key_against(honest_pk: &BlsPublicKey, r: &PrivateKey) -> BlsPublicKey {
         let mut neg_honest = g1(honest_pk);
         let g_r = g1(&r.public_key());
         // SAFETY: all pointers reference valid, initialised blst structs;
@@ -255,7 +252,7 @@ mod tests {
             blst_p1_add(&raw mut rogue, &raw const g_r, &raw const neg_honest);
             let mut compressed = [0u8; 48];
             blst_p1_compress(compressed.as_mut_ptr(), &raw const rogue);
-            Bls12381G1PublicKey(compressed)
+            BlsPublicKey(compressed)
         }
     }
 
@@ -277,7 +274,7 @@ mod tests {
 
         // The attack is real: the two-key aggregate equals g^r, whose
         // discrete log the adversary knows.
-        let agg = Bls12381G1PublicKey::aggregate(&[honest.public_key(), rogue_pk], true)
+        let agg = BlsPublicKey::aggregate(&[honest.public_key(), rogue_pk], true)
             .expect("rogue key is a valid G1 point");
         assert_eq!(agg, r.public_key());
 
@@ -285,7 +282,7 @@ mod tests {
         // could hold. Neither verifies against the rogue key.
         let message = b"any message bound to the rogue key".as_slice();
         for secret in [&r, &honest] {
-            let forged = secret.sign_v1(message);
+            let forged = secret.sign(message);
             assert!(
                 !BlsVerifier.verify(
                     &consensus_key(&rogue_pk),

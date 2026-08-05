@@ -13,7 +13,6 @@ hyperscale-node.workspace = true
 hyperscale-simulation.workspace = true
 hyperscale-storage.workspace = true
 hyperscale-types.workspace = true
-radix-common.workspace = true
 
 serde.workspace = true
 serde-wasm-bindgen.workspace = true

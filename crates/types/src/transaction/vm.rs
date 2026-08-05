@@ -14,10 +14,10 @@
 use std::sync::OnceLock;
 
 use blake3::Hasher as Blake3;
-use radix_common::crypto::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use sbor::prelude::*;
 use thiserror::Error;
 
+use crate::crypto::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use crate::{BoundedBytes, DeclaredKey, Hash, MAX_TX_BYTES_LEN, TimestampRange, WeightedTimestamp};
 
 /// Domain separator for the envelope signing hash.

@@ -1,9 +1,9 @@
-//! Cryptographic types and helpers.
+//! Cryptographic types and helpers for the transaction path.
 //!
-//! Re-exports the Ed25519 private key from `radix_common::crypto` (the
-//! transaction path) and adds [`keys`], keypair generation for that same
-//! path.
+//! [`ed25519`] is the signature scheme itself; [`keys`] is keypair
+//! generation over it.
 
+pub mod ed25519;
 pub mod keys;
 
-pub use radix_common::crypto::Ed25519PrivateKey;
+pub use ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, verify_ed25519};

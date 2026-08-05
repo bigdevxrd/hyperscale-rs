@@ -1,14 +1,15 @@
 //! BLS keypair generation.
 
-use blst::min_pk::SecretKey;
-use radix_common::crypto::Bls12381G1PrivateKey;
 use rand::{Rng, rng};
+
+use crate::bls12381::PrivateKey;
 
 /// Generate a new random BLS12-381 keypair.
 ///
-/// Uses a random 32-byte seed with blst's `key_gen` for proper key derivation.
+/// A random 32-byte seed through the same derivation as
+/// [`bls_keypair_from_seed`].
 #[must_use]
-pub fn generate_bls_keypair() -> Bls12381G1PrivateKey {
+pub fn generate_bls_keypair() -> PrivateKey {
     let mut ikm = [0u8; 32];
     rng().fill_bytes(&mut ikm);
     bls_keypair_from_seed(&ikm)
@@ -16,21 +17,11 @@ pub fn generate_bls_keypair() -> Bls12381G1PrivateKey {
 
 /// Generate a BLS12-381 keypair from a seed (deterministic, for testing/simulation).
 ///
-/// Uses blst's `key_gen` which hashes the full seed to derive a valid BLS scalar.
-/// This is the proper way to deterministically generate BLS keys from arbitrary seeds.
-///
-/// # Panics
-///
-/// Cannot panic: `blst::min_pk::SecretKey::key_gen` succeeds for any 32-byte seed.
+/// Hashes the full seed to a valid BLS scalar, so any 32 bytes name a
+/// key — a seed that is not itself a valid scalar included.
 #[must_use]
-pub fn bls_keypair_from_seed(seed: &[u8; 32]) -> Bls12381G1PrivateKey {
-    // Use blst's key_gen which properly hashes the seed to derive a valid scalar
-    let blst_sk = SecretKey::key_gen(seed, &[]).expect("key_gen should not fail");
-
-    // Convert to radix-common type
-    // blst secret key is a 32-byte scalar in big-endian format
-    let sk_bytes = blst_sk.to_bytes();
-    Bls12381G1PrivateKey::from_bytes(&sk_bytes).expect("valid BLS scalar bytes")
+pub fn bls_keypair_from_seed(seed: &[u8; 32]) -> PrivateKey {
+    PrivateKey::from_ikm(seed)
 }
 
 /// Deterministic seeded-key fixtures shared across the workspace's test

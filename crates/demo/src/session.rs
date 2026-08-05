@@ -9,10 +9,10 @@ use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_simulation::{CryptoScheme, SimConfig, SimulationRunner};
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{
-    BeaconChainConfig, BlockHeight, ReshapeThresholds, ShardId, SharedCertificates, TimestampRange,
-    Transaction, TransactionDecision, TransactionStatus, TxHash, ValidatorId, WeightedTimestamp,
+    BeaconChainConfig, BlockHeight, Ed25519PrivateKey, ReshapeThresholds, ShardId,
+    SharedCertificates, TimestampRange, Transaction, TransactionDecision, TransactionStatus,
+    TxHash, ValidatorId, WeightedTimestamp,
 };
-use radix_common::crypto::Ed25519PrivateKey;
 
 use crate::event::{HostRole, ObserverSeat, ShardPath, TraceEvent};
 

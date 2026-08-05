@@ -85,6 +85,7 @@ clap = { version = "4.6.4", features = ["derive"] }
 core_affinity = "0.8.3"
 crossbeam = "0.8.4"
 dashmap = "6.2.1"
+ed25519-dalek = "3.0.0"
 futures = "0.3.33"
 hdrhistogram = "7.6.0"
 hex = { version = "0.4.3", default-features = false }
@@ -117,6 +118,7 @@ tracing-opentelemetry = "0.33.0"
 tracing-subscriber = "0.3.23"
 tracing-test = "0.2.6"
 wasm-bindgen = "0.2.126"
+zeroize = "1.9.0"
 
 # VM dependencies (github.com/hyperscalers/hyperscale-vm @ bd82a1f).
 # `vm-effects` (types and the routing vocabulary) feeds admission through the
@@ -136,11 +138,7 @@ wasmparser = "0.255.0"
 wasmtime = { version = "=47.0.2", features = ["component-model", "winch", "pulley"] }
 wat = "1.255.0"
 
-# Radix dependencies (github.com/hyperscalers/radixdlt-scrypto @ f7fcb1f62f)
-radix-common = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
-radix-engine-interface = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
-radix-substate-store-interface = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
-radix-transactions = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
+# SBOR, the encoding (github.com/hyperscalers/radixdlt-scrypto @ f7fcb1f62f).
 sbor = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]

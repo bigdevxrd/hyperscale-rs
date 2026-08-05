@@ -28,8 +28,9 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Radix transaction types
+ed25519-dalek.workspace = true
 indexmap.workspace = true
-radix-common.workspace = true
+zeroize.workspace = true
 
 [features]
 test-utils = ["dep:hyperscale-crypto-bls"]

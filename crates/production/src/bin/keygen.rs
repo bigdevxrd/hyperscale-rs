@@ -27,8 +27,8 @@ fn main() {
         // Generate random BLS keypair
         let keypair = generate_bls_keypair();
         let public_key = keypair.public_key();
-        let bytes = public_key.to_vec();
-        println!("{}", encode(&bytes));
+        let bytes = public_key.0;
+        println!("{}", encode(bytes));
     } else {
         // Derive BLS keypair from seed
         let seed_hex = &args[1];
@@ -44,7 +44,7 @@ fn main() {
         let public_key = keypair.public_key();
 
         // Print BLS public key hex
-        let bytes = public_key.to_vec();
-        println!("{}", encode(&bytes));
+        let bytes = public_key.0;
+        println!("{}", encode(bytes));
     }
 }

@@ -1,8 +1,8 @@
 //! [`Signer`] over a BLS12-381 (min-pk) private key.
 
 use hyperscale_crypto::{ConsensusPublicKey, ConsensusSignature, SignError, Signer, VrfProof};
-use radix_common::crypto::Bls12381G1PrivateKey;
 
+use crate::bls12381::PrivateKey;
 use crate::{bls_keypair_from_seed, generate_bls_keypair};
 
 /// A validator's BLS signing identity.
@@ -12,7 +12,7 @@ use crate::{bls_keypair_from_seed, generate_bls_keypair};
 /// deterministic in `(key, message)`, which is what lets `vrf_sign`
 /// reuse the plain signing core.
 pub struct BlsSigner {
-    key: Bls12381G1PrivateKey,
+    key: PrivateKey,
 }
 
 impl std::fmt::Debug for BlsSigner {
@@ -46,10 +46,10 @@ impl Signer for BlsSigner {
     }
 
     fn sign(&self, message: &[u8]) -> Result<ConsensusSignature, SignError> {
-        Ok(ConsensusSignature::new(self.key.sign_v1(message).0))
+        Ok(ConsensusSignature::new(self.key.sign(message).0))
     }
 
     fn vrf_sign(&self, message: &[u8]) -> Result<VrfProof, SignError> {
-        Ok(VrfProof::new(self.key.sign_v1(message).0))
+        Ok(VrfProof::new(self.key.sign(message).0))
     }
 }

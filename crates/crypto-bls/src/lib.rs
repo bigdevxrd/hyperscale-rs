@@ -8,6 +8,7 @@
 //! registration proving possession of every key (genesis keys are
 //! operator-trusted config).
 
+pub mod bls12381;
 mod keys;
 mod signer;
 mod verifier;

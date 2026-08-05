@@ -1,7 +1,8 @@
 //! Ed25519 key generation for the transaction path.
 
-use radix_common::crypto::Ed25519PrivateKey;
 use rand::{Rng, rng};
+
+use crate::crypto::Ed25519PrivateKey;
 
 /// Generate a new random Ed25519 keypair.
 ///
