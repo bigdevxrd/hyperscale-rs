@@ -76,8 +76,9 @@ pub use beacon::{
 pub use crypto::Ed25519PrivateKey;
 pub use crypto::keys::{ed25519_keypair_from_seed, generate_ed25519_keypair};
 pub use hyperscale_crypto::{
-    AggregateError, AggregateSignature, ConsensusPublicKey, ConsensusSignature, SignError, Signer,
-    VRF_PROOF_BYTES, Verifier, VrfOutput, VrfProof,
+    AggregateError, AggregateSignature, CONSENSUS_PUBLIC_KEY_BYTES, CONSENSUS_SIGNATURE_BYTES,
+    ConsensusPublicKey, ConsensusSignature, SignError, Signer, VRF_PROOF_BYTES, Verifier,
+    VrfOutput, VrfProof,
 };
 pub use network::{
     GossipMessage, MessageClass, NetworkMessage, Request, Signed, SignedContext, SignedVerifyError,

@@ -1,11 +1,11 @@
 //! The stake pool's events read as beacon facts.
 //!
 //! The beacon's control plane consumes lifecycle facts — a pool gained
-//! stake, a pool lost stake — and the stake pool package emits them as
-//! ordinary VM events. This module is the whole of the trust boundary
-//! between those two statements: emission is unprivileged, and every
-//! layer past this one is mechanical, so what a witness is allowed to be
-//! is decided here and nowhere else.
+//! stake, a pool lost stake, a pool took on a validator — and the stake
+//! pool package emits them as ordinary VM events. This module is the
+//! whole of the trust boundary between those two statements: emission is
+//! unprivileged, and every layer past this one is mechanical, so what a
+//! witness is allowed to be is decided here and nowhere else.
 //!
 //! Three things must hold before an event is read as a fact, and they are
 //! independent:
@@ -18,27 +18,42 @@
 //!    instances count; the instance registry says what code each one runs.
 //!    Checking both means neither alone is load-bearing for the other's
 //!    claim.
-//! 3. **The payload is the shape the package's event table declares.**
+//! 3. **The payload is exactly the shape its event index declares** — a
+//!    total decode per index, with trailing bytes as fatal as missing
+//!    ones.
 //!
-//! What is deliberately *not* checked is which pool the fact concerns,
-//! because nothing says: the kernel stamps an event's emitter from the
-//! invocation, so the pool is the instance, and an instance cannot name
-//! another. That is why a payload carries an amount and nothing else —
-//! there is no field in it to get wrong or to forge.
+//! Across all of them one rule holds: **the subject of a fact is its
+//! emitter, never its payload.** The kernel stamps an emitter from the
+//! invocation, so the pool a fact concerns is the instance that produced
+//! it and no instance can name another. A payload carries the object of
+//! the action — an amount, a validator — and never a pool. That is what
+//! makes the warrant behind a fact "this package's code produced it"
+//! rather than "someone wrote it down".
+//!
+//! A validator is an object a payload *can* get wrong, because a pool may
+//! name one another pool operates. Nothing here can tell: which pool owns
+//! a validator is beacon state, and this runs on a shard. The fact
+//! carries its emitting pool and the fold refuses a validator that is not
+//! that pool's.
 
 use std::collections::BTreeMap;
 
-use hyperscale_types::{BeaconWitnessEvent, Stake, StakePoolId, VmEvent};
+use hyperscale_types::{
+    BeaconWitnessEvent, CONSENSUS_PUBLIC_KEY_BYTES, ConsensusPublicKey, ConsensusSignature, Stake,
+    StakePoolId, ValidatorId, VmEvent,
+};
 use hyperscale_vm_effects::{Address, InstanceRegistry, PackageHash};
 
 /// The stake pool's event table, by the index its guest emits.
 ///
-/// The order is the package's contract: `staking_metadata` declares
-/// `["staked", "unstaked"]` and the guest emits `0` and `1` against it.
-/// A package is immutable and content-addressed, so an index can never
-/// come to mean something else.
+/// The order is the package's contract: `staking_metadata` declares the
+/// names and the guest emits against them. A package is immutable and
+/// content-addressed, so an index can never come to mean something else.
 const STAKED: u32 = 0;
 const UNSTAKED: u32 = 1;
+const VALIDATOR_REGISTERED: u32 = 2;
+const VALIDATOR_DEACTIVATED: u32 = 3;
+const VALIDATOR_UNJAILED: u32 = 4;
 
 /// The stake pools the beacon folds for: the instance address a fact must
 /// come from, and the identifier it is folded under.
@@ -103,10 +118,33 @@ pub fn witness_from_event(
     if instances.get(Address(event.emitter))?.package != staking_package {
         return None;
     }
-    let amount = Stake::from_attos(amount_of(&event.payload)?);
+    let payload = event.payload.as_slice();
     match event.event_type {
-        STAKED => Some(BeaconWitnessEvent::StakeDeposit { pool_id, amount }),
-        UNSTAKED => Some(BeaconWitnessEvent::StakeWithdraw { pool_id, amount }),
+        STAKED => Some(BeaconWitnessEvent::StakeDeposit {
+            pool_id,
+            amount: Stake::from_attos(amount_of(payload)?),
+        }),
+        UNSTAKED => Some(BeaconWitnessEvent::StakeWithdraw {
+            pool_id,
+            amount: Stake::from_attos(amount_of(payload)?),
+        }),
+        VALIDATOR_REGISTERED => {
+            let (validator_id, pubkey, possession_proof) = registration_of(payload)?;
+            Some(BeaconWitnessEvent::RegisterValidator {
+                pool_id,
+                validator_id,
+                pubkey,
+                possession_proof,
+            })
+        }
+        VALIDATOR_DEACTIVATED => Some(BeaconWitnessEvent::DeactivateValidator {
+            pool_id,
+            validator_id: validator_of(payload)?,
+        }),
+        VALIDATOR_UNJAILED => Some(BeaconWitnessEvent::Unjail {
+            pool_id,
+            id: validator_of(payload)?,
+        }),
         _ => None,
     }
 }
@@ -119,6 +157,32 @@ pub fn witness_from_event(
 fn amount_of(payload: &[u8]) -> Option<u128> {
     let cell: [u8; 16] = payload.try_into().ok()?;
     Some(u128::from_le_bytes(cell))
+}
+
+/// The validator an operator fact names, little-endian and alone.
+fn validator_of(payload: &[u8]) -> Option<ValidatorId> {
+    let id: [u8; 8] = payload.try_into().ok()?;
+    Some(ValidatorId::new(u64::from_le_bytes(id)))
+}
+
+/// What a registration carries: the validator, the consensus key it
+/// registers, and the proof it holds that key.
+///
+/// The three widths are fixed by the consensus scheme, so the
+/// concatenation is unambiguous and its total length is the whole of the
+/// shape check. The proof is not verified here — the beacon fold verifies
+/// it before the key enters the registry, which is where the rogue-key
+/// defence belongs and the only place holding the registry it defends.
+fn registration_of(
+    payload: &[u8],
+) -> Option<(ValidatorId, ConsensusPublicKey, ConsensusSignature)> {
+    let (id, rest) = payload.split_at_checked(8)?;
+    let (pubkey, proof) = rest.split_at_checked(CONSENSUS_PUBLIC_KEY_BYTES)?;
+    Some((
+        validator_of(id)?,
+        ConsensusPublicKey::new(pubkey.try_into().ok()?),
+        ConsensusSignature::new(proof.try_into().ok()?),
+    ))
 }
 
 #[cfg(test)]
@@ -207,11 +271,128 @@ mod tests {
         );
     }
 
+    const VALIDATOR: u64 = 42;
+    const PUBKEY: [u8; CONSENSUS_PUBLIC_KEY_BYTES] = [0xC1; CONSENSUS_PUBLIC_KEY_BYTES];
+    const PROOF: [u8; 96] = [0xC2; 96];
+
+    /// The bytes the pool's guest concatenates for a registration.
+    fn registration_payload() -> Vec<u8> {
+        let mut payload = VALIDATOR.to_le_bytes().to_vec();
+        payload.extend_from_slice(&PUBKEY);
+        payload.extend_from_slice(&PROOF);
+        payload
+    }
+
+    fn raw(emitter: [u8; 16], event_type: u32, payload: Vec<u8>) -> VmEvent {
+        VmEvent {
+            emitter,
+            event_type,
+            payload,
+        }
+    }
+
+    #[test]
+    fn a_recognised_pools_operator_actions_read_as_beacon_facts() {
+        let (pools, instances) = world();
+        let pool_id = StakePoolId::new(POOL_ID);
+        assert_eq!(
+            witness_from_event(
+                &raw(POOL, VALIDATOR_REGISTERED, registration_payload()),
+                &pools,
+                &instances,
+                package(1)
+            ),
+            Some(BeaconWitnessEvent::RegisterValidator {
+                pool_id,
+                validator_id: ValidatorId::new(VALIDATOR),
+                pubkey: ConsensusPublicKey::new(PUBKEY),
+                possession_proof: ConsensusSignature::new(PROOF),
+            }),
+        );
+        let named = VALIDATOR.to_le_bytes().to_vec();
+        assert_eq!(
+            witness_from_event(
+                &raw(POOL, VALIDATOR_DEACTIVATED, named.clone()),
+                &pools,
+                &instances,
+                package(1)
+            ),
+            Some(BeaconWitnessEvent::DeactivateValidator {
+                pool_id,
+                validator_id: ValidatorId::new(VALIDATOR),
+            }),
+        );
+        assert_eq!(
+            witness_from_event(
+                &raw(POOL, VALIDATOR_UNJAILED, named),
+                &pools,
+                &instances,
+                package(1)
+            ),
+            Some(BeaconWitnessEvent::Unjail {
+                pool_id,
+                id: ValidatorId::new(VALIDATOR),
+            }),
+        );
+    }
+
+    /// The pool a fact concerns is never a field of it. An operator
+    /// action carries a validator and its consensus material and nothing
+    /// that names a pool, so the emitter stamp is the only thing that
+    /// could have said which pool spoke.
+    #[test]
+    fn an_operator_action_is_folded_under_its_emitter() {
+        let (mut pools, instances) = world();
+        pools.register(IMPOSTOR, StakePoolId::new(POOL_ID + 1));
+        let event = raw(IMPOSTOR, VALIDATOR_REGISTERED, registration_payload());
+        let Some(BeaconWitnessEvent::RegisterValidator { pool_id, .. }) =
+            witness_from_event(&event, &pools, &instances, package(1))
+        else {
+            panic!("a recognised emitter's registration is a fact");
+        };
+        assert_eq!(pool_id, StakePoolId::new(POOL_ID + 1));
+    }
+
+    /// Trailing bytes are as fatal as missing ones: the decode is total
+    /// per index, so a payload that is nearly right is not a fact.
+    #[test]
+    fn an_operator_payload_of_the_wrong_width_is_not_a_fact() {
+        let (pools, instances) = world();
+        let mut long = registration_payload();
+        long.push(0);
+        let mut short = registration_payload();
+        short.pop();
+        for payload in [long, short, Vec::new(), VALIDATOR.to_le_bytes().to_vec()] {
+            assert_eq!(
+                witness_from_event(
+                    &raw(POOL, VALIDATOR_REGISTERED, payload),
+                    &pools,
+                    &instances,
+                    package(1)
+                ),
+                None,
+            );
+        }
+        for payload in [vec![1; 7], vec![1; 9], Vec::new()] {
+            for event_type in [VALIDATOR_DEACTIVATED, VALIDATOR_UNJAILED] {
+                assert_eq!(
+                    witness_from_event(
+                        &raw(POOL, event_type, payload.clone()),
+                        &pools,
+                        &instances,
+                        package(1)
+                    ),
+                    None,
+                );
+            }
+        }
+    }
+
     #[test]
     fn an_event_the_table_does_not_declare_is_not_a_fact() {
         let (pools, instances) = world();
         assert_eq!(
-            witness_from_event(&event(POOL, 2, 500), &pools, &instances, package(1)),
+            witness_from_event(&event(POOL, 5, 500), &pools, &instances, package(1)),
             None,
         );
     }
