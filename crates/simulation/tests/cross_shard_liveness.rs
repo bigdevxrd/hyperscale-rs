@@ -11,14 +11,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperscale_scenarios::tx::{
-    account_from_seed, build_transfer_tx, signer_from_seed, validity_around,
-};
+use hyperscale_scenarios::tx::{build_vm_transfer_tx, validity_around, vm_account_routing_to};
 use hyperscale_scenarios::{Cluster, ScenarioConfig};
 use hyperscale_storage::ShardChainReader;
-use hyperscale_types::{BlockHeight, ShardId};
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
+use hyperscale_types::{BlockHeight, Ed25519PrivateKey, ShardId, ShardTrie};
 
 mod support;
 
@@ -76,12 +72,32 @@ fn fallbacks(cluster: &SimCluster, shard: ShardId) -> Vec<(u64, u64)> {
     found
 }
 
+/// The accounts the load runs between, alternating leaves so every
+/// transfer in the round-robin below crosses.
+///
+/// Ground rather than seeded: a VM address is its own placement, so
+/// where an account lands is a property of its key, and leaving that to
+/// chance would let the load stop crossing without the test noticing —
+/// which is the whole load it is meant to apply.
+fn cast() -> Vec<(Ed25519PrivateKey, [u8; 16])> {
+    let (left, right) = (ShardId::leaf(1, 0), ShardId::leaf(1, 1));
+    let mut taken = Vec::new();
+    (0..ACCOUNTS)
+        .map(|index| {
+            let shard = if index % 2 == 0 { left } else { right };
+            vm_account_routing_to(shard, &mut taken)
+        })
+        .collect()
+}
+
 #[test]
 fn cross_shard_load_costs_no_view_changes() {
-    let balances: Vec<_> = (1..=ACCOUNTS)
-        .map(|seed| (account_from_seed(seed), Decimal::from(100_000)))
+    let cast = cast();
+    let accounts: Vec<_> = cast
+        .iter()
+        .map(|(_, account)| (*account, 100_000u128))
         .collect();
-    let mut cluster = SimCluster::with_balances(&grow_config(), SEED, &balances);
+    let mut cluster = SimCluster::with_vm_accounts(&grow_config(), SEED, &accounts);
     cluster.runner_mut().grow_to(2);
 
     let (left, right) = ShardId::ROOT.children();
@@ -94,16 +110,20 @@ fn cross_shard_load_costs_no_view_changes() {
         [left, right].map(|shard| fallbacks(&cluster, shard).len())
     };
 
+    let trie = ShardTrie::uniform_from_count(2);
     for nonce in 0..TRANSFERS {
-        let from = u8::try_from(nonce % u32::from(ACCOUNTS)).expect("modulo fits u8") + 1;
-        let to = (from % ACCOUNTS) + 1;
-        let transfer = build_transfer_tx(
-            &signer_from_seed(from),
-            account_from_seed(from),
-            account_from_seed(to),
-            Decimal::from(1),
-            &NetworkDefinition::simulator(),
-            nonce,
+        let from = (nonce % u32::from(ACCOUNTS)) as usize;
+        let to = (from + 1) % cast.len();
+        assert_ne!(
+            trie.shard_for_prefix(cast[from].1),
+            trie.shard_for_prefix(cast[to].1),
+            "every leg of the load has to cross, or the test applies no load",
+        );
+        let transfer = build_vm_transfer_tx(
+            &cast[from].0,
+            cast[from].1,
+            cast[to].1,
+            u128::from(nonce) + 1,
             validity_around(cluster.now()),
         );
         cluster.submit(Arc::new(transfer));

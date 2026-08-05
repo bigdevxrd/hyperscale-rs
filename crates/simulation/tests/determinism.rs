@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
-use hyperscale_scenarios::tx::{account_routing_to, build_transfer_tx, validity_around};
+use hyperscale_scenarios::tx::{
+    build_vm_transfer_tx, validity_around, vm_cross_shard_cast, vm_cross_shard_genesis_accounts,
+};
 use hyperscale_scenarios::{Cluster, ScenarioConfig, epochs, grow_to};
 use hyperscale_simulation::{SimConfig, SimulationRunner};
 use hyperscale_storage::SubstateStore;
@@ -26,8 +28,6 @@ use hyperscale_types::test_utils::test_transaction;
 use hyperscale_types::{
     BeaconBlockHash, BlockHeight, Round, ShardId, StateRoot, TransactionStatus,
 };
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
 use support::SimCluster;
 
 /// A four-validator single-shard network with light jitter; beacon options
@@ -223,24 +223,15 @@ const fn cross_shard_config() -> ScenarioConfig {
 #[test]
 fn cross_shard_grow_replays_byte_identical() {
     let run = |seed: u64| -> (Vec<BlockHeight>, u64, u64) {
-        let (kp_a, acc_a) = account_routing_to(ShardId::leaf(1, 0), 2);
-        let (_kp_b, acc_b) = account_routing_to(ShardId::leaf(1, 1), 2);
-        let balances = [
-            (acc_a, Decimal::from(10_000)),
-            (acc_b, Decimal::from(10_000)),
-        ];
-        let mut cluster = SimCluster::with_balances(&cross_shard_config(), seed, &balances);
+        let (payer, from, to) = vm_cross_shard_cast();
+        let mut cluster = SimCluster::with_vm_accounts(
+            &cross_shard_config(),
+            seed,
+            &vm_cross_shard_genesis_accounts(),
+        );
         grow_to(&mut cluster, 2);
 
-        let tx = build_transfer_tx(
-            &kp_a,
-            acc_a,
-            acc_b,
-            Decimal::from(500),
-            &NetworkDefinition::simulator(),
-            1,
-            validity_around(cluster.now()),
-        );
+        let tx = build_vm_transfer_tx(&payer, from, to, 500, validity_around(cluster.now()));
         let tx_hash = tx.hash();
         cluster.submit(Arc::new(tx));
         // Advance to the same deterministic point in both runs — settlement, or
