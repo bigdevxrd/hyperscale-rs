@@ -11,12 +11,12 @@ use std::time::Duration;
 use hyperscale_core::ProtocolEvent;
 use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
-    CROSS_FRACTION_SENDERS, cross_contention_genesis_balances, cross_shard_fault_genesis_accounts,
-    halt_recovery_genesis_balances, halt_straddler_setup, intershard_partition_genesis_balances,
-    merge_straddler_setup, split_straddler_setup, straddler_genesis_balances,
-    vm_cross_fraction_genesis_accounts, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
-    vm_insolvent_genesis_accounts, vm_livelock_genesis_accounts,
-    vm_nullifier_race_genesis_accounts, vm_staking_genesis_accounts, vm_staking_pools,
+    CROSS_FRACTION_SENDERS, cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances,
+    halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
+    split_straddler_setup, straddler_genesis_balances, vm_cross_fraction_genesis_accounts,
+    vm_cross_shard_genesis_accounts, vm_genesis_accounts, vm_insolvent_genesis_accounts,
+    vm_livelock_genesis_accounts, vm_nullifier_race_genesis_accounts,
+    vm_participant_sweep_genesis_accounts, vm_staking_genesis_accounts, vm_staking_pools,
     vm_storm_genesis_accounts, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
@@ -424,8 +424,11 @@ fn read_share_leaves_write_traffic_decisions_unchanged_sim() {
 
 #[test]
 fn participant_count_sweep_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&split_config(), 11, &cross_contention_genesis_balances(1));
+    let mut cluster = SimCluster::with_vm_accounts(
+        &split_config(),
+        11,
+        &vm_participant_sweep_genesis_accounts(2),
+    );
     let latencies = participant_count_sweep(&mut cluster, 2, 2);
     println!("participant_count_sweep shards=2: {latencies:?}");
 }

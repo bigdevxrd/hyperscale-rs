@@ -682,6 +682,82 @@ pub fn vm_genesis_accounts(senders: u8, recipients: u8) -> Vec<([u8; 16], u128)>
         .collect()
 }
 
+/// One payment to each of `recipients`, all from `from` in a single
+/// transaction.
+///
+/// A withdrawal per recipient rather than one split between them: each
+/// leg is an independent reservation on the payer's own vault, which is
+/// what a fan-out actually contends on, and the payer's shard is the one
+/// cell every leg shares.
+///
+/// # Panics
+///
+/// Panics on a recipient list long enough to overflow a node index,
+/// which is orders past the manifest node cap admission enforces.
+#[must_use]
+pub fn build_vm_fan_out_tx(
+    payer: &Ed25519PrivateKey,
+    from: [u8; 16],
+    recipients: &[[u8; 16]],
+    amount: u128,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let mut nodes = Vec::with_capacity(recipients.len() * 2);
+    for (index, to) in recipients.iter().enumerate() {
+        let producer = u32::try_from(nodes.len()).expect("fan-out node count fits");
+        nodes.push(GraphNode {
+            target: Address(from),
+            method: "withdraw".into(),
+            args: vec![
+                GraphArg::Literal(Value::Address(VM_XRD)),
+                GraphArg::Literal(Value::U128(amount + index as u128)),
+            ],
+        });
+        nodes.push(GraphNode {
+            target: Address(*to),
+            method: "deposit".into(),
+            args: vec![GraphArg::Edge {
+                edge: EdgeRef {
+                    producer,
+                    output: 0,
+                },
+                constraints: vec![Constraint::ResourceIs(VM_XRD)],
+            }],
+        });
+    }
+    RoutableTransaction::new_vm(vm_envelope(ManifestGraph { nodes }, payer, validity))
+}
+
+/// The accounts the participant sweep fans out across: one payer on the
+/// first leaf and one payee on each leaf, under a `num_shards`-wide trie.
+///
+/// The sweep walks the same grind, so what it names is what genesis
+/// funded.
+#[must_use]
+pub fn vm_participant_sweep_accounts(num_shards: u64) -> Vec<(Ed25519PrivateKey, [u8; 16])> {
+    let depth = num_shards.trailing_zeros();
+    let mut taken = Vec::new();
+    let mut accounts = vm_accounts_routing_to(ShardId::leaf(depth, 0), num_shards, 1, &mut taken);
+    for leaf in 0..num_shards {
+        accounts.extend(vm_accounts_routing_to(
+            ShardId::leaf(depth, leaf),
+            num_shards,
+            1,
+            &mut taken,
+        ));
+    }
+    accounts
+}
+
+/// Genesis funding for [`vm_participant_sweep_accounts`].
+#[must_use]
+pub fn vm_participant_sweep_genesis_accounts(num_shards: u64) -> Vec<([u8; 16], u128)> {
+    vm_participant_sweep_accounts(num_shards)
+        .into_iter()
+        .map(|(_, account)| (account, 10_000u128))
+        .collect()
+}
+
 /// The conflicting pair the livelock probe submits: one account on each
 /// child of the root split.
 ///

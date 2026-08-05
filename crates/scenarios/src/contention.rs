@@ -18,15 +18,13 @@ use hyperscale_mempool::DeferralStats;
 use hyperscale_types::test_utils::{test_node, test_notarized_transaction_v1};
 use hyperscale_types::{
     RoutableTransaction, ShardId, TransactionDecision, TransactionStatus, TxHash,
-    build_fan_out_transfer_tx,
 };
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
 use radix_transactions::model::UserTransaction;
 
 use crate::reshape::split_lifecycle;
 use crate::support::tx::{
-    accounts_routing_to, build_vm_transfer_tx, validity_around, vm_accounts_routing_to,
+    build_vm_fan_out_tx, build_vm_transfer_tx, validity_around, vm_accounts_routing_to,
+    vm_participant_sweep_accounts,
 };
 use crate::support::{Budget, Cluster, epochs, grow_to};
 
@@ -229,35 +227,23 @@ pub fn participant_count_sweep(
         "a fan-out cannot touch more shards than the topology has",
     );
     grow_to(c, u32::try_from(num_shards).expect("shard count fits"));
-    let depth = num_shards.trailing_zeros();
-    let mut taken = Vec::new();
-    let (payer, from) = accounts_routing_to(ShardId::leaf(depth, 0), num_shards, 1, &mut taken)
-        .pop()
-        .expect("one sender");
+    // The same walk `vm_participant_sweep_accounts` funds: the payer on
+    // the first leaf, then one payee per leaf in leaf order.
+    let accounts = vm_participant_sweep_accounts(num_shards);
+    let (payer, from) = (&accounts[0].0, accounts[0].1);
 
     let mut latencies = Vec::new();
     for participants in 2..=max_participants {
-        let recipients: Vec<_> = (1..participants)
-            .map(|leaf| {
-                accounts_routing_to(
-                    ShardId::leaf(depth, u64::from(leaf)),
-                    num_shards,
-                    1,
-                    &mut taken,
-                )[0]
-                .1
-            })
+        let recipients: Vec<[u8; 16]> = (1..participants)
+            .map(|leaf| accounts[1 + leaf as usize].1)
             .collect();
-        let tx = build_fan_out_transfer_tx(
-            &payer,
+        let tx = build_vm_fan_out_tx(
+            payer,
             from,
             &recipients,
-            Decimal::from(PAYMENT),
-            &NetworkDefinition::simulator(),
-            participants,
+            u128::from(PAYMENT),
             validity_around(c.now()),
-        )
-        .expect("fan-out builds");
+        );
         let submissions = [(tx.hash(), c.now())];
         c.submit(Arc::new(tx));
         let report = settle_and_report(c, &submissions, epochs(10));

@@ -12,10 +12,10 @@ mod support;
 use std::time::Duration;
 
 use hyperscale_scenarios::tx::{
-    CROSS_FRACTION_SENDERS, cross_contention_genesis_balances, cross_shard_fault_genesis_accounts,
-    halt_recovery_genesis_balances, halt_straddler_setup, intershard_partition_genesis_balances,
-    merge_straddler_setup, split_straddler_setup, straddler_genesis_balances,
-    vm_cross_fraction_genesis_accounts, vm_genesis_accounts, vm_livelock_genesis_accounts,
+    CROSS_FRACTION_SENDERS, cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances,
+    halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
+    split_straddler_setup, straddler_genesis_balances, vm_cross_fraction_genesis_accounts,
+    vm_genesis_accounts, vm_livelock_genesis_accounts, vm_participant_sweep_genesis_accounts,
     vm_staking_genesis_accounts, vm_staking_pools, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
@@ -304,11 +304,12 @@ fn cross_shard_fraction_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn participant_count_sweep_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_accounts(
         &split_config(),
         11,
         EPOCH_MS,
-        cross_contention_genesis_balances(1),
+        straddler_genesis_balances(),
+        vm_participant_sweep_genesis_accounts(2),
     );
     let latencies = participant_count_sweep(&mut cluster, 2, 2);
     println!("participant_count_sweep shards=2: {latencies:?}");
