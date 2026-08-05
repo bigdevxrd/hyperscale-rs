@@ -12,21 +12,9 @@
 
 use blake3::hash as blake3_hash;
 
-use crate::NodeId;
-
 /// First byte of every storage key — the tag a decoder checks before
 /// splitting a key into its halves.
 pub const VM_KEY_TAG: u8 = 0x56;
-
-/// Length of the `SpreadPrefixKeyMapper` hash prefix that precedes the `NodeId`
-/// in a `db_node_key`.
-pub const DB_NODE_KEY_HASH_PREFIX_LEN: usize = 20;
-
-/// Length of a `NodeId` in bytes.
-pub const NODE_ID_LEN: usize = 30;
-
-/// Length of a full `db_node_key`: hash prefix followed by the `NodeId`.
-pub const DB_NODE_KEY_LEN: usize = DB_NODE_KEY_HASH_PREFIX_LEN + NODE_ID_LEN;
 
 /// Length of a VM `db_node_key`: [`VM_KEY_TAG`] followed by the 16-byte
 /// owner prefix.
@@ -148,17 +136,6 @@ pub fn jmt_leaf_key(storage_key: &[u8]) -> [u8; 32] {
     vm_leaf_key(owner, local)
 }
 
-/// The owner-major routing hash whose leading bytes form a leaf key's
-/// high half — the bits a shard prefix routes and partitions on.
-///
-/// Every substate of one routing node (the entity itself, or the global
-/// owner of an internal node) shares it, so "which shard prefix does
-/// this entity's state sit under" is a test against this hash alone.
-#[must_use]
-pub fn node_routing_hash(routing_node: &NodeId) -> [u8; 32] {
-    *blake3_hash(&routing_node.0).as_bytes()
-}
-
 /// Hash a substate value to the 32-byte value hash held in its JMT leaf.
 #[must_use]
 pub fn jmt_value_hash(value: &[u8]) -> [u8; 32] {
@@ -177,49 +154,9 @@ pub fn leaf_key_binds_storage_key(leaf_key: &[u8; 32], storage_key: &[u8]) -> bo
         .is_some_and(|(owner, local)| *leaf_key == vm_leaf_key(owner, local))
 }
 
-/// Decode the [`NodeId`] embedded in a `db_node_key` (or any storage key that
-/// begins with one). Returns `None` when the slice is shorter than a full
-/// `db_node_key`.
-///
-/// Layout: `[hash prefix: DB_NODE_KEY_HASH_PREFIX_LEN][NodeId: NODE_ID_LEN]`.
-#[must_use]
-pub fn db_node_key_to_node_id(db_node_key: &[u8]) -> Option<NodeId> {
-    if db_node_key.len() < DB_NODE_KEY_LEN {
-        return None;
-    }
-    let mut id = [0u8; NODE_ID_LEN];
-    id.copy_from_slice(&db_node_key[DB_NODE_KEY_HASH_PREFIX_LEN..DB_NODE_KEY_LEN]);
-    Some(NodeId(id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Build a well-formed storage key: zeroed hash prefix, then the node id,
-    /// then a partition byte and sort key.
-    fn storage_key(node: NodeId, partition: u8, sort: &[u8]) -> Vec<u8> {
-        let mut key = vec![0u8; DB_NODE_KEY_HASH_PREFIX_LEN];
-        key.extend_from_slice(&node.0);
-        key.push(partition);
-        key.extend_from_slice(sort);
-        key
-    }
-
-    #[test]
-    fn db_node_key_to_node_id_extracts_embedded_id() {
-        let node = NodeId([7u8; NODE_ID_LEN]);
-        assert_eq!(
-            db_node_key_to_node_id(&storage_key(node, 0, b"sort")),
-            Some(node)
-        );
-    }
-
-    #[test]
-    fn db_node_key_to_node_id_rejects_short_key() {
-        assert_eq!(db_node_key_to_node_id(&[]), None);
-        assert_eq!(db_node_key_to_node_id(&[0u8; DB_NODE_KEY_LEN - 1]), None);
-    }
 
     #[test]
     fn jmt_leaf_key_is_owner_major() {
@@ -271,10 +208,10 @@ mod tests {
         assert_eq!(vm_flat_key_parts(&wrong_len), None);
         assert_eq!(vm_flat_key_parts(&good[..VM_FLAT_KEY_LEN - 1]), None);
 
-        // A Radix key never parses as VM-shaped, whatever its first byte.
-        let mut radix = storage_key(NodeId([3u8; NODE_ID_LEN]), 0, b"sort");
-        radix[0] = VM_KEY_TAG;
-        assert_eq!(vm_flat_key_parts(&radix), None);
+        // A correctly tagged key of the wrong length still refuses.
+        let mut overlong = vec![VM_KEY_TAG];
+        overlong.extend_from_slice(&[3u8; 48]);
+        assert_eq!(vm_flat_key_parts(&overlong), None);
 
         assert_eq!(vm_db_node_key_owner(&good), None); // full key, not entity key
         assert_eq!(vm_db_node_key_owner(&wrong_tag[..VM_DB_NODE_KEY_LEN]), None);

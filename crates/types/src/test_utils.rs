@@ -5,47 +5,21 @@ use std::sync::Arc;
 
 use hyperscale_crypto::{Signer, Verifier};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
-use radix_common::constants::PACKAGE_PACKAGE;
 use radix_common::crypto::Ed25519PrivateKey;
-use radix_common::types::BlueprintId;
-use radix_engine_interface::types::{Emitter, EventTypeIdentifier};
 
 use crate::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
     CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived,
     ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot,
-    Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, NodeId, ProposerTimestamp,
-    ProvisionsRoot, QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId,
-    ShardLoad, SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, Transaction,
-    TransactionBody, TransactionDecision, TransactionEnvelope, TransactionRoot, TxHash, TxOutcome,
-    ValidatorId, ValidatorInfo, ValidatorSet, Verifiable, Verified, VmStatics, VmStaticsError,
-    WaveCertificate, WaveId, WeightedTimestamp, WitnessSources, block_vote_message,
-    install_vm_statics, vm_statics_installed,
+    Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, ProposerTimestamp, ProvisionsRoot,
+    QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId, ShardLoad,
+    SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, Transaction, TransactionBody,
+    TransactionDecision, TransactionEnvelope, TransactionRoot, TxHash, TxOutcome, ValidatorId,
+    ValidatorInfo, ValidatorSet, Verifiable, Verified, VmStatics, VmStaticsError, WaveCertificate,
+    WaveId, WeightedTimestamp, WitnessSources, block_vote_message, install_vm_statics,
+    vm_statics_installed,
 };
-
-/// Create a test `NodeId` from a seed byte.
-#[must_use]
-pub const fn test_node(seed: u8) -> NodeId {
-    NodeId([seed; 30])
-}
-
-/// Create a deterministic [`EventTypeIdentifier`] for tests.
-///
-/// Uses the well-known `PACKAGE_PACKAGE` address so the underlying
-/// `PackageAddress` constructor accepts the bytes; the seed varies the
-/// blueprint and event names so different seeds produce different identifiers
-/// (and therefore different event hashes).
-#[must_use]
-pub fn test_event_type_identifier(seed: u8) -> EventTypeIdentifier {
-    EventTypeIdentifier(
-        Emitter::Function(BlueprintId::new(
-            &PACKAGE_PACKAGE,
-            format!("TestBlueprint{seed}"),
-        )),
-        format!("TestEvent{seed}"),
-    )
-}
 
 /// Create a test transaction the [`StubVmStatics`] derivation routes to
 /// `read_prefixes` as shared keys and `write_prefixes` as exclusive ones.

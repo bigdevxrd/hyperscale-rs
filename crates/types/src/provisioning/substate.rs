@@ -2,8 +2,8 @@
 
 use sbor::prelude::*;
 
-use crate::state_key::db_node_key_to_node_id;
-use crate::{BoundedBytes, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN, NodeId};
+use crate::state_key::vm_flat_key;
+use crate::{BoundedBytes, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
 
 /// A state entry with pre-computed storage key for fast engine lookup.
 ///
@@ -32,13 +32,6 @@ impl SubstateEntry {
         }
     }
 
-    /// Extract the [`NodeId`] embedded in this entry's storage key, or `None`
-    /// if the key is shorter than a `db_node_key`.
-    #[must_use]
-    pub fn node_id(&self) -> Option<NodeId> {
-        db_node_key_to_node_id(&self.storage_key)
-    }
-
     /// Compute hash of this entry for signing/verification.
     #[must_use]
     pub fn hash(&self) -> Hash {
@@ -60,24 +53,16 @@ impl SubstateEntry {
 
     /// Create a test entry from a node ID (for testing only).
     ///
-    /// Creates a storage key in the correct format so that `node_id()` can extract
-    /// the node ID. Uses a dummy hash prefix (zeros) since tests don't need real
-    /// `SpreadPrefixKeyMapper` hashes.
+    /// Builds the flat storage key from the owner prefix and a local half
+    /// zero-padded from `local`, so a fixture names a cell by a short seed
+    /// and still produces a key every decoding path accepts.
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
-    pub fn test_entry(
-        node_id: NodeId,
-        partition: u8,
-        sort_key: &[u8],
-        value: Option<Vec<u8>>,
-    ) -> Self {
-        // Format: hash_prefix (20) + node_id (30) + partition (1) + sort_key
-        let mut storage_key = Vec::with_capacity(20 + 30 + 1 + sort_key.len());
-        storage_key.extend_from_slice(&[0u8; 20]); // Dummy hash prefix
-        storage_key.extend_from_slice(&node_id.0); // Node ID
-        storage_key.push(partition); // Partition number
-        storage_key.extend_from_slice(sort_key); // Sort key
-        Self::new(storage_key, value)
+    pub fn test_entry(owner: [u8; 16], local: &[u8], value: Option<Vec<u8>>) -> Self {
+        let mut half = [0u8; 16];
+        let n = local.len().min(16);
+        half[..n].copy_from_slice(&local[..n]);
+        Self::new(vm_flat_key(owner, half), value)
     }
 }
 #[cfg(test)]
@@ -91,8 +76,7 @@ mod tests {
 
     #[test]
     fn test_substate_entry_hash() {
-        let entry =
-            SubstateEntry::test_entry(NodeId([1u8; 30]), 0, b"key", Some(b"value".to_vec()));
+        let entry = SubstateEntry::test_entry([1u8; 16], b"key", Some(b"value".to_vec()));
 
         let hash1 = entry.hash();
         let hash2 = entry.hash();
@@ -101,7 +85,7 @@ mod tests {
 
     #[test]
     fn sbor_roundtrip_some_value() {
-        let entry = SubstateEntry::test_entry(NodeId([7u8; 30]), 3, b"sort", Some(vec![9u8; 128]));
+        let entry = SubstateEntry::test_entry([7u8; 16], b"sort", Some(vec![9u8; 128]));
         let bytes = basic_encode(&entry).unwrap();
         let decoded: SubstateEntry = basic_decode(&bytes).unwrap();
         assert_eq!(decoded, entry);
@@ -109,7 +93,7 @@ mod tests {
 
     #[test]
     fn sbor_roundtrip_none_value() {
-        let entry = SubstateEntry::test_entry(NodeId([7u8; 30]), 3, b"sort", None);
+        let entry = SubstateEntry::test_entry([7u8; 16], b"sort", None);
         let bytes = basic_encode(&entry).unwrap();
         let decoded: SubstateEntry = basic_decode(&bytes).unwrap();
         assert_eq!(decoded, entry);

@@ -8,9 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use blake3::hash as blake3_hash;
-
-use crate::{NodeId, ShardId};
+use crate::ShardId;
 
 /// The set of live shards, forming a complete partition of the keyspace: every
 /// infinite bit path from the root passes through exactly one leaf.
@@ -59,22 +57,6 @@ impl ShardTrie {
         Self {
             leaves: leaves.into_iter().collect(),
         }
-    }
-
-    /// The shard owning `node_id`, by longest-prefix match over the
-    /// node's hash bits.
-    ///
-    /// # Panics
-    /// Panics if the trie is not a complete partition (a hash path descends
-    /// past `depth 63` without hitting a leaf).
-    #[must_use]
-    pub fn shard_for(&self, node_id: &NodeId) -> ShardId {
-        let hash = blake3_hash(&node_id.0);
-        self.walk(u64::from_be_bytes(
-            hash.as_bytes()[..8]
-                .try_into()
-                .expect("blake3 output is 32 bytes"),
-        ))
     }
 
     /// The shard owning `prefix`'s key space: the walk on the prefix's own
@@ -165,17 +147,17 @@ mod tests {
     fn single_routes_everything_to_root() {
         let trie = ShardTrie::single();
         assert_eq!(trie.len(), 1);
-        assert_eq!(trie.shard_for(&NodeId([1; 30])), ShardId::ROOT);
-        assert_eq!(trie.shard_for(&NodeId([0xff; 30])), ShardId::ROOT);
+        assert_eq!(trie.shard_for_prefix([1; 16]), ShardId::ROOT);
+        assert_eq!(trie.shard_for_prefix([0xff; 16]), ShardId::ROOT);
     }
 
     #[test]
     fn uniform_partitions_by_top_bits() {
         let trie = ShardTrie::uniform(1);
         assert_eq!(trie.len(), 2);
-        // Every node lands on one of the two depth-1 leaves, by its hash MSB.
+        // Every owner lands on one of the two depth-1 leaves, by its MSB.
         for seed in 0u8..32 {
-            let shard = trie.shard_for(&NodeId([seed; 30]));
+            let shard = trie.shard_for_prefix([seed; 16]);
             assert_eq!(shard.depth(), 1);
             assert!(trie.contains(shard));
         }
@@ -212,12 +194,11 @@ mod tests {
 
     #[test]
     fn shard_for_matches_a_uniform_leaf_prefix() {
-        // The routed shard's path equals the top `depth` bits of the hash.
+        // The routed shard's path equals the owner prefix's top `depth` bits.
         let trie = ShardTrie::uniform(3);
-        let node = NodeId([0xab; 30]);
-        let shard = trie.shard_for(&node);
-        let hash = blake3_hash(&node.0);
-        let bits = u64::from_be_bytes(hash.as_bytes()[..8].try_into().unwrap());
+        let owner = [0xabu8; 16];
+        let shard = trie.shard_for_prefix(owner);
+        let bits = u64::from_be_bytes(owner[..8].try_into().unwrap());
         assert_eq!(shard.path(), bits >> (64 - 3));
     }
 
@@ -233,18 +214,18 @@ mod tests {
         assert_eq!(left0, ShardId::leaf(2, 0));
         assert_eq!(left1, ShardId::leaf(2, 1));
 
-        // Every node resolves to exactly one leaf by its hash's longest
-        // matching prefix: top bit 1 → the depth-1 leaf; top bit 0 → the
-        // depth-2 leaf chosen by the second bit.
+        // Every owner resolves to exactly one leaf by its longest matching
+        // prefix: top bit 1 → the depth-1 leaf; top bit 0 → the depth-2 leaf
+        // chosen by the second bit.
         for seed in 0u8..=255 {
-            let node = NodeId([seed; 30]);
-            let bits = u64::from_be_bytes(blake3_hash(&node.0).as_bytes()[..8].try_into().unwrap());
+            let owner = [seed; 16];
+            let bits = u64::from_be_bytes(owner[..8].try_into().unwrap());
             let expected = if (bits >> 63) & 1 == 1 {
                 ShardId::leaf(1, 1)
             } else {
                 ShardId::leaf(2, (bits >> 62) & 1)
             };
-            assert_eq!(trie.shard_for(&node), expected, "seed {seed}");
+            assert_eq!(trie.shard_for_prefix(owner), expected, "seed {seed}");
         }
 
         // Merging the two depth-2 leaves restores the 2-shard partition.

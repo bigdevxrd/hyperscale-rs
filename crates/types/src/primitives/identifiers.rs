@@ -4,9 +4,7 @@ use std::fmt::{self, Display};
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
-use hex::encode as hex_encode;
 use hyperscale_crypto::ConsensusPublicKey;
-use radix_common::types::NodeId as RadixNodeId;
 use sbor::prelude::*;
 
 /// Validator identifier.
@@ -1064,68 +1062,6 @@ impl Display for HeaderFetchCount {
     }
 }
 
-/// Node identifier (30-byte address).
-///
-/// The engine-independent mirror of the Radix engine node id — the same 30
-/// address bytes, without the engine's methods. It represents an address in
-/// the state tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor)]
-pub struct NodeId(pub [u8; 30]);
-
-impl NodeId {
-    /// Create a `NodeId` from bytes.
-    ///
-    /// # Panics
-    ///
-    /// Panics if bytes length is not exactly 30.
-    #[must_use]
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        assert_eq!(bytes.len(), 30, "NodeId must be exactly 30 bytes");
-        let mut arr = [0u8; 30];
-        arr.copy_from_slice(bytes);
-        Self(arr)
-    }
-
-    /// Rewrap a Radix engine node id (e.g. from
-    /// `ComponentAddress::into_node_id`) into the mirror type. The two carry
-    /// the same 30 address bytes.
-    #[must_use]
-    pub const fn from_radix(id: RadixNodeId) -> Self {
-        Self(id.0)
-    }
-
-    /// Get the bytes as a slice.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 30] {
-        &self.0
-    }
-}
-
-impl Display for NodeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "NodeId({}..)", hex_encode(&self.0[..4]))
-    }
-}
-
-/// Partition number within a node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor)]
-#[sbor(transparent)]
-pub struct PartitionNumber(pub u8);
-
-impl PartitionNumber {
-    /// Create a new partition number.
-    #[must_use]
-    pub const fn new(n: u8) -> Self {
-        Self(n)
-    }
-}
-
-impl Display for PartitionNumber {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Partition({})", self.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1267,12 +1203,5 @@ mod tests {
             "Byzantine + 1 honest (6/10) should not be quorum"
         );
         assert!(q(7, 10), "7/10 should be quorum");
-    }
-
-    #[test]
-    fn test_node_id() {
-        let bytes = [42u8; 30];
-        let node_id = NodeId(bytes);
-        assert_eq!(node_id.as_bytes(), &bytes);
     }
 }

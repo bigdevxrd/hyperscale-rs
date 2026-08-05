@@ -30,7 +30,6 @@ hyperscale-storage-memory.workspace = true
 hyperscale-types.workspace = true
 hyperscale-dispatch-sync.workspace = true
 radix-common.workspace = true
-radix-transactions.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 tracing.workspace = true

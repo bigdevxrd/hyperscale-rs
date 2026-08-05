@@ -6,7 +6,6 @@
 //! Both the `RocksDB` backend and the engine's provision overlay use these
 //! functions to produce compatible keys.
 
-pub use hyperscale_types::state_key::db_node_key_to_node_id;
 use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey};
 
 /// Convert Radix partition key + sort key to a flat storage key.

@@ -29,8 +29,6 @@ tracing.workspace = true
 
 # Radix transaction types
 radix-common.workspace = true
-radix-engine-interface.workspace = true
-radix-transactions.workspace = true
 radix-substate-store-interface.workspace = true
 
 [features]

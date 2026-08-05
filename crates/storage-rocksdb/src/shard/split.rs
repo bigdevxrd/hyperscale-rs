@@ -698,11 +698,8 @@ mod tests {
     fn followed_children_partition_and_recompose_the_root() {
         use std::sync::Arc;
 
-        use hyperscale_storage::test_helpers::{db_node_key, make_database_update};
-        use hyperscale_types::state_key::node_routing_hash;
-        use hyperscale_types::{
-            ConsensusReceipt, GlobalReceiptHash, Hash, NodeId, StoredReceipt, TxHash,
-        };
+        use hyperscale_storage::test_helpers::{db_node_key, make_database_update, seeded_owner};
+        use hyperscale_types::{ConsensusReceipt, GlobalReceiptHash, Hash, StoredReceipt, TxHash};
 
         let dirs: Vec<TempDir> = (0..3).map(|_| TempDir::new().unwrap()).collect();
         let whole = RocksDbShardStorage::open(dirs[0].path(), NibblePath::empty()).unwrap();
@@ -712,7 +709,8 @@ mod tests {
         let mut sides_hit = [false, false];
         let mut roots = (StateRoot::ZERO, StateRoot::ZERO, StateRoot::ZERO);
         for seed in 1u8..=8 {
-            let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed; 4]);
+            let owner = seeded_owner(seed);
+            let updates = make_database_update(db_node_key(owner), 0, &[seed], vec![seed; 4]);
             let receipts = [StoredReceipt::synced(
                 TxHash::from_raw(Hash::from_bytes(&[seed])),
                 Arc::new(ConsensusReceipt::Succeeded {
@@ -728,7 +726,9 @@ mod tests {
                 left.follow_block_writes(height, &receipts).unwrap(),
                 right.follow_block_writes(height, &receipts).unwrap(),
             );
-            sides_hit[usize::from(node_routing_hash(&NodeId([seed; 30]))[0] >> 7)] = true;
+            // The leaf key is the owner prefix by identity, so the side a
+            // write lands on is that prefix's leading bit.
+            sides_hit[usize::from(owner >> 7)] = true;
         }
         assert!(
             sides_hit[0] && sides_hit[1],

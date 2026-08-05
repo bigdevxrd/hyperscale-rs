@@ -45,10 +45,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::{Hash, NodeId};
+    use crate::Hash;
 
     fn sample_entry(seed: u8) -> SubstateEntry {
-        SubstateEntry::test_entry(NodeId([seed; 30]), 0, b"sort", Some(vec![seed]))
+        SubstateEntry::test_entry([seed; 16], b"sort", Some(vec![seed]))
     }
 
     #[test]

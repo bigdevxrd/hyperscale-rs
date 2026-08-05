@@ -100,7 +100,6 @@ hyperscale-scenarios.workspace = true
 hyperscale-storage = { workspace = true, features = ["test-utils"] }
 hyperscale-storage-memory.workspace = true
 hyperscale-types = { workspace = true, features = ["test-utils"] }
-radix-transactions.workspace = true
 tempfile.workspace = true
 serial_test = "3.5.0"
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }

@@ -692,7 +692,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use hyperscale_crypto_bls::BlsVerifier;
-    use hyperscale_types::{Epoch, Hash, NodeId, ShardWitnessPayload};
+    use hyperscale_types::{Epoch, Hash, ShardWitnessPayload};
 
     use super::*;
     use crate::state::test_fixtures::{
@@ -1160,12 +1160,12 @@ mod tests {
         let active = state.derive_topology_snapshot(net());
         let lookahead = state.derive_next_topology_snapshot(net());
         for seed in 0..32u8 {
-            let node = NodeId([seed; 30]);
-            let now = active.shard_for_node_id(&node);
-            let next = lookahead.shard_for_node_id(&node);
+            let owner = [seed; 16];
+            let now = active.shard_for_prefix(owner);
+            let next = lookahead.shard_for_prefix(owner);
             if now == p {
                 // The parent's traffic remaps to exactly its children.
-                assert_eq!(next.parent(), Some(p), "{node:?} routed to {next:?}");
+                assert_eq!(next.parent(), Some(p), "{owner:?} routed to {next:?}");
             } else {
                 // Anything outside the split is untouched.
                 assert_eq!(now, sibling);
@@ -1175,13 +1175,13 @@ mod tests {
             assert_eq!(
                 state
                     .derive_topology_snapshot(net())
-                    .shard_for_node_id(&node),
+                    .shard_for_prefix(owner),
                 now
             );
             assert_eq!(
                 state
                     .derive_next_topology_snapshot(net())
-                    .shard_for_node_id(&node),
+                    .shard_for_prefix(owner),
                 next
             );
         }
@@ -2369,12 +2369,12 @@ mod tests {
         let active = state.derive_topology_snapshot(net());
         let lookahead = state.derive_next_topology_snapshot(net());
         for seed in 0..32u8 {
-            let node = NodeId([seed; 30]);
-            let now = active.shard_for_node_id(&node);
-            let next = lookahead.shard_for_node_id(&node);
+            let owner = [seed; 16];
+            let now = active.shard_for_prefix(owner);
+            let next = lookahead.shard_for_prefix(owner);
             if now == left || now == right {
                 // The children's traffic remaps to their reunified parent.
-                assert_eq!(next, parent, "{node:?} routed to {next:?}");
+                assert_eq!(next, parent, "{owner:?} routed to {next:?}");
             } else {
                 // Anything outside the merge is untouched.
                 assert_eq!(now, sibling);

@@ -4,7 +4,6 @@
 //! `Verified<Provisions>`; predicate at
 //! [`impl Verify<&ProvisionsContext<'_>>`](Verify::verify) below.
 
-use std::collections::HashSet;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::OnceLock;
 
@@ -15,8 +14,8 @@ use thiserror::Error;
 use crate::state_key::{jmt_value_hash, vm_flat_key_parts, vm_leaf_key};
 use crate::{
     BlockHeight, BoundedVec, CertifiedBlockHeader, Hash, MAX_TXS_PER_BLOCK, MerkleInclusionProof,
-    NodeId, ProvisionEntry, ProvisionHash, RETENTION_HORIZON, RevealChain, ShardId, SubstateEntry,
-    TxHash, Verified, Verify, WeightedTimestamp,
+    ProvisionEntry, ProvisionHash, RETENTION_HORIZON, RevealChain, ShardId, SubstateEntry, TxHash,
+    Verified, Verify, WeightedTimestamp,
 };
 
 /// All provisions from a single source block, scoped to a single target shard.
@@ -241,15 +240,6 @@ impl Provisions {
                 .expect("Vec<ProvisionEntry> serialization should never fail"),
         );
         ProvisionHash::from_raw(Hash::from_bytes(&bytes))
-    }
-
-    /// Get all node IDs across all transactions.
-    #[must_use]
-    pub fn all_node_ids(&self) -> HashSet<NodeId> {
-        self.transactions
-            .iter()
-            .flat_map(|tx| tx.entries.iter().filter_map(SubstateEntry::node_id))
-            .collect()
     }
 
     /// Get all entries across all transactions, sorted and deduped by `storage_key`.

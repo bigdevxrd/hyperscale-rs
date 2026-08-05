@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn non_payer_local_and_radix_transactions_hold_nothing() {
+    fn a_transaction_this_shard_does_not_pay_for_holds_nothing() {
         let mut ledger = FeeReservationLedger::new();
         let tx = transaction(1_000, 60_000);
         ledger.register_committed(std::slice::from_ref(&tx), |_| false);

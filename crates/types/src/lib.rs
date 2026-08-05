@@ -94,8 +94,8 @@ pub use primitives::hash_kinds::{
 };
 pub use primitives::identifiers::{
     Attempt, BeaconWitnessLeafCount, BlockHeight, Epoch, HeaderFetchCount, InFlightCount,
-    LeafIndex, NodeId, PartitionNumber, RatifyRound, Round, ShardId, SpcView, Stake, StakePoolId,
-    StakePoolSeat, ValidatorId, VoteCount,
+    LeafIndex, RatifyRound, Round, ShardId, SpcView, Stake, StakePoolId, StakePoolSeat,
+    ValidatorId, VoteCount,
 };
 pub use primitives::merkle::{
     compute_merkle_root, compute_merkle_root_with_proof, compute_range_proof,
@@ -192,9 +192,7 @@ pub use topology::schedule::{
 };
 pub use topology::settled_set::{SettledSetVerdict, SettledWaveSet, settled_set_verdict};
 pub use topology::shard_prefix::shard_prefix_path;
-pub use topology::snapshot::{
-    ReshapeSeat, ShardAnchor, TopologySnapshot, node_id_hash_u64, uniform_shard_for_node,
-};
+pub use topology::snapshot::{ReshapeSeat, ShardAnchor, TopologySnapshot};
 pub use topology::trie::ShardTrie;
 pub use topology::validator::{ValidatorInfo, ValidatorSet};
 pub use transaction::declared_key::DeclaredKey;

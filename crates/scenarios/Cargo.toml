@@ -14,7 +14,6 @@ hyperscale-mempool.workspace = true
 hyperscale-storage = { workspace = true }
 hyperscale-types = { workspace = true, features = ["test-utils"] }
 radix-common = { workspace = true }
-radix-transactions = { workspace = true }
 
 [lints]
 workspace = true
