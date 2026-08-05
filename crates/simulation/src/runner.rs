@@ -35,8 +35,8 @@ use hyperscale_storage::{BeaconStorage, RecoveredState};
 use hyperscale_storage_memory::{SimBeaconStorage, SimShardStorage};
 use hyperscale_types::{
     BeaconChainConfig, ConsensusPublicKey, Epoch, GenesisConfigHash, GenesisValidators,
-    LocalTimestamp, ShardId, Signer, TopologySnapshot, TransactionStatus, TxHash, ValidatorId,
-    ValidatorInfo, ValidatorSet, Verifier, shard_prefix_path,
+    LocalTimestamp, ShardId, Signer, StakePoolId, TopologySnapshot, TransactionStatus, TxHash,
+    ValidatorId, ValidatorInfo, ValidatorSet, Verifier, shard_prefix_path,
 };
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
@@ -150,6 +150,9 @@ pub struct SimConfig {
     /// keeps per-cluster funding independent. Empty means "the same
     /// accounts this cluster funds".
     pub vm_world_accounts: Vec<([u8; 16], u128)>,
+    /// Stake pools the beacon folds facts for: the pool instance's owner
+    /// prefix and the identifier it is folded under.
+    pub vm_pools: Vec<([u8; 16], StakePoolId)>,
     /// The VM batch executor's group scheduling. Receipts are
     /// schedule-invariant, so this cannot change any outcome — the
     /// serial-vs-parallel A/B constructs one cluster per mode and
@@ -173,6 +176,7 @@ impl Default for SimConfig {
             share_declared_reads: false,
             vm_accounts: Vec::new(),
             vm_world_accounts: Vec::new(),
+            vm_pools: Vec::new(),
             vm_execution_mode: ExecutionMode::Serial,
         }
     }
@@ -390,8 +394,9 @@ impl SimulationRunner {
         } else {
             &network_config.vm_world_accounts
         };
-        let vm_engine = Arc::new(VmExecutor::new(
+        let vm_engine = Arc::new(VmExecutor::with_pools(
             world_accounts,
+            &network_config.vm_pools,
             network_config.vm_execution_mode,
         ));
         let shared_vm_executor: Arc<dyn Executor> = Arc::clone(&vm_engine) as Arc<dyn Executor>;

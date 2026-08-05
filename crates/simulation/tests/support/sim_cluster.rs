@@ -29,8 +29,8 @@ use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds,
-    RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision, TransactionStatus,
-    TxHash, ValidatorId, VmEvent,
+    RoutableTransaction, ShardId, Signer, StakePoolId, StateRoot, TransactionDecision,
+    TransactionStatus, TxHash, ValidatorId, VmEvent,
 };
 use radix_common::math::Decimal;
 use radix_common::types::ComponentAddress;
@@ -57,6 +57,7 @@ struct BuildArgs<'a> {
     share_declared_reads: bool,
     vm_accounts: &'a [([u8; 16], u128)],
     vm_execution_mode: ExecutionMode,
+    vm_pools: &'a [([u8; 16], StakePoolId)],
 }
 
 /// The simulation adaptor: a [`Cluster`] over a [`SimulationRunner`].
@@ -148,6 +149,30 @@ impl SimCluster {
             share_declared_reads: false,
             vm_accounts,
             vm_execution_mode,
+            vm_pools: &[],
+        })
+    }
+
+    /// A genesis cluster seating `pools` as the stake pools the beacon
+    /// folds facts for, with `vm_accounts` funded beside the default
+    /// straddler balances.
+    #[must_use]
+    pub fn with_vm_pools(
+        config: &ScenarioConfig,
+        seed: u64,
+        balances: &[(ComponentAddress, Decimal)],
+        vm_accounts: &[([u8; 16], u128)],
+        vm_pools: &[([u8; 16], StakePoolId)],
+    ) -> Self {
+        Self::build_full(&BuildArgs {
+            config,
+            seed,
+            balances,
+            dedicated_pool_hosts: false,
+            share_declared_reads: false,
+            vm_accounts,
+            vm_execution_mode: ExecutionMode::Serial,
+            vm_pools,
         })
     }
 
@@ -170,6 +195,7 @@ impl SimCluster {
             share_declared_reads: false,
             vm_accounts,
             vm_execution_mode: ExecutionMode::Serial,
+            vm_pools: &[],
         })
     }
 
@@ -204,6 +230,7 @@ impl SimCluster {
             share_declared_reads,
             vm_accounts: &[],
             vm_execution_mode: ExecutionMode::Serial,
+            vm_pools: &[],
         })
     }
 
@@ -235,6 +262,7 @@ impl SimCluster {
             // nothing transacts with costs nothing.
             vm_world_accounts: vm_world_accounts(),
             vm_execution_mode: args.vm_execution_mode,
+            vm_pools: args.vm_pools.to_vec(),
             ..SimConfig::default()
         };
         let mut runner = SimulationRunner::new(&sim_config, args.seed);

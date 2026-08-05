@@ -16,16 +16,20 @@
 use std::sync::Arc;
 
 use hyperscale_types::{
-    BeaconWitnessEvent, ConsensusPublicKey, Stake, StakePoolId, UNBONDING_WINDOW_EPOCHS,
-    ValidatorId, ValidatorStatus, validator_possession_proof_sign,
+    BeaconWitnessEvent, ConsensusPublicKey, Stake, StakePoolId, TransactionDecision,
+    TransactionStatus, UNBONDING_WINDOW_EPOCHS, ValidatorId, ValidatorStatus,
+    validator_possession_proof_sign,
 };
 use radix_common::network::NetworkDefinition;
 
 use crate::support::query::{
     pool_effective_stake, pool_total_stake, validator_pubkey, validator_status,
 };
-use crate::support::tx::{build_witness_tx, validity_around, witness_payer};
-use crate::support::wait::await_beacon_epoch;
+use crate::support::tx::{
+    VM_STAKE_POOL, VM_STAKE_POOL_ID, build_vm_stake_tx, build_witness_tx, validity_around,
+    vm_delegator, witness_payer,
+};
+use crate::support::wait::{await_beacon_epoch, await_tx_terminal};
 use crate::support::{Cluster, epochs};
 
 /// The single genesis stake pool every genesis validator belongs to.
@@ -82,6 +86,72 @@ fn dummy_registration(
         .expect("sign"),
     }
 }
+
+/// A delegation through a stake pool contract folds into the beacon
+/// state — the control plane's whole rail, driven by contract code.
+///
+/// The Radix scenarios above assert a witness a *keyholder signed*: the
+/// action rides a no-op transaction's plaintext message, so the beacon
+/// takes the sender's word for it. This one asserts a witness a *contract
+/// emitted*: the delegator's funds actually move into the pool's vault,
+/// the pool's code records what happened, and the beacon folds that.
+/// Nothing is asserted about the amount by the transaction — the amount
+/// is the delta that occurred.
+///
+/// Every layer between is the one the Radix path already used: the same
+/// receipt field, the same witness leaves, the same windowed root on the
+/// boundary header, the same fold. Only the source changed, which is what
+/// makes this the assertion that the source is all that changed.
+///
+/// # Panics
+///
+/// Panics if the delegation never commits, or the beacon never folds it
+/// within budget.
+pub fn vm_delegation_folds_into_beacon_state(c: &mut impl Cluster) {
+    warm_up(c);
+
+    let pool = VM_STAKE_POOL_ID;
+    assert_eq!(
+        pool_total_stake(c, pool),
+        None,
+        "the pool must have no stake before anyone delegates to it",
+    );
+
+    let (key, delegator) = vm_delegator();
+    let tx = build_vm_stake_tx(
+        &key,
+        delegator,
+        VM_STAKE_POOL,
+        DELEGATION,
+        validity_around(c.now()),
+    );
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+
+    let status = await_tx_terminal(c, hash, epochs(8));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "the delegation must commit before it can be witnessed; status = {status:?}",
+    );
+
+    // The pool's stake is the delegation, in the units the beacon counts:
+    // a VM amount cell is attos, which is what `Stake` is denominated in,
+    // so nothing rescales on the way through.
+    assert!(
+        c.run_until(epochs(10), |c| pool_total_stake(c, pool)
+            == Some(Stake::from_attos(DELEGATION))),
+        "the beacon never folded the delegation; pool stake = {:?}",
+        pool_total_stake(c, pool),
+    );
+}
+
+/// What the staking scenario delegates. Large enough that the folded
+/// stake cannot be confused with a rounding artefact and small enough to
+/// sit well inside the delegator's genesis funding.
+const DELEGATION: u128 = 250_000;
 
 /// A stake deposit to a fresh pool folds into the beacon state.
 ///

@@ -562,8 +562,11 @@ impl ProductionRunnerBuilder {
         } else {
             &self.vm_world_accounts
         };
-        let vm_executor: Arc<dyn Executor> =
-            Arc::new(VmExecutor::new(world_accounts, ExecutionMode::Serial));
+        let vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::with_pools(
+            world_accounts,
+            &engine_bootstrap.config.vm_pools,
+            ExecutionMode::Serial,
+        ));
 
         // Each shard's `shard_event_senders` entry points at that
         // shard's own pinned-thread callback channel — callbacks,

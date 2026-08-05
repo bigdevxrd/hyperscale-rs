@@ -12,6 +12,7 @@
 //! should always go through [`crate::prepared_genesis`] for caching;
 //! direct `bootstrap` calls bypass it and pay the ~2.5s cost every time.
 
+use hyperscale_types::StakePoolId;
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
 use radix_common::prelude::Epoch;
@@ -63,6 +64,13 @@ pub struct GenesisConfig {
     /// statics; the raw prefix keeps this crate free of the VM
     /// vocabulary.
     pub vm_accounts: Vec<([u8; 16], u128)>,
+
+    /// Stake pools the beacon folds facts for: the pool instance's owner
+    /// prefix and the identifier it is folded under. Seated as stake pool
+    /// package instances in the process's VM statics, which is what makes
+    /// their emitted events beacon facts — running the package never
+    /// does, because anyone may run the package.
+    pub vm_pools: Vec<([u8; 16], StakePoolId)>,
 }
 
 impl GenesisConfig {
@@ -85,6 +93,7 @@ impl GenesisConfig {
             staker_accounts: Vec::new(),
             xrd_balances: Vec::new(),
             vm_accounts: Vec::new(),
+            vm_pools: Vec::new(),
         }
     }
 
@@ -102,6 +111,7 @@ impl GenesisConfig {
             staker_accounts: Vec::new(),
             xrd_balances: Vec::new(),
             vm_accounts: Vec::new(),
+            vm_pools: Vec::new(),
         }
     }
 
@@ -124,6 +134,7 @@ impl GenesisConfig {
             .expect("BabylonSettings is encodable")
             .hash(hasher);
         self.vm_accounts.hash(hasher);
+        self.vm_pools.hash(hasher);
     }
 
     fn to_babylon_settings(&self) -> BabylonSettings {

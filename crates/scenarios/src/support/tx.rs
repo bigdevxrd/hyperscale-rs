@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, encode_tree};
+use hyperscale_engine_vm::genesis::stake_unit;
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
@@ -990,6 +991,7 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     all.extend(merge_straddler_setup().vm_accounts);
     all.extend(halt_straddler_setup().vm_accounts);
     all.extend(cross_shard_fault_genesis_accounts());
+    all.extend(vm_staking_genesis_accounts());
     all.sort_unstable_by_key(|(address, _)| *address);
     all.dedup_by_key(|(address, _)| *address);
     all
@@ -1066,6 +1068,91 @@ pub fn build_vm_publish_tx(
         }
         .sign(payer),
     )
+}
+
+/// The stake pool the VM staking scenario delegates to.
+///
+/// An address no key derives, like the genesis publisher's: a pool is
+/// seated by the network rather than created by a signer.
+pub const VM_STAKE_POOL: [u8; 16] = [0x50; 16];
+
+/// The identifier the beacon folds [`VM_STAKE_POOL`] under.
+///
+/// Distinct from the genesis pool every seated validator belongs to, so a
+/// delegation through the VM is the only source of this pool's stake and
+/// the assertion cannot be satisfied by anything else.
+pub const VM_STAKE_POOL_ID: StakePoolId = StakePoolId::new(7777);
+
+/// The delegator's signing key and account.
+#[must_use]
+pub fn vm_delegator() -> (Ed25519PrivateKey, [u8; 16]) {
+    let key = signer_from_seed(180);
+    let account = vm_account_address(&key.public_key().0);
+    (key, account)
+}
+
+/// Genesis VM accounts for the staking scenario: the delegator funded
+/// well above its delegation and its fee ceiling.
+#[must_use]
+pub fn vm_staking_genesis_accounts() -> Vec<([u8; 16], u128)> {
+    vec![(vm_delegator().1, 1_000_000)]
+}
+
+/// The pools a staking cluster seats.
+#[must_use]
+pub fn vm_staking_pools() -> Vec<([u8; 16], StakePoolId)> {
+    vec![(VM_STAKE_POOL, VM_STAKE_POOL_ID)]
+}
+
+/// Build a delegation: withdraw `amount` from the delegator's native
+/// vault, stake it into the pool, and bank the units the pool issues.
+///
+/// The units are an ordinary fungible balance in the delegator's own
+/// account, which is what makes a staking position something a holder can
+/// hold rather than a record only the pool can read.
+#[must_use]
+pub fn build_vm_stake_tx(
+    delegator: &Ed25519PrivateKey,
+    from: [u8; 16],
+    pool: [u8; 16],
+    amount: u128,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let graph = ManifestGraph {
+        nodes: vec![
+            GraphNode {
+                target: Address(from),
+                method: "withdraw".into(),
+                args: vec![
+                    GraphArg::Literal(Value::Address(VM_XRD)),
+                    GraphArg::Literal(Value::U128(amount)),
+                ],
+            },
+            GraphNode {
+                target: Address(pool),
+                method: "stake".into(),
+                args: vec![GraphArg::Edge {
+                    edge: EdgeRef {
+                        producer: 0,
+                        output: 0,
+                    },
+                    constraints: vec![Constraint::ResourceIs(VM_XRD)],
+                }],
+            },
+            GraphNode {
+                target: Address(from),
+                method: "deposit".into(),
+                args: vec![GraphArg::Edge {
+                    edge: EdgeRef {
+                        producer: 1,
+                        output: 0,
+                    },
+                    constraints: vec![Constraint::ResourceIs(stake_unit(pool))],
+                }],
+            },
+        ],
+    };
+    RoutableTransaction::new_vm(vm_envelope(graph, delegator, validity))
 }
 
 /// The one-time payment request `signer` puts their name to: whoever
