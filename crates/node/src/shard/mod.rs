@@ -98,7 +98,7 @@ pub type SharedTopologySnapshot = Arc<ArcSwap<TopologySnapshot>>;
 /// the right entry from the emitting vnode's shard, loading the map per
 /// dispatch so shards added or dropped at runtime are observed.
 pub(crate) struct DispatchHandles<S: ShardStorage, N> {
-    pub(crate) executor: Arc<dyn Executor>,
+    pub(crate) executor: Arc<Executor>,
     pub(crate) network: Arc<N>,
     pub(crate) execution_cache: Arc<ProcessExecutionCache>,
     /// Process-level serve cache for beacon proposals — fed by the

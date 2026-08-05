@@ -29,7 +29,7 @@ use crate::ProtocolEvent;
 #[allow(missing_docs)] // bag of references; field names match the borrowed types
 pub struct ActionContext<'a, S: ShardStorage, N: Network> {
     /// The batch execution seam the execute handlers drive.
-    pub executor: &'a dyn Executor,
+    pub executor: &'a Executor,
     pub topology_snapshot: &'a TopologySnapshot,
     /// Dispatching vnode's validator identity. The shard dispatch site
     /// reads this off the `Vnode` that emitted the action; handlers use

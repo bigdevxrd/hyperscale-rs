@@ -152,7 +152,7 @@ where
         mut storages: HashMap<ShardId, S>,
         beacon_storage: Arc<dyn BeaconStorage>,
         beacon_network: NetworkDefinition,
-        executor: Arc<dyn Executor>,
+        executor: Arc<Executor>,
         network: N,
         dispatch: D,
         shard_event_senders: BTreeMap<ShardId, Sender<HostEvent>>,

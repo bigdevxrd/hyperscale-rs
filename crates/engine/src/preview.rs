@@ -1,7 +1,7 @@
 //! Preview: what a candidate envelope would do, without doing it.
 //!
 //! A wallet's question before it signs is what a transaction moves and
-//! what it costs. [`VmExecutor::preview`] answers it by running the
+//! what it costs. [`Executor::preview`] answers it by running the
 //! envelope through the same derivation, the same kernel, and the same
 //! fee arithmetic a wave would, against a snapshot the caller supplies —
 //! and then reporting the receipt's movements and settles rather than
@@ -34,7 +34,7 @@ use crate::executor::{
     read_cell, tx_randomness,
 };
 use crate::genesis::vault_key;
-use crate::{DynSnapshot, VM_XRD, VmExecutor};
+use crate::{DynSnapshot, Executor, VM_XRD};
 
 /// What a preview run is permitted that a committed execution is not.
 ///
@@ -231,7 +231,7 @@ fn fee_for(outcome: &Outcome, fuel: u64, payer: PayerFee) -> u128 {
     }
 }
 
-impl VmExecutor {
+impl Executor {
     /// Run `tx` against `snapshot` and report what it would move and what
     /// it would cost, committing nothing.
     ///

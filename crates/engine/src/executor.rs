@@ -50,8 +50,7 @@ use crate::backend::EngineBackend;
 use crate::genesis::{VmWorld, genesis_world_with_pools};
 use crate::sharding::{compute_writes_root, sort_database_updates};
 use crate::{
-    CachedVmOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, Executor, WaveBatchContext,
-    project_to_shard,
+    CachedVmOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, WaveBatchContext, project_to_shard,
 };
 
 /// Whether a derivation holds a gated node to its target's authority.
@@ -155,13 +154,13 @@ impl Base for VmBase {
 
 /// The VM engine: the genesis-static world, the compiled stdlib guests,
 /// and the batch scheduling mode.
-pub struct VmExecutor {
+pub struct Executor {
     pub(crate) world: VmWorld,
     pub(crate) backend: EngineBackend,
     pub(crate) mode: ExecutionMode,
 }
 
-impl VmExecutor {
+impl Executor {
     /// Build the engine for the genesis-funded `accounts` and install the
     /// process-wide VM statics (first installation wins, so co-hosted
     /// nodes sharing one genesis coexist).
@@ -803,7 +802,7 @@ fn assemble_executed_tx(
     executed
 }
 
-impl VmExecutor {
+impl Executor {
     /// The batch pipeline both dispatch arms share: derive, pre-read the
     /// local baseline, layer provisioned remote cells, execute under the
     /// shard's locality, fold local keys, and project. `provisions` is
@@ -1057,8 +1056,15 @@ impl VmExecutor {
     }
 }
 
-impl Executor for VmExecutor {
-    fn execute_wave_batch(
+impl Executor {
+    /// Execute `transactions` against `snapshot` and project each result
+    /// to the context's local shard.
+    ///
+    /// The unit is the batch: the whole of it goes to the
+    /// deterministic-parallel executor at once, which returns one
+    /// [`ExecutedTx`] per input transaction, in input order.
+    #[must_use]
+    pub fn execute_wave_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
@@ -1088,7 +1094,11 @@ impl Executor for VmExecutor {
         )
     }
 
-    fn execute_cross_shard_batch(
+    /// Execute a cross-shard sub-batch: `snapshot` carries local state,
+    /// each request its remote provisions. One [`ExecutedTx`] per input,
+    /// in input order, projected to the context's local shard.
+    #[must_use]
+    pub fn execute_cross_shard_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,

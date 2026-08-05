@@ -31,7 +31,7 @@ use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch::{Dispatch, DispatchPool};
 use hyperscale_dispatch_pooled::{PooledDispatch, ThreadPoolConfig};
-use hyperscale_engine::{ExecutionMode, Executor, GenesisConfig, VmExecutor};
+use hyperscale_engine::{ExecutionMode, Executor, GenesisConfig};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_metrics::{set_libp2p_peers, set_pool_queue_depths};
 use hyperscale_metrics_prometheus::install;
@@ -577,7 +577,7 @@ impl ProductionRunnerBuilder {
         } else {
             &self.vm_world_pools
         };
-        let executor: Arc<dyn Executor> = Arc::new(VmExecutor::with_pools(
+        let executor: Arc<Executor> = Arc::new(Executor::with_pools(
             world_accounts,
             world_pools,
             ExecutionMode::Serial,

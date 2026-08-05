@@ -1,20 +1,18 @@
-//! The batch execution seam.
+//! What a wave's batch is executed against.
 //!
-//! An [`Executor`] runs a wave's transactions against a caller-supplied
-//! snapshot and returns one [`ExecutedTx`] per input, projected to the
-//! context's local shard via
-//! [`project_to_shard`](crate::project_to_shard) — typically memoising
-//! the shard-invariant intermediate in
-//! [`ProcessExecutionCache`](crate::ProcessExecutionCache).
+//! The snapshot borrow, the per-wave context, and the cross-shard input
+//! an [`Executor`](crate::Executor) reads besides the transactions
+//! themselves — plus the cache walk that turns an already-computed
+//! output into this shard's [`ExecutedTx`](crate::ExecutedTx).
 //!
 //! Storage is NOT owned by the executor — the runner provides it as a
 //! method argument so the same executor can serve multiple snapshots
 //! and so the runner can hoist a single snapshot across an entire
 //! action batch.
 //!
-//! Execution is READ-ONLY: results are returned as [`ExecutedTx`]
-//! values whose `DatabaseUpdates` the state machine caches and applies
-//! later, when the wave's certificate is included in a committed block.
+//! Execution is READ-ONLY: results are returned as `ExecutedTx` values
+//! whose `DatabaseUpdates` the state machine caches and applies later,
+//! when the wave's certificate is included in a committed block.
 
 use std::sync::Arc;
 
@@ -28,12 +26,11 @@ use radix_common::prelude::DbSubstateValue;
 use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey, PartitionEntry};
 
 use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
-use crate::output::ExecutedTx;
 use crate::receipt::CachedVmOutput;
 
-/// Object-safe borrow of the wave's state snapshot, so the batch seam
-/// stays dyn-dispatchable while the concrete snapshot type remains
-/// generic at the call site.
+/// Type-erased borrow of the wave's state snapshot, so one batch entry
+/// point serves every backend's snapshot type while the concrete type
+/// stays generic at the call site.
 pub struct DynSnapshot<'a>(pub &'a (dyn SubstateDatabase + Sync));
 
 impl SubstateDatabase for DynSnapshot<'_> {
@@ -91,32 +88,6 @@ pub struct CrossShardTxInput<'a> {
     /// The randomness anchor: the same block's reveal chain, likewise
     /// identical on every participant.
     pub randomness: RevealChain,
-}
-
-/// Execution of a wave's sub-batch.
-///
-/// The unit is the batch: the whole of it goes to the deterministic-parallel
-/// executor at once, which returns one [`ExecutedTx`] per input
-/// transaction, in input order.
-pub trait Executor: Send + Sync {
-    /// Execute `transactions` against `snapshot` and project each result
-    /// to the context's local shard.
-    fn execute_wave_batch(
-        &self,
-        ctx: &WaveBatchContext<'_>,
-        snapshot: &DynSnapshot<'_>,
-        transactions: &[Arc<Verified<RoutableTransaction>>],
-    ) -> Vec<ExecutedTx>;
-
-    /// Execute a cross-shard sub-batch: `snapshot` carries local state,
-    /// each request its remote provisions. One [`ExecutedTx`] per input,
-    /// in input order, projected to the context's local shard.
-    fn execute_cross_shard_batch(
-        &self,
-        ctx: &WaveBatchContext<'_>,
-        snapshot: &DynSnapshot<'_>,
-        requests: &[CrossShardTxInput<'_>],
-    ) -> Vec<ExecutedTx>;
 }
 
 /// Shards this transaction reads or writes, routed via the active

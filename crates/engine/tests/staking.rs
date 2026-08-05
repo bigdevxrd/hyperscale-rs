@@ -13,7 +13,7 @@ use hyperscale_effects_bridge::{encode_tree, vm_account_address};
 use hyperscale_engine::genesis::stake_unit;
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache, VM_XRD,
-    VmExecutor, WaveBatchContext, vm_genesis_updates,
+    WaveBatchContext, vm_genesis_updates,
 };
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
 use hyperscale_types::{
@@ -188,7 +188,7 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> RoutableTransaction {
     )
 }
 
-fn execute(executor: &VmExecutor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
+fn execute(executor: &Executor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
     let store = MapDb::genesis(&[(delegator(), 10_000)], &[]);
     let snapshot = DynSnapshot(&store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
@@ -223,7 +223,7 @@ fn witnesses(executed: &ExecutedTx) -> Vec<BeaconWitnessEvent> {
 /// the instance that emitted it and the amount carried across as attos.
 #[test]
 fn a_delegation_to_a_seated_pool_reaches_the_witness_channel() {
-    let executor = VmExecutor::with_pools(
+    let executor = Executor::with_pools(
         &world_accounts(),
         &[seat(POOL, POOL_ID), seat(IMPOSTOR, 99)],
         ExecutionMode::Serial,
@@ -243,7 +243,7 @@ fn a_delegation_to_a_seated_pool_reaches_the_witness_channel() {
 /// decision the network makes, not one a transaction can make for it.
 #[test]
 fn an_unseated_instance_of_the_same_package_reaches_nobody() {
-    let executor = VmExecutor::with_pools(
+    let executor = Executor::with_pools(
         &world_accounts(),
         &[seat(POOL, POOL_ID)],
         ExecutionMode::Serial,
@@ -264,7 +264,7 @@ fn an_unseated_instance_of_the_same_package_reaches_nobody() {
 /// channel carries what a stake pool says and nothing else.
 #[test]
 fn an_ordinary_transfer_is_not_a_beacon_fact() {
-    let executor = VmExecutor::with_pools(
+    let executor = Executor::with_pools(
         &world_accounts(),
         &[seat(POOL, POOL_ID)],
         ExecutionMode::Serial,
@@ -356,7 +356,7 @@ fn signed_registration(pool: [u8; 16], seed: u8) -> RoutableTransaction {
 /// principal's signature reaches it.
 #[test]
 fn only_the_configured_operator_may_register_a_validator() {
-    let _ = VmExecutor::with_pools(
+    let _ = Executor::with_pools(
         &world_accounts(),
         &[seat(POOL, POOL_ID)],
         ExecutionMode::Serial,
@@ -386,7 +386,7 @@ fn only_the_configured_operator_may_register_a_validator() {
 /// in the funds it carries, so anyone may delegate to any seated pool.
 #[test]
 fn a_delegation_needs_no_operator() {
-    let _ = VmExecutor::with_pools(
+    let _ = Executor::with_pools(
         &world_accounts(),
         &[seat(POOL, POOL_ID)],
         ExecutionMode::Serial,

@@ -19,7 +19,7 @@ use hyperscale_effects_bridge::{encode_tree, vm_account_address};
 use hyperscale_engine::genesis::vault_key;
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache, VM_XRD,
-    VmExecutor, WaveBatchContext, vm_genesis_updates,
+    WaveBatchContext, vm_genesis_updates,
 };
 use hyperscale_storage::{
     DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,
@@ -162,7 +162,7 @@ fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransa
     )
 }
 
-fn execute(executor: &VmExecutor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
+fn execute(executor: &Executor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
     let store = MapDb::genesis(&world_accounts());
     let snapshot = DynSnapshot(&store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
@@ -198,7 +198,7 @@ fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
 /// The defect, closed: an address is public, and knowing one buys nothing.
 #[test]
 fn draining_an_account_the_envelope_does_not_sign_for_is_refused() {
-    let _ = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let _ = Executor::new(&world_accounts(), ExecutionMode::Serial);
     let theft = signed_transfer(VICTIM, thief(), 5_000);
 
     assert!(theft.body().signature_is_valid());
@@ -227,7 +227,7 @@ fn draining_an_account_the_envelope_does_not_sign_for_is_refused() {
 /// binding protects is a whole balance rather than a fee floor of it.
 #[test]
 fn the_gated_node_is_the_one_that_moves_the_balance() {
-    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
     let executed = execute(&executor, signed_transfer(thief(), VICTIM, 5_000));
     let ConsensusReceipt::Succeeded {
         database_updates, ..

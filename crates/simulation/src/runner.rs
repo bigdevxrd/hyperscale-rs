@@ -14,7 +14,7 @@ use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_crypto_mock::{MockSigner, MockVerifier};
 use hyperscale_dispatch_sync::SyncDispatch;
-use hyperscale_engine::{ExecutionMode, Executor, GenesisConfig, VmExecutor};
+use hyperscale_engine::{ExecutionMode, Executor, GenesisConfig};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network_memory::{
     BandwidthReport, DeliveryDrain, HostLayout, NetworkConfig, NetworkTrafficAnalyzer, NodeIndex,
@@ -248,11 +248,10 @@ pub struct SimulationRunner {
     /// block.
     vm_pools: Vec<StakePoolSeat>,
 
-    /// The cluster's VM engine, kept in its concrete form beside the
-    /// `dyn Executor` every host runs. Preview is engine-side and has no
-    /// place on the executor seam, so a harness that drives it needs the
-    /// engine itself.
-    vm_engine: Arc<VmExecutor>,
+    /// The [`Executor`] every host runs, retained so a harness can reach
+    /// the engine-side surfaces that are not part of wave execution —
+    /// preview being the only one today.
+    vm_engine: Arc<Executor>,
 
     /// Beacon genesis config hash, retained for runtime-built
     /// `BeaconCoordinator`s.
@@ -408,12 +407,12 @@ impl SimulationRunner {
         } else {
             &network_config.vm_world_pools
         };
-        let vm_engine = Arc::new(VmExecutor::with_pools(
+        let vm_engine = Arc::new(Executor::with_pools(
             world_accounts,
             world_pools,
             network_config.vm_execution_mode,
         ));
-        let shared_executor: Arc<dyn Executor> = Arc::clone(&vm_engine) as Arc<dyn Executor>;
+        let shared_executor = Arc::clone(&vm_engine);
 
         // Generate keys for all registered validators using deterministic
         // seeding. Pool extras are registered in beacon genesis (landing
@@ -702,10 +701,10 @@ impl SimulationRunner {
             .then(|| &**host.shard_io(shard).storage())
     }
 
-    /// The cluster's VM engine, for the engine-side surfaces that sit
-    /// outside the executor seam — preview being the only one today.
+    /// The cluster's engine, for the engine-side surfaces that are not
+    /// part of wave execution — preview being the only one today.
     #[must_use]
-    pub fn vm_engine(&self) -> &VmExecutor {
+    pub fn vm_engine(&self) -> &Executor {
         &self.vm_engine
     }
 

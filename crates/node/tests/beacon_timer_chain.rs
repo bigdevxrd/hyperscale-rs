@@ -19,7 +19,7 @@ use hyperscale_beacon::genesis::build_genesis_beacon_state;
 use hyperscale_core::{ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch_sync::SyncDispatch;
-use hyperscale_engine::{ExecutionMode, VmExecutor};
+use hyperscale_engine::{ExecutionMode, Executor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network::HandlerRegistry;
 use hyperscale_network_memory::SimNetworkAdapter;
@@ -163,7 +163,7 @@ impl Fixture {
             HashMap::<ShardId, SimShardStorage>::new(),
             Arc::clone(&self.beacon_storage),
             NetworkDefinition::simulator(),
-            Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
+            Arc::new(Executor::new(&[], ExecutionMode::Serial)),
             network,
             SyncDispatch,
             BTreeMap::new(),

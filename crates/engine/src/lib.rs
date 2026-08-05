@@ -1,26 +1,23 @@
-//! Engine integration: the wave-batch execution seam and the executor
-//! behind it.
+//! Engine integration: wave-batch transaction execution.
 //!
-//! Synchronous transaction execution shared by the production runner and
-//! the deterministic simulator. The executor does NOT own storage: the
+//! Synchronous execution shared by the production runner and the
+//! deterministic simulator. The [`Executor`] does NOT own storage: the
 //! runner owns it and passes a snapshot per call.
 //!
 //! State machines emit `Action::ExecuteTransactions`; the runner drives
-//! an [`Executor`] over the wave's batch, which projects the
-//! shard-invariant [`CachedVmOutput`] into the local shard's
-//! [`ExecutedTx`] via [`project_to_shard`]. The process-scope
-//! [`ProcessExecutionCache`] short-circuits execution when same-shard
-//! vnodes (or hosted participating shards) replay an already-executed
-//! transaction.
+//! the executor over the wave's batch, which projects the shard-invariant
+//! [`CachedVmOutput`] into the local shard's [`ExecutedTx`] via
+//! [`project_to_shard`]. The process-scope [`ProcessExecutionCache`]
+//! short-circuits execution when same-shard vnodes (or hosted
+//! participating shards) replay an already-executed transaction.
 //!
-//! [`VmExecutor`] is the implementation behind that seam: derivation
-//! through the effects bridge, an owned committed base pre-read from the
-//! wave's JMT-backed snapshot, the kernel's deterministic-parallel batch
-//! executor, and the movement fold that turns schedule-invariant receipts
-//! into per-transaction absolute `database_updates`. Guests run on the
-//! blessed wasmtime engine natively and on the reference interpreter on
-//! wasm32; the vm repo's differential suite pins byte-identical receipts
-//! and fuel across both.
+//! Execution itself is derivation through the effects bridge, an owned
+//! committed base pre-read from the wave's JMT-backed snapshot, the
+//! kernel's deterministic-parallel batch executor, and the movement fold
+//! that turns schedule-invariant receipts into per-transaction absolute
+//! `database_updates`. Guests run on the blessed wasmtime engine natively
+//! and on the reference interpreter on wasm32; the vm repo's differential
+//! suite pins byte-identical receipts and fuel across both.
 //!
 //! [`genesis`] seeds the stdlib world: the account package published
 //! under its artifact hash, funded accounts registered as its instances,
@@ -29,31 +26,30 @@
 #![warn(missing_docs)]
 
 mod backend;
+mod batch;
 mod cache;
 mod executor;
 mod host;
 mod output;
 mod preview;
 mod receipt;
-mod seam;
 
 /// Genesis seeding: the stdlib world and funded-account cells.
 pub mod genesis;
 /// Shard assignment and write filtering for `DatabaseUpdates`.
 pub mod sharding;
 
+pub use batch::{
+    CrossShardTxInput, DynSnapshot, WaveBatchContext, batch_compute_cached, participating_shards,
+};
 pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
-pub use executor::VmExecutor;
+pub use executor::Executor;
 pub use genesis::{GenesisConfig, VM_XRD, VmWorld, genesis_world, vm_genesis_updates};
-// Re-export the fan-out strategy `WaveBatchContext` carries, so seam
-// implementations and their tests need no separate dispatch dependency.
+// Re-export the fan-out strategy `WaveBatchContext` carries, so callers
+// and their tests need no separate dispatch dependency.
 pub use hyperscale_dispatch::Parallelism;
 pub use hyperscale_effects_bridge::vm_account_address;
 pub use hyperscale_vm_kernel::ExecutionMode;
 pub use output::ExecutedTx;
 pub use preview::{PreviewGrants, PreviewInputs, PreviewOutcome, PreviewReport, ResourceChange};
 pub use receipt::{CachedVmOutput, project_to_shard};
-pub use seam::{
-    CrossShardTxInput, DynSnapshot, Executor, WaveBatchContext, batch_compute_cached,
-    participating_shards,
-};
