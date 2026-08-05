@@ -1167,8 +1167,13 @@ fn stake_withdraw_drops_effective_stake_sim() {
 
 #[test]
 fn registered_validator_activates_onto_a_shard_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(4), 0xAC11, &witness_genesis_balances());
+    let mut cluster = SimCluster::with_vm_pools(
+        &witness_config(4),
+        0xAC11,
+        &witness_genesis_balances(),
+        &vm_staking_genesis_accounts(),
+        &vm_staking_pools(),
+    );
     registered_validator_activates_onto_a_shard(&mut cluster);
 }
 
@@ -1176,8 +1181,13 @@ fn registered_validator_activates_onto_a_shard_sim() {
 fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_sim() {
     // Seven validators give the committee slack to keep quorum while a couple
     // eject; `pool_surplus = 0` keeps the shuffle dormant.
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(7), 0xE1EC, &witness_genesis_balances());
+    let mut cluster = SimCluster::with_vm_pools(
+        &witness_config(7),
+        0xE1EC,
+        &witness_genesis_balances(),
+        &vm_staking_genesis_accounts(),
+        &vm_staking_pools(),
+    );
     withdrawal_ejects_a_validator_that_a_deposit_reactivates(&mut cluster);
 }
 

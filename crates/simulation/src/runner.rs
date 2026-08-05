@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use crossbeam::channel::{Receiver, Sender, unbounded};
-use hyperscale_beacon::genesis::build_genesis;
+use hyperscale_beacon::genesis::{build_genesis, seed_founding_members};
 use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_crypto_mock::{MockSigner, MockVerifier};
@@ -246,6 +246,12 @@ pub struct SimulationRunner {
     /// world the executor and statics were built with.
     vm_accounts: Vec<([u8; 16], u128)>,
 
+    /// [`SimConfig::vm_pools`] with each seat's founding members filled
+    /// in from the folded genesis beacon state, so the contract's record
+    /// of who a pool operates and the beacon's agree from the first
+    /// block.
+    vm_pools: Vec<StakePoolSeat>,
+
     /// The cluster's VM engine, kept in its concrete form beside the
     /// `dyn Executor` every host runs. Preview is engine-side and has no
     /// place on the executor seam, so a harness that drives it needs the
@@ -466,6 +472,8 @@ impl SimulationRunner {
         // committee size, form the genesis beacon committee.
         let beacon_network = genesis_validators.network.clone();
         let boot = build_genesis(&genesis_validators, chain_config);
+        let mut vm_pools = network_config.vm_pools.clone();
+        seed_founding_members(&boot.state, &mut vm_pools);
         let beacon_config_hash = boot.config_hash;
         let shared_topology = Arc::clone(&boot.topology_snapshot);
 
@@ -631,6 +639,7 @@ impl SimulationRunner {
             crypto_scheme,
             share_declared_reads: network_config.share_declared_reads,
             vm_accounts: network_config.vm_accounts.clone(),
+            vm_pools,
             vm_engine,
             beacon_config_hash,
             beacon_network,
@@ -906,6 +915,7 @@ impl SimulationRunner {
     pub fn initialize_genesis(&mut self) {
         self.run_genesis(&GenesisConfig {
             vm_accounts: self.vm_accounts.clone(),
+            vm_pools: self.vm_pools.clone(),
             ..GenesisConfig::test_default()
         });
     }
@@ -923,6 +933,7 @@ impl SimulationRunner {
         let config = GenesisConfig {
             xrd_balances: balances.to_vec(),
             vm_accounts: self.vm_accounts.clone(),
+            vm_pools: self.vm_pools.clone(),
             ..GenesisConfig::test_default()
         };
         self.run_genesis(&config);

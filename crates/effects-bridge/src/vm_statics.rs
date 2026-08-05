@@ -20,7 +20,7 @@ use arc_swap::ArcSwap;
 use hyperscale_types::{
     DeclaredKey, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction,
 };
-use hyperscale_vm_effects::stdlib::{ENTROPY, VAULT};
+use hyperscale_vm_effects::stdlib::{ENTROPY, VALIDATORS, VAULT};
 use hyperscale_vm_effects::{
     Accessibility, Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg,
     GraphNode, Hash32, InstanceRegistry, IntentDecl, ManifestGraph, ManifestHash, MetadataCache,
@@ -47,6 +47,23 @@ pub fn vault_key(owner: [u8; 16], resource: Address) -> SubstateKey {
         Address(owner),
         VAULT,
         &[Value::Address(resource).canonical_bytes()],
+    )
+}
+
+/// A stake pool's record of one validator it operates: the cell the
+/// pool's operator methods declare, keyed by the validator.
+///
+/// Non-empty means the pool took this validator on and holds the key it
+/// registered. The methods that speak about an existing validator read
+/// it, so genesis has to write it for members the beacon created before
+/// the contract existed.
+#[must_use]
+pub fn validator_key(pool: [u8; 16], validator: u64) -> SubstateKey {
+    child_key(
+        &ProtocolHasher,
+        Address(pool),
+        VALIDATORS,
+        &[Value::U64(validator).canonical_bytes()],
     )
 }
 

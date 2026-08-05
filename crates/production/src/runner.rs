@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use arc_swap::ArcSwap;
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use hex::encode as hex_encode;
-use hyperscale_beacon::genesis::build_genesis;
+use hyperscale_beacon::genesis::{build_genesis, seed_founding_members};
 use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch::{Dispatch, DispatchPool};
@@ -561,12 +561,18 @@ impl ProductionRunnerBuilder {
         // supervisor opens for a post-genesis join or observer duty —
         // the same network + genesis config the startup genesis path
         // installs, so the substate sides agree across stores.
+        let mut bootstrap_config = self
+            .genesis_config
+            .clone()
+            .unwrap_or_else(GenesisConfig::production);
+        // Each seated pool's founding members, read off the beacon's own
+        // folded genesis state: the contract's record of who a pool
+        // operates has to agree with the beacon's from the first block,
+        // and this is where both exist.
+        seed_founding_members(&boot.state, &mut bootstrap_config.vm_pools);
         let engine_bootstrap = EngineBootstrap {
             network: network_definition.clone(),
-            config: self
-                .genesis_config
-                .clone()
-                .unwrap_or_else(GenesisConfig::production),
+            config: bootstrap_config,
         };
         let executor = RadixExecutor::new(network_definition);
         // The VM engine's world derives from the same genesis config the

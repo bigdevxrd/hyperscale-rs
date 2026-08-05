@@ -1172,6 +1172,17 @@ pub const VM_SECOND_POOL: [u8; 16] = [0x51; 16];
 /// The identifier the beacon folds [`VM_SECOND_POOL`] under.
 pub const VM_SECOND_POOL_ID: StakePoolId = StakePoolId::new(7778);
 
+/// The contract for the pool every genesis validator belongs to.
+///
+/// Beacon genesis creates that pool and its members; seating an instance
+/// for it is what gives it an operator, which is how a deployment retires
+/// a founding validator. Nothing else about the pool changes — its stake
+/// and its membership are still genesis's.
+pub const VM_GENESIS_POOL: [u8; 16] = [0x52; 16];
+
+/// The identifier beacon genesis creates the founding pool under.
+pub const VM_GENESIS_POOL_ID: StakePoolId = StakePoolId::new(0);
+
 /// The pools a staking cluster seats.
 ///
 /// Both name the same operator, which is an entity running two pools
@@ -1186,13 +1197,40 @@ pub fn vm_staking_pools() -> Vec<StakePoolSeat> {
             address: VM_STAKE_POOL,
             id: VM_STAKE_POOL_ID,
             operator,
+            founding: Vec::new(),
         },
         StakePoolSeat {
             address: VM_SECOND_POOL,
             id: VM_SECOND_POOL_ID,
             operator,
+            founding: Vec::new(),
+        },
+        // The founding pool's members are the beacon's to name, and
+        // genesis fills them in from its own folded state.
+        StakePoolSeat {
+            address: VM_GENESIS_POOL,
+            id: VM_GENESIS_POOL_ID,
+            operator,
+            founding: Vec::new(),
         },
     ]
+}
+
+/// Retire `validator`, which `pool` must operate.
+#[must_use]
+pub fn build_vm_deactivate_tx(
+    operator: &Ed25519PrivateKey,
+    pool: [u8; 16],
+    validator: ValidatorId,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    build_vm_operator_tx(
+        operator,
+        pool,
+        "deactivate-validator",
+        vec![GraphArg::Literal(Value::U64(validator.inner()))],
+        validity,
+    )
 }
 
 /// Register `validator` against `pool`, carrying the consensus key it

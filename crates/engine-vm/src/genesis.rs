@@ -9,7 +9,9 @@
 use std::sync::LazyLock;
 
 use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
-use hyperscale_effects_bridge::{PoolRegistry, ProtocolHasher, admit_package, attach_metadata};
+use hyperscale_effects_bridge::{
+    PoolRegistry, ProtocolHasher, admit_package, attach_metadata, validator_key,
+};
 pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
 use hyperscale_types::StakePoolSeat;
@@ -180,7 +182,10 @@ pub fn stake_unit(pool: [u8; 16]) -> Address {
 /// The funded accounts' genesis substate writes: one [`VM_XRD`] vault
 /// cell per account, identity-keyed under the owner's prefix.
 #[must_use]
-pub fn vm_genesis_updates(accounts: &[([u8; 16], u128)]) -> DatabaseUpdates {
+pub fn vm_genesis_updates(
+    accounts: &[([u8; 16], u128)],
+    pools: &[StakePoolSeat],
+) -> DatabaseUpdates {
     let mut updates = DatabaseUpdates::default();
     // The stdlib package as a committed cell, under the same content
     // address a publish would place it at. Genesis is then the cache's
@@ -204,6 +209,33 @@ pub fn vm_genesis_updates(accounts: &[([u8; 16], u128)]) -> DatabaseUpdates {
                 )]),
             },
         );
+    // A seated pool's record of the validators it already operates.
+    // Beacon genesis creates those memberships directly in beacon state,
+    // so without this the contract would hold no record of validators it
+    // demonstrably operates — and its own methods would refuse to speak
+    // about them.
+    for seat in pools {
+        if seat.founding.is_empty() {
+            continue;
+        }
+        let mut substate_updates = IndexMap::new();
+        for (validator, pubkey) in &seat.founding {
+            let key = validator_key(seat.address, validator.inner());
+            substate_updates.insert(
+                DbSortKey(key.local.0.to_vec()),
+                DatabaseUpdate::Set(pubkey.as_bytes().to_vec()),
+            );
+        }
+        updates
+            .node_updates
+            .entry(vm_db_node_key(seat.address))
+            .or_default()
+            .partition_updates
+            .insert(
+                VM_PARTITION,
+                PartitionDatabaseUpdates::Delta { substate_updates },
+            );
+    }
     for (address, balance) in accounts {
         let key = vault_key(*address, VM_XRD);
         let mut substate_updates = IndexMap::new();
@@ -235,7 +267,7 @@ mod tests {
     fn genesis_updates_are_identity_keyed_vault_cells() {
         let alice = [0x11u8; 16];
         let bob = [0x22u8; 16];
-        let updates = vm_genesis_updates(&[(alice, 500), (bob, 700)]);
+        let updates = vm_genesis_updates(&[(alice, 500), (bob, 700)], &[]);
         // Two funded accounts, plus the stdlib package under the
         // publisher no key derives.
         assert_eq!(updates.node_updates.len(), 3);

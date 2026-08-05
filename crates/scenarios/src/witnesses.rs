@@ -26,9 +26,9 @@ use crate::support::query::{
     pool_effective_stake, pool_total_stake, validator_pubkey, validator_status,
 };
 use crate::support::tx::{
-    VM_SECOND_POOL, VM_SECOND_POOL_ID, VM_STAKE_POOL, VM_STAKE_POOL_ID, build_vm_register_tx,
-    build_vm_stake_tx, build_vm_unstake_tx, build_witness_tx, validity_around, vm_delegator,
-    vm_pool_operator, witness_payer,
+    VM_GENESIS_POOL, VM_SECOND_POOL, VM_SECOND_POOL_ID, VM_STAKE_POOL, VM_STAKE_POOL_ID,
+    build_vm_deactivate_tx, build_vm_register_tx, build_vm_stake_tx, build_vm_unstake_tx,
+    build_witness_tx, validity_around, vm_delegator, vm_pool_operator, witness_payer,
 };
 use crate::support::wait::{await_beacon_epoch, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -107,30 +107,6 @@ fn register<C: Cluster>(c: &mut C, pool: [u8; 16], seed: u8, validator: Validato
             validity_around(c.now()),
         ),
     );
-}
-
-/// A `RegisterValidator` event for `dummy_pubkey(seed)` under
-/// `validator_id`, carrying a genuine proof-of-possession — the fold
-/// rejects a registration whose proof does not verify, so the signing
-/// scheme must be the cluster's own.
-fn dummy_registration(
-    c: &impl Cluster,
-    seed: u8,
-    pool_id: StakePoolId,
-    validator_id: ValidatorId,
-) -> BeaconWitnessEvent {
-    let keypair = c.signer_from_seed(&[seed; 32]);
-    BeaconWitnessEvent::RegisterValidator {
-        pool_id,
-        validator_id,
-        pubkey: keypair.public_key(),
-        possession_proof: validator_possession_proof_sign(
-            keypair.as_ref(),
-            &NetworkDefinition::simulator(),
-            validator_id,
-        )
-        .expect("sign"),
-    }
 }
 
 /// A delegation through a stake pool contract folds into the beacon
@@ -364,43 +340,38 @@ fn submit_committed<C: Cluster>(c: &mut C, tx: RoutableTransaction) {
 pub fn registered_validator_activates_onto_a_shard(c: &mut impl Cluster) {
     warm_up(c);
 
+    // Register a new validator into a funded pool; with the committee
+    // full it parks in the pool. Which pool it joins does not matter to
+    // the draw — the committee fills from the pooled set network-wide.
     let newcomer = ValidatorId::new(1000);
-
-    // Grow the genesis pool past its capacity so it can support another node.
-    submit_action(
+    delegate(
         c,
-        1,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: GENESIS_POOL,
-            amount: Stake::from_whole_tokens(10_000_000),
-        },
+        VM_STAKE_POOL,
+        VM_STAKE_POOL_ID,
+        MIN_STAKE_FLOOR.attos() * 10,
     );
-    assert!(
-        c.run_until(epochs(8), |c| pool_total_stake(c, GENESIS_POOL)
-            .is_some_and(|s| s >= Stake::from_whole_tokens(13_000_000))),
-        "capacity deposit never folded",
-    );
-
-    // Register a new validator; with the committee full it parks in the pool.
-    submit_action(c, 2, &dummy_registration(c, 9, GENESIS_POOL, newcomer));
+    register(c, VM_STAKE_POOL, 9, newcomer);
     assert!(
         c.run_until(epochs(8), |c| validator_status(c, newcomer)
             == Some(ValidatorStatus::Pooled)),
         "newcomer never reached the pool",
     );
 
-    // Retire a genesis validator; the freed committee slot draws the only pooled
-    // validator — the newcomer — onto the shard. It enters `OnShard { ready:
-    // false }`; the ready flip follows later via the shard's `Ready` witness,
-    // which this host-less validator never drives, so the placement is the
+    // Retire a genesis validator through its own pool's operator. The
+    // freed committee slot draws the only pooled validator — the
+    // newcomer — onto the shard. It enters `OnShard { ready: false }`;
+    // the ready flip follows later via the shard's `Ready` witness, which
+    // this host-less validator never drives, so the placement is the
     // activation milestone.
-    submit_action(
+    let (operator, _) = vm_pool_operator();
+    submit_committed(
         c,
-        3,
-        &BeaconWitnessEvent::DeactivateValidator {
-            pool_id: GENESIS_POOL,
-            validator_id: ValidatorId::new(0),
-        },
+        build_vm_deactivate_tx(
+            &operator,
+            VM_GENESIS_POOL,
+            ValidatorId::new(0),
+            validity_around(c.now()),
+        ),
     );
     assert!(
         c.run_until(epochs(8), |c| matches!(

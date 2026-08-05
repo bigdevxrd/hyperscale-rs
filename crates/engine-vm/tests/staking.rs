@@ -45,8 +45,8 @@ const OUTSIDER: u8 = 9;
 struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
-    fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
-        let updates = vm_genesis_updates(accounts);
+    fn genesis(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> Self {
+        let updates = vm_genesis_updates(accounts, pools);
         let mut map = BTreeMap::new();
         for (node_key, node_updates) in &updates.node_updates {
             for (partition, partition_updates) in &node_updates.partition_updates {
@@ -119,6 +119,7 @@ fn seat(address: [u8; 16], id: u32) -> StakePoolSeat {
         address,
         id: StakePoolId::new(id),
         operator: account_of(OPERATOR),
+        founding: Vec::new(),
     }
 }
 
@@ -188,7 +189,7 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> RoutableTransaction {
 }
 
 fn execute(executor: &VmExecutor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
-    let store = MapDb::genesis(&[(delegator(), 10_000)]);
+    let store = MapDb::genesis(&[(delegator(), 10_000)], &[]);
     let snapshot = DynSnapshot(&store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();

@@ -5,6 +5,7 @@ use std::iter::Sum;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 use hex::encode as hex_encode;
+use hyperscale_crypto::ConsensusPublicKey;
 use radix_common::types::NodeId as RadixNodeId;
 use sbor::prelude::*;
 
@@ -492,9 +493,11 @@ impl Display for StakePoolId {
     }
 }
 
-/// A stake pool the network seats: the VM instance whose events it reads
-/// as beacon facts, the identifier it folds them under, and the principal
-/// its operator surface admits.
+/// A stake pool the network seats.
+///
+/// The VM instance whose events it reads as beacon facts, the identifier
+/// it folds them under, the principal its operator surface admits, and
+/// the validators it already operates.
 ///
 /// Seating one is a governance act — admitting a pool is admitting a new
 /// source of beacon facts — so the whole seat is fixed where the network
@@ -503,7 +506,16 @@ impl Display for StakePoolId {
 /// confuse: `address` derives from no key and is the pool's identity,
 /// while `operator` derives from one and is the only satisfier of the
 /// pool's validator surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+///
+/// `founding` exists because a pool's membership and its contract have
+/// two different origins. Beacon genesis creates the founding pool and
+/// its validators directly in beacon state, so a contract seated for that
+/// pool has no record of validators it demonstrably operates — and an
+/// operator method that consults its own record would refuse to retire
+/// one. Seeding those records at genesis is what keeps the contract's
+/// view and the beacon's agreeing from the first block; after genesis
+/// only the contract creates memberships, so they never drift again.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
 pub struct StakePoolSeat {
     /// The pool instance's owner prefix.
     pub address: [u8; 16],
@@ -511,6 +523,10 @@ pub struct StakePoolSeat {
     pub id: StakePoolId,
     /// The account whose signature the pool's operator methods admit.
     pub operator: [u8; 16],
+    /// Validators this pool already operates at genesis, with the
+    /// consensus key each was registered under. Empty for a pool whose
+    /// members will all arrive through its own contract.
+    pub founding: Vec<(ValidatorId, ConsensusPublicKey)>,
 }
 
 /// Position in a shard's monotonic beacon-witness accumulator.

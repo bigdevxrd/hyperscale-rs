@@ -50,7 +50,7 @@ struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
-        let updates = vm_genesis_updates(accounts);
+        let updates = vm_genesis_updates(accounts, &[]);
         let mut map = BTreeMap::new();
         for (node_key, node_updates) in &updates.node_updates {
             for (partition, partition_updates) in &node_updates.partition_updates {

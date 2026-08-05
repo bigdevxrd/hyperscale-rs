@@ -21,8 +21,8 @@ use hyperscale_types::{
     BlockHeight, CertifiedBeaconBlock, Epoch, GenesisConfigHash, GenesisPool, GenesisValidator,
     GenesisValidators, MAX_BEACON_COMMITTEE, MAX_VOTE_VECTOR_LEN, MIN_BEACON_COMMITTEE_SIZE,
     MIN_STAKE_FLOOR, NetworkParams, Randomness, ShardBoundary, ShardCommittee, ShardId, Stake,
-    StakePool, StakePoolId, StateRoot, TopologySnapshot, ValidatorId, ValidatorRecord,
-    ValidatorStatus, Verified, WeightedTimestamp, genesis_config_hash,
+    StakePool, StakePoolId, StakePoolSeat, StateRoot, TopologySnapshot, ValidatorId,
+    ValidatorRecord, ValidatorStatus, Verified, WeightedTimestamp, genesis_config_hash,
 };
 
 // ─── builder ───────────────────────────────────────────────────────────────
@@ -222,7 +222,6 @@ pub fn build_genesis(genesis: &GenesisValidators, chain_config: BeaconChainConfi
             pubkey: v.public_key,
         })
         .collect();
-
     let seated: BTreeSet<ValidatorId> = genesis.committee.iter().copied().collect();
     let committee_len = seated
         .len()
@@ -251,6 +250,27 @@ pub fn build_genesis(genesis: &GenesisValidators, chain_config: BeaconChainConfi
         state,
         config_hash,
         topology_snapshot,
+    }
+}
+
+/// Fill in each seat's founding members from the beacon's own folded
+/// genesis state.
+///
+/// The two views of a pool's membership have to agree from the first
+/// block, and this is the only place both exist: the beacon has just
+/// decided who belongs to which pool, and the seats are what genesis will
+/// write the contract's records from. Deriving rather than restating
+/// means the rule lives in one place — here, whatever beacon genesis
+/// decides — instead of being mirrored in every harness that seats a
+/// pool.
+pub fn seed_founding_members(state: &BeaconState, pools: &mut [StakePoolSeat]) {
+    for seat in pools {
+        seat.founding = state
+            .validators
+            .values()
+            .filter(|record| record.pool == seat.id)
+            .map(|record| (record.id, record.pubkey))
+            .collect();
     }
 }
 

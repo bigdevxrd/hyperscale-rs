@@ -783,11 +783,13 @@ fn stake_withdraw_drops_effective_stake_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn registered_validator_activates_onto_a_shard_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(4),
         0xAC11,
         EPOCH_MS,
         witness_genesis_balances(),
+        vm_staking_genesis_accounts(),
+        vm_staking_pools(),
     );
     registered_validator_activates_onto_a_shard(&mut cluster);
 }
@@ -801,11 +803,13 @@ fn registered_validator_activates_onto_a_shard_prod() {
 fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_prod() {
     // Seven validators give the committee slack to keep quorum while a couple
     // eject.
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(7),
         0xE1EC,
         EPOCH_MS,
         witness_genesis_balances(),
+        vm_staking_genesis_accounts(),
+        vm_staking_pools(),
     );
     withdrawal_ejects_a_validator_that_a_deposit_reactivates(&mut cluster);
 }
