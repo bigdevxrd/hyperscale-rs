@@ -9,8 +9,8 @@
 use std::time::Duration;
 
 use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, encode_tree};
-use hyperscale_engine_vm::genesis::stake_unit;
-use hyperscale_engine_vm::{VM_XRD, vm_account_address};
+use hyperscale_engine::genesis::stake_unit;
+use hyperscale_engine::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR,
     NetworkParams, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,

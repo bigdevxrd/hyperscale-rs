@@ -1,12 +1,12 @@
 //! Process-scope cache of shard-invariant execution outputs.
 //!
-//! [`ProcessExecutionCache`] memoises the result of
-//! [`compute_vm_output`](crate::compute_vm_output) keyed by [`TxHash`].
-//! A single `IoLoop` owns one cache; every hosted vnode's action
-//! dispatch consults it. Repeated executions of the same transaction
-//! — across same-shard vnodes co-hosted in one process and across
-//! hosted participating shards for cross-shard transactions — produce
-//! a cache hit and skip the Radix VM call entirely.
+//! [`ProcessExecutionCache`] memoises the [`CachedVmOutput`] a batch
+//! produces, keyed by [`TxHash`]. A single `IoLoop` owns one cache;
+//! every hosted vnode's action dispatch consults it. Repeated
+//! executions of the same transaction — across same-shard vnodes
+//! co-hosted in one process and across hosted participating shards for
+//! cross-shard transactions — produce a cache hit and skip execution
+//! entirely.
 //!
 //! [`ProcessExecutionCache::try_acquire`] also dedupes *in-flight*
 //! work: concurrent callers for the same `tx_hash` receive a shared
@@ -240,7 +240,7 @@ impl ProcessExecutionCache {
     /// Remove `shard` from each named tx's pending-shards set. Entries
     /// that reach an empty set are evicted.
     ///
-    /// Called once per [`FinalizedWavesAdmitted`] event on the
+    /// Called once per `FinalizedWavesAdmitted` event on the
     /// admitting shard's `ShardLoop`; the wave's local EC supplies the
     /// shard identity and tx-hash list. Idempotent — calling twice
     /// with the same shard is a no-op.

@@ -12,7 +12,6 @@ members = [
     "crates/dispatch-sync",
     "crates/effects-bridge",
     "crates/engine",
-    "crates/engine-vm",
     "crates/execution",
     "crates/jmt",
     "crates/mempool",
@@ -54,7 +53,6 @@ hyperscale-dispatch-pooled = { path = "crates/dispatch-pooled" }
 hyperscale-dispatch-sync = { path = "crates/dispatch-sync" }
 hyperscale-effects-bridge = { path = "crates/effects-bridge" }
 hyperscale-engine = { path = "crates/engine" }
-hyperscale-engine-vm = { path = "crates/engine-vm" }
 hyperscale-execution = { path = "crates/execution" }
 hyperscale-jmt = { path = "crates/jmt", features = ["parallel"] }
 hyperscale-mempool = { path = "crates/mempool" }
@@ -123,7 +121,7 @@ wasm-bindgen = "0.2.126"
 # VM dependencies (github.com/hyperscalers/hyperscale-vm @ bd82a1f).
 # `vm-effects` (types and the routing vocabulary) feeds admission through the
 # effects bridge; the kernel, runtimes, and stdlib blob are consumed only by
-# `crates/engine-vm`. Bumps are deliberate rev-pin commits, never
+# `crates/engine`. Bumps are deliberate rev-pin commits, never
 # `cargo update` drift. The wasmtime pin mirrors the VM repo's blessed engine
 # exactly (latest stable ahead of the 48 LTS, expected 2026-08-20); upgrades
 # are protocol events.
@@ -140,7 +138,6 @@ wat = "1.255.0"
 
 # Radix dependencies (github.com/hyperscalers/radixdlt-scrypto @ f7fcb1f62f)
 radix-common = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
-radix-engine = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
 radix-engine-interface = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
 radix-substate-store-interface = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }
 radix-transactions = { git = "https://github.com/hyperscalers/radixdlt-scrypto", rev = "f7fcb1f62f", default-features = false, features = ["std"] }

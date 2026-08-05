@@ -19,7 +19,6 @@ hyperscale-beacon.workspace = true
 hyperscale-core.workspace = true
 hyperscale-shard.workspace = true
 hyperscale-engine.workspace = true
-hyperscale-engine-vm.workspace = true
 hyperscale-execution.workspace = true
 hyperscale-mempool.workspace = true
 hyperscale-network.workspace = true

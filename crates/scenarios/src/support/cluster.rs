@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hyperscale_crypto_bls::BlsSigner;
-use hyperscale_engine_vm::{PreviewGrants, PreviewReport};
+use hyperscale_engine::{PreviewGrants, PreviewReport};
 use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
     BeaconState, BlockHeight, RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision,

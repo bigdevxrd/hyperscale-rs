@@ -14,8 +14,7 @@ use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_crypto_mock::{MockSigner, MockVerifier};
 use hyperscale_dispatch_sync::SyncDispatch;
-use hyperscale_engine::{Executor, GenesisConfig};
-use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
+use hyperscale_engine::{ExecutionMode, Executor, GenesisConfig, VmExecutor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network_memory::{
     BandwidthReport, DeliveryDrain, HostLayout, NetworkConfig, NetworkTrafficAnalyzer, NodeIndex,

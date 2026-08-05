@@ -16,9 +16,8 @@
 use std::sync::Arc;
 
 use hyperscale_dispatch::Dispatch;
-use hyperscale_engine::GenesisConfig;
 use hyperscale_engine::sharding::filter_genesis_updates_for_shard;
-use hyperscale_engine_vm::vm_genesis_updates;
+use hyperscale_engine::{GenesisConfig, vm_genesis_updates};
 use hyperscale_network::Network;
 use hyperscale_storage::{GenesisCommit, RecoveredState, ShardStorage};
 use hyperscale_types::{

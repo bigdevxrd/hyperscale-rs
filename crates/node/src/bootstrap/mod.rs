@@ -27,8 +27,7 @@ pub mod state_range_serve;
 pub mod witness_history;
 pub mod witness_history_serve;
 
-use hyperscale_engine::GenesisConfig;
-use hyperscale_engine_vm::vm_genesis_updates;
+use hyperscale_engine::{GenesisConfig, vm_genesis_updates};
 use hyperscale_storage::{
     GenesisCommit, ImportProgress, RecoveredState, ShardChainReader, WitnessSeed,
 };

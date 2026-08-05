@@ -9,13 +9,11 @@ use hyperscale_effects_bridge::vm_statics::package_key;
 use hyperscale_effects_bridge::{
     ProtocolHasher, admit_package, attach_metadata, encode_tree, vm_account_address,
 };
+use hyperscale_engine::genesis::{account_artifact, entropy_key, vault_key};
 use hyperscale_engine::{
-    DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
-};
-use hyperscale_engine_vm::genesis::{account_artifact, entropy_key, vault_key};
-use hyperscale_engine_vm::{
-    ExecutionMode, PreviewGrants, PreviewInputs, PreviewOutcome, PreviewReport, ResourceChange,
-    VM_XRD, VmExecutor, vm_genesis_updates,
+    DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, PreviewGrants, PreviewInputs,
+    PreviewOutcome, PreviewReport, ProcessExecutionCache, ResourceChange, VM_XRD, VmExecutor,
+    WaveBatchContext, vm_genesis_updates,
 };
 use hyperscale_storage::{
     DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,

@@ -26,7 +26,6 @@ hyperscale-dispatch.workspace = true
 hyperscale-dispatch-pooled.workspace = true
 hyperscale-shard.workspace = true
 hyperscale-engine.workspace = true
-hyperscale-engine-vm.workspace = true
 hyperscale-execution.workspace = true
 hyperscale-mempool.workspace = true
 hyperscale-metrics.workspace = true

@@ -9,8 +9,8 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use hyperscale_engine_vm::VM_XRD;
-use hyperscale_engine_vm::genesis::vault_key;
+use hyperscale_engine::VM_XRD;
+use hyperscale_engine::genesis::vault_key;
 use hyperscale_types::{
     BlockHeight, Ed25519PrivateKey, Epoch, ShardId, TransactionDecision, TransactionStatus, TxHash,
 };

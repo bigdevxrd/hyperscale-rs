@@ -22,7 +22,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hyperscale_effects_bridge::admit_package;
-use hyperscale_engine::DynSnapshot;
 use hyperscale_types::{RevealChain, RoutableTransaction, VmEvent, WeightedTimestamp};
 use hyperscale_vm_effects::{EffectTarget, Hash32, SubstateKey};
 use hyperscale_vm_kernel::{
@@ -35,7 +34,7 @@ use crate::executor::{
     read_cell, tx_randomness,
 };
 use crate::genesis::vault_key;
-use crate::{VM_XRD, VmExecutor};
+use crate::{DynSnapshot, VM_XRD, VmExecutor};
 
 /// What a preview run is permitted that a committed execution is not.
 ///

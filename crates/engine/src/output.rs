@@ -39,8 +39,8 @@ pub struct ExecutedTx {
 
 impl ExecutedTx {
     /// Build a record from already-projected pieces. Most callers want
-    /// [`crate::receipt::build_executed_tx`] (which projects from a Radix
-    /// `TransactionReceipt`) or [`Self::failure`].
+    /// [`project_to_shard`](crate::project_to_shard) (which projects a
+    /// cached output onto one shard) or [`Self::failure`].
     #[must_use]
     pub const fn new(
         tx_hash: TxHash,

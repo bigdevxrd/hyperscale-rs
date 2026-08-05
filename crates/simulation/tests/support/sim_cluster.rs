@@ -10,8 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperscale_engine::DynSnapshot;
-use hyperscale_engine_vm::{PreviewGrants, PreviewInputs, PreviewReport};
+use hyperscale_engine::{DynSnapshot, PreviewGrants, PreviewInputs, PreviewReport};
 use hyperscale_metrics::{MetricsRecorder, with_scoped_recorder};
 use hyperscale_metrics_memory::MemoryRecorder;
 use hyperscale_network::fault::{HostId, RuleHandle};

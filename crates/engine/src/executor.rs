@@ -1,186 +1,1165 @@
-//! The batch execution seam.
+//! The VM engine's wave-batch executor.
 //!
-//! An [`Executor`] runs a wave's transactions against a caller-supplied
-//! snapshot and returns one [`ExecutedTx`] per input, projected to the
-//! context's local shard via
-//! [`project_to_shard`](crate::project_to_shard) — typically memoising
-//! the shard-invariant intermediate in
-//! [`ProcessExecutionCache`](crate::ProcessExecutionCache).
+//! `execute_wave_batch` runs one wave's VM sub-batch end to end: derive
+//! each transaction's manifest and effect set through the bridge
+//! (exactly the derivation admission ran), pre-read the declared cells
+//! from the wave snapshot into an owned committed base, hand the batch
+//! to `vm_kernel::execute_batch`, then fold the schedule-invariant
+//! receipts into per-transaction absolute `database_updates` in
+//! canonical order against the batch baseline — the same fold the
+//! kernel's apply phase performs, checked against its end state before
+//! anything is returned.
 //!
-//! Storage is NOT owned by the executor — the runner provides it as a
-//! method argument so the same executor can serve multiple snapshots
-//! and so the runner can hoist a single snapshot across an entire
-//! action batch.
-//!
-//! Execution is READ-ONLY: results are returned as [`ExecutedTx`]
-//! values whose `DatabaseUpdates` the state machine caches and applies
-//! later, when the wave's certificate is included in a committed block.
+//! Batch receipts are batch-dependent (reservation feasibility is judged
+//! with the whole batch's holds in place), so VM outputs are never
+//! memoized in the per-transaction `ProcessExecutionCache` — the same
+//! transaction in a different block may abort differently.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hyperscale_dispatch::Parallelism;
-use hyperscale_storage::SubstateDatabase;
-use hyperscale_types::{
-    BlockHash, RevealChain, RoutableTransaction, ShardId, ShardTrie, SubstateEntry, Verified,
-    WeightedTimestamp,
+use blake3::hash as blake3_hash;
+use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
+use hyperscale_effects_bridge::{
+    BridgeStatics, PoolRegistry, ProtocolHasher, admit_package, check_target_authority,
+    decode_tree, envelope_identity, witness_from_event,
 };
+use hyperscale_metrics::record_transaction_executed;
+use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
+use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
+use hyperscale_types::{
+    BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata,
+    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, RoutableTransaction,
+    StakePoolSeat, SubstateEntry, TxHash, Verified, VmEvent, compute_merkle_root,
+    install_vm_statics,
+};
+use hyperscale_vm_effects::{
+    Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
+    PrefixShardResolver, RoleId, SubstateKey, admit_tree, package_hash, route_tree,
+};
+use hyperscale_vm_kernel::{
+    Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
+    TxHash as VmTxHash, amount_cell, decode_amount, encode_amount, execute_batch,
+};
+use indexmap::IndexMap;
+use radix_common::math::Decimal;
 use radix_common::prelude::DbSubstateValue;
-use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey, PartitionEntry};
+use radix_substate_store_interface::interface::{DatabaseUpdates, DbPartitionKey};
 
-use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
-use crate::output::ExecutedTx;
-use crate::receipt::CachedVmOutput;
+use crate::backend::EngineBackend;
+use crate::genesis::{VmWorld, genesis_world_with_pools};
+use crate::sharding::{compute_writes_root, sort_database_updates};
+use crate::{
+    CachedVmOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, Executor, WaveBatchContext,
+    project_to_shard,
+};
 
-/// Object-safe borrow of the wave's state snapshot, so the batch seam
-/// stays dyn-dispatchable while the concrete snapshot type remains
-/// generic at the call site.
-pub struct DynSnapshot<'a>(pub &'a (dyn SubstateDatabase + Sync));
-
-impl SubstateDatabase for DynSnapshot<'_> {
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<DbSubstateValue> {
-        self.0.get_raw_substate_by_db_key(partition_key, sort_key)
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
-        self.0
-            .list_raw_values_from_db_key(partition_key, from_sort_key)
-    }
+/// Whether a derivation holds a gated node to its target's authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetAuthority {
+    /// The rule as the chain applies it.
+    Required,
+    /// Every gated node is treated as authorised. A preview grant only,
+    /// for answering what an envelope would do before the accounts it
+    /// touches have signed for it.
+    Assumed,
 }
 
-/// Per-wave inputs an engine's batch execution reads besides the
-/// transactions themselves.
-pub struct WaveBatchContext<'a> {
-    /// Batch fan-out strategy, sourced from the dispatch backend.
-    pub par: Parallelism,
-    /// Process-scope cache of shard-invariant execution outputs.
-    pub cache: &'a ProcessExecutionCache,
-    /// The executing vnode's shard — the projection target.
-    pub local_shard: ShardId,
-    /// The active shard partition.
-    pub shard_trie: &'a ShardTrie,
-    /// The block whose wave this batch executes.
-    pub block_hash: BlockHash,
-    /// The wave-starting block's parent-QC weighted timestamp. For a
-    /// single-shard batch this is the transaction clock of every member;
-    /// cross-shard batches carry per-transaction clocks on their inputs.
-    pub wave_start_ts: WeightedTimestamp,
-    /// The wave-starting block's reveal chain. For a single-shard batch
-    /// this is the randomness anchor of every member; cross-shard
-    /// batches carry per-transaction anchors on their inputs.
-    pub wave_start_reveal: RevealChain,
-}
-
-/// One cross-shard transaction as an engine consumes it: the
-/// transaction plus what its remote counterparts shipped.
-pub struct CrossShardTxInput<'a> {
-    /// The transaction to execute.
-    pub transaction: &'a Arc<Verified<RoutableTransaction>>,
-    /// Verified provision entry lists, one per source shard contribution.
-    pub provisions: &'a [Arc<Vec<SubstateEntry>>],
-    /// The transaction clock: the payer-shard committing block's
-    /// parent-QC weighted timestamp, identical on every participant.
-    pub clock: WeightedTimestamp,
-    /// The randomness anchor: the same block's reveal chain, likewise
-    /// identical on every participant.
-    pub randomness: RevealChain,
-}
-
-/// Execution of a wave's sub-batch.
+/// One derived transaction, as the batch consumes it.
 ///
-/// The unit is the batch: the whole of it goes to the deterministic-parallel
-/// executor at once, which returns one [`ExecutedTx`] per input
-/// transaction, in input order.
-pub trait Executor: Send + Sync {
-    /// Execute `transactions` against `snapshot` and project each result
-    /// to the context's local shard.
+/// The walk itself is the kernel's: routing lowers each manifest node to
+/// the invocation its package's ABI binding describes, and
+/// [`ManifestWalk`] performs them over the engine backend. Nothing on
+/// this side names a method.
+pub struct PreparedVmTx {
+    /// The lowered invocations the kernel walks, in manifest node order.
+    /// Envelope trees lower into one flat list, so nothing downstream
+    /// sees intent structure.
+    pub calls: Vec<NodeCall>,
+    /// The routed declaration, both views: the folded set scheduling
+    /// reads, and the clause order the capability table is built in —
+    /// which is what a lowered call's handle positions index.
+    pub declaration: Declaration,
+    /// The subintent nullifier keys the batch entry enforces.
+    pub nullifiers: Vec<SubstateKey>,
+}
+
+/// The protocol crypto hash behind the kernel's hashing host function
+/// and fresh-ID derivation.
+pub fn protocol_hash(data: &[u8]) -> [u8; 32] {
+    *blake3_hash(data).as_bytes()
+}
+
+/// Domain tag for the per-transaction randomness draw.
+const DOMAIN_TX_RANDOMNESS: &[u8] = b"hyperscale/vm/tx-randomness";
+
+/// The transaction's randomness draw: the payer block's reveal chain —
+/// its proposer's VRF reveal, attested by the committee that committed
+/// the transaction — domain-separated by the transaction hash.
+///
+/// Anchoring on the payer block is what makes the draw a property of the
+/// transaction rather than of whichever block a participant executes it
+/// in, so every participant of a cross-shard transaction derives one
+/// receipt. Mixing the hash keeps two transactions in one payer block
+/// from sharing a draw.
+pub fn tx_randomness(anchor: RevealChain, tx: TxHash) -> [u8; 32] {
+    *Hash::from_parts(&[
+        DOMAIN_TX_RANDOMNESS,
+        anchor.as_raw().as_bytes(),
+        tx.as_raw().as_bytes(),
+    ])
+    .as_bytes()
+}
+
+/// The batch's committed baseline: the declared cells pre-read from the
+/// wave's JMT-backed snapshot at materialize time.
+///
+/// Cells only — ordered collections and locks are absent from the
+/// current stdlib surface, and reservations never persist across
+/// batches, so `holds` is empty by construction. Every kernel read flows
+/// through a capability for a declared effect, so pre-reading exactly
+/// the declared point targets is complete.
+#[derive(Debug, Default)]
+pub struct VmBase {
+    pub cells: BTreeMap<SubstateKey, Vec<u8>>,
+}
+
+impl Base for VmBase {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        self.cells.get(&key).cloned()
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: RoleId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
+    }
+
+    fn is_locked(&self, _key: SubstateKey) -> bool {
+        false
+    }
+
+    fn holds(&self, _key: SubstateKey) -> BTreeMap<VmTxHash, u128> {
+        BTreeMap::new()
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+}
+
+/// The VM engine: the genesis-static world, the compiled stdlib guests,
+/// and the batch scheduling mode.
+pub struct VmExecutor {
+    pub(crate) world: VmWorld,
+    pub(crate) backend: EngineBackend,
+    pub(crate) mode: ExecutionMode,
+}
+
+impl VmExecutor {
+    /// Build the engine for the genesis-funded `accounts` and install the
+    /// process-wide VM statics (first installation wins, so co-hosted
+    /// nodes sharing one genesis coexist).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the committed stdlib artifact fails validation or
+    /// compilation — a build defect surfaced at boot, not in a wave.
+    #[must_use]
+    pub fn new(accounts: &[([u8; 16], u128)], mode: ExecutionMode) -> Self {
+        Self::with_pools(accounts, &[], mode)
+    }
+
+    /// [`Self::new`] seating `pools` as the stake pools the beacon folds
+    /// for: `(instance address, the identifier it is folded under)`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::new`].
+    #[must_use]
+    pub fn with_pools(
+        accounts: &[([u8; 16], u128)],
+        pools: &[StakePoolSeat],
+        mode: ExecutionMode,
+    ) -> Self {
+        let world = genesis_world_with_pools(accounts, pools);
+        install_vm_statics(Box::new(BridgeStatics {
+            cache: world.cache.clone(),
+            instances: world.instances.clone(),
+        }));
+        Self {
+            world,
+            backend: EngineBackend::new(),
+            mode,
+        }
+    }
+
+    /// The published-package cache this engine routes against.
+    ///
+    /// Shared with the installed statics rather than copied, so a package
+    /// a committed block publishes is visible to admission and to
+    /// execution at the same instant.
+    #[must_use]
+    pub const fn packages(&self) -> &PackageCache {
+        &self.world.cache
+    }
+
+    /// Derive one transaction's invocations, effect set, and nullifiers
+    /// — the same `decode → admit → route` admission ran; refusal here
+    /// means the transaction bypassed admission and fails
+    /// deterministically.
+    pub(crate) fn prepare(&self, tx: &RoutableTransaction) -> Result<PreparedVmTx, String> {
+        self.prepare_with_authority(tx, TargetAuthority::Required)
+    }
+
+    /// [`Self::prepare`] with the target-authority rule made optional.
+    ///
+    /// Only a preview waives it, and only when its caller asked to be
+    /// shown what an envelope would do before its counterparties have
+    /// signed. Nothing on the commit path reaches this with
+    /// [`TargetAuthority::Assumed`].
+    pub(crate) fn prepare_with_authority(
+        &self,
+        tx: &RoutableTransaction,
+        authority: TargetAuthority,
+    ) -> Result<PreparedVmTx, String> {
+        let vm = tx.body();
+        let packages = self.world.cache.load();
+        let tree = decode_tree(
+            vm.call_tree()
+                .ok_or_else(|| "publish body in a call sub-batch".to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        if authority == TargetAuthority::Required {
+            check_target_authority(
+                &tree,
+                Address(vm.fee_payer),
+                &packages,
+                &self.world.instances,
+            )
+            .map_err(|error| error.0)?;
+        }
+        let admitted = admit_tree(
+            &tree,
+            envelope_identity(vm),
+            &packages,
+            &self.world.instances,
+            &ProtocolHasher,
+        )
+        .map_err(|error| format!("admission: {error}"))?;
+        let routing = route_tree(
+            &admitted,
+            &packages,
+            &self.world.instances,
+            &ProtocolHasher,
+            &PrefixShardResolver { bits: 0 },
+        )
+        .map_err(|error| format!("routing: {error}"))?;
+        // Both views of the declaration, straight from the fold: the
+        // folded set that scheduling and judging read, and the clause
+        // order capability materialization walks. Unioning `per_shard`
+        // here would reach the same set but discard the order, which is
+        // what a guest's positional handle parameters are indexed by.
+        let declaration = routing
+            .declaration()
+            .map_err(|error| format!("declaration: {error:?}"))?;
+        Ok(PreparedVmTx {
+            calls: routing.calls,
+            declaration,
+            nullifiers: admitted
+                .subintents
+                .iter()
+                .map(|record| record.nullifier)
+                .collect(),
+        })
+    }
+}
+
+/// Read one declared cell from the wave snapshot by its exact flat key.
+pub fn read_cell(snapshot: &DynSnapshot<'_>, key: SubstateKey) -> Option<DbSubstateValue> {
+    snapshot.get_raw_substate_by_db_key(
+        &DbPartitionKey {
+            node_key: vm_db_node_key(key.owner.0),
+            partition_num: VM_PARTITION,
+        },
+        &DbSortKey(key.local.0.to_vec()),
+    )
+}
+
+/// Fold one receipt's delta into per-transaction absolute writes,
+/// mirroring the kernel apply phase's operation order: exclusive cells,
+/// then movements, then settles. `running` carries the batch's folded
+/// state; the per-transaction map reads through it to the base.
+///
+/// # Panics
+///
+/// Panics on arithmetic the kernel's apply already vetted — a divergence
+/// between this fold and kernel semantics, never a sender condition.
+fn fold_delta(
+    receipt: &Receipt,
+    base: &VmBase,
+    running: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    tx: VmTxHash,
+    locality: &Locality,
+) -> BTreeMap<SubstateKey, Option<Vec<u8>>> {
+    assert!(
+        receipt.delta.entries.is_empty(),
+        "ordered-collection entries are outside the genesis stdlib surface"
+    );
+    let mut writes: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
+    let current = |writes: &BTreeMap<SubstateKey, Option<Vec<u8>>>,
+                   running: &BTreeMap<SubstateKey, Option<Vec<u8>>>,
+                   key: SubstateKey| {
+        writes
+            .get(&key)
+            .or_else(|| running.get(&key))
+            .cloned()
+            .unwrap_or_else(|| base.cells.get(&key).cloned())
+    };
+    // The owning shard folds its own cells; a movement on any other is the
+    // outbound record and never becomes an absolute write here.
+    let owned = receipt.delta.owned(locality);
+    for (key, change) in owned.cells() {
+        writes.insert(key, change.clone());
+    }
+    for (key, movement) in owned.movements() {
+        let before = current(&writes, running, key)
+            .map_or(Ok(0), |bytes| decode_amount(&bytes))
+            .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
+        let after = before
+            .checked_add(movement.credit)
+            .and_then(|credited| credited.checked_sub(movement.debit))
+            .unwrap_or_else(|| panic!("fold of {tx:?}: movement past the kernel-vetted floor"));
+        writes.insert(key, Some(encode_amount(after).to_vec()));
+    }
+    for (key, settled) in owned.settles() {
+        let before = current(&writes, running, key)
+            .map_or(Ok(0), |bytes| decode_amount(&bytes))
+            .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
+        let after = before
+            .checked_sub(settled)
+            .unwrap_or_else(|| panic!("fold of {tx:?}: settle past the committed amount"));
+        writes.insert(key, Some(encode_amount(after).to_vec()));
+    }
+    for (key, change) in &writes {
+        running.insert(*key, change.clone());
+    }
+    writes
+}
+
+/// Encode per-transaction absolute writes as VM-namespace
+/// `DatabaseUpdates`.
+fn writes_to_updates(writes: &BTreeMap<SubstateKey, Option<Vec<u8>>>) -> DatabaseUpdates {
+    let mut updates = DatabaseUpdates::default();
+    for (key, change) in writes {
+        let node = updates
+            .node_updates
+            .entry(vm_db_node_key(key.owner.0))
+            .or_default();
+        let partition = node
+            .partition_updates
+            .entry(VM_PARTITION)
+            .or_insert_with(|| PartitionDatabaseUpdates::Delta {
+                substate_updates: IndexMap::new(),
+            });
+        let PartitionDatabaseUpdates::Delta { substate_updates } = partition else {
+            unreachable!("VM updates are Delta-only by construction");
+        };
+        substate_updates.insert(
+            DbSortKey(key.local.0.to_vec()),
+            change
+                .clone()
+                .map_or(DatabaseUpdate::Delete, DatabaseUpdate::Set),
+        );
+    }
+    updates
+}
+
+/// Fuel and the abort reason (if any) as node-local metadata.
+/// How an abort reads in a diagnostic: the kernel's own verdict, or the
+/// deterministic text a trap carried.
+///
+/// One derivation, because a preview quotes the same verdict a wave
+/// records and two copies would drift apart silently. Never
+/// consensus-critical — it lands in the node-local metadata, which a
+/// syncing replica does not carry.
+///
+/// # Panics
+///
+/// Panics on a completed outcome, which is not an abort.
+pub fn abort_reason(outcome: &Outcome) -> String {
+    match outcome {
+        Outcome::UserError { reason } | Outcome::ProtocolError { reason } => reason.clone(),
+        Outcome::Infeasible { key, amount } => format!("infeasible: {amount} uncovered on {key:?}"),
+        Outcome::ConstraintUnmet {
+            node,
+            param,
+            amount,
+        } => format!("constraint unmet: node {node} parameter {param} carried {amount}"),
+        Outcome::NullifierSpent { key } => format!("subintent already spent at {key:?}"),
+        Outcome::Completed { .. } => unreachable!("aborts only"),
+    }
+}
+
+fn vm_metadata(fuel: u64, error: Option<String>) -> ExecutionMetadata {
+    ExecutionMetadata::new(
+        FeeSummary {
+            total_execution_cost: Some(Decimal::from(fuel)),
+            total_royalty_cost: None,
+            total_storage_cost: None,
+            total_tipping_cost: None,
+        },
+        Vec::new(),
+        error,
+    )
+}
+
+/// Assemble one kernel receipt into the projected [`ExecutedTx`]: fold
+/// its delta, root its writes, and run the shard projection. Aborts
+/// carry their reason and fuel in the node-local metadata.
+/// Apply the payer's fee burn on top of a transaction's kernel-mirroring
+/// fold. The burn is part of the receipt's writes — and so of its
+/// attested `writes_root` and the sync-replayable work items — while the
+/// pre-fee `running` map stays the kernel differential's source: the
+/// applied value of a fee-bearing cell is always
+/// `saturating_sub(pre-fee value, cumulative fees)`.
+fn apply_fee_burn(
+    writes: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    running: &BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    base: &VmBase,
+    fees_applied: &mut BTreeMap<SubstateKey, u128>,
+    fee: Option<PayerFee>,
+    fuel: u64,
+) {
+    // The transaction's own burn first: the attested actual — fuel, until
+    // real pricing lands — capped at the signed ceiling.
+    if let Some(payer) = fee {
+        let burn = u128::from(fuel).min(payer.max_fee);
+        if burn > 0 {
+            *fees_applied.entry(payer.vault).or_insert(0) += burn;
+        }
+    }
+    // Re-derive every fee-bearing cell this transaction's update set
+    // covers from the pre-fee fold: later writes of a debited cell must
+    // carry the cumulative burn, or their absolute updates would revert
+    // earlier debits at commit.
+    for (vault, fees) in fees_applied.iter() {
+        let prefee = writes
+            .get(vault)
+            .cloned()
+            .or_else(|| running.get(vault).cloned())
+            .unwrap_or_else(|| base.cells.get(vault).cloned());
+        let Some(bytes) = prefee else {
+            continue;
+        };
+        let Ok(cell): Result<[u8; 16], _> = bytes.as_slice().try_into() else {
+            continue;
+        };
+        let debited = u128::from_le_bytes(cell).saturating_sub(*fees);
+        // The burn folds outside the kernel store, so it applies the
+        // store's own rule itself: a zero balance is an absent cell, and
+        // the leaf goes with the bond it carried.
+        writes.insert(*vault, amount_cell(debited).map(|cell| cell.to_vec()));
+    }
+}
+
+/// What this shard, as a transaction's fee payer, charges it.
+#[derive(Clone, Copy)]
+pub struct PayerFee {
+    pub vault: SubstateKey,
+    /// The signed ceiling a success burns up to, and what the sender's
+    /// own defect costs.
+    pub max_fee: u128,
+    /// The class floor: what an attempt owes when nothing it did was its
+    /// sender's fault.
+    pub floor: u128,
+    /// Whether a wave can abort this transaction after it executed —
+    /// true for a cross-shard leg, which is the one shape whose effects
+    /// are discarded after the engine completed them.
+    pub wave_abortable: bool,
+}
+
+/// What an attempt that applied no effects owes, by why it applied none.
+///
+/// Charging nothing is not an option: a transaction that consumed its
+/// limit and then trapped would cost its sender less than the same work
+/// succeeding, which is the inversion that makes failure the cheaper way
+/// to buy execution.
+///
+/// The consumed work itself cannot price this. Fuel at a trap is not
+/// agreed between the runtimes — one flushes its in-register counter
+/// while the other charges every executed operator — so a charge derived
+/// from it would differ across replicas on the same transaction. Both
+/// amounts below are functions of signed content alone.
+pub const fn charge_for(outcome: &Outcome, payer: PayerFee) -> Option<u128> {
+    match outcome {
+        // Completed here means the engine applied the effects. Only a
+        // wave can still discard them, and only for a cross-shard leg —
+        // that receipt is built in reserve and settles the floor if the
+        // abort comes.
+        Outcome::Completed { .. } => {
+            if payer.wave_abortable {
+                Some(payer.floor)
+            } else {
+                None
+            }
+        }
+        // The sender's own defect, and the only class worth grinding: it
+        // pays the ceiling it declared. Not the work consumed — that is
+        // unknowable — but the sender chose the bound, and anything less
+        // leaves failure discounted against success.
+        Outcome::UserError { .. } => Some(payer.max_fee),
+        // A lost deterministic race. The sender did nothing wrong and
+        // could not have avoided it, so it pays only the floor covering
+        // the declaration work its attempt really did consume.
+        //
+        // A signed edge bound the produced amount missed is the same
+        // class: the sender declared what it would accept and the world
+        // moved between signing and execution. So is a spent subintent —
+        // a conflict tiebreak or a stale declaration, neither of which a
+        // composer can see at signing time.
+        Outcome::Infeasible { .. }
+        | Outcome::ConstraintUnmet { .. }
+        | Outcome::NullifierSpent { .. } => Some(payer.floor),
+        // The kernel's own defect. `materialize_abort` refuses to price
+        // it to the sender, and the burn agrees.
+        Outcome::ProtocolError { .. } => None,
+    }
+}
+
+/// The fold's mutable state across a batch: the pre-fee kernel-mirror
+/// map (the differential's source) and the cumulative fee burns layered
+/// on top of it.
+struct FoldState {
+    running: BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    fees_applied: BTreeMap<SubstateKey, u128>,
+}
+
+/// Build the receipt an abort of this transaction settles: the payer's
+/// vault debited by the class floor, and nothing else.
+///
+/// The value is read as of every canonically earlier transaction's
+/// applied effect and fee, but without this transaction's own — an abort
+/// discards those, so the burn must not be layered on top of them.
+fn build_fee_receipt(
+    ctx: &WaveBatchContext<'_>,
+    base: &VmBase,
+    fold: &FoldState,
+    tx_hash: TxHash,
+    vault: SubstateKey,
+    floor: u128,
+) -> Option<ConsensusReceipt> {
+    let prefee = fold
+        .running
+        .get(&vault)
+        .cloned()
+        .unwrap_or_else(|| base.cells.get(&vault).cloned())?;
+    let cell: [u8; 16] = prefee.as_slice().try_into().ok()?;
+    let applied = u128::from_le_bytes(cell)
+        .saturating_sub(fold.fees_applied.get(&vault).copied().unwrap_or(0));
+    let debited = applied.saturating_sub(floor);
+
+    let writes: BTreeMap<SubstateKey, Option<Vec<u8>>> =
+        BTreeMap::from([(vault, Some(debited.to_le_bytes().to_vec()))]);
+    let mut updates = writes_to_updates(&writes);
+    sort_database_updates(&mut updates);
+    let writes_root = compute_writes_root(&updates);
+    let receipt_hash = GlobalReceipt::new(
+        true,
+        EventRoot::ZERO,
+        BeaconWitnessRoot::ZERO,
+        writes_root,
+        OwnershipRoot::ZERO,
+    )
+    .receipt_hash();
+    // No gas: this receipt settles a floor, it does not report execution.
+    // The transaction whose abort it settles consumed real work, but that
+    // work is unattested — a failed outcome carries no gas either — so an
+    // abort contributes nothing to its shard's emission weight. Pricing
+    // aborted work is the floor's job, not the weight's.
+    let cached = CachedVmOutput::succeeded(
+        updates,
+        receipt_hash,
+        vm_metadata(0, None),
+        0,
+        Vec::new(),
+        Vec::new(),
+    );
+    Some(project_to_shard(&cached, tx_hash, ctx.local_shard, ctx.shard_trie).consensus)
+}
+
+/// What judging and storing one artifact costs, whatever the verdict:
+/// the shard reached it from these bytes before it knew the answer.
+///
+/// One unit per byte is a placeholder against phase 6's measured
+/// baselines, like every other number in the fee model.
+pub const fn publish_work(artifact: &[u8]) -> u64 {
+    artifact.len() as u64
+}
+
+/// Settle one publish: the artifact lands in its content-addressed cell
+/// under the publisher, and the fee burns from the publisher's vault.
+///
+/// A publish never enters the kernel — there is no manifest to run — so
+/// it settles outside the batch fold rather than inside it. That is
+/// sound because a publish declares exactly two keys, its own package
+/// cell and its own fee vault, and both are exclusive: no sibling in the
+/// block can be touching either, so there are no earlier burns to layer
+/// on and nothing for the kernel differential to check.
+fn assemble_published_tx(
+    ctx: &WaveBatchContext<'_>,
+    base: &VmBase,
+    vm_tx: VmTxHash,
+    publisher: [u8; 16],
+    artifact: &[u8],
+    fee: Option<PayerFee>,
+    locality: &Locality,
+) -> ExecutedTx {
+    let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
+    let work = publish_work(artifact);
+
+    // Admission reached the whole verdict from these same bytes, so a
+    // refusal here means the transaction bypassed admission — the same
+    // condition `prepare` treats as a deterministic failure.
+    let refusal = admit_package(artifact).err().map(|error| error.0);
+
+    let mut fold = FoldState {
+        running: BTreeMap::new(),
+        fees_applied: BTreeMap::new(),
+    };
+    let cached = if let Some(reason) = &refusal {
+        CachedVmOutput::failed(vm_metadata(work, Some(reason.clone())))
+    } else {
+        {
+            let mut writes: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
+            if locality.is_local(Address(publisher)) {
+                let package = package_hash(&ProtocolHasher, artifact);
+                // Content-addressed, so republishing the same artifact
+                // writes the same bytes to the same cell: idempotent by
+                // construction rather than by a first-write-wins branch.
+                writes.insert(package_key(publisher, package), Some(artifact.to_vec()));
+            }
+            apply_fee_burn(
+                &mut writes,
+                &fold.running,
+                base,
+                &mut fold.fees_applied,
+                fee,
+                work,
+            );
+            let mut updates = writes_to_updates(&writes);
+            sort_database_updates(&mut updates);
+            let writes_root = compute_writes_root(&updates);
+            let receipt_hash = GlobalReceipt::new(
+                true,
+                EventRoot::ZERO,
+                BeaconWitnessRoot::ZERO,
+                writes_root,
+                OwnershipRoot::ZERO,
+            )
+            .receipt_hash();
+            CachedVmOutput::succeeded(
+                updates,
+                receipt_hash,
+                vm_metadata(work, None),
+                work,
+                Vec::new(),
+                Vec::new(),
+            )
+        }
+    };
+    // A refused artifact is the sender's own defect — they chose what to
+    // publish — so it pays the ceiling, exactly as a trap does. Charging
+    // less would leave a rejected publish cheaper than an accepted one.
+    let fee_receipt = match (&refusal, fee) {
+        (Some(_), Some(payer)) => {
+            build_fee_receipt(ctx, base, &fold, tx_hash, payer.vault, payer.max_fee)
+        }
+        _ => None,
+    };
+
+    let mut executed = project_to_shard(&cached, tx_hash, ctx.local_shard, ctx.shard_trie);
+    executed.fee_receipt = fee_receipt;
+    executed.attested_work = work;
+    executed
+}
+
+/// What the kernel reported for one transaction: the effect record every
+/// participant derives identically, and this shard's own attested share.
+#[derive(Clone, Copy)]
+struct KernelOutput<'a> {
+    receipt: &'a Receipt,
+    work: u64,
+}
+
+/// What every transaction in a batch assembles against: the pre-read
+/// baseline its receipts fold over, the share of the world this shard
+/// applies, and what the witness lift needs to decide whether an emitted
+/// event is a beacon fact — the pools the network recognises, what code
+/// each instance runs, and the code a pool must be running.
+#[derive(Clone, Copy)]
+struct BatchInputs<'a> {
+    base: &'a VmBase,
+    locality: &'a Locality,
+    pools: &'a PoolRegistry,
+    instances: &'a InstanceRegistry,
+    staking_package: PackageHash,
+}
+
+fn assemble_executed_tx(
+    ctx: &WaveBatchContext<'_>,
+    inputs: BatchInputs<'_>,
+    fold: &mut FoldState,
+    vm_tx: VmTxHash,
+    kernel: KernelOutput<'_>,
+    fee: Option<PayerFee>,
+) -> ExecutedTx {
+    let BatchInputs { base, locality, .. } = inputs;
+    let KernelOutput {
+        receipt,
+        work: attested_work,
+    } = kernel;
+    let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
+    // Built before this transaction's own burn folds in: a charge settles
+    // over the state its siblings left, not over its own.
+    let fee_receipt = fee.and_then(|payer| {
+        charge_for(&receipt.outcome, payer)
+            .and_then(|amount| build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, amount))
+    });
+    let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
+        let mut writes = fold_delta(receipt, base, &mut fold.running, vm_tx, locality);
+        apply_fee_burn(
+            &mut writes,
+            &fold.running,
+            base,
+            &mut fold.fees_applied,
+            fee,
+            receipt.fuel,
+        );
+        let mut updates = writes_to_updates(&writes);
+        sort_database_updates(&mut updates);
+        let writes_root = compute_writes_root(&updates);
+        // Every participant derives the same events from the same
+        // manifest, so the root covers the whole union while each shard's
+        // receipt keeps only what its own instances emitted.
+        let vm_events: Vec<VmEvent> = receipt
+            .events
+            .iter()
+            .map(|event| VmEvent {
+                emitter: event.emitter.0,
+                event_type: event.event_type,
+                payload: event.payload.clone(),
+            })
+            .collect();
+        // The beacon facts among them. Read here rather than at
+        // projection because this is where the world that decides is in
+        // reach, and read from the whole union rather than one shard's
+        // share so every participant derives the same set — which shard
+        // keeps a fact is settled once, at projection, by the same rule
+        // that settles which shard keeps the event.
+        let vm_witnesses: Vec<([u8; 16], BeaconWitnessEvent)> = vm_events
+            .iter()
+            .filter_map(|event| {
+                witness_from_event(
+                    event,
+                    inputs.pools,
+                    inputs.instances,
+                    inputs.staking_package,
+                )
+                .map(|witness| (event.emitter, witness))
+            })
+            .collect();
+        let event_hashes: Vec<Hash> = vm_events.iter().map(VmEvent::hash).collect();
+        let receipt_hash = GlobalReceipt::new(
+            true,
+            EventRoot::from_raw(compute_merkle_root(&event_hashes)),
+            BeaconWitnessRoot::ZERO,
+            writes_root,
+            OwnershipRoot::ZERO,
+        )
+        .receipt_hash();
+        CachedVmOutput::succeeded(
+            updates,
+            receipt_hash,
+            vm_metadata(receipt.fuel, None),
+            receipt.fuel,
+            vm_events,
+            vm_witnesses,
+        )
+    } else {
+        CachedVmOutput::failed(vm_metadata(
+            receipt.fuel,
+            Some(abort_reason(&receipt.outcome)),
+        ))
+    };
+    let mut executed = project_to_shard(&cached, tx_hash, ctx.local_shard, ctx.shard_trie);
+    executed.fee_receipt = fee_receipt;
+    executed.attested_work = attested_work;
+    executed
+}
+
+impl VmExecutor {
+    /// The batch pipeline both dispatch arms share: derive, pre-read the
+    /// local baseline, layer provisioned remote cells, execute under the
+    /// shard's locality, fold local keys, and project. `provisions` is
+    /// empty and locality is total for the single-shard arm.
+    #[allow(clippy::too_many_lines)] // one pipeline, stages in order
+    fn run_batch(
+        &self,
+        ctx: &WaveBatchContext<'_>,
+        snapshot: &DynSnapshot<'_>,
+        transactions: &[Arc<Verified<RoutableTransaction>>],
+        provisions_by_tx: &BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>>,
+        env_by_tx: &BTreeMap<VmTxHash, EnvInputs>,
+        cross_shard: bool,
+    ) -> Vec<ExecutedTx> {
+        if transactions.is_empty() {
+            return Vec::new();
+        }
+        let locality = if cross_shard {
+            let trie = ctx.shard_trie.clone();
+            let local_shard = ctx.local_shard;
+            Locality::Owned(Arc::new(move |owner: Address| {
+                trie.shard_for_prefix(owner.0) == local_shard
+            }))
+        } else {
+            Locality::All
+        };
+        // Publishes carry no manifest, so they never reach the kernel;
+        // they settle in their own pass below.
+        let publishes: BTreeMap<VmTxHash, ([u8; 16], Vec<u8>)> = transactions
+            .iter()
+            .filter_map(|tx| {
+                let vm = tx.body();
+                let artifact = vm.artifact()?;
+                Some((
+                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    (vm.fee_payer, artifact.to_vec()),
+                ))
+            })
+            .collect();
+
+        // Derive every transaction; refusals become deterministic
+        // failures without touching the batch.
+        let mut prepared: BTreeMap<VmTxHash, PreparedVmTx> = BTreeMap::new();
+        let mut refused: BTreeMap<TxHash, String> = BTreeMap::new();
+        for tx in transactions {
+            let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+            if publishes.contains_key(&vm_tx) {
+                continue;
+            }
+            match self.prepare(tx) {
+                Ok(entry) => {
+                    record_transaction_executed();
+                    prepared.insert(vm_tx, entry);
+                }
+                Err(reason) => {
+                    tracing::warn!(tx_hash = ?tx.hash(), reason, "VM transaction refused at execution");
+                    refused.insert(tx.hash(), reason);
+                }
+            }
+        }
+
+        // The committed baseline: provisioned remote cells first — a
+        // key's owner prefix routes it to exactly one source, so nothing
+        // arbitrates — then the locally owned declared cells from the
+        // wave snapshot.
+        let mut cells: BTreeMap<SubstateKey, Vec<u8>> = BTreeMap::new();
+        for lists in provisions_by_tx.values() {
+            for entries in lists {
+                for entry in entries.iter() {
+                    if let Some((owner, local)) = vm_flat_key_parts(&entry.storage_key)
+                        && let Some(value) = entry.value.as_ref()
+                    {
+                        cells.insert(
+                            SubstateKey {
+                                owner: Address(owner),
+                                local: LocalKey(local),
+                            },
+                            value.to_vec(),
+                        );
+                    }
+                }
+            }
+        }
+        for entry in prepared.values() {
+            for effect in entry.declaration.set.iter() {
+                if let EffectTarget::Point(key) = effect.target
+                    && locality.is_local(key.owner)
+                    && let Some(value) = read_cell(snapshot, key)
+                {
+                    cells.insert(key, value);
+                }
+            }
+        }
+        // A publish declares no effects for the loop above to walk, but
+        // its burn still has to read the vault it debits: an absent
+        // baseline value is indistinguishable from an absent cell, and
+        // the burn would silently apply to nothing.
+        for tx in transactions {
+            let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+            if !publishes.contains_key(&vm_tx) {
+                continue;
+            }
+            let (owner, local) = tx.fee_vault();
+            let key = SubstateKey {
+                owner: Address(owner),
+                local: LocalKey(local),
+            };
+            if locality.is_local(key.owner)
+                && let Some(value) = read_cell(snapshot, key)
+            {
+                cells.insert(key, value);
+            }
+        }
+        let base = Arc::new(VmBase { cells });
+
+        let batch: Vec<BatchTx> = prepared
+            .iter()
+            .map(|(vm_tx, entry)| {
+                // Total: both dispatch arms build the map from the same
+                // transactions the derivation ran over, and `prepared` is
+                // a subset of those.
+                let env = env_by_tx
+                    .get(vm_tx)
+                    .copied()
+                    .expect("every prepared transaction has an environment");
+                BatchTx::new(
+                    *vm_tx,
+                    entry.declaration.clone(),
+                    env.clock_ms,
+                    env.randomness,
+                )
+                .with_calls(entry.calls.clone())
+                .with_nullifiers(entry.nullifiers.clone())
+            })
+            .collect();
+        let walk = ManifestWalk {
+            backend: &self.backend,
+        };
+        let outcome = execute_batch(
+            Arc::clone(&base) as Arc<dyn Base>,
+            &batch,
+            &walk,
+            protocol_hash,
+            self.mode,
+            &locality,
+        )
+        .unwrap_or_else(|error| panic!("BFT CRITICAL: VM batch execution failed: {error}"));
+
+        // Fold receipts into per-transaction absolute updates in
+        // canonical order, then check the folded end state against the
+        // kernel's own applied store — the fold must be the same fold.
+        // The fee payers this shard settles: a completed transaction
+        // burns its attested actual from its payer's vault, on the
+        // payer's shard only.
+        let fee_by_tx: BTreeMap<VmTxHash, PayerFee> = transactions
+            .iter()
+            .filter_map(|tx| {
+                let vm = tx.body();
+                let (owner, local) = tx.fee_vault();
+                if !locality.is_local(Address(owner)) {
+                    return None;
+                }
+                Some((
+                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    PayerFee {
+                        vault: SubstateKey {
+                            owner: Address(owner),
+                            local: LocalKey(local),
+                        },
+                        max_fee: vm.max_fee,
+                        floor: vm.abort_floor(),
+                        wave_abortable: cross_shard,
+                    },
+                ))
+            })
+            .collect();
+
+        let mut fold = FoldState {
+            running: BTreeMap::new(),
+            fees_applied: BTreeMap::new(),
+        };
+        let mut folded: BTreeMap<VmTxHash, ExecutedTx> = BTreeMap::new();
+        for (vm_tx, receipt) in &outcome.receipts {
+            // The kernel priced this shard's share under the same locality
+            // the receipts were applied through, so nothing here re-derives
+            // it — a workspace-side filter would be a second opinion on a
+            // quantity that must agree.
+            let kernel = KernelOutput {
+                receipt,
+                work: outcome.work.get(vm_tx).map_or(0, |w| w.units),
+            };
+            let executed = assemble_executed_tx(
+                ctx,
+                BatchInputs {
+                    base: &base,
+                    locality: &locality,
+                    pools: &self.world.pools,
+                    instances: &self.world.instances,
+                    staking_package: self.world.staking_package,
+                },
+                &mut fold,
+                *vm_tx,
+                kernel,
+                fee_by_tx.get(vm_tx).copied(),
+            );
+            folded.insert(*vm_tx, executed);
+        }
+
+        for (vm_tx, (publisher, artifact)) in &publishes {
+            folded.insert(
+                *vm_tx,
+                assemble_published_tx(
+                    ctx,
+                    &base,
+                    *vm_tx,
+                    *publisher,
+                    artifact,
+                    fee_by_tx.get(vm_tx).copied(),
+                    &locality,
+                ),
+            );
+        }
+
+        // The differential: every folded key's end value must equal the
+        // kernel's applied store. A mismatch is a fold defect — receipts
+        // silently diverging from kernel semantics — and must never ship.
+        for (key, change) in &fold.running {
+            let applied = Base::cell(&outcome.store, *key);
+            assert_eq!(
+                change.as_ref(),
+                applied.as_ref(),
+                "BFT CRITICAL: VM fold diverged from the kernel apply at {key:?}"
+            );
+        }
+
+        // Reassemble in input order.
+        transactions
+            .iter()
+            .map(|tx| {
+                let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+                folded.get(&vm_tx).cloned().unwrap_or_else(|| {
+                    let reason = refused
+                        .get(&tx.hash())
+                        .cloned()
+                        .unwrap_or_else(|| "missing batch receipt".to_string());
+                    let cached = CachedVmOutput::failed(vm_metadata(0, Some(reason)));
+                    project_to_shard(&cached, tx.hash(), ctx.local_shard, ctx.shard_trie)
+                })
+            })
+            .collect()
+    }
+}
+
+impl Executor for VmExecutor {
     fn execute_wave_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
         transactions: &[Arc<Verified<RoutableTransaction>>],
-    ) -> Vec<ExecutedTx>;
+    ) -> Vec<ExecutedTx> {
+        // A single-shard batch commits in one block, so every member's
+        // environment is anchored on the wave-start block.
+        let env_by_tx: BTreeMap<VmTxHash, EnvInputs> = transactions
+            .iter()
+            .map(|tx| {
+                (
+                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    EnvInputs {
+                        clock_ms: ctx.wave_start_ts.as_millis(),
+                        randomness: tx_randomness(ctx.wave_start_reveal, tx.hash()),
+                    },
+                )
+            })
+            .collect();
+        self.run_batch(
+            ctx,
+            snapshot,
+            transactions,
+            &BTreeMap::new(),
+            &env_by_tx,
+            false,
+        )
+    }
 
-    /// Execute a cross-shard sub-batch: `snapshot` carries local state,
-    /// each request its remote provisions. One [`ExecutedTx`] per input,
-    /// in input order, projected to the context's local shard.
     fn execute_cross_shard_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
         requests: &[CrossShardTxInput<'_>],
-    ) -> Vec<ExecutedTx>;
-}
-
-/// Shards this transaction reads or writes, routed via the active
-/// `ShardTrie`.
-///
-/// Drives the execution cache's per-entry pending-shards set: the cache
-/// narrows this to the host's hosted shards and decrements per-shard as
-/// finalised waves arrive.
-pub fn participating_shards<'a>(
-    tx: &'a RoutableTransaction,
-    shard_trie: &'a ShardTrie,
-) -> impl Iterator<Item = ShardId> + 'a {
-    tx.routing()
-        .all_prefixes()
-        .into_iter()
-        .map(move |prefix| shard_trie.shard_for_prefix(prefix))
-}
-
-/// Plan derived for each position in a batch by classifying its
-/// `ProcessExecutionCache` slot up-front. `Done` skips work; `Claimed`
-/// runs `compute` and fills the slot; `Pending` blocks on another
-/// worker's slot via `get_or_init` (the closure only fires if the
-/// claimant abandoned the slot without setting a value).
-enum Plan {
-    Done(Arc<CachedVmOutput>),
-    Claimed(CachedSlot),
-    Pending(CachedSlot),
-}
-
-/// Two-phase cache acquisition for a batch of transactions.
-///
-/// Phase 1 classifies every position sequentially via `try_acquire` —
-/// cheap `DashMap` lookups that publish all Claimed slots to other
-/// concurrent batches before any compute starts. Phase 2 fans out via
-/// `par.map`: `Done` returns the cached value, `Claimed` runs `compute`
-/// and fills the slot, `Pending` blocks via `OnceLock::get_or_init`
-/// (each blocked worker waits only on its own slot, so the wait
-/// parallelises across the pool).
-pub fn batch_compute_cached(
-    par: Parallelism,
-    cache: &ProcessExecutionCache,
-    txs: &[Arc<Verified<RoutableTransaction>>],
-    shard_trie: &ShardTrie,
-    compute: impl Fn(usize) -> CachedVmOutput + Send + Sync,
-) -> Vec<Arc<CachedVmOutput>> {
-    let plans: Vec<(usize, Plan)> = txs
-        .iter()
-        .enumerate()
-        .map(
-            |(i, tx)| match cache.try_acquire(tx.hash(), participating_shards(tx, shard_trie)) {
-                SlotStatus::Completed(v) => (i, Plan::Done(v)),
-                SlotStatus::Claimed(slot) => (i, Plan::Claimed(slot)),
-                SlotStatus::Pending(slot) => (i, Plan::Pending(slot)),
-            },
+    ) -> Vec<ExecutedTx> {
+        let transactions: Vec<Arc<Verified<RoutableTransaction>>> =
+            requests.iter().map(|r| Arc::clone(r.transaction)).collect();
+        let provisions_by_tx: BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>> = requests
+            .iter()
+            .map(|r| {
+                (
+                    VmTxHash(Hash32(*r.transaction.hash().as_bytes())),
+                    r.provisions.to_vec(),
+                )
+            })
+            .collect();
+        // Each request carries the environment its payer block fixed:
+        // remote-payer legs the anchors off the payer's bundle, everything
+        // else the wave-start block's own.
+        let env_by_tx: BTreeMap<VmTxHash, EnvInputs> = requests
+            .iter()
+            .map(|r| {
+                (
+                    VmTxHash(Hash32(*r.transaction.hash().as_bytes())),
+                    EnvInputs {
+                        clock_ms: r.clock.as_millis(),
+                        randomness: tx_randomness(r.randomness, r.transaction.hash()),
+                    },
+                )
+            })
+            .collect();
+        self.run_batch(
+            ctx,
+            snapshot,
+            &transactions,
+            &provisions_by_tx,
+            &env_by_tx,
+            true,
         )
-        .collect();
+    }
+}
 
-    par.map(plans, |(i, plan)| match plan {
-        Plan::Done(v) => v,
-        Plan::Claimed(slot) => {
-            let value = Arc::new(compute(i));
-            let _ = slot.set(Arc::clone(&value));
-            value
-        }
-        Plan::Pending(slot) => Arc::clone(slot.get_or_init(|| Arc::new(compute(i)))),
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reveal(seed: &[u8]) -> RevealChain {
+        RevealChain::from_raw(Hash::from_bytes(seed))
+    }
+
+    fn tx(seed: &[u8]) -> TxHash {
+        TxHash::from_raw(Hash::from_bytes(seed))
+    }
+
+    /// The draw is a pure function of the payer block's reveal chain and
+    /// the transaction hash: participants agreeing on the anchor derive
+    /// one draw, and two transactions under one anchor derive two.
+    #[test]
+    fn a_draw_is_fixed_by_its_anchor_and_transaction() {
+        let anchor = reveal(b"payer block");
+        assert_eq!(
+            tx_randomness(anchor, tx(b"a")),
+            tx_randomness(anchor, tx(b"a"))
+        );
+        assert_ne!(
+            tx_randomness(anchor, tx(b"a")),
+            tx_randomness(anchor, tx(b"b"))
+        );
+        assert_ne!(
+            tx_randomness(anchor, tx(b"a")),
+            tx_randomness(reveal(b"another block"), tx(b"a"))
+        );
+    }
 }

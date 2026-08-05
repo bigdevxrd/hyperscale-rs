@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use hyperscale_effects_bridge::ProtocolHasher;
 use hyperscale_effects_bridge::vm_statics::package_key;
-use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
-use hyperscale_engine_vm::{
+use hyperscale_engine::genesis::{entropy_key, vault_key};
+use hyperscale_engine::{
     PreviewGrants, PreviewOutcome, PreviewReport, ResourceChange, VM_XRD, vm_account_address,
 };
 use hyperscale_types::{BlockHeight, ShardId, TransactionDecision, TransactionStatus, TxHash};
