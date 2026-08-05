@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use hyperscale_storage::{
     DbPartitionKey, DbSortKey, DbSubstateValue, PartitionEntry, SubstateDatabase,
 };
-use hyperscale_types::NodeId;
 use rocksdb::{DB, ReadOptions, Snapshot};
 
 use super::column_families::{CfHandles, StateCf, StateHistoryCf};
@@ -114,25 +113,6 @@ impl RocksDbSnapshot<'_> {
             .collect();
         out.sort_by(|(a, _), (b, _)| a.cmp(b));
         out
-    }
-
-    /// Entity-scoped list used by cross-shard provisioning.
-    /// Decomposes each `storage_key` into `(partition_num, sort_key, value)`.
-    #[must_use]
-    pub fn list_raw_values_for_node(&self, node_id: &NodeId) -> Vec<(u8, DbSortKey, Vec<u8>)> {
-        let entity_key = substate_key::node_entity_key(node_id);
-        let entity_len = entity_key.len();
-        self.list_at_prefix(&entity_key)
-            .into_iter()
-            .filter_map(|(k, v)| {
-                if k.len() <= entity_len {
-                    return None;
-                }
-                let partition_num = k[entity_len];
-                let sort_key = DbSortKey(k[entity_len + 1..].to_vec());
-                Some((partition_num, sort_key, v))
-            })
-            .collect()
     }
 }
 

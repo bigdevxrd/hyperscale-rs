@@ -189,7 +189,7 @@ mod tests {
         for trie in [ShardTrie::uniform(3), non_uniform] {
             for seed in [0x00u8, 0x1F, 0x5A, 0x80, 0xC3, 0xFF] {
                 let owner = [seed; 16];
-                let leaf = jmt_leaf_key(&vm_flat_key(owner, [7u8; 16]), None);
+                let leaf = jmt_leaf_key(&vm_flat_key(owner, [7u8; 16]));
                 assert_eq!(
                     shard_for_key_bits(&trie, &leaf),
                     trie.shard_for_prefix(owner),

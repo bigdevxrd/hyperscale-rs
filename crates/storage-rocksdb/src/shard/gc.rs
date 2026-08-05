@@ -243,10 +243,12 @@ impl RocksDbShardStorage {
 #[cfg(test)]
 mod tests {
     use hyperscale_jmt::NibblePath;
+    use hyperscale_storage::test_helpers::{db_node_key, local_key};
     use hyperscale_storage::{
         DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, NodeDatabaseUpdates,
         PartitionDatabaseUpdates, SubstateDatabase,
     };
+    use hyperscale_types::state_key::VM_PARTITION;
     use tempfile::TempDir;
 
     use super::super::core::RocksDbShardStorage;
@@ -270,10 +272,10 @@ mod tests {
         let mk_key = |seed: u8, sort: u8| {
             (
                 DbPartitionKey {
-                    node_key: vec![seed; 50],
-                    partition_num: 0,
+                    node_key: db_node_key(seed),
+                    partition_num: VM_PARTITION,
                 },
-                DbSortKey(vec![sort]),
+                DbSortKey(local_key(&[sort])),
             )
         };
         let (pk_a, sk_a) = mk_key(1, 10);

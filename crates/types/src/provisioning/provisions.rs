@@ -12,7 +12,7 @@ use hyperscale_jmt::{Blake3Hasher, MultiProof, Tree};
 use sbor::prelude::*;
 use thiserror::Error;
 
-use crate::state_key::{DB_NODE_KEY_LEN, jmt_leaf_key, jmt_value_hash, vm_flat_key_parts};
+use crate::state_key::{jmt_value_hash, vm_flat_key_parts, vm_leaf_key};
 use crate::{
     BlockHeight, BoundedVec, CertifiedBlockHeader, Hash, MAX_TXS_PER_BLOCK, MerkleInclusionProof,
     NodeId, ProvisionEntry, ProvisionHash, RETENTION_HORIZON, RevealChain, ShardId, SubstateEntry,
@@ -384,13 +384,14 @@ impl Verify<&ProvisionsContext<'_>> for Provisions {
 
         let mut expected: Vec<([u8; 32], Option<[u8; 32]>)> = Vec::with_capacity(entries.len());
         for e in &entries {
-            if vm_flat_key_parts(&e.storage_key).is_none() && e.storage_key.len() < DB_NODE_KEY_LEN
-            {
+            // The one path taking peer-supplied storage keys: decode
+            // before keying, so a malformed key refuses rather than
+            // reaching the leaf derivation.
+            let Some((owner, local)) = vm_flat_key_parts(&e.storage_key) else {
                 return Err(ProvisionsVerifyError::MalformedStorageKey);
-            }
-            let key = jmt_leaf_key(&e.storage_key, None);
+            };
             let value_hash = e.value.as_ref().map(|v| jmt_value_hash(v));
-            expected.push((key, value_hash));
+            expected.push((vm_leaf_key(owner, local), value_hash));
         }
 
         let root_bytes: [u8; 32] = *ctx.certified_header.state_root().as_raw().as_bytes();
@@ -434,14 +435,13 @@ mod tests {
     use sbor::{DecodeError, Encoder as _, NoCustomValueKind, ValueKind};
 
     use super::*;
+    use crate::state_key::vm_flat_key;
 
     fn test_entry(seed: u8) -> SubstateEntry {
-        let mut storage_key = Vec::with_capacity(20 + 30 + 1 + 1);
-        storage_key.extend_from_slice(&[0u8; 20]);
-        storage_key.extend_from_slice(&[seed; 30]);
-        storage_key.push(0);
-        storage_key.push(seed);
-        SubstateEntry::new(storage_key, Some(vec![seed, seed + 1]))
+        SubstateEntry::new(
+            vm_flat_key([seed; 16], [seed; 16]),
+            Some(vec![seed, seed + 1]),
+        )
     }
 
     #[test]
@@ -549,12 +549,10 @@ mod tests {
         type Jmt = Tree<Blake3Hasher, 1>;
 
         fn entry(seed: u8) -> (Vec<u8>, Vec<u8>) {
-            let mut storage_key = Vec::with_capacity(20 + 30 + 1 + 1);
-            storage_key.extend_from_slice(&[0u8; 20]);
-            storage_key.extend_from_slice(&[seed; 30]);
-            storage_key.push(0);
-            storage_key.push(seed);
-            (storage_key, vec![seed, seed.wrapping_add(1)])
+            (
+                vm_flat_key([seed; 16], [seed; 16]),
+                vec![seed, seed.wrapping_add(1)],
+            )
         }
 
         fn build_jmt(entries: &[(Vec<u8>, Vec<u8>)]) -> (StateRoot, MerkleInclusionProof) {
@@ -562,7 +560,7 @@ mod tests {
             let updates: BTreeMap<[u8; 32], Option<LeafValue>> = entries
                 .iter()
                 .map(|(k, v)| {
-                    let key = jmt_leaf_key(k, None);
+                    let key = jmt_leaf_key(k);
                     let val = LeafValue::new(jmt_value_hash(v), v.len() as u64);
                     (key, Some(val))
                 })
@@ -571,8 +569,7 @@ mod tests {
             let root_hash = result.root_hash;
             store.apply(&result);
             let root_key = NodeKey::root(1);
-            let jmt_keys: Vec<[u8; 32]> =
-                entries.iter().map(|(k, _)| jmt_leaf_key(k, None)).collect();
+            let jmt_keys: Vec<[u8; 32]> = entries.iter().map(|(k, _)| jmt_leaf_key(k)).collect();
             let proof = Jmt::prove(&store, &root_key, &jmt_keys).unwrap();
             let state_root = StateRoot::from_raw(Hash::from_hash_bytes(&root_hash));
             (state_root, MerkleInclusionProof::new(proof.encode()))
@@ -755,7 +752,7 @@ mod tests {
 
         #[test]
         fn verify_rejects_malformed_storage_key() {
-            // A storage key shorter than a db_node_key is rejected explicitly,
+            // A storage key that is not flat-shaped is rejected explicitly,
             // not panicked on during leaf-key derivation.
             let (state_root, proof) = build_jmt(&[entry(1)]);
             let verified_header = header_with_state_root(state_root);
@@ -770,28 +767,10 @@ mod tests {
         }
 
         #[test]
-        fn verify_accepts_vm_flat_key_entries() {
-            use crate::state_key::vm_flat_key;
-            let items = vec![
-                (vm_flat_key([0x11; 16], [1; 16]), vec![1, 2]),
-                (vm_flat_key([0x22; 16], [2; 16]), vec![3]),
-            ];
-            let (state_root, proof) = build_jmt(&items);
-            let verified_header = header_with_state_root(state_root);
-            let provisions = provisions_with(proof, items);
-            let ctx = ProvisionsContext {
-                certified_header: &verified_header,
-            };
-            provisions
-                .verify(&ctx)
-                .expect("VM identity-keyed provisions must verify");
-        }
-
-        #[test]
         fn verify_rejects_a_mistagged_vm_length_key() {
-            use crate::state_key::{VM_DB_NODE_KEY_LEN, vm_flat_key};
-            // Exactly VM-length but with a nonzero partition byte: neither
-            // namespace claims it, so it is malformed — not panicked on.
+            use crate::state_key::VM_DB_NODE_KEY_LEN;
+            // Exactly flat-key length but with a nonzero partition byte:
+            // not a well-formed key, so it is malformed — not panicked on.
             let (state_root, proof) = build_jmt(&[entry(1)]);
             let verified_header = header_with_state_root(state_root);
             let mut bad_key = vm_flat_key([0x11; 16], [1; 16]);

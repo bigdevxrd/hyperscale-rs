@@ -12,11 +12,10 @@ mod support;
 use std::time::Duration;
 
 use hyperscale_scenarios::tx::{
-    CROSS_FRACTION_SENDERS, cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances,
-    halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
-    split_straddler_setup, straddler_genesis_balances, vm_cross_fraction_genesis_accounts,
-    vm_genesis_accounts, vm_livelock_genesis_accounts, vm_participant_sweep_genesis_accounts,
-    vm_staking_genesis_accounts, vm_staking_pools, witness_genesis_balances,
+    CROSS_FRACTION_SENDERS, cross_shard_fault_genesis_accounts, halt_straddler_setup,
+    merge_straddler_setup, reshape_lifecycle_accounts, split_straddler_setup,
+    vm_cross_fraction_genesis_accounts, vm_genesis_accounts, vm_livelock_genesis_accounts,
+    vm_participant_sweep_genesis_accounts,
 };
 use hyperscale_scenarios::{
     ScenarioConfig, beacon_pool_partition_stalls_epoch_production,
@@ -85,7 +84,6 @@ fn vm_single_transfer_prod() {
         &liveness_config(),
         7,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_genesis_accounts(1, 1),
     );
     vm_single_transfer(&mut cluster);
@@ -102,7 +100,6 @@ fn vm_abort_converges_prod() {
         &liveness_config(),
         7,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_genesis_accounts(1, 1),
     );
     vm_abort_converges(&mut cluster);
@@ -142,7 +139,6 @@ fn gossip_drop_engages_fetch_fallback_prod() {
         &fault_config(),
         7,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_genesis_accounts(1, 1),
     );
     cluster.run_faultable(gossip_drop_engages_fetch_fallback);
@@ -170,7 +166,6 @@ fn isolated_validator_still_settles_prod() {
         &fault_config(),
         7,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_genesis_accounts(1, 1),
     );
     cluster.run_faultable(isolated_validator_still_settles);
@@ -237,7 +232,6 @@ fn split_lifecycle_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_genesis_accounts(1, 1),
     );
     split_lifecycle(&mut cluster);
@@ -254,7 +248,6 @@ fn vm_zipf_payments_prod() {
         &liveness_config(),
         42,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_genesis_accounts(24, 6),
     );
     let report = vm_zipf_payments(&mut cluster, 24, 6, 1.0);
@@ -272,7 +265,6 @@ fn vm_hot_recipient_prod() {
         &liveness_config(),
         42,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_genesis_accounts(12, 1),
     );
     let (report, height_span) = vm_hot_recipient(&mut cluster, 12);
@@ -290,7 +282,6 @@ fn cross_shard_fraction_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_cross_fraction_genesis_accounts(CROSS_FRACTION_SENDERS),
     );
     let report = cross_shard_fraction(&mut cluster, CROSS_FRACTION_SENDERS, 500);
@@ -308,7 +299,6 @@ fn participant_count_sweep_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         vm_participant_sweep_genesis_accounts(2),
     );
     let latencies = participant_count_sweep(&mut cluster, 2, 2);
@@ -326,7 +316,6 @@ fn cross_shard_provisions_drop_fetch_fallback_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(cross_shard_provisions_drop_fetch_fallback);
@@ -343,7 +332,6 @@ fn cross_shard_exec_cert_drop_fetch_fallback_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(cross_shard_exec_cert_drop_fetch_fallback);
@@ -360,7 +348,6 @@ fn cross_shard_compound_drop_fetch_fallback_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(cross_shard_compound_drop_fetch_fallback);
@@ -377,7 +364,6 @@ fn cross_shard_transaction_da_fetch_fallback_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(cross_shard_transaction_da_fetch_fallback);
@@ -394,7 +380,6 @@ fn cross_shard_header_fetch_fallback_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(cross_shard_header_fetch_fallback);
@@ -411,7 +396,6 @@ fn cross_shard_provisions_recovers_after_transient_outage_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        straddler_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(cross_shard_provisions_recovers_after_transient_outage);
@@ -428,7 +412,6 @@ fn inter_shard_partition_strands_waves_until_it_heals_prod() {
         &split_config(),
         11,
         EPOCH_MS,
-        intershard_partition_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(inter_shard_partition_strands_waves_until_it_heals);
@@ -441,12 +424,7 @@ fn inter_shard_partition_strands_waves_until_it_heals_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn beacon_pool_partition_stalls_epoch_production_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
-        &split_config(),
-        11,
-        EPOCH_MS,
-        intershard_partition_genesis_balances(),
-    );
+    let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
     cluster.run_faultable(beacon_pool_partition_stalls_epoch_production);
 }
 
@@ -461,7 +439,6 @@ fn cross_shard_provisions_fetch_with_request_loss_prod() {
         &split_config(),
         42,
         EPOCH_MS,
-        straddler_genesis_balances(),
         cross_shard_fault_genesis_accounts(),
     );
     // The body's liveness invariants are the prod assertion; the returned drop
@@ -476,13 +453,8 @@ fn cross_shard_provisions_fetch_with_request_loss_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn livelock_resolves_promptly_prod() {
-    let mut cluster = ProdCluster::start_with_vm_accounts(
-        &split_config(),
-        11,
-        EPOCH_MS,
-        straddler_genesis_balances(),
-        livelock_accounts(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&split_config(), 11, EPOCH_MS, livelock_accounts());
     livelock_resolves_promptly(&mut cluster);
 }
 
@@ -493,20 +465,27 @@ fn livelock_resolves_promptly_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn merge_lifecycle_prod() {
-    let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &split_config(),
+        11,
+        EPOCH_MS,
+        reshape_lifecycle_accounts(),
+    );
     merge_lifecycle(&mut cluster);
 }
 
-/// Two cohorts of pool surplus and a grow trigger above each child but below
-/// ROOT: one cohort grows ROOT to the two siblings, the other splits the heavier
-/// one after the vote. One validator per host (each reshape seat its own store).
+/// Two cohorts of pool surplus and a grow trigger above each child of the
+/// ballasted root (~29.2 KB and ~8.1 KB) but below the root itself
+/// (~37.2 KB): one cohort grows ROOT to the two siblings, the other splits
+/// the heavier one after the vote. One validator per host (each reshape
+/// seat its own store).
 const fn straddler_config() -> ScenarioConfig {
     ScenarioConfig {
         shard_size: 4,
         vnodes_per_host: 1,
         pool_surplus: 8,
         num_shards: 1,
-        split_bytes: 800_000,
+        split_bytes: 33_000,
         latency: Duration::from_millis(60),
     }
 }
@@ -519,13 +498,8 @@ const fn straddler_config() -> ScenarioConfig {
 )]
 fn split_straddler_atomic_prod() {
     let setup = split_straddler_setup();
-    let mut cluster = ProdCluster::start_with_vm_accounts(
-        &straddler_config(),
-        11,
-        EPOCH_MS,
-        setup.balances,
-        setup.vm_accounts,
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&straddler_config(), 11, EPOCH_MS, setup.vm_accounts);
     split_straddler_atomic(&mut cluster);
 }
 
@@ -537,13 +511,8 @@ fn split_straddler_atomic_prod() {
 )]
 fn split_terminating_payer_releases_its_reservation_prod() {
     let setup = split_straddler_setup();
-    let mut cluster = ProdCluster::start_with_vm_accounts(
-        &straddler_config(),
-        11,
-        EPOCH_MS,
-        setup.balances,
-        setup.vm_accounts,
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&straddler_config(), 11, EPOCH_MS, setup.vm_accounts);
     cluster.run_faultable(split_terminating_payer_releases_its_reservation);
 }
 
@@ -555,13 +524,8 @@ fn split_terminating_payer_releases_its_reservation_prod() {
 )]
 fn split_straddler_ec_partition_atomic_prod() {
     let setup = split_straddler_setup();
-    let mut cluster = ProdCluster::start_with_vm_accounts(
-        &straddler_config(),
-        11,
-        EPOCH_MS,
-        setup.balances,
-        setup.vm_accounts,
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&straddler_config(), 11, EPOCH_MS, setup.vm_accounts);
     split_straddler_ec_partition_atomic(&mut cluster);
 }
 
@@ -578,7 +542,7 @@ const fn merge_straddler_config() -> ScenarioConfig {
         vnodes_per_host: 1,
         pool_surplus: 12,
         num_shards: 4,
-        split_bytes: 2_880_000,
+        split_bytes: 40_000,
         latency: Duration::from_millis(60),
     }
 }
@@ -595,13 +559,13 @@ fn merge_straddler_atomic_prod() {
         &merge_straddler_config(),
         11,
         EPOCH_MS,
-        setup.balances,
         setup.vm_accounts,
     );
     merge_straddler_atomic(&mut cluster);
 }
 
-/// Single-shard genesis that splits once into a holding pair, with two pool
+/// Single-shard genesis whose funded root (~43.9 KB) splits once into a
+/// holding pair (~29.0 KB and ~14.6 KB, both inside the band), with two pool
 /// cohorts — one grows the root, the other is the halted shard's recovery
 /// committee — plus jail slack so an organic performance jail over the long
 /// run can refill from the pool without starving the recovery draw. Mirrors
@@ -614,7 +578,7 @@ const fn halt_recovery_config() -> ScenarioConfig {
         vnodes_per_host: 1,
         pool_surplus: 10,
         num_shards: 1,
-        split_bytes: 800_000,
+        split_bytes: 36_000,
         latency: Duration::from_millis(150),
     }
 }
@@ -626,11 +590,12 @@ const fn halt_recovery_config() -> ScenarioConfig {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn halted_shard_recovers_by_committee_redraw_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let setup = halt_straddler_setup();
+    let mut cluster = ProdCluster::start_with_vm_accounts(
         &halt_recovery_config(),
         11,
         EPOCH_MS,
-        halt_recovery_genesis_balances(),
+        setup.vm_accounts,
     );
     cluster.run_faultable(halted_shard_recovers_by_committee_redraw);
 }
@@ -647,7 +612,6 @@ fn halted_shard_straddler_atomic_prod() {
         &halt_recovery_config(),
         11,
         EPOCH_MS,
-        setup.balances,
         setup.vm_accounts,
     );
     cluster.run_faultable(halted_shard_straddler_atomic);
@@ -689,14 +653,8 @@ const fn witness_config(validators: u32) -> ScenarioConfig {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn vm_delegation_folds_into_beacon_state_prod() {
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(4),
-        0x57AC,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&witness_config(4), 0x57AC, EPOCH_MS, Vec::new());
     vm_delegation_folds_into_beacon_state(&mut cluster);
 }
 
@@ -707,14 +665,8 @@ fn vm_delegation_folds_into_beacon_state_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn register_validator_pools_a_node_prod() {
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(4),
-        0x5EED,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&witness_config(4), 0x5EED, EPOCH_MS, Vec::new());
     register_validator_pools_a_node(&mut cluster);
 }
 
@@ -725,14 +677,8 @@ fn register_validator_pools_a_node_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn register_without_capacity_is_rejected_prod() {
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(4),
-        0x0CA9,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&witness_config(4), 0x0CA9, EPOCH_MS, Vec::new());
     register_without_capacity_is_rejected(&mut cluster);
 }
 
@@ -743,14 +689,8 @@ fn register_without_capacity_is_rejected_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn stake_withdraw_drops_effective_stake_prod() {
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(4),
-        0xD7A1,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&witness_config(4), 0xD7A1, EPOCH_MS, Vec::new());
     stake_withdraw_drops_effective_stake(&mut cluster);
 }
 
@@ -761,14 +701,8 @@ fn stake_withdraw_drops_effective_stake_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn registered_validator_activates_onto_a_shard_prod() {
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(4),
-        0xAC11,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&witness_config(4), 0xAC11, EPOCH_MS, Vec::new());
     registered_validator_activates_onto_a_shard(&mut cluster);
 }
 
@@ -779,14 +713,8 @@ fn registered_validator_activates_onto_a_shard_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn re_registration_of_a_live_validator_is_a_no_op_prod() {
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(4),
-        0xDEAD,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&witness_config(4), 0xDEAD, EPOCH_MS, Vec::new());
     re_registration_of_a_live_validator_is_a_no_op(&mut cluster);
 }
 
@@ -797,14 +725,8 @@ fn re_registration_of_a_live_validator_is_a_no_op_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn pool_capacity_caps_registrations_prod() {
-    let mut cluster = ProdCluster::start_with_vm_pools(
-        &witness_config(4),
-        0xCA9A,
-        EPOCH_MS,
-        witness_genesis_balances(),
-        vm_staking_genesis_accounts(),
-        vm_staking_pools(),
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&witness_config(4), 0xCA9A, EPOCH_MS, Vec::new());
     pool_capacity_caps_registrations(&mut cluster);
 }
 
@@ -835,7 +757,12 @@ const fn grow_config(target_shards: u32) -> ScenarioConfig {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn grow_reaches_two_shard_topology_prod() {
-    let mut cluster = ProdCluster::start(&grow_config(2), 11, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &grow_config(2),
+        11,
+        EPOCH_MS,
+        reshape_lifecycle_accounts(),
+    );
     grow_reaches_two_shard_topology(&mut cluster);
 }
 
@@ -846,7 +773,12 @@ fn grow_reaches_two_shard_topology_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn grow_reaches_four_shard_topology_prod() {
-    let mut cluster = ProdCluster::start(&grow_config(4), 11, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &grow_config(4),
+        11,
+        EPOCH_MS,
+        reshape_lifecycle_accounts(),
+    );
     grow_reaches_four_shard_topology(&mut cluster);
 }
 
@@ -857,7 +789,12 @@ fn grow_reaches_four_shard_topology_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn merge_seats_full_keeper_committee_prod() {
-    let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
+    let mut cluster = ProdCluster::start_with_vm_accounts(
+        &split_config(),
+        11,
+        EPOCH_MS,
+        reshape_lifecycle_accounts(),
+    );
     merge_seats_full_keeper_committee(&mut cluster);
 }
 
@@ -869,12 +806,7 @@ fn merge_seats_full_keeper_committee_prod() {
 )]
 fn surviving_sibling_split_seats_full_committees_prod() {
     let setup = split_straddler_setup();
-    let mut cluster = ProdCluster::start_with_vm_accounts(
-        &straddler_config(),
-        11,
-        EPOCH_MS,
-        setup.balances,
-        setup.vm_accounts,
-    );
+    let mut cluster =
+        ProdCluster::start_with_vm_accounts(&straddler_config(), 11, EPOCH_MS, setup.vm_accounts);
     surviving_sibling_split_seats_full_committees(&mut cluster);
 }

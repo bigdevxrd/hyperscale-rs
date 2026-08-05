@@ -1,12 +1,8 @@
 //! Utilities for merging, filtering, and reconstructing `DatabaseUpdates`.
 
-use std::collections::HashMap;
-
 use hyperscale_jmt::NibblePath;
-use hyperscale_types::state_key::{
-    db_node_key_to_node_id, node_routing_hash, vm_db_node_key_owner,
-};
-use hyperscale_types::{NodeId, StoredReceipt};
+use hyperscale_types::StoredReceipt;
+use hyperscale_types::state_key::vm_db_node_key_owner;
 use indexmap::map::Entry;
 use radix_common::prelude::DatabaseUpdate;
 use radix_substate_store_interface::interface::{
@@ -33,36 +29,24 @@ pub fn merge_updates_from_receipts(receipts: &[StoredReceipt]) -> DatabaseUpdate
 /// `prefix` — the subset of a followed chain's block writes that
 /// belongs to a store rooted there.
 ///
-/// Leaf keys are owner-major ([`node_routing_hash`] forms the high
-/// half), so every substate of one entity shares the prefix decision
-/// and the filter is per entity: a Radix entity resolves through
-/// `owner_map` exactly as the JMT build resolves it, and a VM entity
-/// key carries its owner prefix directly — the identity leaves' routing
-/// half. An entity key that is neither VM-shaped nor embeds a
-/// `db_node_key` is dropped — nothing the engine commits is shaped that
-/// way, and a store must never bucket a key it cannot route.
+/// An entity key carries its owner prefix — the identity leaves' routing
+/// half — so every substate of one entity shares the prefix decision and
+/// the filter is per entity. An entity key that is not owner-shaped is
+/// dropped: nothing the engine commits is shaped that way, and a store
+/// must never bucket a key it cannot route.
 #[must_use]
-#[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s; generic hasher would require turbofishing every site
-pub fn filter_updates_to_prefix(
-    updates: &DatabaseUpdates,
-    owner_map: &HashMap<NodeId, NodeId>,
-    prefix: &NibblePath,
-) -> DatabaseUpdates {
+pub fn filter_updates_to_prefix(updates: &DatabaseUpdates, prefix: &NibblePath) -> DatabaseUpdates {
     DatabaseUpdates {
         node_updates: updates
             .node_updates
             .iter()
             .filter(|(entity_key, _)| {
-                if let Some(owner) = vm_db_node_key_owner(entity_key) {
+                vm_db_node_key_owner(entity_key).is_some_and(|owner| {
                     // A shard prefix is under 64 bits (trie depth bound), so
                     // the zero-padded low half is never consulted.
                     let mut routing = [0u8; 32];
                     routing[..16].copy_from_slice(&owner);
-                    return hash_under_prefix(&routing, prefix);
-                }
-                db_node_key_to_node_id(entity_key).is_some_and(|node| {
-                    let routing = owner_map.get(&node).copied().unwrap_or(node);
-                    hash_under_prefix(&node_routing_hash(&routing), prefix)
+                    hash_under_prefix(&routing, prefix)
                 })
             })
             .map(|(entity_key, node_updates)| (entity_key.clone(), node_updates.clone()))
@@ -270,12 +254,12 @@ mod tests {
         );
 
         let left = shard_prefix_path(ShardId::leaf(1, 0));
-        let filtered = filter_updates_to_prefix(&updates, &HashMap::new(), &left);
+        let filtered = filter_updates_to_prefix(&updates, &left);
         assert!(filtered.node_updates.contains_key(&under));
         assert!(!filtered.node_updates.contains_key(&outside));
 
         let right = shard_prefix_path(ShardId::leaf(1, 1));
-        let filtered = filter_updates_to_prefix(&updates, &HashMap::new(), &right);
+        let filtered = filter_updates_to_prefix(&updates, &right);
         assert!(!filtered.node_updates.contains_key(&under));
         assert!(filtered.node_updates.contains_key(&outside));
     }

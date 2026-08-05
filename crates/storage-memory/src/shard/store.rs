@@ -1,13 +1,12 @@
 //! `SubstateStore` implementation for `SimShardStorage`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::lock_recover::read_or_recover;
 use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{DbSortKey, SubstateStore, VersionedStore};
-use hyperscale_types::{BlockHeight, MerkleInclusionProof, NodeId, StateRoot};
+use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot};
 
 use super::core::SimShardStorage;
 use super::snapshot::SimSnapshot;
@@ -27,29 +26,6 @@ impl SubstateStore for SimShardStorage {
 
     fn state_root(&self) -> StateRoot {
         read_or_recover(&self.state).current_root_hash
-    }
-
-    fn list_substates_for_node_at_height(
-        &self,
-        node_id: &NodeId,
-        block_height: BlockHeight,
-    ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>> {
-        let current_version = read_or_recover(&self.state).current_block_height.inner();
-        if block_height.inner() > current_version {
-            return None;
-        }
-        let floor = current_version.saturating_sub(self.jmt_history_length);
-        if block_height.inner() < floor {
-            // Below retention — historical state no longer recoverable.
-            // External API: return None (network-supplied heights may
-            // legitimately fall out of range; `snapshot_at` would panic,
-            // so don't delegate for this case).
-            return None;
-        }
-        Some(
-            self.snapshot_at(block_height)
-                .list_raw_values_for_node(node_id),
-        )
     }
 
     fn get_vm_substate_at_height(
@@ -80,11 +56,10 @@ impl SubstateStore for SimShardStorage {
     fn generate_merkle_proofs(
         &self,
         storage_keys: &[Vec<u8>],
-        owner_map: &HashMap<NodeId, NodeId>,
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
         let s = read_or_recover(&self.state);
-        generate_proof(&s.tree_store, storage_keys, owner_map, block_height)
+        generate_proof(&s.tree_store, storage_keys, block_height)
     }
 }
 

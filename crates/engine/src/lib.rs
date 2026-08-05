@@ -17,7 +17,6 @@
 mod cache;
 mod executor;
 mod genesis;
-mod genesis_cache;
 mod output;
 mod receipt;
 
@@ -30,7 +29,6 @@ pub use executor::{
     participating_shards,
 };
 pub use genesis::GenesisConfig;
-pub use genesis_cache::prepared_genesis;
 // Re-export the fan-out strategy `WaveBatchContext` carries, so seam
 // implementations and their tests need no separate dispatch dependency.
 pub use hyperscale_dispatch::Parallelism;

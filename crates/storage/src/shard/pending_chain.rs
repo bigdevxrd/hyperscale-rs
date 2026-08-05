@@ -12,7 +12,7 @@ use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeRea
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
     CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
-    MerkleInclusionProof, NodeId, PreparedCommit, QuorumCertificate, RETENTION_HORIZON,
+    MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON,
     RoutableTransaction, SettledWavesRoot, ShardId, ShardWitnessPayload, StateRoot, TxHash,
     Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
     settled_waves_root_from_ids,
@@ -21,7 +21,6 @@ use radix_common::prelude::DatabaseUpdate;
 use radix_substate_store_interface::interface::SubstateDatabase;
 
 use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
-use crate::shard::keys::node_entity_key;
 use crate::tree::proofs::generate_proof;
 use crate::{
     BlockForSync, DatabaseUpdates, DbPartitionKey, DbSortKey, JmtSnapshot,
@@ -656,7 +655,7 @@ pub struct SubstateView<S> {
     /// (see [`jmt::TreeReader`] impl).
     jmt_nodes: JmtNodeIndex,
     /// Per-receipt references for versioned queries
-    /// ([`SubstateStore::list_substates_for_node_at_height`]).
+    /// ([`SubstateStore::get_vm_substate_at_height`]).
     /// Sorted by height ascending.
     versioned_receipts: Vec<(BlockHeight, Arc<ConsensusReceipt>)>,
     /// Lazy cache of base-storage reads observed through this view.
@@ -945,80 +944,6 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         (*self.base).state_root()
     }
 
-    fn list_substates_for_node_at_height(
-        &self,
-        node_id: &NodeId,
-        block_height: BlockHeight,
-    ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>> {
-        let persisted_version = (*self.base).jmt_height();
-
-        // If the requested height is within persisted range, delegate.
-        if block_height <= persisted_version {
-            return (*self.base).list_substates_for_node_at_height(node_id, block_height);
-        }
-
-        // Get base result at the persisted version (latest available on disk).
-        let base_result =
-            (*self.base).list_substates_for_node_at_height(node_id, persisted_version);
-
-        // Build a map from base result, then apply pending receipts in
-        // commit order up to block_height.
-        let entity_key = node_entity_key(node_id);
-        let mut substates: HashMap<(u8, DbSortKey), Vec<u8>> = base_result
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(part, sk, v)| ((part, sk), v))
-            .collect();
-
-        for (h, receipt) in &self.versioned_receipts {
-            if *h > block_height {
-                break;
-            }
-            let Some(updates) = receipt.database_updates() else {
-                continue;
-            };
-            if let Some(node_updates) = updates.node_updates.get(&entity_key) {
-                for (&partition_num, partition_updates) in &node_updates.partition_updates {
-                    match partition_updates {
-                        PartitionDatabaseUpdates::Delta { substate_updates } => {
-                            for (sort_key, update) in substate_updates {
-                                match update {
-                                    DatabaseUpdate::Set(v) => {
-                                        substates
-                                            .insert((partition_num, sort_key.clone()), v.clone());
-                                    }
-                                    DatabaseUpdate::Delete => {
-                                        substates.remove(&(partition_num, sort_key.clone()));
-                                    }
-                                }
-                            }
-                        }
-                        PartitionDatabaseUpdates::Reset {
-                            new_substate_values,
-                        } => {
-                            substates.retain(|(p, _), _| *p != partition_num);
-                            for (sort_key, value) in new_substate_values {
-                                substates.insert((partition_num, sort_key.clone()), value.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Sort to match the base path's order — `list_raw_values_for_node`
-        // returns entries sorted by `(partition, sort_key)`, so gossip
-        // emission off the overlay must do the same or a later fetch-serve
-        // over the persisted base produces a different `entries` Vec for
-        // the same logical provision.
-        let mut out: Vec<(u8, DbSortKey, Vec<u8>)> = substates
-            .into_iter()
-            .map(|((p, sk), v)| (p, sk, v))
-            .collect();
-        out.sort_by(|(p1, sk1, _), (p2, sk2, _)| p1.cmp(p2).then_with(|| sk1.cmp(sk2)));
-        Some(out)
-    }
-
     fn get_vm_substate_at_height(
         &self,
         owner: [u8; 16],
@@ -1071,13 +996,10 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
     fn generate_merkle_proofs(
         &self,
         storage_keys: &[Vec<u8>],
-        owner_map: &HashMap<NodeId, NodeId>,
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
         // Try base first — works for heights already persisted.
-        if let Some(proof) =
-            (*self.base).generate_merkle_proofs(storage_keys, owner_map, block_height)
-        {
+        if let Some(proof) = (*self.base).generate_merkle_proofs(storage_keys, block_height) {
             return Some(proof);
         }
         // Beyond persisted — caller should use `generate_merkle_proofs_overlay`
@@ -1098,15 +1020,12 @@ impl<S: SubstateStore + TreeReader + Sync> SubstateView<S> {
     pub fn generate_merkle_proofs_overlay(
         &self,
         storage_keys: &[Vec<u8>],
-        owner_map: &HashMap<NodeId, NodeId>,
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
-        if let Some(proof) =
-            (*self.base).generate_merkle_proofs(storage_keys, owner_map, block_height)
-        {
+        if let Some(proof) = (*self.base).generate_merkle_proofs(storage_keys, block_height) {
             return Some(proof);
         }
-        generate_proof(self, storage_keys, owner_map, block_height)
+        generate_proof(self, storage_keys, block_height)
     }
 }
 
@@ -1268,13 +1187,6 @@ mod tests {
         fn state_root(&self) -> StateRoot {
             StateRoot::ZERO
         }
-        fn list_substates_for_node_at_height(
-            &self,
-            _node_id: &NodeId,
-            _block_height: BlockHeight,
-        ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>> {
-            None
-        }
         fn get_vm_substate_at_height(
             &self,
             _owner: [u8; 16],
@@ -1286,7 +1198,6 @@ mod tests {
         fn generate_merkle_proofs(
             &self,
             _storage_keys: &[Vec<u8>],
-            _owner_map: &HashMap<NodeId, NodeId>,
             _block_height: BlockHeight,
         ) -> Option<MerkleInclusionProof> {
             None

@@ -89,7 +89,6 @@ impl ShardChainWriter for SimShardStorage {
                 block_height.inner(),
                 &per_receipt_updates,
                 &HashMap::new(),
-                &HashMap::new(),
             )
         } else {
             let overlay = OverlayTreeReader::new(&s.tree_store, pending_snapshots);
@@ -98,7 +97,6 @@ impl ShardChainWriter for SimShardStorage {
                 parent_version,
                 block_height.inner(),
                 &per_receipt_updates,
-                &HashMap::new(),
                 &HashMap::new(),
             )
         };
@@ -264,7 +262,7 @@ impl SimShardStorage {
             s.current_block_height
         );
 
-        let new_root = apply_state_writes(&mut s, merged_updates, &HashMap::new(), block_height);
+        let new_root = apply_state_writes(&mut s, merged_updates, block_height);
 
         drop(s);
 

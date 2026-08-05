@@ -8,24 +8,22 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hyperscale_jmt::TreeReader;
+use hyperscale_types::state_key::vm_db_node_key;
 use hyperscale_types::{
     AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert, BeaconChainConfig, BeaconState,
     BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, ChainOrigin,
     ConsensusReceipt, Epoch, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome, FeeSummary,
     FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot,
-    LogLevel, NodeId, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp,
+    LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp,
     ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound, RevealChain, Round,
     ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield, SpcCert, SpcView, Stake,
     StakePoolId, StateRoot, StoredReceipt, TransactionRoot, TxHash, TxOutcome, ValidatorId,
     Verifiable, Verified, VmEvent, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
     compute_global_receipt_root, compute_merkle_root,
 };
-use indexmap::IndexMap;
 use radix_common::math::Decimal;
 use radix_common::prelude::DatabaseUpdate;
-use radix_common::types::{NodeId as RadixNodeId, PartitionNumber};
-use radix_substate_store_interface::db_key_mapper::{DatabaseKeyMapper, SpreadPrefixKeyMapper};
 
 use crate::tree::Jmt;
 use crate::{
@@ -70,11 +68,15 @@ pub fn import_boundary_state<S: BoundaryStore>(
 }
 
 /// Build a `DatabaseUpdates` containing a single `Set` operation.
+///
+/// `sort_key` is zero-padded to a flat key's 16-byte local half, so a
+/// fixture can name a cell by a short seed and still produce a key the
+/// JMT can derive a leaf from.
 #[must_use]
 pub fn make_database_update(
     node_key: Vec<u8>,
     partition: u8,
-    sort_key: Vec<u8>,
+    sort_key: &[u8],
     value: Vec<u8>,
 ) -> DatabaseUpdates {
     let mut updates = DatabaseUpdates::default();
@@ -85,7 +87,7 @@ pub fn make_database_update(
                 partition,
                 PartitionDatabaseUpdates::Delta {
                     substate_updates: std::iter::once((
-                        DbSortKey(sort_key),
+                        DbSortKey(local_key(sort_key)),
                         DatabaseUpdate::Set(value),
                     ))
                     .collect(),
@@ -97,43 +99,32 @@ pub fn make_database_update(
     updates
 }
 
-/// A realistic 50-byte `db_node_key` for the logical node `[seed; 30]`, using
-/// the same `SpreadPrefixKeyMapper` encoding the engine produces for real
-/// substates.
-#[must_use]
-pub fn db_node_key(seed: u8) -> Vec<u8> {
-    SpreadPrefixKeyMapper::to_db_node_key(&RadixNodeId(NodeId([seed; 30]).0))
-}
-
-/// Build `DatabaseUpdates` from a logical node seed, using `SpreadPrefixKeyMapper`
-/// to compute the correct `db_node_key` — matching the storage format used in production.
-///
-/// The `NodeId` is `[node_seed; 30]`, consistent with other test helpers.
+/// [`make_database_update`] keyed by an owner seed rather than a raw
+/// entity key.
 #[must_use]
 pub fn make_mapped_database_update(
     node_seed: u8,
     partition: u8,
-    sort_key: Vec<u8>,
+    sort_key: &[u8],
     value: Vec<u8>,
 ) -> DatabaseUpdates {
-    let radix_node_id = RadixNodeId(NodeId([node_seed; 30]).0);
-    let radix_partition = PartitionNumber(partition);
-    let db_node_key = SpreadPrefixKeyMapper::to_db_node_key(&radix_node_id);
-    let db_partition_num = SpreadPrefixKeyMapper::to_db_partition_num(radix_partition);
-    let db_sort_key = DbSortKey(sort_key);
+    make_database_update(db_node_key(node_seed), partition, sort_key, value)
+}
 
-    let mut updates = DatabaseUpdates::default();
-    let node_updates = updates.node_updates.entry(db_node_key).or_default();
-    let partition_updates = node_updates
-        .partition_updates
-        .entry(db_partition_num)
-        .or_insert_with(|| PartitionDatabaseUpdates::Delta {
-            substate_updates: IndexMap::new(),
-        });
-    if let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates {
-        substate_updates.insert(db_sort_key, DatabaseUpdate::Set(value));
-    }
-    updates
+/// The entity key for the owner prefix `[seed; 16]` — the same shape the
+/// engine commits, so a fixture's keys route and key like real ones.
+#[must_use]
+pub fn db_node_key(seed: u8) -> Vec<u8> {
+    vm_db_node_key([seed; 16])
+}
+
+/// A substate's local half from a short seed, zero-padded to the fixed
+/// 16 bytes a flat key's low half occupies.
+#[must_use]
+pub fn local_key(seed: &[u8]) -> Vec<u8> {
+    let mut local = vec![0u8; 16];
+    local[..seed.len().min(16)].copy_from_slice(&seed[..seed.len().min(16)]);
+    local
 }
 
 /// Build a test `WaveCertificate` at the given height.
@@ -648,12 +639,32 @@ pub const fn stake_deposit(amount: u64) -> ShardWitnessPayload {
     }
 }
 
+/// The owner prefix seeded at `seed`, with the leading bit alternating.
+///
+/// A leaf key's leading bit is the first bit a depth-1 shard prefix
+/// routes on, and a leaf key is its owner and local halves by identity —
+/// so alternating the owner's top bit is what makes a seeded population
+/// straddle the root split rather than piling into one child.
+#[must_use]
+pub const fn seeded_owner(seed: u8) -> u8 {
+    if seed.is_multiple_of(2) {
+        seed
+    } else {
+        seed | 0x80
+    }
+}
+
 /// Seed `entries` single-substate block commits at heights
-/// `1..=entries`, each writing one distinct node keyed by its seed
-/// byte.
+/// `1..=entries`, each writing one distinct owner keyed by
+/// [`seeded_owner`] of its seed byte.
 pub fn seed_substate_commits(storage: &impl ShardChainWriter, entries: u8) {
     for seed in 1..=entries {
-        let updates = make_database_update(vec![seed; 50], 0, vec![seed], vec![seed, seed, seed]);
+        let updates = make_database_update(
+            db_node_key(seeded_owner(seed)),
+            0,
+            &[seed],
+            vec![seed, seed, seed],
+        );
         commit_block_with_updates(storage, BlockHeight::new(u64::from(seed)), &updates);
     }
 }

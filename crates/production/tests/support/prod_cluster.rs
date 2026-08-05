@@ -16,19 +16,15 @@ use hyperscale_network_libp2p::fault::{DropSpec, HostId, RuleHandle};
 use hyperscale_network_libp2p::test_utils::TestFixtures;
 use hyperscale_production::LocalValidator;
 use hyperscale_scenarios::query::status_rank;
-use hyperscale_scenarios::tx::{
-    straddler_genesis_balances, vm_staking_genesis_accounts, vm_world_pools,
-};
+use hyperscale_scenarios::tx::{vm_staking_genesis_accounts, vm_world_pools};
 use hyperscale_scenarios::{
     Budget, Cluster, FaultHandle, FaultableCluster, ScenarioConfig, grow_to, vote_reshape_threshold,
 };
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
-    StakePoolSeat, StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
+    StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
 };
-use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
-use radix_common::types::ComponentAddress;
 use tokio::runtime::{Builder, Runtime};
 use tokio::time::{sleep, timeout};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -39,15 +35,13 @@ use super::harness::{ClusterSpec, Harness, HostSpec};
 /// harness's own `await_*` interval.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// The full constructor input, so the VM knobs don't fan out across every
-/// legacy constructor's signature.
+/// The full constructor input, so the knobs don't fan out across every
+/// constructor's signature.
 struct StartArgs<'a> {
     config: &'a ScenarioConfig,
     seed: u64,
     epoch_ms: u64,
-    balances: Vec<(ComponentAddress, Decimal)>,
     vm_accounts: Vec<([u8; 16], u128)>,
-    vm_pools: Vec<StakePoolSeat>,
 }
 
 /// The production adaptor: a [`Cluster`] over the real QUIC + `RocksDB` harness.
@@ -65,64 +59,24 @@ impl ProdCluster {
     /// topology; reshape scenarios are seed-sensitive.
     #[must_use]
     pub fn start(config: &ScenarioConfig, seed: u64, epoch_ms: u64) -> Self {
-        Self::start_with_balances(config, seed, epoch_ms, straddler_genesis_balances())
+        Self::start_with_vm_accounts(config, seed, epoch_ms, Vec::new())
     }
 
-    /// Build and start a genesis cluster funding `balances` instead of the
-    /// default straddler accounts — for scenarios that seat their own genesis
-    /// distribution (a byte-skewed split-straddler topology). The simulation
-    /// installs the identical balances.
-    #[must_use]
-    pub fn start_with_balances(
-        config: &ScenarioConfig,
-        seed: u64,
-        epoch_ms: u64,
-        balances: Vec<(ComponentAddress, Decimal)>,
-    ) -> Self {
-        Self::start_with_vm_accounts(config, seed, epoch_ms, balances, Vec::new())
-    }
-
-    /// [`Self::start_with_balances`] with funded VM accounts beside the
-    /// Radix balances — the mirror of `SimCluster::with_vm_accounts`, so
-    /// the VM catalogue runs identically on both harnesses.
+    /// [`Self::start`] with funded accounts — the mirror of
+    /// `SimCluster::with_vm_accounts`, so the catalogue runs identically
+    /// on both harnesses.
     #[must_use]
     pub fn start_with_vm_accounts(
         config: &ScenarioConfig,
         seed: u64,
         epoch_ms: u64,
-        balances: Vec<(ComponentAddress, Decimal)>,
         vm_accounts: Vec<([u8; 16], u128)>,
     ) -> Self {
         Self::start_full(&StartArgs {
             config,
             seed,
             epoch_ms,
-            balances,
             vm_accounts,
-            vm_pools: Vec::new(),
-        })
-    }
-
-    /// [`Self::start_with_vm_accounts`] seating `vm_pools` as the stake
-    /// pools the beacon folds facts for — the mirror of
-    /// `SimCluster::with_vm_pools`, so the control plane's scenarios run
-    /// identically on both harnesses.
-    #[must_use]
-    pub fn start_with_vm_pools(
-        config: &ScenarioConfig,
-        seed: u64,
-        epoch_ms: u64,
-        balances: Vec<(ComponentAddress, Decimal)>,
-        vm_accounts: Vec<([u8; 16], u128)>,
-        vm_pools: Vec<StakePoolSeat>,
-    ) -> Self {
-        Self::start_full(&StartArgs {
-            config,
-            seed,
-            epoch_ms,
-            balances,
-            vm_accounts,
-            vm_pools,
         })
     }
 
@@ -157,39 +111,28 @@ impl ProdCluster {
         }
     }
 
-    /// Build a cluster grown to `config.num_shards` with `config.split_bytes` as
-    /// the live reshape threshold. Genesis is always a single ROOT shard, so a
-    /// scenario that needs a deeper partition reaches it the only way the network
-    /// does — by splitting into it, here via [`grow_to`]. The mirror of
-    /// `SimCluster::with_grown_balances`, so a scenario starts identically on both
-    /// harnesses.
-    #[must_use]
-    pub fn start_with_grown_balances(
-        config: &ScenarioConfig,
-        seed: u64,
-        epoch_ms: u64,
-        balances: Vec<(ComponentAddress, Decimal)>,
-    ) -> Self {
-        Self::start_with_grown_vm_accounts(config, seed, epoch_ms, balances, Vec::new())
-    }
-
-    /// [`Self::start_with_grown_balances`] with funded VM accounts: genesis
-    /// seats them on the single ROOT shard and the grow moves their cells
-    /// to their prefix shards.
+    /// Build a cluster grown to `config.num_shards` with `config.split_bytes`
+    /// as the live reshape threshold, with `vm_accounts` funded at the
+    /// single ROOT genesis so the grow moves their cells to their prefix
+    /// shards.
+    ///
+    /// Genesis is always a single ROOT shard, so a scenario that needs a
+    /// deeper partition reaches it the only way the network does — by
+    /// splitting into it, here via [`grow_to`]. The mirror of
+    /// `SimCluster::with_grown_vm_accounts`, so a scenario starts
+    /// identically on both harnesses.
     #[must_use]
     pub fn start_with_grown_vm_accounts(
         config: &ScenarioConfig,
         seed: u64,
         epoch_ms: u64,
-        balances: Vec<(ComponentAddress, Decimal)>,
         vm_accounts: Vec<([u8; 16], u128)>,
     ) -> Self {
         let grow_config = ScenarioConfig {
             split_bytes: 0,
             ..*config
         };
-        let mut cluster =
-            Self::start_with_vm_accounts(&grow_config, seed, epoch_ms, balances, vm_accounts);
+        let mut cluster = Self::start_with_vm_accounts(&grow_config, seed, epoch_ms, vm_accounts);
         grow_to(&mut cluster, config.num_shards);
         vote_reshape_threshold(&mut cluster, config.split_bytes);
         cluster
@@ -228,24 +171,18 @@ impl ProdCluster {
                 },
                 ..BeaconChainConfig::default()
             },
-            // Match the simulation's engine genesis: a funded faucet (100B XRD)
-            // plus a funded account in each child span of the first split, so
-            // both a faucet-funded transfer and the cross-shard scenarios behave
-            // identically on both harnesses. The production default leaves the
-            // faucet empty and seeds no accounts.
+            // Match the simulation's genesis, so a scenario's accounts
+            // behave identically on both harnesses. Every cluster funds
+            // the pool operator and seats the pools: the founding pool's
+            // vote is how any cluster retunes a network parameter.
             genesis_config: Some(GenesisConfig {
-                xrd_balances: args.balances.clone(),
-                // Every cluster funds the pool operator and seats the
-                // pools: the founding pool's vote is how any cluster
-                // retunes a network parameter.
-                vm_accounts: args
+                accounts: args
                     .vm_accounts
                     .iter()
                     .copied()
                     .chain(vm_staking_genesis_accounts())
                     .collect(),
-                vm_pools: vm_world_pools(),
-                ..GenesisConfig::test_default()
+                pools: vm_world_pools(),
             }),
             simulated_outbound_latency: config.latency,
         }

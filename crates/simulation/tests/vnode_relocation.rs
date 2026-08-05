@@ -137,7 +137,7 @@ fn vnode_moves_through_a_committee_rotation() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(SEED);
-    let mut cluster = SimCluster::with_dedicated_pool_hosts(&rotation_config(), seed, &[]);
+    let mut cluster = SimCluster::with_dedicated_pool_hosts(&rotation_config(), seed);
     let runner = cluster.runner_mut();
     // Grow the single-shard genesis into the two shards the shuffle rotates,
     // then discard the grow's placement deltas so only the shuffle's move is

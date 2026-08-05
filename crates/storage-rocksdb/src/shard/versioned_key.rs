@@ -50,35 +50,39 @@ impl DbCodec<VersionedKey> for VersionedSubstateKeyCodec {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+
     use super::*;
 
-    fn make_test_key(partition_num: u8, sort_key: &[u8]) -> (DbPartitionKey, DbSortKey) {
+    fn make_test_key(local: [u8; 16]) -> (DbPartitionKey, DbSortKey) {
         (
             DbPartitionKey {
-                node_key: vec![0u8; 50], // 50-byte entity key
-                partition_num,
+                node_key: vm_db_node_key([0u8; 16]),
+                partition_num: VM_PARTITION,
             },
-            DbSortKey(sort_key.to_vec()),
+            DbSortKey(local.to_vec()),
         )
     }
 
     #[test]
     fn round_trip() {
-        let substate_key = make_test_key(1, b"sort_key");
+        let local = [7u8; 16];
+        let substate_key = make_test_key(local);
         let version = 42u64;
 
         let encoded = VersionedSubstateKeyCodec.encode(&(substate_key, version));
         let ((decoded_pk, decoded_sort), decoded_version) =
             VersionedSubstateKeyCodec.decode(&encoded);
 
-        assert_eq!(decoded_pk.partition_num, 1);
-        assert_eq!(decoded_sort.0, b"sort_key");
+        assert_eq!(decoded_pk.node_key, vm_db_node_key([0u8; 16]));
+        assert_eq!(decoded_pk.partition_num, VM_PARTITION);
+        assert_eq!(decoded_sort.0, local);
         assert_eq!(decoded_version, version);
     }
 
     #[test]
     fn lexicographic_version_ordering() {
-        let key = make_test_key(0, b"same_key");
+        let key = make_test_key([9u8; 16]);
 
         let buf1 = VersionedSubstateKeyCodec.encode(&(key.clone(), 1));
         let buf2 = VersionedSubstateKeyCodec.encode(&(key, 2));

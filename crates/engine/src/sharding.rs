@@ -64,145 +64,29 @@
 //! that execute at different committed heights see different vault balances,
 //! producing different DatabaseUpdates and divergent state roots.
 
-use std::collections::HashMap;
-
 use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates};
 pub use hyperscale_types::state_key::db_node_key_to_node_id;
 use hyperscale_types::state_key::vm_db_node_key_owner;
 use hyperscale_types::{NodeId, ShardId, ShardTrie, WritesRoot};
-use radix_common::prelude::{DatabaseUpdate, basic_encode};
+use radix_common::prelude::basic_encode;
 use radix_common::types::NodeId as RadixNodeId;
 
-/// System entity type bytes that should be filtered from `DatabaseUpdates`.
-///
-/// These are global system components whose state is replicated to all shards
-/// and not yet set up for sharded consensus. Writes to these nodes must be
-/// excluded from the per-shard `state_root` computation.
-const SYSTEM_ENTITY_TYPES: &[u8] = &[
-    0x86, // GlobalConsensusManager
-    0x82, // GlobalTransactionTracker
-    0x83, // GlobalValidator
-];
-
-/// Internal entity type bytes (children of a global entity).
-///
-/// Values are the `EntityType` discriminants from `radix-common`
-/// (`entity_type.rs`): vault/KV-store/component types whose `NodeId`s are
-/// random hashes unrelated to their owner.
-const INTERNAL_ENTITY_TYPES: &[u8] = &[
-    0x58, // InternalFungibleVault
-    0x98, // InternalNonFungibleVault
-    0xb0, // InternalKeyValueStore
-    0xf8, // InternalGenericComponent
-];
-
-/// SBOR custom value kind tag for `Own(NodeId)` references.
-const SBOR_OWN_TAG: u8 = 0x90;
-
-// ============================================================================
-// Stage 1: Ownership Resolution
-// ============================================================================
-
-/// Resolve `internal_node → owning_global_ancestor` directly from a
-/// [`DatabaseUpdates`] by scanning every node's written substate values for
-/// `Own(NodeId)` references.
-///
-/// Used at genesis, where the full initial state is written in one batch:
-/// every account's `Own(_)` refs are present in `merged`, so the JMT build can
-/// owner-prefix the vaults it owns without a separate snapshot walk. Mirrors
-/// [`resolve_owned_nodes`] but sources values from the updates rather than a
-/// store. One level deep — for the current scope accounts own their vaults
-/// directly, so the immediate owner is the global ancestor.
-#[must_use]
-pub fn resolve_owned_nodes_from_updates(merged: &DatabaseUpdates) -> HashMap<NodeId, NodeId> {
-    let mut ownership: HashMap<NodeId, NodeId> = HashMap::new();
-    for (db_node_key, node_updates) in &merged.node_updates {
-        let Some(owner) = db_node_key_to_node_id(db_node_key) else {
-            continue;
-        };
-        for partition_updates in node_updates.partition_updates.values() {
-            match partition_updates {
-                PartitionDatabaseUpdates::Delta { substate_updates } => {
-                    for update in substate_updates.values() {
-                        if let DatabaseUpdate::Set(value) = update {
-                            extract_owned_node_ids(value, owner, &mut ownership);
-                        }
-                    }
-                }
-                PartitionDatabaseUpdates::Reset {
-                    new_substate_values,
-                } => {
-                    for value in new_substate_values.values() {
-                        extract_owned_node_ids(value, owner, &mut ownership);
-                    }
-                }
-            }
-        }
-    }
-    ownership
-}
-
-/// Scan raw SBOR bytes for `Own(NodeId)` references to internal entities.
-///
-/// SBOR encodes `Own` as: `[0x90, <30 bytes NodeId>]`.
-/// We look for this tag followed by a known internal entity type byte.
-/// False positives are near-impossible since `NodeId`s are random hashes.
-fn extract_owned_node_ids(value: &[u8], owner: NodeId, ownership: &mut HashMap<NodeId, NodeId>) {
-    for window in value.windows(31) {
-        if window[0] == SBOR_OWN_TAG && INTERNAL_ENTITY_TYPES.contains(&window[1]) {
-            let id: [u8; 30] = window[1..31].try_into().expect("window len is 31");
-            ownership.entry(NodeId(id)).or_insert(owner);
-        }
-    }
-}
-
-/// Filter genesis `DatabaseUpdates` to the nodes whose owner-prefixed key
+/// Filter genesis `DatabaseUpdates` to the entities whose owner prefix
 /// routes to `local_shard`, for building that shard's prefix-rooted JMT.
 ///
-/// A node routes by its owning global ancestor (from `owner_map`) for an
-/// internal node, or by itself for a global. System entities are dropped —
-/// they are replicated to every shard's substate store but excluded from the
-/// per-shard state root, matching [`filter_updates_for_shard`].
-///
-/// Genesis installs the full Radix bootstrap (resource managers, components,
-/// packages, system entities) into every shard's substate store for read
-/// availability, but the prefix-rooted JMT must contain only this shard's
-/// subtree — so the committed `state_root` is exactly the global tree's node
-/// at the shard prefix. Single-shard deployments root at the empty prefix,
-/// where every node routes to the one shard and this is the identity filter.
+/// The stdlib package is replicated to every shard's substate store for
+/// read availability, but the prefix-rooted JMT must contain only this
+/// shard's subtree — so the committed `state_root` is exactly the global
+/// tree's node at the shard prefix. Single-shard deployments root at the
+/// empty prefix, where every entity routes to the one shard and this is
+/// the identity filter.
 #[must_use]
-#[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
 pub fn filter_genesis_updates_for_shard(
     merged: &DatabaseUpdates,
-    owner_map: &HashMap<NodeId, NodeId>,
     local_shard: ShardId,
     shard_trie: &ShardTrie,
 ) -> DatabaseUpdates {
-    let mut filtered = DatabaseUpdates::default();
-    for (db_node_key, node_updates) in &merged.node_updates {
-        if let Some(owner) = vm_db_node_key_owner(db_node_key) {
-            if shard_trie.shard_for_prefix(owner) == local_shard {
-                filtered
-                    .node_updates
-                    .insert(db_node_key.clone(), node_updates.clone());
-            }
-            continue;
-        }
-        let Some(node_id) = db_node_key_to_node_id(db_node_key) else {
-            continue;
-        };
-        if SYSTEM_ENTITY_TYPES.contains(&node_id.0[0]) {
-            continue;
-        }
-        let routing_node = owner_map.get(&node_id).copied().unwrap_or(node_id);
-        if shard_trie.shard_for(&routing_node) != local_shard {
-            continue;
-        }
-        filtered
-            .node_updates
-            .insert(db_node_key.clone(), node_updates.clone());
-    }
-    filtered
+    filter_updates_for_shard(merged, local_shard, shard_trie)
 }
 
 // ============================================================================
@@ -323,19 +207,6 @@ mod tests {
         id_with_type(0x58, seed)
     }
 
-    fn nonfungible_vault_id(seed: u8) -> NodeId {
-        id_with_type(0x98, seed)
-    }
-
-    /// SBOR-encoded `Own(node)` reference: [`SBOR_OWN_TAG`] followed by the
-    /// 30-byte `NodeId`.
-    fn own_bytes(node: &NodeId) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(31);
-        bytes.push(SBOR_OWN_TAG);
-        bytes.extend_from_slice(&node.0);
-        bytes
-    }
-
     fn make_set_update(
         node: NodeId,
         partition: u8,
@@ -364,79 +235,6 @@ mod tests {
             a.node_updates.insert(k, v);
         }
         a
-    }
-
-    // ── extract_owned_node_ids ───────────────────────────────────────────────
-
-    #[test]
-    fn extract_owned_short_value_is_noop() {
-        let mut ownership = HashMap::new();
-        extract_owned_node_ids(&[0x90; 5], account_id(1), &mut ownership);
-        assert!(ownership.is_empty());
-    }
-
-    #[test]
-    fn extract_owned_captures_internal_reference() {
-        let owner = account_id(1);
-        let vault = fungible_vault_id(2);
-        let mut ownership = HashMap::new();
-        extract_owned_node_ids(&own_bytes(&vault), owner, &mut ownership);
-        assert_eq!(ownership.get(&vault), Some(&owner));
-    }
-
-    #[test]
-    fn extract_owned_skips_non_internal_targets() {
-        // An Own pointing at another account (0x51) should be ignored —
-        // accounts are global, not internal entities.
-        let owner = account_id(1);
-        let other_account = account_id(2);
-        let mut ownership = HashMap::new();
-        extract_owned_node_ids(&own_bytes(&other_account), owner, &mut ownership);
-        assert!(ownership.is_empty());
-    }
-
-    #[test]
-    fn extract_owned_handles_each_internal_type() {
-        let owner = account_id(1);
-        for (i, &type_byte) in INTERNAL_ENTITY_TYPES.iter().enumerate() {
-            let seed = u8::try_from(i).expect("internal entity table fits in u8") + 10;
-            let target = id_with_type(type_byte, seed);
-            let mut ownership = HashMap::new();
-            extract_owned_node_ids(&own_bytes(&target), owner, &mut ownership);
-            assert_eq!(
-                ownership.get(&target),
-                Some(&owner),
-                "type 0x{type_byte:02x} should be captured"
-            );
-        }
-    }
-
-    #[test]
-    fn extract_owned_finds_multiple_in_one_value() {
-        let owner = account_id(1);
-        let v1 = fungible_vault_id(2);
-        let v2 = nonfungible_vault_id(3);
-        let mut value = own_bytes(&v1);
-        value.extend_from_slice(&own_bytes(&v2));
-        let mut ownership = HashMap::new();
-        extract_owned_node_ids(&value, owner, &mut ownership);
-        assert_eq!(ownership.len(), 2);
-        assert_eq!(ownership[&v1], owner);
-        assert_eq!(ownership[&v2], owner);
-    }
-
-    #[test]
-    fn extract_owned_first_owner_wins() {
-        // entry().or_insert means if the same vault is referenced twice
-        // by different owners, the first owner sticks.
-        let first = account_id(1);
-        let second = account_id(2);
-        let vault = fungible_vault_id(3);
-        let value = own_bytes(&vault);
-        let mut ownership = HashMap::new();
-        extract_owned_node_ids(&value, first, &mut ownership);
-        extract_owned_node_ids(&value, second, &mut ownership);
-        assert_eq!(ownership[&vault], first);
     }
 
     // ── db_node_key_to_node_id ───────────────────────────────────────────────

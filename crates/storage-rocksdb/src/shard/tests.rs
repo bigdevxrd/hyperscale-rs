@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_jmt::NibblePath;
 use hyperscale_storage::test_helpers::{
-    db_node_key, make_database_update, make_mapped_database_update, make_test_block,
+    db_node_key, local_key, make_database_update, make_mapped_database_update, make_test_block,
     make_test_block_with_anchor_wt, make_test_certified, make_test_execution_certificate,
     make_test_qc, make_test_receipt, make_test_wave_certificate,
     test_ec_storage_batch as helpers_test_ec_storage_batch,
@@ -15,6 +14,7 @@ use hyperscale_storage::{
     PartitionDatabaseUpdates, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter,
     SubstateDatabase, SubstateStore, VersionedStore, merge_database_updates, merge_into,
 };
+use hyperscale_types::state_key::VM_PARTITION;
 use hyperscale_types::{
     AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight,
     BoundedVec, CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
@@ -79,7 +79,10 @@ fn commit_empty(storage: &RocksDbShardStorage, block: &Block, qc: &Verified<Quor
 }
 
 /// Build a `DatabaseUpdates` containing a single `Delete` operation.
-fn make_database_delete(node_key: Vec<u8>, partition: u8, sort_key: Vec<u8>) -> DatabaseUpdates {
+///
+/// `sort_key` is zero-padded to a flat key's 16-byte local half, matching
+/// [`make_database_update`].
+fn make_database_delete(node_key: Vec<u8>, partition: u8, sort_key: &[u8]) -> DatabaseUpdates {
     let mut updates = DatabaseUpdates::default();
     updates.node_updates.insert(
         node_key,
@@ -88,7 +91,7 @@ fn make_database_delete(node_key: Vec<u8>, partition: u8, sort_key: Vec<u8>) -> 
                 partition,
                 PartitionDatabaseUpdates::Delta {
                     substate_updates: std::iter::once((
-                        DbSortKey(sort_key),
+                        DbSortKey(local_key(sort_key)),
                         DatabaseUpdate::Delete,
                     ))
                     .collect(),
@@ -107,21 +110,21 @@ fn leaf_associations_track_live_substates() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let node_key = vec![3u8; 50];
-    let updates = make_database_update(node_key.clone(), 0, vec![7], vec![1, 2, 3]);
+    let node_key = db_node_key(3);
+    let updates = make_database_update(node_key.clone(), 0, &[7], vec![1, 2, 3]);
     storage.commit(&updates).unwrap();
 
     let mut raw_key = node_key.clone();
-    raw_key.push(0);
-    raw_key.push(7);
-    let hashed = Hash::from_hash_bytes(&hash_storage_key(&raw_key, &HashMap::new()));
+    raw_key.push(VM_PARTITION);
+    raw_key.extend_from_slice(&local_key(&[7]));
+    let hashed = Hash::from_hash_bytes(&hash_storage_key(&raw_key));
     assert_eq!(
         storage.cf_get::<LeafAssociationsCf>(&hashed),
         Some(raw_key.clone()),
     );
 
     storage
-        .commit(&make_database_delete(node_key, 0, vec![7]))
+        .commit(&make_database_delete(node_key, VM_PARTITION, &[7]))
         .unwrap();
     assert_eq!(storage.cf_get::<LeafAssociationsCf>(&hashed), None);
 }
@@ -133,26 +136,26 @@ fn substate_bytes_tracks_commits_and_survives_reopen() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let key_a = vec![3u8; 50];
-    let key_b = vec![4u8; 50];
+    let key_a = db_node_key(3);
+    let key_b = db_node_key(4);
 
     // v1: two inserts.
     let v1 = merge_database_updates(&[
-        make_database_update(key_a.clone(), 0, vec![7], vec![1]),
-        make_database_update(key_b, 0, vec![8], vec![2]),
+        make_database_update(key_a.clone(), 0, &[7], vec![1]),
+        make_database_update(key_b, 0, &[8], vec![2]),
     ]);
     storage.commit(&v1).unwrap();
     assert_eq!(storage.substate_bytes_at(BlockHeight::new(1)), Some(2));
 
     // v2: value update only — count unchanged.
     storage
-        .commit(&make_database_update(key_a.clone(), 0, vec![7], vec![9]))
+        .commit(&make_database_update(key_a.clone(), 0, &[7], vec![9]))
         .unwrap();
     assert_eq!(storage.substate_bytes_at(BlockHeight::new(2)), Some(2));
 
     // v3: delete one — count drops; the historical entry is untouched.
     storage
-        .commit(&make_database_delete(key_a, 0, vec![7]))
+        .commit(&make_database_delete(key_a, 0, &[7]))
         .unwrap();
     assert_eq!(storage.substate_bytes_at(BlockHeight::new(3)), Some(1));
     assert_eq!(storage.substate_bytes_at(BlockHeight::new(1)), Some(2));
@@ -175,7 +178,7 @@ fn recovered_state_carries_substate_bytes() {
         let block = make_test_block(BlockHeight::new(h));
         let qc = make_test_qc(&block);
         let updates =
-            make_mapped_database_update(u8::try_from(h).unwrap_or(u8::MAX), 0, vec![1], vec![1]);
+            make_mapped_database_update(u8::try_from(h).unwrap_or(u8::MAX), 0, &[1], vec![1]);
         rocks_commit_with(&storage, &updates, &block, &qc);
     }
 
@@ -187,13 +190,11 @@ fn test_basic_substate_operations() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    // 50-byte spread-prefix node_key — snapshot iteration decodes composite
-    // keys so raw short keys hit the entity-key length assertion.
     let partition_key = DbPartitionKey {
-        node_key: vec![3u8; 50],
-        partition_num: 0,
+        node_key: db_node_key(3),
+        partition_num: VM_PARTITION,
     };
-    let sort_key = DbSortKey(vec![10, 20]);
+    let sort_key = DbSortKey(local_key(&[10, 20]));
 
     // Initially empty
     assert!(
@@ -232,14 +233,11 @@ fn test_snapshot() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    // Use a realistic 50-byte node_key (spread-prefix format). Snapshot
-    // snapshots decode composite keys during iteration, so raw short keys
-    // would hit the entity-key length assertion.
     let partition_key = DbPartitionKey {
-        node_key: vec![7u8; 50],
-        partition_num: 0,
+        node_key: db_node_key(7),
+        partition_num: VM_PARTITION,
     };
-    let sort_key = DbSortKey(vec![10]);
+    let sort_key = DbSortKey(local_key(&[10]));
 
     // Write initial value
     let mut updates = DatabaseUpdates::default();
@@ -299,7 +297,7 @@ fn test_commit_certificate_with_writes_persists_both() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let updates = make_mapped_database_update(1, 0, vec![10, 20], vec![99, 88, 77]);
+    let updates = make_mapped_database_update(1, 0, &[10, 20], vec![99, 88, 77]);
     let cert = make_test_wave_certificate(BlockHeight::new(42), ShardId::ROOT);
     let wave_id = cert.wave_id().clone();
 
@@ -310,15 +308,13 @@ fn test_commit_certificate_with_writes_persists_both() {
     assert_eq!(stored_cert.unwrap().wave_id(), &wave_id);
 
     // Verify the substate was written to the state CF via direct key lookup.
-    // make_mapped_database_update uses SpreadPrefixKeyMapper, so extract the
-    // mapped key from the updates struct.
-    let (db_node_key, node_upd) = updates.node_updates.iter().next().unwrap();
+    let (entity_key, node_upd) = updates.node_updates.iter().next().unwrap();
     let (db_part_num, _) = node_upd.partition_updates.iter().next().unwrap();
     let partition_key = DbPartitionKey {
-        node_key: db_node_key.clone(),
+        node_key: entity_key.clone(),
         partition_num: *db_part_num,
     };
-    let sort_key = DbSortKey(vec![10, 20]);
+    let sort_key = DbSortKey(local_key(&[10, 20]));
     let value = storage.get_raw_substate_by_db_key(&partition_key, &sort_key);
     assert_eq!(
         value,
@@ -483,7 +479,7 @@ fn test_certificate_idempotency() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let updates = make_mapped_database_update(1, 0, vec![10, 20], vec![99, 88, 77]);
+    let updates = make_mapped_database_update(1, 0, &[10, 20], vec![99, 88, 77]);
     let cert = make_test_wave_certificate(BlockHeight::new(42), ShardId::ROOT);
     let wave_id = cert.wave_id().clone();
 
@@ -519,12 +515,12 @@ fn test_block_height_increments_on_commit() {
     assert_eq!(storage.jmt_height(), BlockHeight::new(0));
 
     storage
-        .commit(&make_database_update(db_node_key(1), 0, vec![10], vec![1]))
+        .commit(&make_database_update(db_node_key(1), 0, &[10], vec![1]))
         .unwrap();
     assert_eq!(storage.jmt_height(), BlockHeight::new(1));
 
     storage
-        .commit(&make_database_update(db_node_key(4), 0, vec![20], vec![2]))
+        .commit(&make_database_update(db_node_key(4), 0, &[20], vec![2]))
         .unwrap();
     assert_eq!(storage.jmt_height(), BlockHeight::new(2));
 }
@@ -537,13 +533,13 @@ fn test_state_root_changes_on_commit() {
     let root0 = storage.state_root();
 
     storage
-        .commit(&make_database_update(db_node_key(1), 0, vec![10], vec![1]))
+        .commit(&make_database_update(db_node_key(1), 0, &[10], vec![1]))
         .unwrap();
     let root1 = storage.state_root();
     assert_ne!(root0, root1, "root should change after first commit");
 
     storage
-        .commit(&make_database_update(db_node_key(4), 0, vec![20], vec![2]))
+        .commit(&make_database_update(db_node_key(4), 0, &[20], vec![2]))
         .unwrap();
     let root2 = storage.state_root();
     assert_ne!(root1, root2, "root should change after second commit");
@@ -676,7 +672,7 @@ fn test_commit_block_applies_writes() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let updates = make_mapped_database_update(1, 0, vec![10], vec![42]);
+    let updates = make_mapped_database_update(1, 0, &[10], vec![42]);
     let mut block = make_test_block(BlockHeight::new(1));
     let receipts = updates_to_receipts(&updates);
     attach_receipts(&mut block, receipts);
@@ -689,8 +685,8 @@ fn test_commit_block_multiple_certs() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let updates1 = make_mapped_database_update(1, 0, vec![10], vec![1]);
-    let updates2 = make_mapped_database_update(2, 0, vec![20], vec![2]);
+    let updates1 = make_mapped_database_update(1, 0, &[10], vec![1]);
+    let updates2 = make_mapped_database_update(2, 0, &[20], vec![2]);
     let merged = merge_database_updates(&[updates1, updates2]);
     let mut block = make_test_block(BlockHeight::new(1));
     let receipts = updates_to_receipts(&merged);
@@ -841,7 +837,7 @@ fn test_initial_state_root_is_zero() {
 
 #[test]
 fn test_state_root_deterministic() {
-    let updates = make_database_update(db_node_key(1), 0, vec![10], vec![42]);
+    let updates = make_database_update(db_node_key(1), 0, &[10], vec![42]);
 
     let td1 = TempDir::new().unwrap();
     let s1 = RocksDbShardStorage::open(td1.path(), NibblePath::empty()).unwrap();
@@ -859,12 +855,12 @@ fn test_state_root_deterministic() {
 fn test_state_root_differs_for_different_data() {
     let td1 = TempDir::new().unwrap();
     let s1 = RocksDbShardStorage::open(td1.path(), NibblePath::empty()).unwrap();
-    s1.commit(&make_database_update(db_node_key(1), 0, vec![10], vec![1]))
+    s1.commit(&make_database_update(db_node_key(1), 0, &[10], vec![1]))
         .unwrap();
 
     let td2 = TempDir::new().unwrap();
     let s2 = RocksDbShardStorage::open(td2.path(), NibblePath::empty()).unwrap();
-    s2.commit(&make_database_update(db_node_key(1), 0, vec![10], vec![2]))
+    s2.commit(&make_database_update(db_node_key(1), 0, &[10], vec![2]))
         .unwrap();
 
     assert_ne!(s1.state_root(), s2.state_root());
@@ -917,7 +913,7 @@ fn test_commit_certificate_via_commit_store() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let updates = make_mapped_database_update(1, 0, vec![10], vec![42]);
+    let updates = make_mapped_database_update(1, 0, &[10], vec![42]);
     let cert = make_test_wave_certificate(BlockHeight::new(1), ShardId::ROOT);
 
     storage.commit_certificate_with_writes(&cert, &updates);
@@ -950,7 +946,7 @@ fn test_substates_survive_reopen() {
     let cert_id;
     {
         let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
-        let updates = make_mapped_database_update(1, 0, vec![10], vec![42]);
+        let updates = make_mapped_database_update(1, 0, &[10], vec![42]);
         let cert = make_test_wave_certificate(BlockHeight::new(1), ShardId::ROOT);
         cert_id = cert.wave_id().clone();
         storage.commit_certificate_with_writes(&cert, &updates);
@@ -969,16 +965,14 @@ fn test_substates_survive_reopen() {
         assert_eq!(cert.unwrap().wave_id(), &cert_id);
 
         // Verify the substate was written via direct key lookup.
-        // make_mapped_database_update uses SpreadPrefixKeyMapper, so use the
-        // same helper to reconstruct the mapped key.
-        let mapped_updates = make_mapped_database_update(1, 0, vec![10], vec![42]);
-        let (db_node_key, node_upd) = mapped_updates.node_updates.iter().next().unwrap();
+        let mapped_updates = make_mapped_database_update(1, VM_PARTITION, &[10], vec![42]);
+        let (entity_key, node_upd) = mapped_updates.node_updates.iter().next().unwrap();
         let (db_part_num, _) = node_upd.partition_updates.iter().next().unwrap();
         let partition_key = DbPartitionKey {
-            node_key: db_node_key.clone(),
+            node_key: entity_key.clone(),
             partition_num: *db_part_num,
         };
-        let sort_key = DbSortKey(vec![10]);
+        let sort_key = DbSortKey(local_key(&[10]));
         let value = storage.get_raw_substate_by_db_key(&partition_key, &sort_key);
         assert_eq!(value, Some(vec![42]), "substate should survive reopen");
     }
@@ -1121,7 +1115,7 @@ fn test_ec_atomic_with_block_commit() {
 // These mirror `storage-memory/src/tests.rs`:
 //   - test_state_history_create_delete_create
 //   - test_snapshot_at_below_retention_panics
-//   - test_list_substates_at_height_respects_retention
+//   - test_historical_substate_read_respects_retention
 //   - test_reset_partition_captures_history_for_all_removed_keys
 //   - test_genesis_skips_history_entries
 //
@@ -1181,9 +1175,9 @@ fn test_state_history_create_delete_create() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let node_key = vec![7u8; 50];
-    let partition_num = 0u8;
-    let sort_key = vec![42u8];
+    let node_key = db_node_key(7);
+    let partition_num = VM_PARTITION;
+    let sort_key = local_key(&[42]);
     let pk = DbPartitionKey {
         node_key: node_key.clone(),
         partition_num,
@@ -1193,7 +1187,7 @@ fn test_state_history_create_delete_create() {
     // Keep an anchor key alive throughout so the JMT never empties out —
     // deleting K alone at V2 would otherwise break the parent-version
     // chain. The state-history behavior under test is independent of this.
-    let anchor_node_key = vec![99u8; 50];
+    let anchor_node_key = db_node_key(99);
     let mk_delta = |nk: &[u8], p: u8, sk_bytes: Vec<u8>, val: DatabaseUpdate| {
         let mut u = DatabaseUpdates::default();
         u.node_updates.insert(
@@ -1220,8 +1214,8 @@ fn test_state_history_create_delete_create() {
     );
     let anchor = mk_delta(
         &anchor_node_key,
-        0,
-        vec![0xFF],
+        VM_PARTITION,
+        local_key(&[0xFF]),
         DatabaseUpdate::Set(vec![0xFF]),
     );
     merge_into(&mut v1, &anchor);
@@ -1278,9 +1272,9 @@ fn substate_bytes_pruned_by_jmt_gc() {
 
     for h in 1..=10u64 {
         let updates = make_database_update(
-            vec![u8::try_from(h).unwrap_or(u8::MAX); 50],
-            0,
-            vec![1],
+            db_node_key(u8::try_from(h).unwrap_or(u8::MAX)),
+            VM_PARTITION,
+            &[1],
             vec![1],
         );
         storage.commit(&updates).unwrap();
@@ -1315,12 +1309,10 @@ fn test_snapshot_at_below_retention_panics() {
     let _snap = <RocksDbShardStorage as VersionedStore>::snapshot_at(&storage, BlockHeight::new(1));
 }
 
-/// `list_substates_for_node_at_height` is an external-facing API — it
-/// must return `None` for out-of-retention heights rather than panicking.
+/// `get_vm_substate_at_height` is an external-facing API — it must
+/// return `None` for out-of-retention heights rather than panicking.
 #[test]
-fn test_list_substates_at_height_respects_retention() {
-    use hyperscale_types::NodeId;
-
+fn test_historical_substate_read_respects_retention() {
     let temp_dir = TempDir::new().unwrap();
     let config = RocksDbConfig {
         jmt_history_length: 2,
@@ -1330,17 +1322,16 @@ fn test_list_substates_at_height_respects_retention() {
         RocksDbShardStorage::open_with_config(temp_dir.path(), &config, NibblePath::empty())
             .unwrap();
 
-    let nid = NodeId([9u8; 30]);
-    let partition_num = 0u8;
-    let sort_key = vec![1u8];
+    let owner = [9u8; 16];
+    let local = [1u8; 16];
 
     for h in 1..=10u64 {
         let block = make_test_block(BlockHeight::new(h));
         let qc = make_test_qc(&block);
         let updates = make_mapped_database_update(
             9,
-            partition_num,
-            sort_key.clone(),
+            VM_PARTITION,
+            &local,
             vec![u8::try_from(h).unwrap_or(u8::MAX)],
         );
         rocks_commit_with(&storage, &updates, &block, &qc);
@@ -1348,23 +1339,22 @@ fn test_list_substates_at_height_respects_retention() {
     // current=10, floor=8.
 
     // Within retention: returns Some.
-    assert!(
-        storage
-            .list_substates_for_node_at_height(&nid, BlockHeight::new(9))
-            .is_some(),
+    assert_eq!(
+        storage.get_vm_substate_at_height(owner, local, BlockHeight::new(9)),
+        Some(Some(vec![9])),
         "height within retention must succeed"
     );
     // Below retention: returns None.
     assert!(
         storage
-            .list_substates_for_node_at_height(&nid, BlockHeight::new(1))
+            .get_vm_substate_at_height(owner, local, BlockHeight::new(1))
             .is_none(),
         "height below retention must return None"
     );
     // Above current: returns None.
     assert!(
         storage
-            .list_substates_for_node_at_height(&nid, BlockHeight::new(99))
+            .get_vm_substate_at_height(owner, local, BlockHeight::new(99))
             .is_none(),
         "future height returns None"
     );
@@ -1377,8 +1367,8 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let node_key = vec![3u8; 50];
-    let partition_num = 0u8;
+    let node_key = db_node_key(3);
+    let partition_num = VM_PARTITION;
     let pk = DbPartitionKey {
         node_key: node_key.clone(),
         partition_num,
@@ -1394,9 +1384,18 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
                     partition_num,
                     PartitionDatabaseUpdates::Delta {
                         substate_updates: [
-                            (DbSortKey(vec![0xA1]), DatabaseUpdate::Set(vec![0xAA])),
-                            (DbSortKey(vec![0xB1]), DatabaseUpdate::Set(vec![0xBB])),
-                            (DbSortKey(vec![0xC1]), DatabaseUpdate::Set(vec![0xCC])),
+                            (
+                                DbSortKey(local_key(&[0xA1])),
+                                DatabaseUpdate::Set(vec![0xAA]),
+                            ),
+                            (
+                                DbSortKey(local_key(&[0xB1])),
+                                DatabaseUpdate::Set(vec![0xBB]),
+                            ),
+                            (
+                                DbSortKey(local_key(&[0xC1])),
+                                DatabaseUpdate::Set(vec![0xCC]),
+                            ),
                         ]
                         .into_iter()
                         .collect(),
@@ -1412,8 +1411,8 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
     {
         let mut updates = DatabaseUpdates::default();
         let mut new_values = IndexMap::new();
-        new_values.insert(DbSortKey(vec![0xD1]), vec![0xDD]);
-        new_values.insert(DbSortKey(vec![0xE1]), vec![0xEE]);
+        new_values.insert(DbSortKey(local_key(&[0xD1])), vec![0xDD]);
+        new_values.insert(DbSortKey(local_key(&[0xE1])), vec![0xEE]);
         updates.node_updates.insert(
             node_key,
             NodeDatabaseUpdates {
@@ -1433,19 +1432,19 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
     let snap_v1 =
         <RocksDbShardStorage as VersionedStore>::snapshot_at(&storage, BlockHeight::new(1));
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xA1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xA1]))),
         Some(vec![0xAA])
     );
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xB1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xB1]))),
         Some(vec![0xBB])
     );
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xC1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xC1]))),
         Some(vec![0xCC])
     );
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xD1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xD1]))),
         None
     );
 
@@ -1453,15 +1452,15 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
     let snap_v2 =
         <RocksDbShardStorage as VersionedStore>::snapshot_at(&storage, BlockHeight::new(2));
     assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xA1])),
+        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xA1]))),
         None
     );
     assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xD1])),
+        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xD1]))),
         Some(vec![0xDD])
     );
     assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xE1])),
+        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xE1]))),
         Some(vec![0xEE])
     );
 }
@@ -1473,7 +1472,7 @@ fn test_genesis_skips_history_entries() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let updates = make_database_update(vec![1u8; 50], 0, vec![1], vec![0xAA]);
+    let updates = make_database_update(db_node_key(1), 0, &[1], vec![0xAA]);
     storage.commit_substates_only(&updates);
 
     // StateHistoryCf must be empty after a genesis-style commit.
@@ -1498,10 +1497,10 @@ fn test_genesis_skips_history_entries() {
 
     // StateCf must hold the genesis write (readable via current-tip snapshot).
     let pk = DbPartitionKey {
-        node_key: vec![1u8; 50],
-        partition_num: 0,
+        node_key: db_node_key(1),
+        partition_num: VM_PARTITION,
     };
-    let sk = DbSortKey(vec![1]);
+    let sk = DbSortKey(local_key(&[1]));
     assert_eq!(
         storage.get_raw_substate_by_db_key(&pk, &sk),
         Some(vec![0xAA])

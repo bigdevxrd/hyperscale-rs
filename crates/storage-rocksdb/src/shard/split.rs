@@ -712,7 +712,7 @@ mod tests {
         let mut sides_hit = [false, false];
         let mut roots = (StateRoot::ZERO, StateRoot::ZERO, StateRoot::ZERO);
         for seed in 1u8..=8 {
-            let updates = make_database_update(db_node_key(seed), 0, vec![seed], vec![seed; 4]);
+            let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed; 4]);
             let receipts = [StoredReceipt::synced(
                 TxHash::from_raw(Hash::from_bytes(&[seed])),
                 Arc::new(ConsensusReceipt::Succeeded {

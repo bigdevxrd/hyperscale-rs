@@ -9,7 +9,6 @@
 //!
 //! [`fetch_and_broadcast_provision`]: crate::action_handlers::fetch_and_broadcast_provision
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
@@ -84,11 +83,7 @@ where
     let proof = if all_storage_keys.is_empty() {
         MerkleInclusionProof::new(Vec::new())
     } else {
-        view.generate_merkle_proofs_overlay(
-            &all_storage_keys,
-            &HashMap::new(),
-            source_block_height,
-        )?
+        view.generate_merkle_proofs_overlay(&all_storage_keys, source_block_height)?
     };
 
     let transactions = staged

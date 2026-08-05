@@ -19,7 +19,7 @@ use hyperscale_storage::{
     PartitionEntry, RecoveredState, SubstateDatabase, SubstateStore,
 };
 use hyperscale_types::{
-    BeaconWitnessLeafCount, BlockHeight, Hash, NodeId, QuorumCertificate, StateRoot, Verified,
+    BeaconWitnessLeafCount, BlockHeight, Hash, QuorumCertificate, StateRoot, Verified,
 };
 
 use super::state::{ConsensusState, SharedState, apply_updates};
@@ -282,11 +282,7 @@ impl SimShardStorage {
     /// already been initialized.
     #[must_use]
     #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
-    pub fn finalize_genesis_jmt(
-        &self,
-        merged: &DatabaseUpdates,
-        owner_map: &HashMap<NodeId, NodeId>,
-    ) -> StateRoot {
+    pub fn finalize_genesis_jmt(&self, merged: &DatabaseUpdates) -> StateRoot {
         let mut s = write_or_recover(&self.state);
 
         // Guard: finalize_genesis_jmt must only be called once, on an uninitialized JMT.
@@ -297,14 +293,7 @@ impl SimShardStorage {
         );
 
         // parent=None, version=0: genesis is the first JMT state.
-        let (root, collected) = put_at_version(
-            &s.tree_store,
-            None,
-            0,
-            &[merged],
-            &HashMap::new(),
-            owner_map,
-        );
+        let (root, collected) = put_at_version(&s.tree_store, None, 0, &[merged], &HashMap::new());
 
         for (key, node) in &collected.nodes {
             s.tree_store.insert(key.clone(), Arc::clone(node));
@@ -338,10 +327,9 @@ impl GenesisCommit for SimShardStorage {
         &self,
         substates: &DatabaseUpdates,
         jmt_updates: &DatabaseUpdates,
-        owner_map: &HashMap<NodeId, NodeId>,
     ) -> StateRoot {
         Self::commit_substates_only(self, substates);
-        Self::finalize_genesis_jmt(self, jmt_updates, owner_map)
+        Self::finalize_genesis_jmt(self, jmt_updates)
     }
 
     fn replicate_genesis_substates(&self, substates: &DatabaseUpdates) {

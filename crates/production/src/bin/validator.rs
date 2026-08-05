@@ -83,7 +83,6 @@ use igd_next::{PortMappingProtocol, SearchOptions};
 use libp2p::Multiaddr;
 use libp2p::multiaddr::Protocol;
 use radix_common::network::NetworkDefinition;
-use radix_common::prelude::AddressBech32Decoder;
 use serde::Deserialize;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as TokioHandle};
 use tokio::signal;
@@ -526,10 +525,6 @@ pub struct GenesisConfig {
     #[serde(default)]
     pub validators: Vec<ValidatorEntry>,
 
-    /// Initial XRD balances for accounts
-    #[serde(default)]
-    pub xrd_balances: Vec<XrdBalanceEntry>,
-
     /// Initial balances for funded accounts, keyed by their 16-byte
     /// address. This is what genesis actually seeds: an account's address
     /// *is* its shard placement, so the list needs no routing metadata.
@@ -544,16 +539,6 @@ pub struct AccountBalanceEntry {
     pub address: String,
 
     /// Balance as a string, parsed as `u128`.
-    pub balance: String,
-}
-
-/// An XRD balance entry for genesis configuration.
-#[derive(Debug, Clone, Deserialize)]
-pub struct XrdBalanceEntry {
-    /// `Bech32`-encoded account address (e.g., `"account_sim1..."`).
-    pub address: String,
-
-    /// Balance as a string (parsed as `Decimal`)
     pub balance: String,
 }
 
@@ -757,35 +742,12 @@ fn build_genesis_validators(
     Ok(GenesisValidators::new(network, validator_set, committee))
 }
 
-/// Build engine genesis configuration from TOML config.
+/// Build genesis configuration from TOML config.
 ///
-/// Converts the TOML-friendly genesis config (with string addresses and balances)
-/// to the engine's `GenesisConfig` type.
+/// Converts the TOML-friendly genesis config (with string addresses and
+/// balances) to the engine's `GenesisConfig` type.
 fn build_engine_genesis_config(config: &GenesisConfig) -> Result<EngineGenesisConfig> {
-    use std::str::FromStr;
-
-    use radix_common::math::Decimal;
-    use radix_common::types::ComponentAddress;
-
-    let network = NetworkDefinition::simulator();
-    let decoder = AddressBech32Decoder::new(&network);
-
-    let mut engine_config = EngineGenesisConfig::test_default();
-
-    for entry in &config.xrd_balances {
-        let (_, address_bytes) = decoder
-            .validate_and_decode(&entry.address)
-            .map_err(|e| anyhow::anyhow!("Invalid address '{}': {:?}", entry.address, e))?;
-
-        let address = ComponentAddress::try_from(address_bytes.as_slice()).map_err(|e| {
-            anyhow::anyhow!("Invalid component address '{}': {:?}", entry.address, e)
-        })?;
-
-        let balance = Decimal::from_str(&entry.balance)
-            .map_err(|e| anyhow::anyhow!("Invalid balance '{}': {:?}", entry.balance, e))?;
-
-        engine_config.xrd_balances.push((address, balance));
-    }
+    let mut engine_config = EngineGenesisConfig::default();
 
     for entry in &config.accounts {
         let bytes = hex_decode(&entry.address)
@@ -796,12 +758,11 @@ fn build_engine_genesis_config(config: &GenesisConfig) -> Result<EngineGenesisCo
             .balance
             .parse::<u128>()
             .map_err(|e| anyhow::anyhow!("Invalid balance '{}': {e}", entry.balance))?;
-        engine_config.vm_accounts.push((address, balance));
+        engine_config.accounts.push((address, balance));
     }
 
     info!(
-        xrd_balances = engine_config.xrd_balances.len(),
-        accounts = engine_config.vm_accounts.len(),
+        accounts = engine_config.accounts.len(),
         "Parsed genesis balances"
     );
 
@@ -1281,7 +1242,7 @@ async fn async_main(cli: Cli, config: ValidatorConfig) -> Result<()> {
     .provision_config(config.provisions)
     .beacon_chain_config(beacon_chain_config);
 
-    if !config.genesis.xrd_balances.is_empty() {
+    if !config.genesis.accounts.is_empty() {
         let engine_genesis = build_engine_genesis_config(&config.genesis)
             .context("Failed to parse genesis configuration")?;
         runner_builder = runner_builder.genesis_config(engine_genesis);

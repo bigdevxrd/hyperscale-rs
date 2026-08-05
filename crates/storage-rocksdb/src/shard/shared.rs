@@ -9,7 +9,6 @@
 //! `CommittableSubstateDatabase`) for `Arc<RocksDbShardStorage>` directly. This
 //! newtype sidesteps that while providing zero-cost delegation.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
@@ -22,7 +21,7 @@ use hyperscale_storage::{
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock,
     CertifiedBlockHeader, ChainOrigin, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
-    MerkleInclusionProof, NodeId, PreparedCommit, QuorumCertificate, RoutableTransaction,
+    MerkleInclusionProof, PreparedCommit, QuorumCertificate, RoutableTransaction,
     SafeVoteRegisters, ShardWitnessPayload, StateRoot, StoredReceipt, TxHash, ValidatorId,
     Verifiable, Verified, WaveCertificate, WaveId,
 };
@@ -88,10 +87,9 @@ impl GenesisCommit for SharedStorage {
         &self,
         substates: &DatabaseUpdates,
         jmt_updates: &DatabaseUpdates,
-        owner_map: &HashMap<NodeId, NodeId>,
     ) -> StateRoot {
         self.0.commit_substates_only(substates);
-        self.0.finalize_genesis_jmt(jmt_updates, owner_map)
+        self.0.finalize_genesis_jmt(jmt_updates)
     }
 
     fn replicate_genesis_substates(&self, substates: &DatabaseUpdates) {
@@ -117,15 +115,6 @@ impl SubstateStore for SharedStorage {
         self.0.state_root()
     }
 
-    fn list_substates_for_node_at_height(
-        &self,
-        node_id: &NodeId,
-        block_height: BlockHeight,
-    ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>> {
-        self.0
-            .list_substates_for_node_at_height(node_id, block_height)
-    }
-
     fn get_vm_substate_at_height(
         &self,
         owner: [u8; 16],
@@ -138,11 +127,9 @@ impl SubstateStore for SharedStorage {
     fn generate_merkle_proofs(
         &self,
         storage_keys: &[Vec<u8>],
-        owner_map: &HashMap<NodeId, NodeId>,
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
-        self.0
-            .generate_merkle_proofs(storage_keys, owner_map, block_height)
+        self.0.generate_merkle_proofs(storage_keys, block_height)
     }
 }
 

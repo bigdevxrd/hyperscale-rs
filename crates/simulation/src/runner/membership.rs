@@ -23,7 +23,6 @@
 use std::sync::Arc;
 
 use hyperscale_core::ParticipationChange;
-use hyperscale_engine::GenesisConfig;
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network_memory::NodeIndex;
 use hyperscale_node::bootstrap::{
@@ -128,11 +127,7 @@ impl SimulationRunner {
             // intent-hash tracker) before the snap-sync import, exactly as the
             // reshape duty and the production supervisor seed a fresh store —
             // the authenticated span import overwrites only the prefix subtree.
-            replicate_engine_bootstrap(
-                &storage,
-                &self.beacon_network,
-                &GenesisConfig::test_default(),
-            );
+            replicate_engine_bootstrap(&storage, &self.genesis_config());
             let Some(recovered) = self.bootstrap_from_committee(host, shard, anchor, &storage)
             else {
                 // The attested anchor's state has aged out of the serving

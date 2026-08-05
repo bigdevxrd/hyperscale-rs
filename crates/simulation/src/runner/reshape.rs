@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hyperscale_core::ProtocolEvent;
-use hyperscale_engine::GenesisConfig;
 use hyperscale_network::Network;
 use hyperscale_network_memory::NodeIndex;
 use hyperscale_node::bootstrap::replicate_engine_bootstrap;
@@ -217,11 +216,7 @@ impl SimulationRunner {
     /// cache it for the duty.
     fn reshape_open_store(&mut self, host: NodeIndex, shard: ShardId) {
         let storage = SimShardStorage::new(shard_prefix_path(shard));
-        replicate_engine_bootstrap(
-            &storage,
-            &self.beacon_network,
-            &GenesisConfig::test_default(),
-        );
+        replicate_engine_bootstrap(&storage, &self.genesis_config());
         let recovered = storage.load_recovered_state();
         self.reshape_stores.insert(
             (host, shard),

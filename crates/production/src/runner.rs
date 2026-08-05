@@ -542,7 +542,7 @@ impl ProductionRunnerBuilder {
             libp2p_network,
         } = build_network_stack(NetworkBuildArgs {
             network_config,
-            network: network_definition.clone(),
+            network: network_definition,
             ed25519_keypair,
             local_shards: local_shards.clone(),
             bind_vnodes,
@@ -555,17 +555,13 @@ impl ProductionRunnerBuilder {
         // supervisor opens for a post-genesis join or observer duty —
         // the same network + genesis config the startup genesis path
         // installs, so the substate sides agree across stores.
-        let mut bootstrap_config = self
-            .genesis_config
-            .clone()
-            .unwrap_or_else(GenesisConfig::production);
+        let mut bootstrap_config = self.genesis_config.clone().unwrap_or_default();
         // Each seated pool's founding members, read off the beacon's own
         // folded genesis state: the contract's record of who a pool
         // operates has to agree with the beacon's from the first block,
         // and this is where both exist.
-        seed_founding_members(&boot.state, &mut bootstrap_config.vm_pools);
+        seed_founding_members(&boot.state, &mut bootstrap_config.pools);
         let engine_bootstrap = EngineBootstrap {
-            network: network_definition,
             config: bootstrap_config,
         };
         // The VM engine's world derives from the same genesis config the
@@ -573,12 +569,12 @@ impl ProductionRunnerBuilder {
         // construction installs the process VM statics, which are
         // first-writer-wins, so several clusters in one process must agree.
         let world_accounts = if self.vm_world_accounts.is_empty() {
-            &engine_bootstrap.config.vm_accounts
+            &engine_bootstrap.config.accounts
         } else {
             &self.vm_world_accounts
         };
         let world_pools = if self.vm_world_pools.is_empty() {
-            &engine_bootstrap.config.vm_pools
+            &engine_bootstrap.config.pools
         } else {
             &self.vm_world_pools
         };
@@ -853,10 +849,7 @@ impl ProductionRunner {
         let topology_snapshot = Arc::clone(&self.topology_snapshot);
         // Shared across every hosted shard; `install_engine_genesis` retains
         // only the accounts whose address hashes to the shard it installs.
-        let genesis_config = self
-            .genesis_config
-            .take()
-            .unwrap_or_else(GenesisConfig::production);
+        let genesis_config = self.genesis_config.take().unwrap_or_default();
         for shard in local_shards {
             let height = host.shard_io(shard).storage().committed_height();
             if height > BlockHeight::GENESIS {
@@ -884,7 +877,7 @@ impl ProductionRunner {
                 shard = ?shard,
                 genesis_jmt_root = ?block.header().state_root(),
                 genesis_hash = ?block.hash(),
-                xrd_balances = genesis_config.xrd_balances.len(),
+                accounts = genesis_config.accounts.len(),
                 proposer = ?first_validator,
                 "Initialized genesis block"
             );

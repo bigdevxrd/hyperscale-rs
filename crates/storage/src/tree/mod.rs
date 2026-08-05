@@ -28,8 +28,8 @@ use hyperscale_jmt::{
     Blake3Hasher, Key, LeafValue, NibblePath, Node as JmtNode, NodeKey, Tree, TreeReader,
     UpdateResult, ValueHash,
 };
-use hyperscale_types::state_key::{db_node_key_to_node_id, jmt_leaf_key, jmt_value_hash};
-use hyperscale_types::{BlockHeight, Hash, NodeId, StateRoot};
+use hyperscale_types::state_key::{jmt_leaf_key, jmt_value_hash};
+use hyperscale_types::{BlockHeight, Hash, StateRoot};
 use radix_common::prelude::DatabaseUpdate;
 use radix_substate_store_interface::interface::{
     DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates,
@@ -92,21 +92,12 @@ impl<S: TreeReader + Sync> TreeReader for OverlayTreeReader<'_, S> {
 /// Centralizing as a type alias so callers don't repeat the parameters.
 pub type Jmt = Tree<Blake3Hasher, 1>;
 
-/// Hash a storage key to a 32-byte JMT key, owner-prefixing internal nodes.
-///
-/// Storage keys are variable-length (`entity_key || partition_num || sort_key`).
-/// `owner_map` maps an internal node (vault, KV store) to its owning global
-/// ancestor; a key whose node is present is prefixed under that owner so the
-/// owner's footprint stays a contiguous prefix subtree. Globals are absent and
-/// key under themselves. The map is the merge of every committed receipt's
-/// `owned_nodes`, so the key bytes are identical on every node. VM flat keys
-/// map by identity — their owner and local halves are the leaf key — and are
-/// never in `owner_map`.
+/// The 32-byte JMT key of a storage key: its owner and local halves,
+/// by identity, so one owner's substates form a contiguous prefix
+/// subtree.
 #[must_use]
-#[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
-pub fn hash_storage_key(storage_key: &[u8], owner_map: &HashMap<NodeId, NodeId>) -> Key {
-    let owner = db_node_key_to_node_id(storage_key).and_then(|n| owner_map.get(&n).copied());
-    jmt_leaf_key(storage_key, owner)
+pub fn hash_storage_key(storage_key: &[u8]) -> Key {
+    jmt_leaf_key(storage_key)
 }
 
 /// A JMT root hash as a [`StateRoot`], mapping the empty-tree sentinel
@@ -124,9 +115,9 @@ pub fn state_root_from_jmt(root_hash: [u8; 32]) -> StateRoot {
 /// `version`, on top of `parent_version` (`None` for the first batch of
 /// an import into an empty store).
 ///
-/// The shipped leaf keys are already owner-prefixed, so the tree is
+/// The shipped leaf keys are already in leaf form, so the tree is
 /// rebuilt from them directly instead of re-deriving through
-/// [`put_at_version`], which would need the owner map. The caller
+/// [`put_at_version`]. The caller
 /// persists the result's node batch plus whatever raw-pair and
 /// leaf-association records its backend keeps; a single-batch import
 /// stores the returned root as the imported state root, a chunked one
@@ -389,7 +380,6 @@ pub fn put_at_version<S: TreeReader + Sync>(
     new_version: u64,
     database_updates_list: &[&DatabaseUpdates],
     reset_old_keys: &HashMap<(Vec<u8>, u8), Vec<DbSortKey>>,
-    owner_map: &HashMap<NodeId, NodeId>,
 ) -> (StateRoot, CollectedWrites) {
     assert!(
         parent_version.is_none_or(|pv| new_version > pv),
@@ -429,7 +419,7 @@ pub fn put_at_version<S: TreeReader + Sync>(
     let mut updates: Vec<(Key, Option<LeafValue>)> = work_items
         .par_iter()
         .map(|(storage_key, value_ref)| {
-            let jmt_key = hash_storage_key(storage_key, owner_map);
+            let jmt_key = hash_storage_key(storage_key);
             let jmt_value = value_ref.map(|v| LeafValue::new(hash_value(v), v.len() as u64));
             (jmt_key, jmt_value)
         })
@@ -483,27 +473,29 @@ pub fn put_at_version<S: TreeReader + Sync>(
 #[cfg(test)]
 mod tests {
     use hyperscale_jmt::MemoryStore;
+    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key, vm_leaf_key};
 
     use super::*;
     use crate::{DatabaseUpdate, DbSortKey, NodeDatabaseUpdates, PartitionDatabaseUpdates};
 
-    /// One association per work item: the hashed leaf key paired with
-    /// the raw storage key for sets, `None` for deletes.
+    /// One association per work item: the leaf key paired with the raw
+    /// storage key for sets, `None` for deletes.
     #[test]
     fn put_at_version_records_leaf_associations() {
         let store = MemoryStore::new();
 
-        let set_entity = vec![1u8; 50];
-        let del_entity = vec![2u8; 50];
+        let set_entity = vm_db_node_key([1u8; 16]);
+        let del_entity = vm_db_node_key([2u8; 16]);
+        let (set_local, del_local) = ([9u8; 16], [5u8; 16]);
         let mut updates = DatabaseUpdates::default();
         updates.node_updates.insert(
             set_entity.clone(),
             NodeDatabaseUpdates {
                 partition_updates: std::iter::once((
-                    0u8,
+                    VM_PARTITION,
                     PartitionDatabaseUpdates::Delta {
                         substate_updates: std::iter::once((
-                            DbSortKey(vec![9]),
+                            DbSortKey(set_local.to_vec()),
                             DatabaseUpdate::Set(vec![42]),
                         ))
                         .collect(),
@@ -516,10 +508,10 @@ mod tests {
             del_entity.clone(),
             NodeDatabaseUpdates {
                 partition_updates: std::iter::once((
-                    1u8,
+                    VM_PARTITION,
                     PartitionDatabaseUpdates::Delta {
                         substate_updates: std::iter::once((
-                            DbSortKey(vec![5]),
+                            DbSortKey(del_local.to_vec()),
                             DatabaseUpdate::Delete,
                         ))
                         .collect(),
@@ -529,19 +521,12 @@ mod tests {
             },
         );
 
-        let (_, collected) = put_at_version(
-            &store,
-            None,
-            1,
-            &[&updates],
-            &HashMap::new(),
-            &HashMap::new(),
-        );
+        let (_, collected) = put_at_version(&store, None, 1, &[&updates], &HashMap::new());
 
-        let set_raw = make_storage_key(&set_entity, 0, &[9]);
-        let del_raw = make_storage_key(&del_entity, 1, &[5]);
+        let set_raw = make_storage_key(&set_entity, VM_PARTITION, &set_local);
+        let del_raw = make_storage_key(&del_entity, VM_PARTITION, &del_local);
         let by_key = |raw: &[u8]| {
-            let hashed = hash_storage_key(raw, &HashMap::new());
+            let hashed = hash_storage_key(raw);
             collected
                 .leaf_associations
                 .iter()
@@ -558,8 +543,6 @@ mod tests {
     /// association records the flat key so range serving resolves it.
     #[test]
     fn put_at_version_keys_vm_updates_by_identity() {
-        use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key, vm_leaf_key};
-
         let store = MemoryStore::new();
         let owner = [0xA5u8; 16];
         let local = [0x3Cu8; 16];
@@ -582,14 +565,7 @@ mod tests {
             },
         );
 
-        let (root, collected) = put_at_version(
-            &store,
-            None,
-            1,
-            &[&updates],
-            &HashMap::new(),
-            &HashMap::new(),
-        );
+        let (root, collected) = put_at_version(&store, None, 1, &[&updates], &HashMap::new());
 
         assert_ne!(root, StateRoot::ZERO);
         assert_eq!(collected.leaf_associations.len(), 1);

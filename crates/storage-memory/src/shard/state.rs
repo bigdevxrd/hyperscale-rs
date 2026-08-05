@@ -13,7 +13,7 @@ use hyperscale_storage::{
 };
 use hyperscale_types::{
     BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate,
-    ExecutionMetadata, NodeId, QuorumCertificate, RoutableTransaction, SafeVoteRegisters,
+    ExecutionMetadata, QuorumCertificate, RoutableTransaction, SafeVoteRegisters,
     ShardWitnessPayload, StateRoot, StoredReceipt, TxHash, ValidatorId, WaveCertificate, WaveId,
 };
 
@@ -130,7 +130,6 @@ impl SharedState {
 pub fn apply_state_writes(
     s: &mut SharedState,
     updates: &DatabaseUpdates,
-    owner_map: &HashMap<NodeId, NodeId>,
     height: BlockHeight,
 ) -> StateRoot {
     apply_updates(s, updates, height.inner(), /* write_history */ true);
@@ -146,7 +145,6 @@ pub fn apply_state_writes(
         height.inner(),
         &[updates],
         &HashMap::new(),
-        owner_map,
     );
 
     for (key, node) in &collected.nodes {

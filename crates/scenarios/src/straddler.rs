@@ -75,10 +75,17 @@ const fn vote_activate_lead(fold_budget_ms: u64, epoch_ms: u64) -> u64 {
     VOTE_ACTIVATE_LEAD_BASE + fold_budget_ms.div_ceil(epoch_ms)
 }
 
-/// Reshape `split_bytes` the vote installs after the grow: between the survivor's
-/// byte total and the splitter's, so only the heavier splitter crosses and
-/// terminates while the survivor stays a live leaf.
-const STRADDLER_SPLIT_BYTES: u64 = 500_000;
+/// Reshape `split_bytes` the vote installs after the grow: between the
+/// survivor's byte total and the splitter's, so only the heavier splitter
+/// crosses and terminates while the survivor stays a live leaf.
+///
+/// Bracketed against what genesis writes — the stdlib package cell under
+/// one prefix plus one 16-byte vault cell per funded account — so the
+/// survivor (~8.1 KB) sits below it, the splitter (~29.2 KB) above it, and
+/// the derived merge floor (an eighth of it) below every live leaf,
+/// including the splitter's own children once it splits (~21.1 KB and
+/// ~8.1 KB).
+const STRADDLER_SPLIT_BYTES: u64 = 25_000;
 
 /// Verify a split straddler settles atomically across the reshape boundary.
 ///

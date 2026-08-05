@@ -1,8 +1,6 @@
 //! Genesis install primitive.
 
-use std::collections::HashMap;
-
-use hyperscale_types::{NodeId, StateRoot};
+use hyperscale_types::StateRoot;
 use radix_substate_store_interface::interface::DatabaseUpdates;
 
 /// Storage backends that can install a genesis snapshot in one shot.
@@ -31,7 +29,6 @@ pub trait GenesisCommit {
         &self,
         substates: &DatabaseUpdates,
         jmt_updates: &DatabaseUpdates,
-        owner_map: &HashMap<NodeId, NodeId>,
     ) -> StateRoot;
 
     /// Write `substates` to the substate store without touching the JMT.

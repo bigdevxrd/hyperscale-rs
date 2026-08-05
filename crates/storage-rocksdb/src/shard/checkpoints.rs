@@ -12,7 +12,6 @@
 //! dot-prefixed temporary name and a rename, so a crash mid-create
 //! leaves only a `.tmp-*` directory, swept on the next creation.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -585,7 +584,7 @@ impl BoundaryStore for RocksDbShardStorage {
         }
 
         let merged = merge_updates_from_receipts(receipts);
-        let filtered = filter_updates_to_prefix(&merged, &HashMap::new(), &self.root_path);
+        let filtered = filter_updates_to_prefix(&merged, &self.root_path);
         if filtered.node_updates.is_empty() {
             return Ok(base_root);
         }
@@ -604,7 +603,6 @@ impl BoundaryStore for RocksDbShardStorage {
             height.inner(),
             &[&filtered],
             &reset_old_keys,
-            &HashMap::new(),
         );
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,
@@ -650,7 +648,7 @@ mod tests {
     use blake3::hash as blake3_hash;
     use hyperscale_jmt::{Blake3Hasher, Tree};
     use hyperscale_storage::test_helpers::{
-        completed_import_progress, import_boundary_state, make_database_update,
+        completed_import_progress, db_node_key, import_boundary_state, make_database_update,
         test_boundary_import_roundtrip, test_boundary_retention_evicts_oldest,
         test_boundary_unpinned_height_not_served,
     };
@@ -670,7 +668,7 @@ mod tests {
     }
 
     fn commit_one(storage: &RocksDbShardStorage, seed: u8) {
-        let updates = make_database_update(vec![seed; 50], 0, vec![seed], vec![seed, seed, seed]);
+        let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed, seed, seed]);
         storage.commit(&updates).unwrap();
     }
 

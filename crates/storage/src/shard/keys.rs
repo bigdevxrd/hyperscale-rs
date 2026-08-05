@@ -6,10 +6,7 @@
 //! Both the `RocksDB` backend and the engine's provision overlay use these
 //! functions to produce compatible keys.
 
-use hyperscale_types::NodeId;
 pub use hyperscale_types::state_key::db_node_key_to_node_id;
-use radix_common::types::NodeId as RadixNodeId;
-use radix_substate_store_interface::db_key_mapper::{DatabaseKeyMapper, SpreadPrefixKeyMapper};
 use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey};
 
 /// Convert Radix partition key + sort key to a flat storage key.
@@ -46,23 +43,4 @@ pub fn next_prefix(prefix: &[u8]) -> Option<Vec<u8>> {
         next[i] = 0;
     }
     None
-}
-
-// ─── NodeId ↔ db_node_key conversions ────────────────────────────────────────
-//
-// These use SpreadPrefixKeyMapper to convert between our NodeId type and the
-// Radix db_node_key format (20-byte hash prefix + 30-byte NodeId).
-// Used by writes.rs for state change extraction and shard filtering.
-
-/// Build the storage key prefix for a given `NodeId` (for node-level iteration).
-#[must_use]
-pub fn node_prefix(node_id: &NodeId) -> Vec<u8> {
-    node_entity_key(node_id)
-}
-
-/// Get the `db_node_key` (entity key) for a `NodeId`.
-#[must_use]
-pub fn node_entity_key(node_id: &NodeId) -> Vec<u8> {
-    let radix_node_id = RadixNodeId(node_id.0);
-    SpreadPrefixKeyMapper::to_db_node_key(&radix_node_id)
 }

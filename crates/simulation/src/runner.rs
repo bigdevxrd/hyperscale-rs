@@ -38,9 +38,7 @@ use hyperscale_types::{
     LocalTimestamp, ShardId, Signer, StakePoolSeat, TopologySnapshot, TransactionStatus, TxHash,
     ValidatorId, ValidatorInfo, ValidatorSet, Verifier, shard_prefix_path,
 };
-use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
-use radix_common::types::ComponentAddress;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tracing::{debug, info, trace};
@@ -904,32 +902,18 @@ impl SimulationRunner {
     // Genesis
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// Initialize all nodes with genesis blocks and start consensus.
-    pub fn initialize_genesis(&mut self) {
-        self.run_genesis(&GenesisConfig {
-            vm_accounts: self.vm_accounts.clone(),
-            vm_pools: self.vm_pools.clone(),
-            ..GenesisConfig::test_default()
-        });
+    /// The genesis config this cluster installs: its funded accounts and
+    /// the pools its beacon folds facts for.
+    pub(crate) fn genesis_config(&self) -> GenesisConfig {
+        GenesisConfig {
+            accounts: self.vm_accounts.clone(),
+            pools: self.vm_pools.clone(),
+        }
     }
 
-    /// Initialize genesis with pre-funded accounts.
-    ///
-    /// Genesis is a single ROOT shard, so every funded account lands on ROOT;
-    /// a later `grow_to` partitions them across the children by prefix. The
-    /// account count is bounded by the Radix Engine genesis limit (~8000) —
-    /// callers past it fund the surplus at runtime instead.
-    pub fn initialize_genesis_with_balances(&mut self, balances: &[(ComponentAddress, Decimal)]) {
-        // One GenesisConfig for the whole ROOT shard; the engine cache
-        // memoizes the merged DatabaseUpdates so installing it on each ROOT
-        // host is cheap.
-        let config = GenesisConfig {
-            xrd_balances: balances.to_vec(),
-            vm_accounts: self.vm_accounts.clone(),
-            vm_pools: self.vm_pools.clone(),
-            ..GenesisConfig::test_default()
-        };
-        self.run_genesis(&config);
+    /// Initialize all nodes with genesis blocks and start consensus.
+    pub fn initialize_genesis(&mut self) {
+        self.run_genesis(&self.genesis_config());
     }
 
     /// Install and commit genesis across the cluster, then wire the hosts

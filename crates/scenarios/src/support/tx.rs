@@ -13,31 +13,21 @@ use hyperscale_engine_vm::genesis::stake_unit;
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR,
-    NetworkParams, NodeId, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
+    NetworkParams, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
     TimestampRange, ValidatorId, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
-    ed25519_keypair_from_seed, uniform_shard_for_node,
+    ed25519_keypair_from_seed,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
     Subintent, Value, YieldBinding, YieldParam,
 };
 use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
-use radix_common::math::Decimal;
-use radix_common::types::ComponentAddress;
 
 /// A deterministic Ed25519 signer from a one-byte seed. A faucet transaction's
 /// fee comes from the faucet, so any key notarizes it.
 #[must_use]
 pub fn signer_from_seed(seed: u8) -> Ed25519PrivateKey {
     ed25519_keypair_from_seed(&[seed; 32])
-}
-
-/// The preallocated account address for the [`signer_from_seed`] of `seed` —
-/// the account that signer controls, so a genesis that funds this address can
-/// be spent by that key.
-#[must_use]
-pub fn account_from_seed(seed: u8) -> ComponentAddress {
-    ComponentAddress::preallocated_account_from_public_key(&signer_from_seed(seed).public_key())
 }
 
 /// The splitting shard of the grown surviving-sibling shape — `leaf(1, 0)`, the
@@ -50,10 +40,20 @@ pub const STRADDLER_SPLITTER: ShardId = ShardId::leaf(1, 0);
 /// terminating splitter.
 pub const STRADDLER_SURVIVOR: ShardId = ShardId::leaf(1, 1);
 
-/// Bulk accounts funded into the splitter to reinforce the engine bootstrap's
-/// natural low-prefix skew, so the splitter clears the voted-down threshold and
-/// the survivor stays under it.
-const STRADDLER_BULK: usize = 20;
+/// Ballast accounts funded into the splitter, so it clears the voted-down
+/// threshold while the survivor — ballasted at [`STRADDLER_SURVIVOR_BULK`]
+/// — stays under it.
+///
+/// Sized against the stdlib package cell, which genesis writes whole
+/// under one prefix and which therefore lands on one shard as a single
+/// ~14 KiB lump. A shard's ballast has to be the same order or the
+/// derived merge floor sits above every shard that did not get the lump.
+const STRADDLER_BULK: usize = 900;
+
+/// Ballast accounts funded into the survivor: enough to clear the derived
+/// merge floor with margin, and short of the splitter's so only the
+/// splitter crosses the voted-down split threshold.
+const STRADDLER_SURVIVOR_BULK: usize = 500;
 
 /// Straddler pairs submitted across the splitter's grow — enough to span its
 /// terminal cut: the earliest settle on it before it crosses, the latest name a
@@ -78,14 +78,10 @@ pub const MERGE_STRADDLER_LEFT: ShardId = ShardId::leaf(2, 2);
 /// [`MERGE_STRADDLER_LEFT`] into their parent `leaf(1, 1)`.
 pub const MERGE_STRADDLER_RIGHT: ShardId = ShardId::leaf(2, 3);
 
-/// Bulk accounts funded into the lighter surviving quarter `leaf(2, 1)`.
-///
-/// The engine bootstrap leaves `leaf(2, 1)` (~89k) below `merge_bytes`, so
-/// without this it would emit an unpairable merge against its heavy sibling
-/// `leaf(2, 0)` (~522k) and churn the schedule. Lifting it to ~403k keeps the
-/// whole surviving pair above the threshold while the lighter merging pair stays
-/// under it. The `u8`-seeded [`account_in_n`] tops out at 255 keys; this draws
-/// from the wide `u64` seed space of [`bulk_fund_into`].
+/// Ballast accounts funded into each surviving quarter (`leaf(2, 0)` and
+/// `leaf(2, 1)`), lifting the pair above `merge_bytes` so neither emits an
+/// unpairable merge against the other while the lighter merging pair stays
+/// under it.
 const MERGE_SURVIVOR_BULK: usize = 500;
 
 /// Merge-straddler pairs submitted across the merge.
@@ -112,13 +108,6 @@ pub fn merge_vote_payer() -> Ed25519PrivateKey {
     signer_from_seed(MERGE_VOTE_PAYER_SEED)
 }
 
-/// The merge-vote payer's account, for genesis funding by cluster
-/// builders that re-vote the reshape threshold after growing.
-#[must_use]
-pub fn merge_vote_payer_account() -> ComponentAddress {
-    account_from_seed(MERGE_VOTE_PAYER_SEED)
-}
-
 /// Seed of the witness scenarios' fee payer.
 ///
 /// The beacon-witness scenarios (staking, validator registration, governance
@@ -133,38 +122,6 @@ pub fn witness_payer() -> Ed25519PrivateKey {
     signer_from_seed(WITNESS_PAYER_SEED)
 }
 
-/// Genesis funding for the witness scenarios.
-///
-/// Funds the witness payer's account well above the fee any single system action
-/// locks. Both adaptors install these so the witness bodies run identically on
-/// either harness.
-#[must_use]
-pub fn witness_genesis_balances() -> Vec<(ComponentAddress, Decimal)> {
-    vec![(
-        account_from_seed(WITNESS_PAYER_SEED),
-        Decimal::from(100_000),
-    )]
-}
-
-/// Genesis funding for the halted-shard recovery scenario.
-///
-/// Both children of the root are bulk-funded into the stable band — above
-/// the derived merge floor, below the split threshold, summing over it —
-/// so the root splits exactly once and the grown pair holds: neither
-/// child re-splits or asserts a merge half while the halt and its
-/// recovery play out (a pending reshape would exempt the halted shard
-/// from detection).
-#[must_use]
-pub fn halt_recovery_genesis_balances() -> Vec<(ComponentAddress, Decimal)> {
-    let mut balances = vec![(
-        account_from_seed(MERGE_VOTE_PAYER_SEED),
-        Decimal::from(100_000),
-    )];
-    bulk_fund_into(ShardId::leaf(1, 0), 2, STRADDLER_BULK, &mut balances);
-    bulk_fund_into(ShardId::leaf(1, 1), 2, STRADDLER_BULK, &mut balances);
-    balances
-}
-
 /// Probe pairs per submission batch of the halted-shard straddler scenario.
 ///
 /// Two transfers sourced on the surviving sibling into the halting shard,
@@ -175,16 +132,14 @@ pub const HALT_STRADDLER_BATCH: usize = 3;
 /// The genesis funding and probe transfers for the halted-shard straddler
 /// scenario.
 ///
-/// The stable-band bulk of [`halt_recovery_genesis_balances`] plus three
-/// probe batches (submitted before the fault installs, at the freeze edge,
-/// and against the frozen shard) and a post-recovery transfer per
-/// direction. One definition the adaptors and the scenario body share, so
-/// the funded accounts cannot drift from the transfers spent against them.
+/// The stable-band ballast plus three probe batches (submitted before
+/// the fault installs, at the freeze edge, and against the frozen shard)
+/// and a post-recovery transfer per direction. One definition the
+/// adaptors and the scenario body share, so the funded accounts cannot
+/// drift from the transfers spent against them.
 pub struct HaltStraddlerSetup {
-    /// Genesis XRD ballast: the halt-recovery stable-band bulk plus one
-    /// account per probe leg per child.
-    pub balances: Vec<(ComponentAddress, Decimal)>,
-    /// Genesis VM accounts: every probe leg's payer and recipient.
+    /// Genesis accounts: the stable-band ballast plus every probe leg's
+    /// payer and recipient.
     pub vm_accounts: Vec<([u8; 16], u128)>,
     /// Probe transfers in submission order, [`HALT_STRADDLER_BATCH`] per
     /// batch: `(payer key, payer account, recipient account)`.
@@ -194,35 +149,34 @@ pub struct HaltStraddlerSetup {
     pub post_recovery: Vec<(Ed25519PrivateKey, [u8; 16], [u8; 16])>,
 }
 
-/// Probe legs the halted-shard straddler scenario submits: three batches
-/// plus a post-recovery transfer per direction.
-const HALT_STRADDLER_LEGS: usize = HALT_STRADDLER_BATCH * 3 + 2;
+/// Ballast accounts per child of the root split, for the halt-recovery
+/// stable band: above the derived merge floor, below the split threshold,
+/// summing over it, so the root splits exactly once and the grown pair
+/// holds while the halt and its recovery play out.
+///
+/// The child that receives the stdlib package cell starts ~14 KiB ahead,
+/// so the band has to be wide enough to hold both — see
+/// [`STRADDLER_BULK`] for why the lump sets the scale.
+const HALT_RECOVERY_BULK: usize = 900;
 
 /// Build the halted-shard straddler genesis funding and probe transfers.
 ///
-/// The halting `leaf(1, 0)` and surviving `leaf(1, 1)` keep the
-/// [`halt_recovery_genesis_balances`] stable-band bulk; the probe accounts
-/// ride on top, small enough to leave both children inside the band.
+/// Both children of the root are ballasted into the stable band — above
+/// the derived merge floor, below the split threshold, summing over it —
+/// so the root splits exactly once and the grown pair holds: neither
+/// child re-splits or asserts a merge half while the halt and its
+/// recovery play out (a pending reshape would exempt the halted shard
+/// from detection). The probe accounts ride on top, small enough to leave
+/// both children inside the band.
 #[must_use]
 pub fn halt_straddler_setup() -> HaltStraddlerSetup {
     let halting = ShardId::leaf(1, 0);
     let surviving = ShardId::leaf(1, 1);
 
-    let mut balances = halt_recovery_genesis_balances();
-    // The vote payer's seed is excluded from the ballast draw — it already
-    // carries the grow vote's nonce sequence.
-    let mut ballast_taken = vec![MERGE_VOTE_PAYER_SEED];
-    for shard in [halting, surviving] {
-        ballast(
-            shard,
-            2,
-            HALT_STRADDLER_LEGS,
-            &mut ballast_taken,
-            &mut balances,
-        );
-    }
-
     let mut vm_accounts = Vec::new();
+    ballast(halting, 2, HALT_RECOVERY_BULK, &mut vm_accounts);
+    ballast(surviving, 2, HALT_RECOVERY_BULK, &mut vm_accounts);
+
     let mut taken = Vec::new();
     let mut leg = |from, to| vm_leg(from, to, 2, &mut taken, &mut vm_accounts);
 
@@ -234,7 +188,6 @@ pub fn halt_straddler_setup() -> HaltStraddlerSetup {
     }
     let post_recovery = vec![leg(surviving, halting), leg(halting, surviving)];
     HaltStraddlerSetup {
-        balances,
         vm_accounts,
         straddlers,
         post_recovery,
@@ -250,11 +203,9 @@ pub fn halt_straddler_setup() -> HaltStraddlerSetup {
 /// installed at the single-shard genesis and partitions across the quarters as
 /// the cluster grows.
 pub struct MergeStraddlerSetup {
-    /// Genesis XRD ballast: the survivor pair funded over `merge_bytes`, the
-    /// merging pair left under it.
-    pub balances: Vec<(ComponentAddress, Decimal)>,
-    /// Genesis VM accounts: the straddler payers in the survivor, their
-    /// recipients in the merging left child.
+    /// Genesis accounts: the survivor pair ballasted over `merge_bytes`
+    /// and the merging pair left under it, plus the straddler payers in
+    /// the survivor and their recipients in the merging left child.
     pub vm_accounts: Vec<([u8; 16], u128)>,
     /// Straddler transfers: `(payer key, payer account in the survivor,
     /// recipient in the merging left child)`.
@@ -266,11 +217,9 @@ pub struct MergeStraddlerSetup {
 /// One definition both adaptors and the scenario body derive from, so the funded
 /// accounts can't drift from the transfers spent against them.
 pub struct SplitStraddlerSetup {
-    /// Genesis XRD ballast, skewed toward the splitter so only it crosses the
-    /// voted-down threshold.
-    pub balances: Vec<(ComponentAddress, Decimal)>,
-    /// Genesis VM accounts: the straddler payers in the survivor, their
-    /// recipients in the splitter.
+    /// Genesis accounts: ballast skewed toward the splitter so only it
+    /// crosses the voted-down threshold, plus the straddler payers in the
+    /// survivor and their recipients in the splitter.
     pub vm_accounts: Vec<([u8; 16], u128)>,
     /// Straddler transfers: `(payer key, payer account in survivor, recipient in
     /// splitter)`.
@@ -306,70 +255,64 @@ const _: () = assert!(
     "the terminating payer must cover exactly one fee ceiling: one transaction      admits, a second while the first is in flight cannot",
 );
 
-/// A deterministic seeded account routing to `shard` under the `num_shards`-wide
-/// uniform trie, skipping seeds already `taken`.
-fn account_in_n(
-    shard: ShardId,
-    num_shards: u64,
-    taken: &mut Vec<u8>,
-) -> (Ed25519PrivateKey, ComponentAddress) {
-    for seed in 1u8..=u8::MAX {
-        if taken.contains(&seed) {
-            continue;
-        }
-        let key = ed25519_keypair_from_seed(&[seed; 32]);
-        let address = ComponentAddress::preallocated_account_from_public_key(&key.public_key());
-        let node = NodeId::from_radix(address.into_node_id());
-        if uniform_shard_for_node(&node, num_shards) == shard {
-            taken.push(seed);
-            return (key, address);
-        }
-    }
-    panic!("no account seed routes to {shard:?}");
-}
-
-/// Push `count` funded accounts routing to `shard` onto `balances`.
+/// Push `count` ballast accounts routing to `shard` under a
+/// `num_shards`-wide trie onto `accounts`.
 ///
-/// Ballast is funded for its committed bytes and nothing else: nothing spends
-/// it, and the reshape thresholds a straddler scenario votes in are bracketed
-/// against the totals it produces. It retires with the Radix genesis.
-fn ballast(
-    shard: ShardId,
-    num_shards: u64,
-    count: usize,
-    taken: &mut Vec<u8>,
-    balances: &mut Vec<(ComponentAddress, Decimal)>,
-) {
-    for _ in 0..count {
-        let (_, account) = account_in_n(shard, num_shards, taken);
-        balances.push((account, Decimal::from(10_000)));
+/// Ballast is funded for its committed bytes and nothing else: nothing
+/// spends it, and the reshape thresholds a straddler scenario votes in are
+/// bracketed against the totals it produces. Grinds the wide `u64` seed
+/// space rather than the `u8` one the transacting accounts draw from, so a
+/// ballast account can never collide with one a transfer names.
+fn ballast(shard: ShardId, num_shards: u64, count: usize, accounts: &mut Vec<([u8; 16], u128)>) {
+    let trie = ShardTrie::uniform_from_count(num_shards);
+    let mut found = 0;
+    let mut seed: u64 = 1;
+    while found < count {
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&seed.to_le_bytes());
+        let address = vm_account_address(&ed25519_keypair_from_seed(&bytes).public_key().0);
+        if trie.shard_for_prefix(address) == shard {
+            accounts.push((address, BALLAST_FUNDING));
+            found += 1;
+        }
+        seed += 1;
     }
 }
 
-/// The first seeded account routing to `shard` under a `num_shards`-wide
-/// uniform trie, with its signing key — for tests that pin a payer or payee
-/// to a specific leaf.
-#[must_use]
-pub fn account_routing_to(
-    shard: ShardId,
-    num_shards: u64,
-) -> (Ed25519PrivateKey, ComponentAddress) {
-    account_in_n(shard, num_shards, &mut Vec::new())
-}
+/// What one ballast account holds. Never spent — the balance exists only
+/// to give the cell a value to store.
+const BALLAST_FUNDING: u128 = 10_000;
 
-/// The first `count` seeded accounts routing to `shard` under a
-/// `num_shards`-wide uniform trie, with signing keys. `taken` threads seed
-/// exclusions across calls, so successive account sets stay disjoint.
+/// Ballast accounts per leaf in [`reshape_lifecycle_accounts`].
+///
+/// Only has to put every leaf on the board, not to shape a skew, so it
+/// is a fraction of a straddler's bulk — each account costs a grind at
+/// genesis and every cluster in a binary pays for the whole world.
+const RESHAPE_LIFECYCLE_BULK: usize = 100;
+
+/// Genesis funding spread over every leaf of a four-shard partition.
+///
+/// Genesis writes the stdlib package as one cell under a single prefix,
+/// so an unfunded network is one shard holding a ~14 KiB lump beside
+/// siblings holding nothing at all. Under an armed trigger that skew
+/// decides the order splits are admitted in: the populated side splits
+/// generation after generation while the empty sibling waits, and the
+/// pool is drained by the deeper generations before the intended
+/// partition can seat. A spread population keeps the generations in
+/// step, and populating every leaf of the deepest partition these
+/// scenarios reach populates every shard on the way down.
 #[must_use]
-pub fn accounts_routing_to(
-    shard: ShardId,
-    num_shards: u64,
-    count: usize,
-    taken: &mut Vec<u8>,
-) -> Vec<(Ed25519PrivateKey, ComponentAddress)> {
-    (0..count)
-        .map(|_| account_in_n(shard, num_shards, taken))
-        .collect()
+pub fn reshape_lifecycle_accounts() -> Vec<([u8; 16], u128)> {
+    let mut accounts = Vec::new();
+    for path in 0..4 {
+        ballast(
+            ShardId::leaf(2, path),
+            4,
+            RESHAPE_LIFECYCLE_BULK,
+            &mut accounts,
+        );
+    }
+    accounts
 }
 
 /// Seed base for the contention scenarios' payers; each sender occupies
@@ -380,118 +323,24 @@ const CONTENTION_SENDER_BASE: u8 = 120;
 /// sender seed.
 const CONTENTION_RECIPIENT_BASE: u8 = 200;
 
-/// Contention sender `index`: its signing key and account. Funded at
-/// genesis via [`contention_genesis_balances`].
-#[must_use]
-pub fn contention_sender(index: u8) -> (Ed25519PrivateKey, ComponentAddress) {
-    let seed = CONTENTION_SENDER_BASE + index;
-    (signer_from_seed(seed), account_from_seed(seed))
-}
-
-/// Contention recipient `index`: a payee account. Never funded — deposits
-/// instantiate it.
-#[must_use]
-pub fn contention_recipient(index: u8) -> ComponentAddress {
-    account_from_seed(CONTENTION_RECIPIENT_BASE + index)
-}
-
-/// Genesis funding for the contention scenarios: `senders` payers, plus
-/// `recipients` payees.
-///
-/// Shared payees must exist at genesis — a virtual account instantiated
-/// by concurrent conflicting commits (the pipeline admits up to the
-/// two-chain window of them before locks engage) is torn by their
-/// interleaved creation write sets and faults on every later open.
-#[must_use]
-pub fn contention_genesis_balances(
-    senders: u8,
-    recipients: u8,
-) -> Vec<(ComponentAddress, Decimal)> {
-    (0..senders)
-        .map(|index| (contention_sender(index).1, Decimal::from(10_000)))
-        .chain((0..recipients).map(|index| (contention_recipient(index), Decimal::from(10))))
-        .collect()
-}
-
-/// Genesis funding for the cross-shard contention scenarios: `senders`
-/// payers routed to the left child shard of a two-shard trie.
-///
-/// The scenarios regenerate the same accounts with an identical `taken`
-/// walk.
-#[must_use]
-pub fn cross_contention_genesis_balances(senders: usize) -> Vec<(ComponentAddress, Decimal)> {
-    let mut taken = Vec::new();
-    accounts_routing_to(ShardId::leaf(1, 0), 2, senders, &mut taken)
-        .into_iter()
-        .map(|(_, account)| (account, Decimal::from(10_000)))
-        .collect()
-}
-
-/// Push `count` funded accounts routing to `shard` under a `num_shards`-wide
-/// trie onto `balances`, drawing from the wide `u64` seed space so a single
-/// shard's prefix can be funded far past the `u8`-seeded [`account_in_n`] ceiling
-/// — needed to lift a light quarter above `merge_bytes` so it stays a live leaf.
-fn bulk_fund_into(
-    shard: ShardId,
-    num_shards: u64,
-    count: usize,
-    balances: &mut Vec<(ComponentAddress, Decimal)>,
-) {
-    let mut found = 0;
-    let mut seed: u64 = 1;
-    while found < count {
-        let mut bytes = [0u8; 32];
-        bytes[..8].copy_from_slice(&seed.to_le_bytes());
-        let key = ed25519_keypair_from_seed(&bytes);
-        let address = ComponentAddress::preallocated_account_from_public_key(&key.public_key());
-        let node = NodeId::from_radix(address.into_node_id());
-        if uniform_shard_for_node(&node, num_shards) == shard {
-            balances.push((address, Decimal::from(10_000)));
-            found += 1;
-        }
-        seed += 1;
-    }
-}
-
 /// Build the split-straddler genesis funding and straddler transfers.
 ///
-/// The splitter (`leaf(1, 0)`) is funded over the voted-down threshold, the
-/// survivor (`leaf(1, 1)`) under it, so only the splitter crosses and
-/// terminates. The skew comes from the [`ballast`] — accounts funded for their
-/// committed bytes and nothing else — while the straddlers themselves are VM
-/// transfers from a survivor payer into a splitter recipient.
+/// The splitter (`leaf(1, 0)`) is ballasted over the voted-down threshold,
+/// the survivor (`leaf(1, 1)`) under it, so only the splitter crosses and
+/// terminates. The skew comes from the [`ballast`] — accounts funded for
+/// their committed bytes and nothing else — while the straddlers
+/// themselves are transfers from a survivor payer into a splitter
+/// recipient.
 #[must_use]
 pub fn split_straddler_setup() -> SplitStraddlerSetup {
-    let mut taken = vec![MERGE_VOTE_PAYER_SEED];
-    // The threshold vote is a fee-paying system action, so its payer's Radix
-    // account is funded here rather than left to whichever seed the ballast
-    // draw happened to reach.
-    let mut balances = vec![(merge_vote_payer_account(), Decimal::from(100_000))];
-    ballast(
-        STRADDLER_SPLITTER,
-        2,
-        STRADDLER_BULK,
-        &mut taken,
-        &mut balances,
-    );
-    // One ballast pair per straddler, splitter and survivor alike: the
-    // threshold the vote installs is bracketed against these byte totals.
+    let mut vm_accounts = Vec::new();
+    ballast(STRADDLER_SPLITTER, 2, STRADDLER_BULK, &mut vm_accounts);
     ballast(
         STRADDLER_SURVIVOR,
         2,
-        STRADDLER_COUNT,
-        &mut taken,
-        &mut balances,
+        STRADDLER_SURVIVOR_BULK,
+        &mut vm_accounts,
     );
-    ballast(
-        STRADDLER_SPLITTER,
-        2,
-        STRADDLER_COUNT,
-        &mut taken,
-        &mut balances,
-    );
-
-    let mut vm_accounts = Vec::new();
     let mut vm_taken = Vec::new();
     let straddlers = (0..STRADDLER_COUNT)
         .map(|_| {
@@ -520,7 +369,6 @@ pub fn split_straddler_setup() -> SplitStraddlerSetup {
     vm_accounts.push((control_payer, 10_000));
 
     SplitStraddlerSetup {
-        balances,
         vm_accounts,
         straddlers,
         terminating: (terminating_key, terminating_payer, terminating_recipient),
@@ -540,40 +388,23 @@ pub fn split_straddler_setup() -> SplitStraddlerSetup {
 #[must_use]
 pub fn merge_straddler_setup() -> MergeStraddlerSetup {
     let num_shards = 4;
-    let mut taken = Vec::new();
-    let mut balances = vec![(
-        account_from_seed(MERGE_VOTE_PAYER_SEED),
-        Decimal::from(100_000),
-    )];
+    let mut vm_accounts = Vec::new();
 
-    // Lift the naturally light survivor quarter `leaf(2, 1)` above `merge_bytes`:
-    // its heavy sibling `leaf(2, 0)` already clears it, but `leaf(2, 1)` would
-    // otherwise emit an unpairable merge and churn the schedule.
-    bulk_fund_into(
-        ShardId::leaf(2, 1),
-        num_shards,
-        MERGE_SURVIVOR_BULK,
-        &mut balances,
-    );
-
-    // One ballast pair per straddler, survivor and merging child alike: the
-    // derived `merge_bytes` is bracketed against these byte totals.
+    // Lift the surviving quarters above `merge_bytes` so neither emits an
+    // unpairable merge against the other and churns the schedule.
     ballast(
         MERGE_STRADDLER_SURVIVOR,
         num_shards,
-        MERGE_STRADDLER_COUNT,
-        &mut taken,
-        &mut balances,
+        MERGE_SURVIVOR_BULK,
+        &mut vm_accounts,
     );
     ballast(
-        MERGE_STRADDLER_LEFT,
+        ShardId::leaf(2, 1),
         num_shards,
-        MERGE_STRADDLER_COUNT,
-        &mut taken,
-        &mut balances,
+        MERGE_SURVIVOR_BULK,
+        &mut vm_accounts,
     );
 
-    let mut vm_accounts = Vec::new();
     let mut vm_taken = Vec::new();
     let straddlers = (0..MERGE_STRADDLER_COUNT)
         .map(|_| {
@@ -587,42 +418,9 @@ pub fn merge_straddler_setup() -> MergeStraddlerSetup {
         })
         .collect();
     MergeStraddlerSetup {
-        balances,
         vm_accounts,
         straddlers,
     }
-}
-
-/// Genesis XRD balances that seat a funded account in each child span of the
-/// first root split: seed `31` lands in the left child, seed `30` in the right.
-///
-/// Both adaptors install these at genesis from this one definition so the
-/// cross-shard scenarios spend `account_from_seed(31)` and `account_from_seed(30)`
-/// across the two children identically on either harness — the funding can't
-/// drift between sim and production.
-#[must_use]
-pub fn straddler_genesis_balances() -> Vec<(ComponentAddress, Decimal)> {
-    vec![
-        (account_from_seed(31), Decimal::from(10_000)),
-        (account_from_seed(30), Decimal::from(10_000)),
-    ]
-}
-
-/// The cross-shard accounts (`31` left, `30` right) plus two extra funded
-/// accounts (`40`, `41`) for single-shard control transfers.
-///
-/// The inter-shard partition scenario needs control accounts *disjoint* from the
-/// cross-shard pair: a self-transfer on `31` or `30` would collide with the
-/// in-flight cross-shard wave's reserved writes and stall behind it, so the
-/// controls run on `40` / `41` instead and settle purely intra-shard.
-#[must_use]
-pub fn intershard_partition_genesis_balances() -> Vec<(ComponentAddress, Decimal)> {
-    vec![
-        (account_from_seed(31), Decimal::from(10_000)),
-        (account_from_seed(30), Decimal::from(10_000)),
-        (account_from_seed(40), Decimal::from(10_000)),
-        (account_from_seed(41), Decimal::from(10_000)),
-    ]
 }
 
 /// A validity window bracketing `now`.
@@ -1167,6 +965,7 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     all.extend(vm_staking_genesis_accounts());
     all.extend(vm_livelock_genesis_accounts());
     all.extend(vm_cross_fraction_genesis_accounts(CROSS_FRACTION_SENDERS));
+    all.extend(reshape_lifecycle_accounts());
     all.sort_unstable_by_key(|(address, _)| *address);
     all.dedup_by_key(|(address, _)| *address);
     all

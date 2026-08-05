@@ -91,7 +91,6 @@ impl ShardChainWriter for RocksDbShardStorage {
                 block_height.inner(),
                 &per_receipt_updates,
                 &HashMap::new(),
-                &HashMap::new(),
             )
         } else {
             let overlay = OverlayTreeReader::new(&snapshot_store, pending_snapshots);
@@ -100,7 +99,6 @@ impl ShardChainWriter for RocksDbShardStorage {
                 parent_version,
                 block_height.inner(),
                 &per_receipt_updates,
-                &HashMap::new(),
                 &HashMap::new(),
             )
         };
@@ -322,7 +320,6 @@ impl RocksDbShardStorage {
             block_height,
             &[merged_updates],
             &reset_old_keys,
-            &HashMap::new(),
         );
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,

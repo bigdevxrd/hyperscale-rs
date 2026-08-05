@@ -1,13 +1,13 @@
-//! Storage traits for Radix Engine execution.
+//! Storage traits for execution.
 //!
-//! This module defines the storage abstraction used by runners to persist Radix state.
+//! This module defines the storage abstraction used by runners to persist
+//! substate state.
 
-use std::collections::HashMap;
+use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot};
+use radix_substate_store_interface::interface::SubstateDatabase;
 
-use hyperscale_types::{BlockHeight, MerkleInclusionProof, NodeId, StateRoot};
-use radix_substate_store_interface::interface::{DbSortKey, SubstateDatabase};
-
-/// Extension trait for substate storage with snapshots, node listing, and JMT state roots.
+/// Extension trait for substate storage with snapshots, historical reads,
+/// and JMT state roots.
 ///
 /// This trait extends Radix's `SubstateDatabase` with additional methods needed
 /// for deterministic simulation and state commitment:
@@ -62,27 +62,12 @@ pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
     /// Returns a zero hash if no commits have occurred.
     fn state_root(&self) -> StateRoot;
 
-    /// List all substates for a node at a specific historical block height.
+    /// Read one flat-key substate at a specific historical block height.
     ///
-    /// Traverses the JMT at the given height and looks up raw substate
-    /// values from the leaf association table.
-    ///
-    /// Returns `Some(entries)` on success (may be empty if the node has no
-    /// substates at that height), or `None` if the height is unavailable
-    /// (e.g. garbage-collected or not yet committed).
-    ///
-    /// Used by cross-shard provision paths to serve historical state that
-    /// can be verified against the original block's `state_root`.
-    fn list_substates_for_node_at_height(
-        &self,
-        node_id: &NodeId,
-        block_height: BlockHeight,
-    ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>>;
-
-    /// Read one VM flat-key substate at a specific historical block
-    /// height. The exact-key sibling of
-    /// [`Self::list_substates_for_node_at_height`]: VM provision targets
-    /// are substate-granular, so serving reads points, never scans.
+    /// Provision targets are substate-granular, so serving reads points,
+    /// never scans. Used by cross-shard provision paths to serve
+    /// historical state that can be verified against the original block's
+    /// `state_root`.
     ///
     /// Returns `None` if the height is unavailable (garbage-collected or
     /// not yet committed); `Some(None)` when the cell is absent at that
@@ -96,14 +81,11 @@ pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
 
     /// Generate a batched merkle multiproof for the given storage keys.
     ///
-    /// `owner_map` owner-prefixes internal nodes' leaf keys so the proof
-    /// matches the owner-prefixed keys committed to the tree. Returns `None`
-    /// if the requested version is unavailable (GC'd or not committed).
-    #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
+    /// Returns `None` if the requested version is unavailable (GC'd or
+    /// not committed).
     fn generate_merkle_proofs(
         &self,
         storage_keys: &[Vec<u8>],
-        owner_map: &HashMap<NodeId, NodeId>,
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof>;
 }

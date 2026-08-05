@@ -11,13 +11,12 @@ use std::time::Duration;
 use hyperscale_core::ProtocolEvent;
 use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
-    CROSS_FRACTION_SENDERS, cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances,
-    halt_straddler_setup, intershard_partition_genesis_balances, merge_straddler_setup,
-    split_straddler_setup, straddler_genesis_balances, vm_cross_fraction_genesis_accounts,
-    vm_cross_shard_genesis_accounts, vm_genesis_accounts, vm_insolvent_genesis_accounts,
-    vm_livelock_genesis_accounts, vm_nullifier_race_genesis_accounts,
-    vm_participant_sweep_genesis_accounts, vm_staking_genesis_accounts, vm_staking_pools,
-    vm_storm_genesis_accounts, witness_genesis_balances,
+    CROSS_FRACTION_SENDERS, cross_shard_fault_genesis_accounts, halt_straddler_setup,
+    merge_straddler_setup, reshape_lifecycle_accounts, split_straddler_setup,
+    vm_cross_fraction_genesis_accounts, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
+    vm_insolvent_genesis_accounts, vm_livelock_genesis_accounts,
+    vm_nullifier_race_genesis_accounts, vm_participant_sweep_genesis_accounts,
+    vm_staking_genesis_accounts, vm_storm_genesis_accounts,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, ScenarioConfig, beacon_lag_drops_skipped_epochs_reveal_chains,
@@ -402,10 +401,9 @@ fn participant_count_sweep_sim() {
 
 #[test]
 fn cross_shard_provisions_drop_fetch_fallback_sim() {
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &split_config(),
         11,
-        &straddler_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
         ExecutionMode::Serial,
     );
@@ -414,10 +412,9 @@ fn cross_shard_provisions_drop_fetch_fallback_sim() {
 
 #[test]
 fn cross_shard_exec_cert_drop_fetch_fallback_sim() {
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &split_config(),
         11,
-        &straddler_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
         ExecutionMode::Serial,
     );
@@ -426,10 +423,9 @@ fn cross_shard_exec_cert_drop_fetch_fallback_sim() {
 
 #[test]
 fn cross_shard_transaction_da_fetch_fallback_sim() {
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &split_config(),
         11,
-        &straddler_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
         ExecutionMode::Serial,
     );
@@ -438,10 +434,9 @@ fn cross_shard_transaction_da_fetch_fallback_sim() {
 
 #[test]
 fn cross_shard_header_fetch_fallback_sim() {
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &split_config(),
         11,
-        &straddler_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
         ExecutionMode::Serial,
     );
@@ -450,10 +445,9 @@ fn cross_shard_header_fetch_fallback_sim() {
 
 #[test]
 fn cross_shard_compound_drop_fetch_fallback_sim() {
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &split_config(),
         11,
-        &straddler_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
         ExecutionMode::Serial,
     );
@@ -462,10 +456,9 @@ fn cross_shard_compound_drop_fetch_fallback_sim() {
 
 #[test]
 fn cross_shard_provisions_recovers_after_transient_outage_sim() {
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &split_config(),
         11,
-        &straddler_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
         ExecutionMode::Serial,
     );
@@ -481,7 +474,6 @@ fn inter_shard_partition_strands_waves_until_it_heals_sim() {
     let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
         &split_config(),
         11,
-        &intershard_partition_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
     );
     cluster.run_faultable(inter_shard_partition_strands_waves_until_it_heals);
@@ -489,11 +481,7 @@ fn inter_shard_partition_strands_waves_until_it_heals_sim() {
 
 #[test]
 fn beacon_pool_partition_stalls_epoch_production_sim() {
-    let mut cluster = SimCluster::with_dedicated_pool_hosts(
-        &split_config(),
-        11,
-        &intershard_partition_genesis_balances(),
-    );
+    let mut cluster = SimCluster::with_dedicated_pool_hosts(&split_config(), 11);
     cluster.run_faultable(beacon_pool_partition_stalls_epoch_production);
 }
 
@@ -518,9 +506,10 @@ fn beacon_lag_drops_skipped_epochs_reveal_chains_sim() {
     cluster.run_faultable(beacon_lag_drops_skipped_epochs_reveal_chains);
 }
 
-/// Single-shard genesis armed so the funded root splits exactly once and the
-/// grown pair holds (each child sits between the derived merge floor and the
-/// split threshold), with two cohorts of pool surplus — one grows the root,
+/// Single-shard genesis armed so the funded root (~43.9 KB) splits exactly
+/// once and the grown pair holds — each child (~29.0 KB and ~14.6 KB) sits
+/// between the derived merge floor and the split threshold — with two
+/// cohorts of pool surplus — one grows the root,
 /// the other is the halted shard's recovery committee — plus two spares of
 /// jail slack: the recovery draw needs a full free committee, and over the
 /// scenario's ~40 epochs an organic `Performance` jail on the healthy shard
@@ -532,17 +521,18 @@ const fn halt_recovery_config() -> ScenarioConfig {
         vnodes_per_host: 1,
         pool_surplus: 14,
         num_shards: 1,
-        split_bytes: 800_000,
+        split_bytes: 36_000,
         latency: Duration::from_millis(150),
     }
 }
 
 #[test]
 fn halted_shard_recovers_by_committee_redraw_sim() {
-    let mut cluster = SimCluster::with_dedicated_pool_hosts(
+    let setup = halt_straddler_setup();
+    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
         &halt_recovery_config(),
         11,
-        &halt_recovery_genesis_balances(),
+        &setup.vm_accounts,
     );
     cluster.run_faultable(halted_shard_recovers_by_committee_redraw);
 }
@@ -555,7 +545,6 @@ fn halted_shard_straddler_atomic_at_seed(seed: u64) {
     let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
         &halt_recovery_config(),
         seed,
-        &setup.balances,
         &setup.vm_accounts,
     );
     cluster.run_faultable(halted_shard_straddler_atomic);
@@ -612,10 +601,11 @@ fn halted_shard_straddler_atomic_seed_2026_sim() {
 #[test]
 #[allow(clippy::too_many_lines)] // one scripted fault scenario end to end
 fn shard_fork_drives_committee_recovery_sim() {
-    let mut cluster = SimCluster::with_dedicated_pool_hosts(
+    let setup = halt_straddler_setup();
+    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
         &halt_recovery_config(),
         11,
-        &halt_recovery_genesis_balances(),
+        &setup.vm_accounts,
     );
     // Grow to two children before injecting the fork. Recovering the sole
     // ROOT committee would starve beacon epoch production: in a single-shard
@@ -866,10 +856,9 @@ fn shard_fork_drives_committee_recovery_sim() {
 /// engagement (its async retry path is nondeterministic), so that check lives
 /// here, keyed on the exact seed.
 fn request_loss_engages_at_seed(seed: u64) {
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &split_config(),
         seed,
-        &straddler_genesis_balances(),
         &cross_shard_fault_genesis_accounts(),
         ExecutionMode::Serial,
     );
@@ -903,20 +892,23 @@ fn livelock_resolves_promptly_sim() {
 
 #[test]
 fn merge_lifecycle_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster =
+        SimCluster::with_vm_accounts(&split_config(), 11, &reshape_lifecycle_accounts());
     merge_lifecycle(&mut cluster);
 }
 
-/// Single-shard genesis with the grow trigger armed (`split_bytes` above each
-/// child but below ROOT) and two cohorts of pool surplus — one grows ROOT to the
-/// two siblings, the other splits the heavier one after the vote.
+/// Single-shard genesis with the grow trigger armed — `split_bytes` above
+/// each child of the ballasted root (~29.2 KB and ~8.1 KB) and below the
+/// root itself (~37.2 KB), so the root splits once and the pair holds —
+/// and two cohorts of pool surplus: one grows ROOT to the two siblings,
+/// the other splits the heavier one after the vote.
 const fn straddler_config() -> ScenarioConfig {
     ScenarioConfig {
         shard_size: 4,
         vnodes_per_host: 1,
         pool_surplus: 8,
         num_shards: 1,
-        split_bytes: 800_000,
+        split_bytes: 33_000,
         latency: Duration::from_millis(150),
     }
 }
@@ -924,10 +916,9 @@ const fn straddler_config() -> ScenarioConfig {
 #[test]
 fn split_straddler_atomic_sim() {
     let setup = split_straddler_setup();
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &straddler_config(),
         11,
-        &setup.balances,
         &setup.vm_accounts,
         ExecutionMode::Serial,
     );
@@ -944,24 +935,16 @@ fn split_straddler_atomic_sim() {
 /// resolve one-sided.
 fn split_straddler_ec_partition_atomic_at_seed(seed: u64) {
     let setup = split_straddler_setup();
-    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
-        &straddler_config(),
-        seed,
-        &setup.balances,
-        &setup.vm_accounts,
-    );
+    let mut cluster =
+        SimCluster::with_vm_and_dedicated_pool_hosts(&straddler_config(), seed, &setup.vm_accounts);
     split_straddler_ec_partition_atomic(&mut cluster);
 }
 
 #[test]
 fn split_terminating_payer_releases_its_reservation_sim() {
     let setup = split_straddler_setup();
-    let mut cluster = SimCluster::with_vm_and_dedicated_pool_hosts(
-        &straddler_config(),
-        11,
-        &setup.balances,
-        &setup.vm_accounts,
-    );
+    let mut cluster =
+        SimCluster::with_vm_and_dedicated_pool_hosts(&straddler_config(), 11, &setup.vm_accounts);
     cluster.run_faultable(split_terminating_payer_releases_its_reservation);
 }
 
@@ -1002,7 +985,7 @@ const fn merge_straddler_config() -> ScenarioConfig {
         vnodes_per_host: 1,
         pool_surplus: 12,
         num_shards: 4,
-        split_bytes: 2_880_000,
+        split_bytes: 40_000,
         latency: Duration::from_millis(150),
     }
 }
@@ -1010,12 +993,8 @@ const fn merge_straddler_config() -> ScenarioConfig {
 #[test]
 fn merge_straddler_atomic_sim() {
     let setup = merge_straddler_setup();
-    let mut cluster = SimCluster::with_grown_vm_and_balances(
-        &merge_straddler_config(),
-        11,
-        &setup.balances,
-        &setup.vm_accounts,
-    );
+    let mut cluster =
+        SimCluster::with_grown_vm_accounts(&merge_straddler_config(), 11, &setup.vm_accounts);
     merge_straddler_atomic(&mut cluster);
 }
 
@@ -1056,85 +1035,50 @@ const fn witness_config(validators: u32) -> ScenarioConfig {
 
 #[test]
 fn vm_delegation_folds_into_beacon_state_sim() {
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(4),
-        0x57AC,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
+    let mut cluster =
+        SimCluster::with_vm_accounts(&witness_config(4), 0x57AC, &vm_staking_genesis_accounts());
     vm_delegation_folds_into_beacon_state(&mut cluster);
 }
 
 #[test]
 fn register_validator_pools_a_node_sim() {
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(4),
-        0x5EED,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
+    let mut cluster =
+        SimCluster::with_vm_accounts(&witness_config(4), 0x5EED, &vm_staking_genesis_accounts());
     register_validator_pools_a_node(&mut cluster);
 }
 
 #[test]
 fn register_without_capacity_is_rejected_sim() {
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(4),
-        0x0CA9,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
+    let mut cluster =
+        SimCluster::with_vm_accounts(&witness_config(4), 0x0CA9, &vm_staking_genesis_accounts());
     register_without_capacity_is_rejected(&mut cluster);
 }
 
 #[test]
 fn stake_withdraw_drops_effective_stake_sim() {
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(4),
-        0xD7A1,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
+    let mut cluster =
+        SimCluster::with_vm_accounts(&witness_config(4), 0xD7A1, &vm_staking_genesis_accounts());
     stake_withdraw_drops_effective_stake(&mut cluster);
 }
 
 #[test]
 fn registered_validator_activates_onto_a_shard_sim() {
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(4),
-        0xAC11,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
+    let mut cluster =
+        SimCluster::with_vm_accounts(&witness_config(4), 0xAC11, &vm_staking_genesis_accounts());
     registered_validator_activates_onto_a_shard(&mut cluster);
 }
 
 #[test]
 fn re_registration_of_a_live_validator_is_a_no_op_sim() {
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(4),
-        0xDEAD,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
+    let mut cluster =
+        SimCluster::with_vm_accounts(&witness_config(4), 0xDEAD, &vm_staking_genesis_accounts());
     re_registration_of_a_live_validator_is_a_no_op(&mut cluster);
 }
 
 #[test]
 fn pool_capacity_caps_registrations_sim() {
-    let mut cluster = SimCluster::with_vm_pools(
-        &witness_config(4),
-        0xCA9A,
-        &witness_genesis_balances(),
-        &vm_staking_genesis_accounts(),
-        &vm_staking_pools(),
-    );
+    let mut cluster =
+        SimCluster::with_vm_accounts(&witness_config(4), 0xCA9A, &vm_staking_genesis_accounts());
     pool_capacity_caps_registrations(&mut cluster);
 }
 
@@ -1159,29 +1103,31 @@ const fn grow_config(target_shards: u32) -> ScenarioConfig {
 
 #[test]
 fn grow_reaches_two_shard_topology_sim() {
-    let mut cluster = SimCluster::new(&grow_config(2), 11);
+    let mut cluster =
+        SimCluster::with_vm_accounts(&grow_config(2), 11, &reshape_lifecycle_accounts());
     grow_reaches_two_shard_topology(&mut cluster);
 }
 
 #[test]
 fn grow_reaches_four_shard_topology_sim() {
-    let mut cluster = SimCluster::new(&grow_config(4), 11);
+    let mut cluster =
+        SimCluster::with_vm_accounts(&grow_config(4), 11, &reshape_lifecycle_accounts());
     grow_reaches_four_shard_topology(&mut cluster);
 }
 
 #[test]
 fn merge_seats_full_keeper_committee_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
+    let mut cluster =
+        SimCluster::with_vm_accounts(&split_config(), 11, &reshape_lifecycle_accounts());
     merge_seats_full_keeper_committee(&mut cluster);
 }
 
 #[test]
 fn surviving_sibling_split_seats_full_committees_sim() {
     let setup = split_straddler_setup();
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
+    let mut cluster = SimCluster::with_vm_mode(
         &straddler_config(),
         11,
-        &setup.balances,
         &setup.vm_accounts,
         ExecutionMode::Serial,
     );

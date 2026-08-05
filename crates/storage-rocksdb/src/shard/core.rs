@@ -26,7 +26,7 @@ use hyperscale_storage::{
     SubstateStore, tree,
 };
 use hyperscale_types::{
-    Block, BlockHeight, ChainOrigin, Hash, NodeId, QuorumCertificate, SafeVoteRegisters, StateRoot,
+    Block, BlockHeight, ChainOrigin, Hash, QuorumCertificate, SafeVoteRegisters, StateRoot,
     ValidatorId, Verified,
 };
 use rocksdb::{
@@ -754,11 +754,7 @@ impl RocksDbShardStorage {
     /// Panics if called after the JMT has already been initialized, or
     /// if the underlying `RocksDB` write fails.
     #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
-    pub fn finalize_genesis_jmt(
-        &self,
-        merged: &DatabaseUpdates,
-        owner_map: &HashMap<NodeId, NodeId>,
-    ) -> StateRoot {
+    pub fn finalize_genesis_jmt(&self, merged: &DatabaseUpdates) -> StateRoot {
         let _commit_guard = self.commit_lock.lock().unwrap();
 
         // Guard: finalize_genesis_jmt must only be called once, on an uninitialized JMT.
@@ -771,14 +767,8 @@ impl RocksDbShardStorage {
         let snapshot_store = SnapshotTreeStore::new(&self.db, self.root_path.clone());
 
         // parent=None, version=0: genesis is the first JMT state.
-        let (root, collected) = tree::put_at_version(
-            &snapshot_store,
-            None,
-            0,
-            &[merged],
-            &HashMap::new(),
-            owner_map,
-        );
+        let (root, collected) =
+            tree::put_at_version(&snapshot_store, None, 0, &[merged], &HashMap::new());
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,
             StateRoot::ZERO,
@@ -803,10 +793,9 @@ impl GenesisCommit for RocksDbShardStorage {
         &self,
         substates: &DatabaseUpdates,
         jmt_updates: &DatabaseUpdates,
-        owner_map: &HashMap<NodeId, NodeId>,
     ) -> StateRoot {
         Self::commit_substates_only(self, substates);
-        Self::finalize_genesis_jmt(self, jmt_updates, owner_map)
+        Self::finalize_genesis_jmt(self, jmt_updates)
     }
 
     fn replicate_genesis_substates(&self, substates: &DatabaseUpdates) {
@@ -930,7 +919,6 @@ mod test_helpers {
                 new_version,
                 &[updates],
                 &reset_old_keys,
-                &HashMap::new(),
             );
             let jmt_snapshot = JmtSnapshot::from_collected_writes(
                 collected,

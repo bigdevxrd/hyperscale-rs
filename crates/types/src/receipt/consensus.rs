@@ -319,6 +319,7 @@ mod tests {
     use sbor::{BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, VecEncoder};
 
     use super::*;
+    use crate::state_key::vm_db_node_key;
 
     fn sample_succeeded() -> ConsensusReceipt {
         ConsensusReceipt::Succeeded {
@@ -396,7 +397,9 @@ mod tests {
             },
         );
         let mut database_updates = DatabaseUpdates::default();
-        database_updates.node_updates.insert(vec![1u8; 50], node);
+        database_updates
+            .node_updates
+            .insert(vm_db_node_key([1u8; 16]), node);
         assert!(has_partition_reset(&database_updates));
 
         let receipt = ConsensusReceipt::Succeeded {

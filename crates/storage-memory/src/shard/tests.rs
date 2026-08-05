@@ -1,9 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use hyperscale_storage::shard::keys;
 use hyperscale_storage::test_helpers::{
-    db_node_key, make_database_update, make_mapped_database_update, make_test_block,
+    db_node_key, local_key, make_database_update, make_mapped_database_update, make_test_block,
     make_test_certified, make_test_qc,
 };
 use hyperscale_storage::tree::{hash_storage_key, jmt_parent_height, put_at_version};
@@ -13,13 +12,13 @@ use hyperscale_storage::{
     ShardChainWriter, SubstateDatabase, SubstateStore, VersionedStore, merge_database_updates,
     merge_into, test_helpers,
 };
+use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::test_utils::test_transaction;
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHeight, CertifiedBlock, ChainOrigin,
-    ConsensusReceipt, FinalizedWave, GlobalReceiptHash, Hash, NodeId, ProposerTimestamp,
-    QuorumCertificate, Round, SafeVoteRegisters, ShardId, StateRoot, StoredReceipt, SyncHint,
-    TxHash, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
-    WitnessSources,
+    ConsensusReceipt, FinalizedWave, GlobalReceiptHash, Hash, ProposerTimestamp, QuorumCertificate,
+    Round, SafeVoteRegisters, ShardId, StateRoot, StoredReceipt, SyncHint, TxHash, ValidatorId,
+    Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
 };
 
 fn no_witness() -> BeaconWitnessCommit {
@@ -84,7 +83,6 @@ impl SimShardStorage {
             parent_version,
             new_version,
             &[updates],
-            &HashMap::new(),
             &HashMap::new(),
         );
 
@@ -200,13 +198,13 @@ fn commit_empty(
 #[test]
 fn leaf_associations_map_hashed_to_raw_keys() {
     let storage = SimShardStorage::default();
-    let node_key = vec![3u8; 50];
-    storage.commit_shared(&make_database_update(node_key.clone(), 0, vec![7], vec![1]));
+    let node_key = db_node_key(3);
+    storage.commit_shared(&make_database_update(node_key.clone(), 0, &[7], vec![1]));
 
     let mut raw_key = node_key.clone();
-    raw_key.push(0);
-    raw_key.push(7);
-    let hashed = hash_storage_key(&raw_key, &HashMap::new());
+    raw_key.push(VM_PARTITION);
+    raw_key.extend_from_slice(&local_key(&[7]));
+    let hashed = hash_storage_key(&raw_key);
     assert_eq!(
         storage.state.read().unwrap().associations.get(&hashed),
         Some(&raw_key),
@@ -219,8 +217,11 @@ fn leaf_associations_map_hashed_to_raw_keys() {
             partition_updates: std::iter::once((
                 0u8,
                 PartitionDatabaseUpdates::Delta {
-                    substate_updates: std::iter::once((DbSortKey(vec![7]), DatabaseUpdate::Delete))
-                        .collect(),
+                    substate_updates: std::iter::once((
+                        DbSortKey(local_key(&[7])),
+                        DatabaseUpdate::Delete,
+                    ))
+                    .collect(),
                 },
             ))
             .collect(),
@@ -242,7 +243,7 @@ fn test_basic_substate_operations() {
         node_key: db_node_key(1),
         partition_num: 0,
     };
-    let sort_key = DbSortKey(vec![10, 20]);
+    let sort_key = DbSortKey(local_key(&[10, 20]));
 
     // Initially empty
     assert!(
@@ -284,7 +285,7 @@ fn test_snapshot_isolation() {
         node_key: db_node_key(1),
         partition_num: 0,
     };
-    let sort_key = DbSortKey(vec![10]);
+    let sort_key = DbSortKey(local_key(&[10]));
 
     // Write initial value
     let mut updates = DatabaseUpdates::default();
@@ -350,13 +351,13 @@ fn test_snapshot_clone_performance() {
     // This test bounds the cost of a single BTreeMap-clone snapshot at
     // simulation scale, not tree commit speed.
     for i in 0..10_000u32 {
-        let mut node_id = [0u8; 30];
-        node_id[..4].copy_from_slice(&i.to_be_bytes());
+        let mut owner = [0u8; 16];
+        owner[..4].copy_from_slice(&i.to_be_bytes());
         let partition_key = DbPartitionKey {
-            node_key: keys::node_entity_key(&NodeId(node_id)),
-            partition_num: 0,
+            node_key: vm_db_node_key(owner),
+            partition_num: VM_PARTITION,
         };
-        let sort_key = DbSortKey(vec![0]);
+        let sort_key = DbSortKey(local_key(&[0]));
 
         let mut updates = DatabaseUpdates::default();
         updates.node_updates.insert(
@@ -522,10 +523,10 @@ fn test_jmt_height_increments_on_commit() {
     let storage = SimShardStorage::default();
     assert_eq!(storage.jmt_height(), BlockHeight::new(0));
 
-    storage.commit_shared(&make_database_update(db_node_key(1), 0, vec![10], vec![1]));
+    storage.commit_shared(&make_database_update(db_node_key(1), 0, &[10], vec![1]));
     assert_eq!(storage.jmt_height(), BlockHeight::new(1));
 
-    storage.commit_shared(&make_database_update(db_node_key(4), 0, vec![20], vec![2]));
+    storage.commit_shared(&make_database_update(db_node_key(4), 0, &[20], vec![2]));
     assert_eq!(storage.jmt_height(), BlockHeight::new(2));
 }
 
@@ -534,11 +535,11 @@ fn test_state_root_changes_on_commit() {
     let storage = SimShardStorage::default();
     let root0 = storage.state_root();
 
-    storage.commit_shared(&make_database_update(db_node_key(1), 0, vec![10], vec![1]));
+    storage.commit_shared(&make_database_update(db_node_key(1), 0, &[10], vec![1]));
     let root1 = storage.state_root();
     assert_ne!(root0, root1, "root should change after first commit");
 
-    storage.commit_shared(&make_database_update(db_node_key(4), 0, vec![20], vec![2]));
+    storage.commit_shared(&make_database_update(db_node_key(4), 0, &[20], vec![2]));
     let root2 = storage.state_root();
     assert_ne!(root1, root2, "root should change after second commit");
 }
@@ -549,7 +550,7 @@ fn test_state_root_deterministic() {
     let s1 = SimShardStorage::default();
     let s2 = SimShardStorage::default();
 
-    let updates = make_database_update(db_node_key(1), 0, vec![10], vec![42]);
+    let updates = make_database_update(db_node_key(1), 0, &[10], vec![42]);
     s1.commit_shared(&updates);
     s2.commit_shared(&updates);
 
@@ -562,8 +563,8 @@ fn test_state_root_differs_for_different_data() {
     let s1 = SimShardStorage::default();
     let s2 = SimShardStorage::default();
 
-    s1.commit_shared(&make_database_update(db_node_key(1), 0, vec![10], vec![1]));
-    s2.commit_shared(&make_database_update(db_node_key(1), 0, vec![10], vec![2]));
+    s1.commit_shared(&make_database_update(db_node_key(1), 0, &[10], vec![1]));
+    s2.commit_shared(&make_database_update(db_node_key(1), 0, &[10], vec![2]));
 
     assert_ne!(s1.state_root(), s2.state_root());
 }
@@ -583,7 +584,7 @@ fn test_empty_commit_still_advances_version() {
 #[test]
 fn test_commit_block_single() {
     let storage = SimShardStorage::default();
-    let updates = make_mapped_database_update(1, 0, vec![10], vec![42]);
+    let updates = make_mapped_database_update(1, 0, &[10], vec![42]);
     let block = make_test_block(BlockHeight::new(1));
     let qc = make_test_qc(&block);
 
@@ -594,8 +595,8 @@ fn test_commit_block_single() {
 #[test]
 fn test_commit_block_multiple_updates() {
     let storage = SimShardStorage::default();
-    let updates1 = make_mapped_database_update(1, 0, vec![10], vec![1]);
-    let updates2 = make_mapped_database_update(2, 0, vec![20], vec![2]);
+    let updates1 = make_mapped_database_update(1, 0, &[10], vec![1]);
+    let updates2 = make_mapped_database_update(2, 0, &[20], vec![2]);
     let merged = merge_database_updates(&[updates1, updates2]);
     let block = make_test_block(BlockHeight::new(1));
     let qc = make_test_qc(&block);
@@ -676,7 +677,7 @@ fn test_clear() {
     let mut storage = SimShardStorage::default();
 
     // Add some data
-    storage.commit_shared(&make_database_update(db_node_key(1), 0, vec![10], vec![1]));
+    storage.commit_shared(&make_database_update(db_node_key(1), 0, &[10], vec![1]));
     assert!(storage.jmt_height() > BlockHeight::GENESIS);
     assert!(!storage.is_empty());
 
@@ -693,11 +694,11 @@ fn test_len_and_is_empty() {
     assert!(storage.is_empty());
     assert_eq!(storage.len(), 0);
 
-    storage.commit_shared(&make_database_update(db_node_key(1), 0, vec![10], vec![1]));
+    storage.commit_shared(&make_database_update(db_node_key(1), 0, &[10], vec![1]));
     assert!(!storage.is_empty());
     assert_eq!(storage.len(), 1);
 
-    storage.commit_shared(&make_database_update(db_node_key(4), 0, vec![20], vec![2]));
+    storage.commit_shared(&make_database_update(db_node_key(4), 0, &[20], vec![2]));
     assert_eq!(storage.len(), 2);
 }
 
@@ -708,13 +709,13 @@ fn test_len_and_is_empty() {
 fn substate_bytes_tracks_block_commits() {
     let storage = SimShardStorage::default();
 
-    let key_a = vec![3u8; 50];
-    let key_b = vec![4u8; 50];
+    let key_a = db_node_key(3);
+    let key_b = db_node_key(4);
 
     // h1: two inserts.
     let v1 = merge_database_updates(&[
-        make_database_update(key_a.clone(), 0, vec![7], vec![1]),
-        make_database_update(key_b, 0, vec![8], vec![2]),
+        make_database_update(key_a.clone(), 0, &[7], vec![1]),
+        make_database_update(key_b, 0, &[8], vec![2]),
     ]);
     let block1 = make_test_block(BlockHeight::new(1));
     let qc1 = make_test_qc(&block1);
@@ -722,7 +723,7 @@ fn substate_bytes_tracks_block_commits() {
     assert_eq!(storage.substate_bytes_at(BlockHeight::new(1)), Some(2));
 
     // h2: value update only.
-    let v2 = make_database_update(key_a.clone(), 0, vec![7], vec![9]);
+    let v2 = make_database_update(key_a.clone(), 0, &[7], vec![9]);
     let block2 = make_test_block(BlockHeight::new(2));
     let qc2 = make_test_qc(&block2);
     commit_with(&storage, &v2, &block2, &qc2);
@@ -736,8 +737,11 @@ fn substate_bytes_tracks_block_commits() {
             partition_updates: std::iter::once((
                 0u8,
                 PartitionDatabaseUpdates::Delta {
-                    substate_updates: std::iter::once((DbSortKey(vec![7]), DatabaseUpdate::Delete))
-                        .collect(),
+                    substate_updates: std::iter::once((
+                        DbSortKey(local_key(&[7])),
+                        DatabaseUpdate::Delete,
+                    ))
+                    .collect(),
                 },
             ))
             .collect(),
@@ -752,47 +756,45 @@ fn substate_bytes_tracks_block_commits() {
 }
 
 #[test]
-fn test_list_substates_for_node_at_height_returns_historical_data() {
+fn historical_substate_reads_resolve_per_version() {
     let storage = SimShardStorage::default();
-    let node_id = NodeId([1; 30]);
+    let owner = [1u8; 16];
+    let local = local_key(&[10]).try_into().expect("padded to 16");
 
-    // Block height 1: commit value [100] for node 1
-    let updates1 = make_mapped_database_update(1, 0, vec![10], vec![100]);
+    // Block height 1: commit value [100].
+    let updates1 = make_mapped_database_update(1, VM_PARTITION, &[10], vec![100]);
     let block1 = make_test_block(BlockHeight::new(1));
     let qc1 = make_test_qc(&block1);
     let root_v1 = commit_with(&storage, &updates1, &block1, &qc1);
 
-    // Block height 2: overwrite with value [200]
-    let updates2 = make_mapped_database_update(1, 0, vec![10], vec![200]);
+    // Block height 2: overwrite with value [200].
+    let updates2 = make_mapped_database_update(1, VM_PARTITION, &[10], vec![200]);
     let block2 = make_test_block(BlockHeight::new(2));
     let qc2 = make_test_qc(&block2);
     let root_v2 = commit_with(&storage, &updates2, &block2, &qc2);
     assert_ne!(root_v1, root_v2, "roots must differ after overwrite");
 
-    // Read at version 1: should get the original value [100]
-    let v1_substates = storage
-        .list_substates_for_node_at_height(&node_id, BlockHeight::new(1))
-        .expect("version 1 should be available");
-    assert_eq!(v1_substates.len(), 1, "should find 1 substate at v1");
-    assert_eq!(v1_substates[0].2, vec![100u8], "v1 value should be [100]");
+    assert_eq!(
+        storage.get_vm_substate_at_height(owner, local, BlockHeight::new(1)),
+        Some(Some(vec![100u8])),
+        "v1 value should be [100]"
+    );
+    assert_eq!(
+        storage.get_vm_substate_at_height(owner, local, BlockHeight::new(2)),
+        Some(Some(vec![200u8])),
+        "v2 value should be [200]"
+    );
 
-    // Read at version 2: should get the overwritten value [200]
-    let v2_substates = storage
-        .list_substates_for_node_at_height(&node_id, BlockHeight::new(2))
-        .expect("version 2 should be available");
-    assert_eq!(v2_substates.len(), 1, "should find 1 substate at v2");
-    assert_eq!(v2_substates[0].2, vec![200u8], "v2 value should be [200]");
+    // An unwritten cell reads as absent, not as an unavailable height.
+    assert_eq!(
+        storage.get_vm_substate_at_height([99u8; 16], local, BlockHeight::new(1)),
+        Some(None),
+    );
 
-    // Read for a nonexistent node: should be Some(empty)
-    let other = storage
-        .list_substates_for_node_at_height(&NodeId([99; 30]), BlockHeight::new(1))
-        .expect("version 1 should be available even for unknown node");
-    assert!(other.is_empty());
-
-    // Read at a future version: should be None
+    // A future version is unavailable.
     assert!(
         storage
-            .list_substates_for_node_at_height(&node_id, BlockHeight::new(99))
+            .get_vm_substate_at_height(owner, local, BlockHeight::new(99))
             .is_none(),
         "future version should return None"
     );
@@ -830,14 +832,14 @@ fn witness_payload_range_reads() {
 /// requested version on the faster-persisting validator.
 #[test]
 fn test_snapshot_at_version_is_deterministic_across_persistence_lag() {
-    let nid = NodeId([1u8; 30]);
-    let partition_num = 0;
-    let sort_key = vec![1u8];
+    let node_seed = 1u8;
+    let partition_num = VM_PARTITION;
+    let sort_key = local_key(&[1]);
 
     let commit = |storage: &SimShardStorage, height: BlockHeight, value: Vec<u8>| {
         let block = make_test_block(height);
         let qc = make_test_qc(&block);
-        let updates = make_mapped_database_update(1, partition_num, sort_key.clone(), value);
+        let updates = make_mapped_database_update(node_seed, partition_num, &sort_key, value);
         commit_with(storage, &updates, &block, &qc);
     };
 
@@ -868,7 +870,7 @@ fn test_snapshot_at_version_is_deterministic_across_persistence_lag() {
     let snap_a = a.snapshot_at(BlockHeight::new(3));
     let snap_b = b.snapshot_at(BlockHeight::new(3));
     let pk = DbPartitionKey {
-        node_key: keys::node_entity_key(&nid),
+        node_key: db_node_key(node_seed),
         partition_num,
     };
     let sk = DbSortKey(sort_key.clone());
@@ -892,9 +894,8 @@ fn test_snapshot_at_version_is_deterministic_across_persistence_lag() {
 #[test]
 fn test_snapshot_resolves_floor_among_many_versions() {
     let node_seed = 5u8;
-    let nid = NodeId([node_seed; 30]);
-    let partition_num = 0;
-    let sort_key = vec![1u8];
+    let partition_num = VM_PARTITION;
+    let sort_key = local_key(&[1]);
 
     let storage = SimShardStorage::default();
     for h in 1..=50u64 {
@@ -903,14 +904,14 @@ fn test_snapshot_resolves_floor_among_many_versions() {
         let updates = make_mapped_database_update(
             node_seed,
             partition_num,
-            sort_key.clone(),
+            &sort_key,
             vec![u8::try_from(h).unwrap_or(u8::MAX)],
         );
         commit_with(&storage, &updates, &block, &qc);
     }
 
     let pk = DbPartitionKey {
-        node_key: keys::node_entity_key(&nid),
+        node_key: db_node_key(node_seed),
         partition_num,
     };
     let sk = DbSortKey(sort_key);
@@ -936,11 +937,11 @@ fn test_snapshot_resolves_floor_among_many_versions() {
 /// construct full blocks/QCs around every write.
 #[test]
 fn test_state_history_create_delete_create() {
-    let nid = NodeId([7u8; 30]);
-    let partition_num = 0;
-    let sort_key = vec![42u8];
+    let node_seed = 7u8;
+    let partition_num = VM_PARTITION;
+    let sort_key = local_key(&[42]);
     let pk = DbPartitionKey {
-        node_key: keys::node_entity_key(&nid),
+        node_key: db_node_key(node_seed),
         partition_num,
     };
     let sk = DbSortKey(sort_key.clone());
@@ -951,10 +952,10 @@ fn test_state_history_create_delete_create() {
     // — the JMT parent-version chain would otherwise break at V2 if
     // deleting K left the tree empty. The state-history behavior we're
     // actually testing is entirely independent of this.
-    let anchor = make_mapped_database_update(99, 0, vec![0xFF], vec![0xFF]);
+    let anchor = make_mapped_database_update(99, 0, &[0xFF], vec![0xFF]);
 
     // V1: create with value A (=0xAA). Also set the anchor key.
-    let mut v1 = make_mapped_database_update(7, partition_num, sort_key.clone(), vec![0xAA]);
+    let mut v1 = make_mapped_database_update(7, partition_num, &sort_key, vec![0xAA]);
     merge_into(&mut v1, &anchor);
     storage.commit_shared(&v1);
 
@@ -976,7 +977,7 @@ fn test_state_history_create_delete_create() {
     storage.commit_shared(&v2);
 
     // V3: create again with value B (=0xBB).
-    let v3 = make_mapped_database_update(7, partition_num, sort_key, vec![0xBB]);
+    let v3 = make_mapped_database_update(7, partition_num, &sort_key, vec![0xBB]);
     storage.commit_shared(&v3);
 
     // Expected:
@@ -1024,14 +1025,13 @@ fn test_snapshot_at_below_retention_panics() {
     let _snap = <SimShardStorage as VersionedStore>::snapshot_at(&storage, BlockHeight::new(1));
 }
 
-/// `list_substates_for_node_at_height` is an external-facing API —
-/// it must return `None` for out-of-retention heights rather than
-/// panicking (the panic path is reserved for `snapshot_at` callers).
+/// `get_vm_substate_at_height` is an external-facing API — it must
+/// return `None` for out-of-retention heights rather than panicking
+/// (the panic path is reserved for `snapshot_at` callers).
 #[test]
-fn test_list_substates_at_height_respects_retention() {
-    let nid = NodeId([9u8; 30]);
-    let partition_num = 0;
-    let sort_key = vec![1u8];
+fn test_historical_substate_read_respects_retention() {
+    let owner = [9u8; 16];
+    let local = [1u8; 16];
 
     let storage = SimShardStorage::with_jmt_history_length(2);
     for h in 1..=10u64 {
@@ -1039,25 +1039,28 @@ fn test_list_substates_at_height_respects_retention() {
         let qc = make_test_qc(&block);
         let updates = make_mapped_database_update(
             9,
-            partition_num,
-            sort_key.clone(),
+            VM_PARTITION,
+            &local,
             vec![u8::try_from(h).unwrap_or(u8::MAX)],
         );
         commit_with(&storage, &updates, &block, &qc);
     }
     // current=10, floor=8.
-    let _ = keys::node_entity_key(&nid); // use imported for consistency
 
     // Within retention: returns Some.
-    let got = storage.list_substates_for_node_at_height(&nid, BlockHeight::new(9));
-    assert!(got.is_some(), "height within retention must succeed");
+    let got = storage.get_vm_substate_at_height(owner, local, BlockHeight::new(9));
+    assert_eq!(
+        got,
+        Some(Some(vec![9])),
+        "height within retention must succeed"
+    );
 
     // Below retention: returns None (graceful).
-    let got = storage.list_substates_for_node_at_height(&nid, BlockHeight::new(1));
+    let got = storage.get_vm_substate_at_height(owner, local, BlockHeight::new(1));
     assert!(got.is_none(), "height below retention must return None");
 
     // Above current: returns None.
-    let got = storage.list_substates_for_node_at_height(&nid, BlockHeight::new(99));
+    let got = storage.get_vm_substate_at_height(owner, local, BlockHeight::new(99));
     assert!(got.is_none(), "future height returns None");
 }
 
@@ -1065,8 +1068,8 @@ fn test_list_substates_at_height_respects_retention() {
 /// removed so historical reads see the pre-reset contents.
 #[test]
 fn test_reset_partition_captures_history_for_all_removed_keys() {
-    let node_key = vec![3u8; 50];
-    let partition_num = 0;
+    let node_key = db_node_key(3);
+    let partition_num = VM_PARTITION;
     let pk = DbPartitionKey {
         node_key: node_key.clone(),
         partition_num,
@@ -1086,9 +1089,18 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
                     partition_num,
                     PartitionDatabaseUpdates::Delta {
                         substate_updates: [
-                            (DbSortKey(vec![0xA1]), DatabaseUpdate::Set(vec![0xAA])),
-                            (DbSortKey(vec![0xB1]), DatabaseUpdate::Set(vec![0xBB])),
-                            (DbSortKey(vec![0xC1]), DatabaseUpdate::Set(vec![0xCC])),
+                            (
+                                DbSortKey(local_key(&[0xA1])),
+                                DatabaseUpdate::Set(vec![0xAA]),
+                            ),
+                            (
+                                DbSortKey(local_key(&[0xB1])),
+                                DatabaseUpdate::Set(vec![0xBB]),
+                            ),
+                            (
+                                DbSortKey(local_key(&[0xC1])),
+                                DatabaseUpdate::Set(vec![0xCC]),
+                            ),
                         ]
                         .into_iter()
                         .collect(),
@@ -1106,8 +1118,8 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
         let qc = make_test_qc(&block);
         let mut updates = DatabaseUpdates::default();
         let mut new_values = IndexMap::new();
-        new_values.insert(DbSortKey(vec![0xD1]), vec![0xDD]);
-        new_values.insert(DbSortKey(vec![0xE1]), vec![0xEE]);
+        new_values.insert(DbSortKey(local_key(&[0xD1])), vec![0xDD]);
+        new_values.insert(DbSortKey(local_key(&[0xE1])), vec![0xEE]);
         updates.node_updates.insert(
             node_key,
             NodeDatabaseUpdates {
@@ -1126,35 +1138,35 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
     // At V1, the original contents A/B/C must still be visible.
     let snap_v1 = storage.snapshot_at(BlockHeight::new(1));
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xA1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xA1]))),
         Some(vec![0xAA]),
     );
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xB1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xB1]))),
         Some(vec![0xBB]),
     );
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xC1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xC1]))),
         Some(vec![0xCC]),
     );
     // D/E must not be visible at V1 — they don't exist yet.
     assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xD1])),
+        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xD1]))),
         None,
     );
 
     // At V2, only D/E are visible.
     let snap_v2 = storage.snapshot_at(BlockHeight::new(2));
     assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xA1])),
+        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xA1]))),
         None,
     );
     assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xD1])),
+        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xD1]))),
         Some(vec![0xDD]),
     );
     assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![0xE1])),
+        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xE1]))),
         Some(vec![0xEE]),
     );
 }
@@ -1167,7 +1179,7 @@ fn test_reset_partition_captures_history_for_all_removed_keys() {
 fn test_genesis_skips_history_entries() {
     let storage = SimShardStorage::default();
 
-    let updates = make_database_update(vec![1u8; 50], 0, vec![1], vec![0xAA]);
+    let updates = make_database_update(db_node_key(1), 0, &[1], vec![0xAA]);
     storage.commit_substates_only(&updates);
 
     // History map must be empty after a genesis-style commit.

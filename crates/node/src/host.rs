@@ -201,7 +201,6 @@ where
         let execution_cache = Arc::new(ProcessExecutionCache::new(hosted_shards.clone()));
         let dispatch_handles = Arc::new(DispatchHandles {
             executor,
-            genesis_network: beacon_network.clone(),
             network: Arc::clone(&network),
             execution_cache,
             beacon_proposal_cache: Arc::new(BeaconProposalCache::new(beacon_network)),

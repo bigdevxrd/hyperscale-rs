@@ -18,10 +18,7 @@ use hyperscale_network::fault::{HostId, RuleHandle};
 use hyperscale_network_memory::NodeIndex;
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::query::{chain_fate, status_rank};
-use hyperscale_scenarios::tx::{
-    merge_vote_payer_account, straddler_genesis_balances, vm_staking_genesis_accounts,
-    vm_world_accounts, vm_world_pools,
-};
+use hyperscale_scenarios::tx::{vm_staking_genesis_accounts, vm_world_accounts, vm_world_pools};
 use hyperscale_scenarios::{
     Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
     vote_reshape_threshold,
@@ -30,11 +27,9 @@ use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds,
-    RoutableTransaction, ShardId, Signer, StakePoolSeat, StateRoot, TransactionDecision,
-    TransactionStatus, TxHash, ValidatorId, VmEvent,
+    RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision, TransactionStatus,
+    TxHash, ValidatorId, VmEvent,
 };
-use radix_common::math::Decimal;
-use radix_common::types::ComponentAddress;
 
 /// The clock slice `run_until` advances per poll, matching the runner's own
 /// internal predicate loop.
@@ -48,17 +43,15 @@ const SLICE: Duration = Duration::from_secs(1);
 /// runs unbounded and crosses this within a few extra slices.
 const MAX_BEACON_LAG_EPOCHS: u64 = 10;
 
-/// The full constructor input, so the VM knobs don't fan out across
-/// every legacy constructor's signature.
+/// The full constructor input, so the knobs don't fan out across every
+/// constructor's signature.
 struct BuildArgs<'a> {
     config: &'a ScenarioConfig,
     seed: u64,
-    balances: &'a [(ComponentAddress, Decimal)],
     dedicated_pool_hosts: bool,
     share_declared_reads: bool,
     vm_accounts: &'a [([u8; 16], u128)],
     vm_execution_mode: ExecutionMode,
-    vm_pools: &'a [StakePoolSeat],
 }
 
 /// The simulation adaptor: a [`Cluster`] over a [`SimulationRunner`].
@@ -71,25 +64,11 @@ pub struct SimCluster {
 }
 
 impl SimCluster {
-    /// Build a genesis cluster from `config`, seeded by `seed`, funding the
-    /// shared straddler accounts (seed `31` left, `30` right) the cross-shard
-    /// scenarios spend.
+    /// Build a genesis cluster from `config`, seeded by `seed`, funding no
+    /// accounts of its own.
     #[must_use]
     pub fn new(config: &ScenarioConfig, seed: u64) -> Self {
-        Self::with_balances(config, seed, &straddler_genesis_balances())
-    }
-
-    /// Build a genesis cluster funding `balances` instead of the default
-    /// straddler accounts — for scenarios that seat their own genesis
-    /// distribution (a byte-skewed split-straddler topology). Production
-    /// installs the identical balances.
-    #[must_use]
-    pub fn with_balances(
-        config: &ScenarioConfig,
-        seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
-    ) -> Self {
-        Self::build(config, seed, balances, false, false)
+        Self::build(config, seed, &[], false, false)
     }
 
     /// [`Self::with_vm_accounts`] with declared reads shared rather than
@@ -100,20 +79,11 @@ impl SimCluster {
         seed: u64,
         vm_accounts: &[([u8; 16], u128)],
     ) -> Self {
-        Self::build_full(&BuildArgs {
-            config,
-            seed,
-            balances: &straddler_genesis_balances(),
-            dedicated_pool_hosts: false,
-            share_declared_reads: true,
-            vm_accounts,
-            vm_execution_mode: ExecutionMode::Serial,
-            vm_pools: &[],
-        })
+        Self::build(config, seed, vm_accounts, false, true)
     }
 
-    /// Build a genesis cluster with funded VM accounts beside the default
-    /// straddler balances, batch-scheduling VM waves serially.
+    /// Build a genesis cluster with funded accounts, batch-scheduling
+    /// waves serially.
     #[must_use]
     pub fn with_vm_accounts(
         config: &ScenarioConfig,
@@ -123,8 +93,8 @@ impl SimCluster {
         Self::with_vm_mode(config, seed, vm_accounts, ExecutionMode::Serial)
     }
 
-    /// [`Self::with_vm_accounts`] with an explicit VM batch scheduling
-    /// mode — one side of the serial/parallel A/B.
+    /// [`Self::with_vm_accounts`] with an explicit batch scheduling mode —
+    /// one side of the serial/parallel A/B.
     #[must_use]
     pub fn with_vm_mode(
         config: &ScenarioConfig,
@@ -132,81 +102,26 @@ impl SimCluster {
         vm_accounts: &[([u8; 16], u128)],
         vm_execution_mode: ExecutionMode,
     ) -> Self {
-        Self::with_vm_mode_and_balances(
-            config,
-            seed,
-            &straddler_genesis_balances(),
-            vm_accounts,
-            vm_execution_mode,
-        )
-    }
-
-    /// The mixed-engine constructor: funded Radix `balances` and funded
-    /// VM accounts on one chain.
-    #[must_use]
-    pub fn with_vm_mode_and_balances(
-        config: &ScenarioConfig,
-        seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
-        vm_accounts: &[([u8; 16], u128)],
-        vm_execution_mode: ExecutionMode,
-    ) -> Self {
         Self::build_full(&BuildArgs {
             config,
             seed,
-            balances,
             dedicated_pool_hosts: false,
             share_declared_reads: false,
             vm_accounts,
             vm_execution_mode,
-            vm_pools: &[],
         })
     }
 
-    /// A genesis cluster seating `pools` as the stake pools the beacon
-    /// folds facts for, with `vm_accounts` funded beside the default
-    /// straddler balances.
-    #[must_use]
-    pub fn with_vm_pools(
-        config: &ScenarioConfig,
-        seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
-        vm_accounts: &[([u8; 16], u128)],
-        vm_pools: &[StakePoolSeat],
-    ) -> Self {
-        Self::build_full(&BuildArgs {
-            config,
-            seed,
-            balances,
-            dedicated_pool_hosts: false,
-            share_declared_reads: false,
-            vm_accounts,
-            vm_execution_mode: ExecutionMode::Serial,
-            vm_pools,
-        })
-    }
-
-    /// [`Self::with_dedicated_pool_hosts`] with funded VM accounts beside
-    /// the Radix `balances` — the straddler and halt-recovery scenarios,
-    /// whose legs are VM transfers over a byte skew the Radix ballast
-    /// shapes.
+    /// [`Self::with_dedicated_pool_hosts`] with funded accounts — the
+    /// straddler and halt-recovery scenarios, whose legs are transfers
+    /// over a byte skew the genesis ballast shapes.
     #[must_use]
     pub fn with_vm_and_dedicated_pool_hosts(
         config: &ScenarioConfig,
         seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
         vm_accounts: &[([u8; 16], u128)],
     ) -> Self {
-        Self::build_full(&BuildArgs {
-            config,
-            seed,
-            balances,
-            dedicated_pool_hosts: true,
-            share_declared_reads: false,
-            vm_accounts,
-            vm_execution_mode: ExecutionMode::Serial,
-            vm_pools: &[],
-        })
+        Self::build(config, seed, vm_accounts, true, false)
     }
 
     /// Build a genesis cluster giving each pool extra its own shard-less
@@ -217,30 +132,24 @@ impl SimCluster {
     /// scenarios never need it — they express host packing through
     /// `vnodes_per_host` alone.
     #[must_use]
-    pub fn with_dedicated_pool_hosts(
-        config: &ScenarioConfig,
-        seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
-    ) -> Self {
-        Self::build(config, seed, balances, true, false)
+    pub fn with_dedicated_pool_hosts(config: &ScenarioConfig, seed: u64) -> Self {
+        Self::build(config, seed, &[], true, false)
     }
 
     fn build(
         config: &ScenarioConfig,
         seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
+        vm_accounts: &[([u8; 16], u128)],
         dedicated_pool_hosts: bool,
         share_declared_reads: bool,
     ) -> Self {
         Self::build_full(&BuildArgs {
             config,
             seed,
-            balances,
             dedicated_pool_hosts,
             share_declared_reads,
-            vm_accounts: &[],
+            vm_accounts,
             vm_execution_mode: ExecutionMode::Serial,
-            vm_pools: &[],
         })
     }
 
@@ -274,12 +183,12 @@ impl SimCluster {
                 .copied()
                 .chain(vm_staking_genesis_accounts())
                 .collect(),
-            // Unconditional, including for clusters that fund no VM
-            // accounts at all: the statics install once per process and the
-            // first cluster built wins, and a scenario that never touches
-            // the VM would otherwise install an empty registry that every
-            // VM scenario after it fails against. Registering an address
-            // nothing transacts with costs nothing.
+            // Unconditional, including for clusters that fund no accounts
+            // at all: the statics install once per process and the first
+            // cluster built wins, and a scenario that never transacts
+            // would otherwise install an empty registry that every later
+            // scenario fails against. Registering an address nothing
+            // transacts with costs nothing.
             vm_world_accounts: vm_world_accounts(),
             vm_execution_mode: args.vm_execution_mode,
             vm_pools: vm_world_pools(),
@@ -287,7 +196,7 @@ impl SimCluster {
             ..SimConfig::default()
         };
         let mut runner = SimulationRunner::new(&sim_config, args.seed);
-        runner.initialize_genesis_with_balances(args.balances);
+        runner.initialize_genesis();
 
         Self {
             runner,
@@ -295,10 +204,16 @@ impl SimCluster {
         }
     }
 
-    /// [`Self::with_grown_balances`] with funded VM accounts: genesis
-    /// seeds the accounts on the single ROOT shard and the grow splits
-    /// their cells to their prefix shards — the cross-shard VM
-    /// scenarios' entry.
+    /// Build a cluster grown to `config.num_shards` with `config.split_bytes`
+    /// as the live reshape threshold, with `vm_accounts` funded at the
+    /// single ROOT genesis so the grow splits their cells to their prefix
+    /// shards.
+    ///
+    /// Genesis is always a single ROOT shard, so a scenario that needs a
+    /// deeper partition reaches it the only way the network does — by
+    /// splitting into it, here via [`grow_to`]. Production grows to the
+    /// same starting point the same way, so the scenario body is identical
+    /// on both harnesses.
     ///
     /// # Panics
     ///
@@ -313,67 +228,7 @@ impl SimCluster {
             split_bytes: 0,
             ..*config
         };
-        // The threshold re-vote after the grow pays from the merge-vote
-        // payer, so it must be genesis-funded beside the default
-        // straddler accounts.
-        let mut balances = straddler_genesis_balances();
-        balances.push((merge_vote_payer_account(), Decimal::from(100_000)));
-        let mut cluster = Self::with_vm_mode_and_balances(
-            &grow_config,
-            seed,
-            &balances,
-            vm_accounts,
-            ExecutionMode::Serial,
-        );
-        grow_to(&mut cluster, config.num_shards);
-        vote_reshape_threshold(&mut cluster, config.split_bytes);
-        cluster
-    }
-
-    /// Build a cluster grown to `config.num_shards` with `config.split_bytes` as
-    /// the live reshape threshold. Genesis is always a single ROOT shard, so a
-    /// scenario that needs a deeper partition reaches it the only way the network
-    /// does — by splitting into it, here via [`grow_to`]. Production grows to the
-    /// same starting point the same way, so the scenario body is identical on
-    /// both harnesses.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the grow or the threshold activation misses its budget.
-    #[must_use]
-    pub fn with_grown_balances(
-        config: &ScenarioConfig,
-        seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
-    ) -> Self {
-        Self::with_grown_vm_and_balances(config, seed, balances, &[])
-    }
-
-    /// [`Self::with_grown_balances`] with funded VM accounts: genesis seats
-    /// them on the single ROOT shard and the grow moves their cells to
-    /// their prefix shards.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the grow or the threshold activation misses its budget.
-    #[must_use]
-    pub fn with_grown_vm_and_balances(
-        config: &ScenarioConfig,
-        seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
-        vm_accounts: &[([u8; 16], u128)],
-    ) -> Self {
-        let grow_config = ScenarioConfig {
-            split_bytes: 0,
-            ..*config
-        };
-        let mut cluster = Self::with_vm_mode_and_balances(
-            &grow_config,
-            seed,
-            balances,
-            vm_accounts,
-            ExecutionMode::Serial,
-        );
+        let mut cluster = Self::with_vm_accounts(&grow_config, seed, vm_accounts);
         grow_to(&mut cluster, config.num_shards);
         vote_reshape_threshold(&mut cluster, config.split_bytes);
         cluster

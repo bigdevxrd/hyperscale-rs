@@ -1,6 +1,5 @@
 //! `SubstateStore` implementation for `RocksDbShardStorage`.
 
-use std::collections::HashMap;
 use std::time::Instant;
 
 use hex::encode as hex_encode;
@@ -9,7 +8,7 @@ use hyperscale_storage::tree::carry_noop_root;
 use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{DbSortKey, JmtSnapshot, SubstateStore, VersionedStore};
 use hyperscale_types::{
-    Block, BlockHeight, MerkleInclusionProof, NodeId, QuorumCertificate, StateRoot, Verified,
+    Block, BlockHeight, MerkleInclusionProof, QuorumCertificate, StateRoot, Verified,
 };
 use rocksdb::{WriteBatch, WriteOptions};
 
@@ -42,35 +41,6 @@ impl SubstateStore for RocksDbShardStorage {
     fn state_root(&self) -> StateRoot {
         let (_, root_hash) = self.read_jmt_metadata();
         root_hash
-    }
-
-    fn list_substates_for_node_at_height(
-        &self,
-        node_id: &NodeId,
-        block_height: BlockHeight,
-    ) -> Option<Vec<(u8, DbSortKey, Vec<u8>)>> {
-        // Take the snapshot first so bounds checks and the subsequent
-        // reads all see one consistent LSN (see `snapshot_at` for why).
-        let snapshot = self.db.snapshot();
-        let (current_version, _) = read_jmt_metadata(&snapshot);
-        if block_height.inner() > current_version {
-            return None;
-        }
-        let floor = current_version.saturating_sub(self.jmt_history_length);
-        if block_height.inner() < floor {
-            // Below retention — historical state no longer recoverable.
-            // External API: return None (network-supplied heights may
-            // legitimately fall out of range; `snapshot_at` would panic,
-            // so don't delegate for this case).
-            return None;
-        }
-        let snap = RocksDbSnapshot {
-            snapshot,
-            db: &self.db,
-            version: block_height.inner(),
-            current_version,
-        };
-        Some(snap.list_raw_values_for_node(node_id))
     }
 
     fn get_vm_substate_at_height(
@@ -108,13 +78,12 @@ impl SubstateStore for RocksDbShardStorage {
     fn generate_merkle_proofs(
         &self,
         storage_keys: &[Vec<u8>],
-        owner_map: &HashMap<NodeId, NodeId>,
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
         // Use a RocksDB snapshot for all reads so concurrent JMT GC cannot
         // delete nodes mid-proof-generation.
         let snapshot_store = SnapshotTreeStore::new(&self.db, self.root_path.clone());
-        generate_proof(&snapshot_store, storage_keys, owner_map, block_height)
+        generate_proof(&snapshot_store, storage_keys, block_height)
     }
 }
 

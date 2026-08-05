@@ -6,7 +6,6 @@
 //! that version. Retention mirrors the production checkpoint ring so
 //! eviction behaviour is exercised in simulation too.
 
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use hyperscale_jmt::{Key, NibblePath, Node, NodeKey, TreeReader};
@@ -210,12 +209,11 @@ impl BoundaryStore for SimShardStorage {
                 state.current_block_height,
             ));
         }
-        let filtered =
-            filter_updates_to_prefix(&merged, &HashMap::new(), &state.tree_store.root_path());
+        let filtered = filter_updates_to_prefix(&merged, &state.tree_store.root_path());
         if filtered.node_updates.is_empty() {
             return Ok(state.current_root_hash);
         }
-        let root = apply_state_writes(&mut state, &filtered, &HashMap::new(), height);
+        let root = apply_state_writes(&mut state, &filtered, height);
         drop(state);
         Ok(root)
     }
@@ -242,9 +240,9 @@ mod tests {
         test_boundary_retention_evicts_oldest, test_boundary_unpinned_height_not_served,
     };
     use hyperscale_storage::{DatabaseUpdates, SubstateStore};
-    use hyperscale_types::state_key::node_routing_hash;
+    use hyperscale_types::state_key::vm_leaf_key;
     use hyperscale_types::{
-        ConsensusReceipt, GlobalReceiptHash, Hash, NodeId, ShardId, SplitChildRoots, TxHash,
+        ConsensusReceipt, GlobalReceiptHash, Hash, ShardId, SplitChildRoots, TxHash,
         shard_prefix_path,
     };
 
@@ -253,7 +251,7 @@ mod tests {
     type Jmt = Tree<Blake3Hasher, 1>;
 
     fn commit_one(storage: &SimShardStorage, seed: u8) {
-        let updates = make_database_update(vec![seed; 50], 0, vec![seed], vec![seed, seed, seed]);
+        let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed, seed, seed]);
         storage.commit_shared(&updates);
     }
 
@@ -313,13 +311,13 @@ mod tests {
     #[test]
     fn boundary_leaf_reads_resolve_at_pinned_version() {
         let storage = SimShardStorage::default();
-        let node_key = vec![7u8; 50];
-        let old = make_database_update(node_key.clone(), 0, vec![7], vec![1]);
+        let node_key = db_node_key(7);
+        let old = make_database_update(node_key.clone(), 0, &[7], vec![1]);
         storage.commit_shared(&old);
         storage.pin_boundary(BlockHeight::new(1)).unwrap();
 
         // Overwrite the same substate at height 2.
-        let new = make_database_update(node_key, 0, vec![7], vec![2]);
+        let new = make_database_update(node_key, 0, &[7], vec![2]);
         storage.commit_shared(&new);
 
         let boundary = storage.open_boundary(BlockHeight::new(1)).expect("pinned");
@@ -352,10 +350,10 @@ mod tests {
         test_boundary_import_roundtrip(&storage, &fresh, |seed| commit_one(&storage, seed));
     }
 
-    /// One write to the logical node `[seed; 30]` wrapped as a synced
+    /// One write under the owner prefix `[seed; 16]` wrapped as a synced
     /// receipt — the shape a followed parent block's writes arrive in.
     fn follow_receipt(seed: u8) -> (DatabaseUpdates, StoredReceipt) {
-        let updates = make_database_update(db_node_key(seed), 0, vec![seed], vec![seed; 4]);
+        let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed; 4]);
         let receipt = StoredReceipt::synced(
             TxHash::from_raw(Hash::from_bytes(&[seed])),
             Arc::new(ConsensusReceipt::Succeeded {
@@ -368,15 +366,22 @@ mod tests {
         (updates, receipt)
     }
 
-    /// Which child of the root the logical node `[seed; 30]` routes to —
-    /// the first bit of its routing hash.
+    /// Which child of the root the owner prefix `[seed; 16]` routes to —
+    /// the leading bit of its leaf key, which is what a depth-1 shard
+    /// prefix tests.
     fn child_of(seed: u8) -> ShardId {
         let (left, right) = ShardId::ROOT.children();
-        if node_routing_hash(&NodeId([seed; 30]))[0] >> 7 == 0 {
+        if vm_leaf_key([seed; 16], [0u8; 16])[0] >> 7 == 0 {
             left
         } else {
             right
         }
+    }
+
+    /// Owner seeds paired with the height that writes them, alternating
+    /// the leading bit so the fixture's writes straddle the root split.
+    fn straddling_seeds() -> impl Iterator<Item = (u64, u8)> {
+        (1u8..=12).map(|i| (u64::from(i), if i % 2 == 0 { i } else { i | 0x80 }))
     }
 
     /// Partition independence over follows, the keystone: two child
@@ -393,10 +398,10 @@ mod tests {
         let right_store = SimShardStorage::new(shard_prefix_path(right));
 
         let mut counts = [0u64, 0];
-        for seed in 1u8..=12 {
+        for (height, seed) in straddling_seeds() {
             let (updates, receipt) = follow_receipt(seed);
             parent.commit_shared(&updates);
-            let height = BlockHeight::new(u64::from(seed));
+            let height = BlockHeight::new(height);
             let receipts = [receipt];
 
             let left_before = left_store.state_root();
