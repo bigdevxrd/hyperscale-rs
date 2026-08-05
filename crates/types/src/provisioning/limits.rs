@@ -1,7 +1,7 @@
 //! Per-provision wire limits.
 //!
 //! Hard caps applied at decode time on peer-supplied provision payloads.
-//! Bound the SBOR pre-allocation a single merkle proof or per-tx entry
+//! Bound the wire pre-allocation a single merkle proof or per-tx entry
 //! list can claim — independent of how many transactions a block
 //! carries (which is governed by [`crate::shard::limits`]). Caps on the
 //! substate key and value bytes themselves live with the canonical key

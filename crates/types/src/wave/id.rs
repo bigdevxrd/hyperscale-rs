@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{self, Display};
 
-use sbor::prelude::*;
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 
 use crate::primitives::bloom::BloomKey;
 use crate::{BlockHeight, BoundedBTreeSet, Hash, ShardId};
@@ -28,7 +28,7 @@ pub const MAX_REMOTE_SHARDS_PER_WAVE: usize = 1024;
 /// dependency sets belong to the same wave and can be voted on together.
 ///
 /// A wave with empty `remote_shards` represents single-shard transactions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor)]
 pub struct WaveId {
     shard_id: ShardId,
     block_height: BlockHeight,
@@ -87,7 +87,7 @@ impl WaveId {
 
 impl BloomKey for WaveId {
     fn bloom_seed(&self) -> [u8; 16] {
-        let bytes = basic_encode(self).expect("WaveId serialization should never fail");
+        let bytes = hbor_to_vec(self).expect("WaveId serialization should never fail");
         let h = Hash::from_bytes(&bytes);
         let raw = h.as_bytes();
         let mut out = [0u8; 16];
@@ -125,9 +125,8 @@ impl Display for WaveId {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -143,18 +142,18 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip() {
+    fn hbor_roundtrip() {
         let wave = sample_wave_id();
-        let bytes = basic_encode(&wave).unwrap();
-        let decoded: WaveId = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&wave).unwrap();
+        let decoded: WaveId = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, wave);
     }
 
     #[test]
-    fn sbor_roundtrip_empty_remote_shards() {
+    fn hbor_roundtrip_empty_remote_shards() {
         let wave = WaveId::new(ShardId::leaf(3, 0), BlockHeight::new(1), BTreeSet::new());
-        let bytes = basic_encode(&wave).unwrap();
-        let decoded: WaveId = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&wave).unwrap();
+        let decoded: WaveId = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, wave);
     }
 
@@ -162,44 +161,39 @@ mod tests {
     /// verify decode rejects it before iterating.
     #[test]
     fn decode_rejects_oversized_remote_shards() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(3).unwrap();
-        enc.encode(&ShardId::leaf(3, 0)).unwrap();
-        enc.encode(&BlockHeight::new(0)).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ShardId::value_kind()).unwrap();
-        enc.write_size(MAX_REMOTE_SHARDS_PER_WAVE + 1).unwrap();
-        let err = basic_decode::<WaveId>(&buf).unwrap_err();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&hbor_to_vec(&ShardId::leaf(3, 0)).unwrap());
+        buf.extend_from_slice(&hbor_to_vec(&BlockHeight::new(0)).unwrap());
+        varint::write(&mut buf, MAX_REMOTE_SHARDS_PER_WAVE + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_REMOTE_SHARDS_PER_WAVE + 1) * 12,
+        ));
+        let err = hbor_from_slice::<WaveId>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_REMOTE_SHARDS_PER_WAVE,
-                actual,
-            } if actual == MAX_REMOTE_SHARDS_PER_WAVE + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_REMOTE_SHARDS_PER_WAVE
+                    && actual == MAX_REMOTE_SHARDS_PER_WAVE + 1
         ));
     }
 
-    /// SBOR rejects duplicate `BTreeSet` elements at decode time.
+    /// Duplicate `BTreeSet` elements reject at decode time.
     #[test]
     fn decode_rejects_duplicate_remote_shards() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(3).unwrap();
-        enc.encode(&ShardId::leaf(3, 0)).unwrap();
-        enc.encode(&BlockHeight::new(0)).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ShardId::value_kind()).unwrap();
-        enc.write_size(2).unwrap();
-        enc.encode_deeper_body(&ShardId::leaf(3, 5)).unwrap();
-        enc.encode_deeper_body(&ShardId::leaf(3, 5)).unwrap();
-        let err = basic_decode::<WaveId>(&buf).unwrap_err();
-        assert!(matches!(err, DecodeError::DuplicateKey));
+        #[derive(Hbor)]
+        struct ForgedWaveId {
+            shard_id: ShardId,
+            block_height: BlockHeight,
+            remote_shards: Vec<ShardId>,
+        }
+        let forged = ForgedWaveId {
+            shard_id: ShardId::leaf(3, 0),
+            block_height: BlockHeight::new(0),
+            remote_shards: vec![ShardId::leaf(3, 5), ShardId::leaf(3, 5)],
+        };
+        let buf = hbor_to_vec(&forged).unwrap();
+        let err = hbor_from_slice::<WaveId>(&buf).unwrap_err();
+        assert!(matches!(err, DecodeError::UnsortedKeys));
     }
 }

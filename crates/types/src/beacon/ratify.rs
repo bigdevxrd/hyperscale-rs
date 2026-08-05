@@ -31,7 +31,7 @@
 use std::collections::{BTreeMap, btree_map};
 
 use hyperscale_crypto::{SignError, Signer, Verifier};
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use super::certified::verify_committed_proposal_binding;
@@ -47,7 +47,7 @@ use crate::{
 /// The tag is baked into the signing bytes
 /// ([`ratify_vote_message`](crate::ratify_vote_message)), so a prevote
 /// can never be counted as a precommit or vice versa.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub enum RatifyPhase {
     /// First-phase vote; a quorum of prevotes (a polka) gates
     /// precommits but commits nothing.
@@ -76,7 +76,7 @@ impl RatifyPhase {
 /// spent rounds and its lock instead of a blank register. One record
 /// per validator; a vote for a newer epoch supersedes the whole record
 /// — ratification is per-epoch state.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct RatifyVoteRecord {
     /// Epoch the registers belong to.
     pub epoch: Epoch,
@@ -145,7 +145,7 @@ impl RatifyVoteRecord {
 /// Gossiped all-to-all across the active validator pool. A quorum of
 /// precommit-phase signers over the same tuple assembles into a
 /// [`RatifyCert`].
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct RatifyVote {
     anchor_hash: BeaconBlockHash,
     epoch: Epoch,
@@ -237,7 +237,7 @@ impl RatifyVote {
 /// `derive_active_pool(state)` produces). `aggregate_sig` verifies
 /// under the union of the set bits' pubkeys over the canonical
 /// precommit signing bytes.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct RatifyCert {
     anchor_hash: BeaconBlockHash,
     epoch: Epoch,
@@ -540,7 +540,7 @@ pub fn build_ratify_cert(
 /// ratify cert: SPC cert against the committee, embedded equivocation
 /// witnesses, and the committed-proposal binding. An honest member
 /// prevotes only hashes that would be valid blocks.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct CandidateBeaconBlock {
     block: BeaconBlock,
     spc: Box<SpcCert>,
@@ -840,6 +840,7 @@ impl Verified<CandidateBeaconBlock> {
 #[cfg(test)]
 mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier, signer_from_u64_seed};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::Hash;
@@ -909,18 +910,18 @@ mod tests {
     }
 
     #[test]
-    fn vote_sbor_round_trip() {
+    fn vote_hbor_round_trip() {
         let original = sample_vote();
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: RatifyVote = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: RatifyVote = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 
     #[test]
-    fn cert_sbor_round_trip() {
+    fn cert_hbor_round_trip() {
         let original = sample_cert();
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: RatifyCert = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: RatifyCert = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 
@@ -1205,13 +1206,13 @@ mod tests {
     }
 
     #[test]
-    fn candidate_sbor_round_trip() {
+    fn candidate_hbor_round_trip() {
         let original = CandidateBeaconBlock::new(
             BeaconBlock::new(Epoch::new(3), anchor(), Vec::new()),
             dummy_spc_cert(),
         );
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: CandidateBeaconBlock = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: CandidateBeaconBlock = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 

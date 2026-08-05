@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, CompletedRecovery, ConsensusPublicKey,
@@ -69,7 +69,7 @@ pub struct ShardAnchor {
 /// credited: `ready` is the same bit the split and merge gates count, so a
 /// seat holder that reads its own seat ready knows its `ReshapeReady` has
 /// folded and it has nothing left to assert.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct ReshapeSeat {
     /// The shard the seat pairs its holder with: the pending child an
     /// observer syncs, or the parent a keeper reforms.

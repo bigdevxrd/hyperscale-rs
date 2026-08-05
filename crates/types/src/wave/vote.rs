@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use hyperscale_crypto::{SignError, Signer, Verifier};
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
 /// One vote covers all transactions sharing the same provision dependency set,
 /// with `global_receipt_root` being a padded merkle root over per-tx leaf hashes
 /// where each leaf = `H(tx_hash` || `receipt_hash` || `success_byte`).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ExecutionVote {
     block_hash: BlockHash,
     block_height: BlockHeight,
@@ -387,9 +387,8 @@ impl Verified<ExecutionVote> {
 #[cfg(test)]
 mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, Categorize, DecodeError, Encoder,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -425,10 +424,10 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip() {
+    fn hbor_roundtrip() {
         let vote = sample_vote();
-        let bytes = basic_encode(&vote).unwrap();
-        let decoded: ExecutionVote = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&vote).unwrap();
+        let decoded: ExecutionVote = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, vote);
     }
 
@@ -691,29 +690,25 @@ mod tests {
     #[test]
     fn decode_rejects_oversized_tx_outcomes() {
         let vote = sample_vote();
-        let mut buf = Vec::with_capacity(128);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(10).unwrap();
-        enc.encode(&vote.block_hash).unwrap();
-        enc.encode(&vote.block_height).unwrap();
-        enc.encode(&vote.vote_anchor_ts).unwrap();
-        enc.encode(&vote.wave_id).unwrap();
-        enc.encode(&vote.shard_id).unwrap();
-        enc.encode(&vote.global_receipt_root).unwrap();
-        enc.encode(&vote.tx_count).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(TxOutcome::value_kind()).unwrap();
-        enc.write_size(MAX_TXS_PER_BLOCK + 1).unwrap();
-        let err = basic_decode::<ExecutionVote>(&buf).unwrap_err();
+        let mut buf = Vec::new();
+        for part in [
+            hbor_to_vec(&vote.block_hash).unwrap(),
+            hbor_to_vec(&vote.block_height).unwrap(),
+            hbor_to_vec(&vote.vote_anchor_ts).unwrap(),
+            hbor_to_vec(&vote.wave_id).unwrap(),
+            hbor_to_vec(&vote.shard_id).unwrap(),
+            hbor_to_vec(&vote.global_receipt_root).unwrap(),
+            hbor_to_vec(&vote.tx_count).unwrap(),
+        ] {
+            buf.extend_from_slice(&part);
+        }
+        varint::write(&mut buf, MAX_TXS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_TXS_PER_BLOCK + 1) * 128));
+        let err = hbor_from_slice::<ExecutionVote>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_TXS_PER_BLOCK,
-                actual,
-            } if actual == MAX_TXS_PER_BLOCK + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
         ));
     }
 }

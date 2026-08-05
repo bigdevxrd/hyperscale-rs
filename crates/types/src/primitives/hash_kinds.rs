@@ -1,6 +1,6 @@
 //! Domain-specific [`Hash`](crate::Hash) newtypes for compile-time safety.
 //!
-//! Each newtype is a `#[repr(transparent)]` wrapper with `#[sbor(transparent)]`
+//! Each newtype is a `#[repr(transparent)]` wrapper with `#[hbor(transparent)]`
 //! encoding, so swapping a field's type from `Hash` to a newtype is source-level
 //! only — wire format and on-disk bytes are unchanged.
 //!
@@ -165,7 +165,7 @@ hash_newtype!(
 );
 
 hash_newtype!(
-    /// SBOR-canonical hash of a [`BeaconGenesisConfig`](crate::BeaconGenesisConfig).
+    /// HBOR-canonical hash of a [`BeaconGenesisConfig`](crate::BeaconGenesisConfig).
     ///
     /// Carried directly by [`BeaconCert::Genesis`](crate::BeaconCert)
     /// so the genesis block's authenticator binds the chain to a
@@ -202,25 +202,25 @@ hash_newtype!(
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::Hash;
 
     #[test]
-    fn sbor_encoding_is_identical_to_inner_hash() {
+    fn hbor_encoding_is_identical_to_inner_hash() {
         let raw = Hash::from_bytes(b"wire-format");
         let wrapped = BlockHash::from_raw(raw);
 
-        let raw_bytes = basic_encode(&raw).unwrap();
-        let wrapped_bytes = basic_encode(&wrapped).unwrap();
+        let raw_bytes = hbor_to_vec(&raw).unwrap();
+        let wrapped_bytes = hbor_to_vec(&wrapped).unwrap();
 
         assert_eq!(
             raw_bytes, wrapped_bytes,
-            "#[sbor(transparent)] must make newtype encoding byte-identical to Hash"
+            "#[hbor(transparent)] must make newtype encoding byte-identical to Hash"
         );
 
-        let decoded: BlockHash = basic_decode(&raw_bytes).unwrap();
+        let decoded: BlockHash = hbor_from_slice(&raw_bytes).unwrap();
         assert_eq!(decoded, wrapped);
     }
 

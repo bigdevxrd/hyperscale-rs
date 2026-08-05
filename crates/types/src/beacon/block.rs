@@ -10,7 +10,9 @@
 //! different signer subsets) at the same `(anchor, epoch)` all
 //! authenticate the same block hash, so adoption converges.
 
-use sbor::prelude::*;
+use std::collections::BTreeMap;
+
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 
 use crate::{
     BeaconBlockHash, BeaconProposal, BlockHeader, BoundedBTreeMap, BoundedVec, Epoch, Hash,
@@ -38,7 +40,7 @@ use crate::{
 /// `boundary_header.beacon_witness_root`. Like the header, neither field
 /// carries a standalone verification marker: the fold recomputes the root
 /// every time.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ShardEpochContribution {
     /// The shard's canonical boundary block header for this epoch.
     pub boundary_header: BlockHeader,
@@ -52,7 +54,7 @@ pub struct ShardEpochContribution {
 
 /// One epoch's committed-proposal record.
 ///
-/// `block_hash` is the canonical SBOR-hash of the flat fields. The
+/// `block_hash` is the canonical HBOR-hash of the flat fields. The
 /// cert that authenticates this block sits on the wrapping
 /// [`CertifiedBeaconBlock`](crate::CertifiedBeaconBlock) — chain
 /// linkage via `prev_block_hash` references the block hash, never the
@@ -66,7 +68,7 @@ pub struct ShardEpochContribution {
 /// Skip and Genesis blocks have empty `committed_proposals` and
 /// `shard_contributions`; the authenticating cert kind distinguishes
 /// them.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BeaconBlock {
     epoch: Epoch,
     prev_block_hash: BeaconBlockHash,
@@ -168,16 +170,16 @@ impl BeaconBlock {
         &self.shard_contributions
     }
 
-    /// Canonical SBOR-hash of the block — the chain-linkage identity.
+    /// Canonical HBOR-hash of the block — the chain-linkage identity.
     /// Independent of which cert authenticates the block.
     ///
     /// # Panics
     ///
-    /// Never in practice: every field is `BasicSbor` and the struct is
+    /// Never in practice: every field is `Hbor` and the struct is
     /// closed, so encoding is total.
     #[must_use]
     pub fn block_hash(&self) -> BeaconBlockHash {
-        let bytes = basic_encode(self).expect("BeaconBlock serialization is infallible");
+        let bytes = hbor_to_vec(self).expect("BeaconBlock serialization is infallible");
         BeaconBlockHash::from_raw(Hash::from_bytes(&bytes))
     }
 
@@ -190,6 +192,8 @@ impl BeaconBlock {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
     use crate::{VRF_PROOF_BYTES, VrfProof};
 
@@ -204,19 +208,19 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip_empty_proposals() {
+    fn hbor_round_trip_empty_proposals() {
         let original = BeaconBlock::new(
             Epoch::new(7),
             BeaconBlockHash::from_raw(Hash::from_bytes(b"prev")),
             Vec::new(),
         );
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: BeaconBlock = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: BeaconBlock = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 
     #[test]
-    fn sbor_round_trip_with_proposals() {
+    fn hbor_round_trip_with_proposals() {
         let original = BeaconBlock::new(
             Epoch::new(7),
             BeaconBlockHash::from_raw(Hash::from_bytes(b"prev")),
@@ -225,8 +229,8 @@ mod tests {
                 (ValidatorId::new(1), sample_proposal(1)),
             ],
         );
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: BeaconBlock = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: BeaconBlock = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 

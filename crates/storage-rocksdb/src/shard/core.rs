@@ -33,7 +33,6 @@ use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamilyDescriptor, DB, DBCompressionType, Options,
     SliceTransform, WriteBatch,
 };
-use sbor::prelude::*;
 use tracing::field::Empty;
 use tracing::{Level, Span, instrument};
 
@@ -386,7 +385,7 @@ impl RocksDbShardStorage {
 
         // Stale nodes for deferred GC — keyed by the version at which they became stale.
         if !snapshot.stale_node_keys.is_empty() {
-            // Wrap keys as StaleTreePart::Node for SBOR serialization.
+            // Wrap keys as StaleTreePart::Node for wire serialization.
             let stale_parts: Vec<StaleTreePart> = snapshot
                 .stale_node_keys
                 .iter()

@@ -15,7 +15,7 @@ use rocksdb::{DB, ReadOptions, Snapshot};
 
 use super::column_families::{CfHandles, StateCf, StateHistoryCf};
 use super::substate_key;
-use crate::typed_cf::{DbCodec, SborCodec, TypedCf, get, prefix_iter_snap};
+use crate::typed_cf::{DbCodec, HborCodec, TypedCf, get, prefix_iter_snap};
 
 /// Length of the version suffix on each state-history key (`u64` big-endian).
 const VERSION_LEN: usize = 8;
@@ -71,7 +71,7 @@ impl RocksDbSnapshot<'_> {
         // one that captured value-at-version.
         let mut history_iter = self.db.raw_iterator_cf_opt(history_cf, self.read_opts());
         history_iter.seek(prefix);
-        let value_codec: SborCodec<Option<Vec<u8>>> = SborCodec::default();
+        let value_codec: HborCodec<Option<Vec<u8>>> = HborCodec::default();
         while history_iter.valid() {
             let Some(raw_key) = history_iter.key() else {
                 break;
@@ -157,7 +157,7 @@ impl SubstateDatabase for RocksDbSnapshot<'_> {
             if raw_key.len() == storage_key_bytes.len() + VERSION_LEN
                 && &raw_key[..storage_key_bytes.len()] == storage_key_bytes.as_slice()
             {
-                let value_codec: SborCodec<Option<Vec<u8>>> = SborCodec::default();
+                let value_codec: HborCodec<Option<Vec<u8>>> = HborCodec::default();
                 return value_codec.decode(iter.value().unwrap_or_default());
             }
         }

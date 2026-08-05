@@ -21,7 +21,7 @@
 //!
 //! # Async Transaction Validation
 //!
-//! Transaction submission performs structural validation (hex + SBOR decode)
+//! Transaction submission performs structural validation (hex + HBOR decode)
 //! synchronously and returns 400 on failure. Valid submissions are forwarded
 //! into the consensus thread via the same dispatch pool that handles network
 //! gossip, so signature verification and admission run on the configurable

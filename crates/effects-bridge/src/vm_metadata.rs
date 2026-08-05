@@ -21,7 +21,7 @@ use hyperscale_vm_effects::{
 /// A section rides inside a published artifact and the artifact inside a
 /// transaction, so the code it describes has to fit beside it; a quarter
 /// of the transaction budget is the share this side claims. The cap is
-/// also what makes decode linear: SBOR frames every collection with its
+/// also what makes decode linear: HBOR frames every collection with its
 /// length and every element costs at least a byte, so no claimed count
 /// can outrun the input.
 pub const MAX_PACKAGE_METADATA_BYTES: usize = MAX_TX_BYTES_LEN / 4;
@@ -484,7 +484,7 @@ mod tests {
     fn the_deepest_admissible_metadata_still_encodes() {
         // Every nesting bound at its limit at once, along the costliest
         // path: clause bodies, child-key material, and a tuple literal
-        // each cost two SBOR levels a layer. If the codec's own nesting
+        // each cost two decoder levels a layer. If the codec's own nesting
         // limit ever stops covering the bounds it is derived from, this
         // is what says so — the checks would accept a structure the
         // encoder could not write.

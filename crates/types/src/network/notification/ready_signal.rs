@@ -1,6 +1,6 @@
 //! Validator-emitted "ready on shard" signal notification.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{MessageClass, NetworkMessage, ReadySignal};
 
@@ -17,7 +17,7 @@ use crate::{MessageClass, NetworkMessage, ReadySignal};
 /// single Byzantine proposer can't suppress a validator's readiness
 /// indefinitely — the next honest proposer already holds the signal.
 /// Senders re-emit if their window passes uncollected.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ReadySignalNotification {
     /// The signal being submitted. Carries its own validator id +
     /// height window + signature.
@@ -44,7 +44,7 @@ impl NetworkMessage for ReadySignalNotification {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{ConsensusSignature, ShardId, ValidatorId, WeightedTimestamp};
@@ -60,10 +60,10 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let n = ReadySignalNotification::new(sample_signal());
-        let bytes = basic_encode(&n).unwrap();
-        let decoded: ReadySignalNotification = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&n).unwrap();
+        let decoded: ReadySignalNotification = hbor_from_slice(&bytes).unwrap();
         assert_eq!(n, decoded);
     }
 

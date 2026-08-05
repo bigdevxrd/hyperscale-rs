@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use blake3::Hasher;
-use sbor::prelude::*;
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 
 use crate::{
     BEACON_SIGNER_COUNT, ConsensusPublicKey, EPOCH_DURATION, EpochWindows, GenesisConfigHash, Hash,
@@ -27,13 +27,12 @@ const DOMAIN_BEACON_GENESIS: &[u8] = b"HYPERSCALE_BEACON_GENESIS_v1";
 /// Sizing knobs for a beacon chain. Lives on [`BeaconGenesisConfig`]
 /// and is copied verbatim into `BeaconState.chain_config` at genesis,
 /// where every consensus-critical sizing decision reads it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct BeaconChainConfig {
     /// Wall-clock milliseconds per epoch. Drives the
     /// `BeaconCommitteeStart` timer and the skip-trigger window.
-    /// Stored as `u64` ms rather than [`Duration`] because the radix
-    /// SBOR derive in this workspace doesn't impl `Encode`/`Decode`
-    /// for `Duration`.
+    /// Stored as `u64` ms rather than [`Duration`] because `Duration`
+    /// has no wire codec.
     pub epoch_duration_ms: u64,
     /// Max validators per shard committee.
     pub shard_size: u32,
@@ -206,7 +205,7 @@ impl Default for BeaconChainConfig {
 /// one pool); the pool's validator set is derived by filtering
 /// `initial_validators` on `pool == this_pool_id` during state
 /// construction.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GenesisValidator {
     /// Validator id.
     pub id: ValidatorId,
@@ -217,7 +216,7 @@ pub struct GenesisValidator {
 }
 
 /// One stake pool as supplied at genesis.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GenesisPool {
     /// Pool id.
     pub id: StakePoolId,
@@ -230,11 +229,11 @@ pub struct GenesisPool {
 /// Loaded from TOML at the validator binary's startup; consumed once by
 /// the state builder. Every field is consensus-critical — two
 /// validators with different `BeaconGenesisConfig`s produce divergent
-/// `BeaconState`s at epoch 0 and never converge. The SBOR-canonical
+/// `BeaconState`s at epoch 0 and never converge. The HBOR-canonical
 /// hash of this struct is the [`GenesisConfigHash`] carried by
 /// [`BeaconCert::Genesis`](crate::BeaconCert), binding the chain
 /// identity to operator-supplied TOML; see [`genesis_config_hash`].
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BeaconGenesisConfig {
     /// Sizing knobs (`epoch_duration_ms`, `shard_size`,
     /// `beacon_committee_size`). Copied into `BeaconState.chain_config`
@@ -265,7 +264,7 @@ pub struct BeaconGenesisConfig {
 /// Hash a [`BeaconGenesisConfig`] into the [`GenesisConfigHash`] carried
 /// by [`BeaconCert::Genesis`](crate::BeaconCert).
 ///
-/// Pure function over the SBOR-canonical encoding plus the network's
+/// Pure function over the HBOR-canonical encoding plus the network's
 /// id byte. Two operators with byte-identical TOML produce the same
 /// hash *only* when bootstrapping the same network — mainnet and
 /// stokenet operators using identical genesis TOML still get distinct
@@ -273,12 +272,12 @@ pub struct BeaconGenesisConfig {
 /// initial randomness, ...) likewise yields a different hash and a
 /// different [`BeaconBlockHash`](crate::BeaconBlockHash) at genesis.
 ///
-/// Layout: `BLAKE3(DOMAIN_BEACON_GENESIS || network.id || SBOR(config))`.
+/// Layout: `BLAKE3(DOMAIN_BEACON_GENESIS || network.id || HBOR(config))`.
 /// The domain tag bumps with any future layout change.
 ///
 /// # Panics
 ///
-/// Never in practice: every field is `BasicSbor` and the struct is
+/// Never in practice: every field is `Hbor` and the struct is
 /// closed, so encoding is total.
 #[must_use]
 pub fn genesis_config_hash(
@@ -288,7 +287,7 @@ pub fn genesis_config_hash(
     let mut h = Hasher::new();
     h.update(DOMAIN_BEACON_GENESIS);
     h.update(&[network.id]);
-    let bytes = basic_encode(config).expect("BeaconGenesisConfig SBOR encode is infallible");
+    let bytes = hbor_to_vec(config).expect("BeaconGenesisConfig HBOR encode is infallible");
     h.update(&bytes);
     GenesisConfigHash::from_raw(Hash::from_hash_bytes(h.finalize().as_bytes()))
 }
@@ -296,6 +295,7 @@ pub fn genesis_config_hash(
 #[cfg(test)]
 mod tests {
     use hyperscale_crypto_bls::public_key_from_u64_seed;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
@@ -323,10 +323,10 @@ mod tests {
     }
 
     #[test]
-    fn config_sbor_round_trip() {
+    fn config_hbor_round_trip() {
         let original = sample_config();
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: BeaconGenesisConfig = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: BeaconGenesisConfig = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 

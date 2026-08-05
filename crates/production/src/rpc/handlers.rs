@@ -28,6 +28,7 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 use hex::{decode as hex_decode, encode as hex_encode};
+use hyperscale_hbor::from_slice as hbor_from_slice;
 use hyperscale_metrics::{
     record_transaction_rejected, record_tx_ingress_rejected_pending_limit,
     record_tx_ingress_rejected_syncing,
@@ -36,7 +37,6 @@ use hyperscale_metrics_prometheus::encode_metrics;
 use hyperscale_types::{
     Hash, InFlightCount, Transaction, TransactionDecision, TransactionStatus, TxHash,
 };
-use sbor::prelude::basic_decode;
 
 use super::state::RpcState;
 use super::types::{
@@ -147,7 +147,7 @@ pub async fn sync_handler(State(state): State<RpcState>) -> impl IntoResponse {
 
 /// Handler for `POST /api/v1/transactions` - submit transaction.
 ///
-/// Performs quick structural validation (hex decode, SBOR decode) and submits
+/// Performs quick structural validation (hex decode, HBOR decode) and submits
 /// to the runner for validation and gossip.
 ///
 /// Returns 202 Accepted immediately with transaction hash. Clients should poll
@@ -341,7 +341,7 @@ fn check_backpressure(state: &RpcState) -> Option<(StatusCode, Json<SubmitTransa
     None
 }
 
-/// Hex- and SBOR-decode a submitted transaction, recording metrics on failure.
+/// Hex- and wire-decode a submitted transaction, recording metrics on failure.
 fn decode_transaction(
     transaction_hex: &str,
 ) -> Result<Transaction, (StatusCode, Json<SubmitTransactionResponse>)> {
@@ -357,7 +357,7 @@ fn decode_transaction(
         )
     })?;
 
-    basic_decode(&tx_bytes).map_err(|e| {
+    hbor_from_slice(&tx_bytes).map_err(|e| {
         record_transaction_rejected("invalid_format");
         (
             StatusCode::BAD_REQUEST,
@@ -407,10 +407,10 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use axum::routing::{get, post};
+    use hyperscale_hbor::to_vec as hbor_to_vec;
     use hyperscale_node::{BlockSyncStateKind, TxStatusCache};
     use hyperscale_types::test_utils::test_transaction;
     use hyperscale_types::{BlockHeight, ShardId, TransactionDecision};
-    use sbor::prelude::basic_encode;
     use serde_json::{from_slice, to_string};
     use tower::ServiceExt;
 
@@ -667,7 +667,7 @@ mod tests {
 
         // Submit a valid transaction (we expect it to be rejected due to sync)
         let tx = test_transaction(1);
-        let tx_hex = hex_encode(basic_encode(&tx).unwrap());
+        let tx_hex = hex_encode(hbor_to_vec(&tx).unwrap());
 
         let response = app
             .oneshot(
@@ -720,7 +720,7 @@ mod tests {
 
         // Submit a valid transaction
         let tx = test_transaction(1);
-        let tx_hex = hex_encode(basic_encode(&tx).unwrap());
+        let tx_hex = hex_encode(hbor_to_vec(&tx).unwrap());
 
         let response = app
             .oneshot(

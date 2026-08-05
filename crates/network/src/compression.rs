@@ -20,7 +20,7 @@ use thiserror::Error;
 ///
 /// Prevents allocation bombs where a small compressed frame claims a huge
 /// uncompressed size in its LZ4 header. The compressed wire frame is already
-/// capped at 10 MB; 64 MB allows for highly compressible SBOR payloads while
+/// capped at 10 MB; 64 MB allows for highly compressible wire payloads while
 /// blocking multi-GB allocations from malicious peers.
 pub const MAX_DECOMPRESSED_SIZE: usize = 64 * 1024 * 1024;
 

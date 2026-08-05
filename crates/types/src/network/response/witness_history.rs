@@ -1,6 +1,6 @@
 //! Snap-sync beacon-witness history response.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     BlockHeader, BoundedVec, MAX_WITNESSES_PER_FETCH, MessageClass, NetworkMessage,
@@ -25,7 +25,7 @@ use crate::{
 /// `header.beacon_witness_root()` with exactly
 /// `header.beacon_witness_leaf_count()` entries. Individual pages
 /// carry no proof — a mismatch at final assembly restarts the fetch.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct WitnessHistoryChunk {
     /// The boundary block's header. Hash-bound to the anchor; its
     /// `beacon_witness_root` / `beacon_witness_leaf_count` are the
@@ -50,7 +50,7 @@ pub struct WitnessHistoryChunk {
 
 /// Response to a
 /// [`GetWitnessHistoryRequest`](crate::network::request::GetWitnessHistoryRequest).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetWitnessHistoryResponse {
     /// The served page, or `None` when this peer cannot serve the
     /// requested anchor (unknown height, fork-divergent hash, or
@@ -73,7 +73,7 @@ impl NetworkMessage for GetWitnessHistoryResponse {
 mod tests {
     use std::collections::BTreeMap;
 
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{
@@ -112,16 +112,16 @@ mod tests {
     }
 
     #[test]
-    fn test_sbor_roundtrip_unavailable() {
+    fn test_hbor_roundtrip_unavailable() {
         let response = GetWitnessHistoryResponse { history: None };
 
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetWitnessHistoryResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetWitnessHistoryResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 
     #[test]
-    fn test_sbor_roundtrip_chunk() {
+    fn test_hbor_roundtrip_chunk() {
         let header = make_header();
         let qc = QuorumCertificate::new(
             header.hash(),
@@ -152,8 +152,8 @@ mod tests {
             }),
         };
 
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetWitnessHistoryResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetWitnessHistoryResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 }

@@ -9,14 +9,13 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 
 use hyperscale_crypto::{ConsensusSignature, Verifier};
-use sbor::prelude::*;
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
+use hyperscale_hbor::error::{DecodeError as HborDecodeError, EncodeError as HborEncodeError};
+use hyperscale_hbor::{
+    Decoder as HborDecoder, Encoder as HborEncoder, HborDecode, HborEncode, HborWidth,
+    bounded as hbor_bounded, to_vec as hbor_to_vec,
 };
 use thiserror::Error;
 
-use crate::sbor_codec::decode_bounded_vec;
 use crate::{
     AggregateSignature, BlockHeight, ConsensusPublicKey, ExecutionVote, GlobalReceiptRoot, Hash,
     MAX_TXS_PER_BLOCK, NetworkDefinition, RETENTION_HORIZON, ShardId, SignerBitfield, TxOutcome,
@@ -35,9 +34,9 @@ pub struct ExecutionCertificate {
     tx_outcomes: Vec<TxOutcome>,
     aggregated_signature: AggregateSignature,
     signers: SignerBitfield,
-    /// Cached SBOR-encoded bytes. Populated at construction or after
+    /// Cached HBOR-encoded bytes. Populated at construction or after
     /// deserialization to avoid re-serialization on storage writes.
-    cached_sbor: Option<Vec<u8>>,
+    cached_bytes: Option<Vec<u8>>,
 }
 
 impl Debug for ExecutionCertificate {
@@ -62,7 +61,7 @@ impl Clone for ExecutionCertificate {
             tx_outcomes: self.tx_outcomes.clone(),
             aggregated_signature: self.aggregated_signature,
             signers: self.signers.clone(),
-            cached_sbor: self.cached_sbor.clone(),
+            cached_bytes: self.cached_bytes.clone(),
         }
     }
 }
@@ -80,51 +79,44 @@ impl PartialEq for ExecutionCertificate {
 
 impl Eq for ExecutionCertificate {}
 
-// Manual SBOR: cached_sbor is derived, not serialized.
-impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ExecutionCertificate {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
+// Manual codec: cached_bytes is derived, not serialized.
+// Manual codec — the decode side recomputes the receipt root over the
+// carried outcomes. The signature aggregate only commits to
+// (global_receipt_root, tx_count), not to tx_outcomes content; without
+// this check a Byzantine aggregator could ship a signature-valid EC whose
+// outcomes don't hash to the signed root, slipping bogus per-tx results
+// past every downstream consumer (gossip ingress, fetch ingress,
+// FinalizedWave admission).
 
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_size(6)?;
-        encoder.encode(&self.wave_id)?;
-        encoder.encode(&self.vote_anchor_ts)?;
-        encoder.encode(&self.global_receipt_root)?;
-        encoder.encode(&self.tx_outcomes)?;
-        encoder.encode(&self.aggregated_signature)?;
-        encoder.encode(&self.signers)?;
-        Ok(())
+impl HborWidth for ExecutionCertificate {
+    const MIN_ENCODED_LEN: usize = 1;
+}
+
+impl HborEncode for ExecutionCertificate {
+    fn encode(&self, encoder: &mut HborEncoder<'_>) -> Result<(), HborEncodeError> {
+        encoder.nested(&self.wave_id)?;
+        encoder.nested(&self.vote_anchor_ts)?;
+        encoder.nested(&self.global_receipt_root)?;
+        hbor_bounded::check_encoded_len("tx_outcomes", self.tx_outcomes.len(), MAX_TXS_PER_BLOCK)?;
+        encoder.nested(&self.tx_outcomes)?;
+        encoder.nested(&self.aggregated_signature)?;
+        encoder.nested(&self.signers)
     }
 }
 
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ExecutionCertificate {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 6 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 6,
-                actual: length,
-            });
-        }
-        let wave_id: WaveId = decoder.decode()?;
-        let vote_anchor_ts: WeightedTimestamp = decoder.decode()?;
-        let global_receipt_root: GlobalReceiptRoot = decoder.decode()?;
-        let tx_outcomes = decode_bounded_vec::<_, TxOutcome>(decoder, MAX_TXS_PER_BLOCK)?;
-        let aggregated_signature: AggregateSignature = decoder.decode()?;
-        let signers: SignerBitfield = decoder.decode()?;
-        // The signature aggregate only commits to (global_receipt_root, tx_count),
-        // not to tx_outcomes content. Without this check a Byzantine
-        // aggregator could ship a signature-valid EC whose outcomes don't
-        // hash to the signed root, slipping bogus per-tx results past every
-        // downstream consumer (gossip ingress, fetch ingress, FinalizedWave
-        // admission).
+impl HborDecode for ExecutionCertificate {
+    fn decode(decoder: &mut HborDecoder<'_>) -> Result<Self, HborDecodeError> {
+        let wave_id: WaveId = decoder.nested()?;
+        let vote_anchor_ts: WeightedTimestamp = decoder.nested()?;
+        let global_receipt_root: GlobalReceiptRoot = decoder.nested()?;
+        let tx_outcomes: Vec<TxOutcome> = decoder
+            .descend(|decoder| hbor_bounded::decode_bounded_vec(decoder, MAX_TXS_PER_BLOCK))?;
+        let aggregated_signature: AggregateSignature = decoder.nested()?;
+        let signers: SignerBitfield = decoder.nested()?;
         if compute_global_receipt_root(&tx_outcomes) != global_receipt_root {
-            return Err(DecodeError::InvalidCustomValue);
+            return Err(HborDecodeError::FailedValidation(
+                "tx outcomes do not hash to the signed receipt root",
+            ));
         }
         let mut ec = Self {
             wave_id,
@@ -133,24 +125,10 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ExecutionCe
             tx_outcomes,
             aggregated_signature,
             signers,
-            cached_sbor: None,
+            cached_bytes: None,
         };
-        ec.populate_cached_sbor();
+        ec.populate_cached_bytes();
         Ok(ec)
-    }
-}
-
-impl Categorize<NoCustomValueKind> for ExecutionCertificate {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl Describe<NoCustomTypeKind> for ExecutionCertificate {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("ExecutionCertificate", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
     }
 }
 
@@ -172,9 +150,9 @@ impl ExecutionCertificate {
             tx_outcomes,
             aggregated_signature,
             signers,
-            cached_sbor: None,
+            cached_bytes: None,
         };
-        ec.populate_cached_sbor();
+        ec.populate_cached_bytes();
         ec
     }
 
@@ -240,10 +218,10 @@ impl ExecutionCertificate {
         self.wave_id.block_height()
     }
 
-    /// Pre-serialized SBOR bytes, if available.
+    /// Pre-serialized wire bytes, if available.
     #[must_use]
-    pub fn cached_sbor_bytes(&self) -> Option<&[u8]> {
-        self.cached_sbor.as_deref()
+    pub fn cached_wire_bytes(&self) -> Option<&[u8]> {
+        self.cached_bytes.as_deref()
     }
 
     /// Content hash over the full wire encoding (including
@@ -254,20 +232,20 @@ impl ExecutionCertificate {
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding fails — closed type, infallible in practice.
+    /// Panics if HBOR encoding fails — closed type, infallible in practice.
     #[must_use]
     pub fn wire_hash(&self) -> Hash {
-        self.cached_sbor.as_deref().map_or_else(
+        self.cached_bytes.as_deref().map_or_else(
             || {
-                let bytes = basic_encode(self).expect("EC SBOR encoding must succeed");
+                let bytes = hbor_to_vec(self).expect("EC HBOR encoding must succeed");
                 Hash::from_parts(&[&bytes])
             },
             |bytes| Hash::from_parts(&[bytes]),
         )
     }
 
-    fn populate_cached_sbor(&mut self) {
-        self.cached_sbor = Some(basic_encode(self).expect("EC SBOR encoding must succeed"));
+    fn populate_cached_bytes(&mut self) {
+        self.cached_bytes = Some(hbor_to_vec(self).expect("EC HBOR encoding must succeed"));
     }
 
     /// Build the canonical signing message used by every constituent vote

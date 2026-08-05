@@ -1,7 +1,7 @@
 //! Per-tx execution outcome ([`TxOutcome`]) and the [`ExecutionOutcome`] enum
 //! carried inside execution certificates.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{GlobalReceiptHash, TxHash};
 
@@ -9,7 +9,7 @@ use crate::{GlobalReceiptHash, TxHash};
 ///
 /// Carried inside execution certificates so remote shards can extract
 /// individual transaction results for cross-shard finalization.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct TxOutcome {
     tx_hash: TxHash,
     outcome: ExecutionOutcome,
@@ -128,7 +128,7 @@ impl TxOutcome {
 /// flag. Failed transactions carry no `receipt_hash` on the wire (the
 /// canonical [`FAILED_RECEIPT_HASH`](crate::FAILED_RECEIPT_HASH) is
 /// derivable at hash time).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum ExecutionOutcome {
     /// Engine committed the transaction; state changes applied.
     Succeeded {

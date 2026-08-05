@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use sbor::prelude::*;
+use hyperscale_hbor::to_vec as hbor_to_vec;
 
 use crate::{
     Attempt, BlockHeight, Hash, ShardId, TopologySnapshot, Transaction, ValidatorId, Verifiable,
@@ -66,7 +66,7 @@ pub fn wave_leader(wave_id: &WaveId, committee: &[ValidatorId]) -> ValidatorId {
 /// re-send their vote to `wave_leader_at(wave_id, attempt+1, committee)`
 /// after a timeout.
 ///
-/// Uses `Hash(sbor_encode(wave_id) ++ attempt.to_le_bytes()) % committee_size`
+/// Uses `Hash(encode(wave_id) ++ attempt.to_le_bytes()) % committee_size`
 /// for deterministic selection. All validators compute the same result.
 ///
 /// # Panics
@@ -79,7 +79,7 @@ pub fn wave_leader_at(
     committee: &[ValidatorId],
 ) -> ValidatorId {
     assert!(!committee.is_empty(), "committee must not be empty");
-    let mut buf = basic_encode(wave_id).expect("WaveId serialization should never fail");
+    let mut buf = hbor_to_vec(wave_id).expect("WaveId serialization should never fail");
     buf.extend_from_slice(&attempt.to_le_bytes());
     let selection_hash = Hash::from_bytes(&buf);
     let bytes = selection_hash.as_bytes();

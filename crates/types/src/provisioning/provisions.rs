@@ -7,8 +7,8 @@
 use std::fmt::{self, Debug, Formatter};
 use std::sync::OnceLock;
 
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use hyperscale_jmt::{Blake3Hasher, MultiProof, Tree};
-use sbor::prelude::*;
 use thiserror::Error;
 
 use crate::state_key::{jmt_value_hash, vm_flat_key_parts, vm_leaf_key};
@@ -32,7 +32,7 @@ use crate::{
 ///
 /// The content hash is computed lazily on first call to [`Self::hash`] and
 /// cached for the lifetime of the value.
-#[derive(BasicSbor)]
+#[derive(Hbor)]
 pub struct Provisions {
     source_shard: ShardId,
     target_shard: ShardId,
@@ -54,9 +54,9 @@ pub struct Provisions {
     proof: MerkleInclusionProof,
     transactions: BoundedVec<ProvisionEntry, MAX_TXS_PER_BLOCK>,
 
-    /// Lazily-computed content hash (blake3 over SBOR-encoded content fields).
+    /// Lazily-computed content hash (blake3 over HBOR-encoded content fields).
     /// Populated on first [`Self::hash`] call; not on the wire.
-    #[sbor(skip)]
+    #[hbor(skip)]
     hash: OnceLock<ProvisionHash>,
 }
 
@@ -216,27 +216,27 @@ impl Provisions {
         // Encode the content fields (excluding the hash itself) for hashing.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(
-            &basic_encode(&source_shard).expect("ShardId serialization should never fail"),
+            &hbor_to_vec(&source_shard).expect("ShardId serialization should never fail"),
         );
         bytes.extend_from_slice(
-            &basic_encode(&target_shard).expect("ShardId serialization should never fail"),
+            &hbor_to_vec(&target_shard).expect("ShardId serialization should never fail"),
         );
         bytes.extend_from_slice(
-            &basic_encode(&block_height).expect("BlockHeight serialization should never fail"),
+            &hbor_to_vec(&block_height).expect("BlockHeight serialization should never fail"),
         );
         bytes.extend_from_slice(
-            &basic_encode(&source_block_ts)
+            &hbor_to_vec(&source_block_ts)
                 .expect("WeightedTimestamp serialization should never fail"),
         );
         bytes.extend_from_slice(
-            &basic_encode(&source_block_reveal)
+            &hbor_to_vec(&source_block_reveal)
                 .expect("RevealChain serialization should never fail"),
         );
         bytes.extend_from_slice(
-            &basic_encode(proof).expect("MerkleInclusionProof serialization should never fail"),
+            &hbor_to_vec(proof).expect("MerkleInclusionProof serialization should never fail"),
         );
         bytes.extend_from_slice(
-            &basic_encode(transactions)
+            &hbor_to_vec(&transactions.to_vec())
                 .expect("Vec<ProvisionEntry> serialization should never fail"),
         );
         ProvisionHash::from_raw(Hash::from_bytes(&bytes))
@@ -422,7 +422,9 @@ impl Verified<Provisions> {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{DecodeError, Encoder as _, NoCustomValueKind, ValueKind};
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
+    };
 
     use super::*;
     use crate::state_key::vm_flat_key;
@@ -464,8 +466,8 @@ mod tests {
             vec![],
         );
 
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: Provisions = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: Provisions = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
         assert_eq!(decoded.target_shard(), ShardId::leaf(2, 2));
     }
@@ -485,8 +487,8 @@ mod tests {
             )],
         );
 
-        let bytes = basic_encode(&provisions).unwrap();
-        let decoded: Provisions = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&provisions).unwrap();
+        let decoded: Provisions = hbor_from_slice(&bytes).unwrap();
         assert_eq!(provisions, decoded);
     }
 
@@ -519,8 +521,8 @@ mod tests {
     #[test]
     fn test_merkle_inclusion_proof_roundtrip() {
         let proof = MerkleInclusionProof::new(vec![1, 2, 3, 4, 5]);
-        let bytes = basic_encode(&proof).unwrap();
-        let decoded: MerkleInclusionProof = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&proof).unwrap();
+        let decoded: MerkleInclusionProof = hbor_from_slice(&bytes).unwrap();
         assert_eq!(proof, decoded);
     }
 
@@ -778,30 +780,24 @@ mod tests {
 
     #[test]
     fn decode_rejects_oversized_transactions_count() {
-        use sbor::{BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, VecEncoder};
-        let mut buf = Vec::with_capacity(64);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(7).unwrap();
-            enc.encode(&ShardId::leaf(1, 1)).unwrap();
-            enc.encode(&ShardId::leaf(2, 2)).unwrap();
-            enc.encode(&BlockHeight::new(10)).unwrap();
-            enc.encode(&WeightedTimestamp::ZERO).unwrap();
-            enc.encode(&RevealChain::ZERO).unwrap();
-            enc.encode(&MerkleInclusionProof::dummy()).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ProvisionEntry::value_kind()).unwrap();
-            enc.write_size(MAX_TXS_PER_BLOCK + 1).unwrap();
+        let mut buf = Vec::new();
+        for part in [
+            hbor_to_vec(&ShardId::leaf(1, 1)).unwrap(),
+            hbor_to_vec(&ShardId::leaf(2, 2)).unwrap(),
+            hbor_to_vec(&BlockHeight::new(10)).unwrap(),
+            hbor_to_vec(&WeightedTimestamp::ZERO).unwrap(),
+            hbor_to_vec(&RevealChain::ZERO).unwrap(),
+            hbor_to_vec(&MerkleInclusionProof::dummy()).unwrap(),
+        ] {
+            buf.extend_from_slice(&part);
         }
-        let err = basic_decode::<Provisions>(&buf).unwrap_err();
+        varint::write(&mut buf, MAX_TXS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_TXS_PER_BLOCK + 1) * 64));
+        let err = hbor_from_slice::<Provisions>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_TXS_PER_BLOCK
-                    && actual == MAX_TXS_PER_BLOCK + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
         ));
     }
 }

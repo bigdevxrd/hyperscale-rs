@@ -1,6 +1,6 @@
 //! Snap-sync beacon-witness history request.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetWitnessHistoryResponse;
 use crate::{BlockHash, BlockHeight, MessageClass, NetworkMessage, Request};
@@ -16,7 +16,7 @@ use crate::{BlockHash, BlockHeight, MessageClass, NetworkMessage, Request};
 /// against `block_hash`, and answers leaf hashes from `start_index` in
 /// leaf-index order. The joiner verifies the assembled vector against
 /// the header's root and count once complete.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetWitnessHistoryRequest {
     /// The anchor's block height, read from the projected
     /// `TopologySnapshot`.
@@ -53,13 +53,13 @@ impl Request for GetWitnessHistoryRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::Hash;
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let request = GetWitnessHistoryRequest {
             height: BlockHeight::new(42),
             block_hash: BlockHash::from_raw(Hash::from_bytes(b"anchor")),
@@ -67,8 +67,8 @@ mod tests {
             limit: 512,
         };
 
-        let encoded = basic_encode(&request).unwrap();
-        let decoded: GetWitnessHistoryRequest = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&request).unwrap();
+        let decoded: GetWitnessHistoryRequest = hbor_from_slice(&encoded).unwrap();
         assert_eq!(request, decoded);
     }
 }

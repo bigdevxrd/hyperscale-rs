@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{BeaconProposal, Epoch, MessageClass, NetworkMessage, ValidatorId, Verifiable};
 
@@ -28,7 +28,7 @@ use crate::{BeaconProposal, Epoch, MessageClass, NetworkMessage, ValidatorId, Ve
 /// Unicast (not gossip) because the audience is exactly the beacon
 /// committee — bounded at `BEACON_SIGNER_COUNT`. Gossipsub's flood
 /// overhead isn't justified at that fanout.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BeaconProposalNotification {
     /// Claimed sender. The VRF reveal inside `proposal` authenticates
     /// it — receivers verify against this validator's pubkey.
@@ -70,7 +70,7 @@ impl NetworkMessage for BeaconProposalNotification {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::VrfProof;
@@ -80,14 +80,14 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let n = BeaconProposalNotification::new(
             ValidatorId::new(3),
             Epoch::new(7),
             Arc::new(Verifiable::from(sample_proposal())),
         );
-        let bytes = basic_encode(&n).unwrap();
-        let decoded: BeaconProposalNotification = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&n).unwrap();
+        let decoded: BeaconProposalNotification = hbor_from_slice(&bytes).unwrap();
         assert_eq!(n, decoded);
     }
 

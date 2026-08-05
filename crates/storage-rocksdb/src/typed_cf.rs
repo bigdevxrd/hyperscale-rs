@@ -8,13 +8,14 @@
 
 use std::marker::PhantomData;
 
+use hyperscale_hbor::{
+    HborDecode, HborEncode, from_slice as hbor_from_slice, to_vec as hbor_to_vec,
+};
 use hyperscale_storage::{ImportCursor, ImportProgress};
 use hyperscale_types::{
     BlockHeight, ChainOrigin, Hash, QuorumCertificate, StateRoot, WeightedTimestamp,
 };
 use rocksdb::{ColumnFamily, DB, DBRawIteratorWithThreadMode, Snapshot, WriteBatch};
-use sbor::prelude::{BasicDecode, BasicEncode};
-use sbor::{basic_decode, basic_encode};
 
 use crate::shard::jmt_stored::{StoredNodeKey, encode_key};
 
@@ -45,25 +46,25 @@ pub trait DbCodec<T>: DbEncode<T> {
 
 // ─── Codec implementations ───────────────────────────────────────────────────
 
-/// SBOR encode/decode. Covers most types in the codebase.
-pub struct SborCodec<T>(PhantomData<T>);
+/// HBOR encode/decode. Covers most types in the codebase.
+pub struct HborCodec<T>(PhantomData<T>);
 
-impl<T> Default for SborCodec<T> {
+impl<T> Default for HborCodec<T> {
     fn default() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T: BasicEncode> DbEncode<T> for SborCodec<T> {
+impl<T: HborEncode> DbEncode<T> for HborCodec<T> {
     fn encode_to(&self, value: &T, buf: &mut Vec<u8>) {
-        let encoded = basic_encode(value).expect("SBOR encoding must succeed");
+        let encoded = hbor_to_vec(value).expect("encoding must succeed");
         buf.extend_from_slice(&encoded);
     }
 }
 
-impl<T: BasicEncode + BasicDecode> DbCodec<T> for SborCodec<T> {
+impl<T: HborEncode + HborDecode> DbCodec<T> for HborCodec<T> {
     fn decode(&self, bytes: &[u8]) -> T {
-        basic_decode(bytes).expect("SBOR decoding must succeed")
+        hbor_from_slice(bytes).expect("decoding must succeed")
     }
 }
 
@@ -591,7 +592,7 @@ pub struct CommittedQcEntry;
 impl MetadataEntry for CommittedQcEntry {
     const KEY: &'static [u8] = b"chain:committed_qc";
     type Value = QuorumCertificate;
-    type Codec = SborCodec<QuorumCertificate>;
+    type Codec = HborCodec<QuorumCertificate>;
 }
 
 pub struct JmtMetadataEntry;

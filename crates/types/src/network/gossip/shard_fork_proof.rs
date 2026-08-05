@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{MessageClass, NetworkMessage, ShardForkProof, ShardId};
@@ -15,7 +15,7 @@ use crate::{MessageClass, NetworkMessage, ShardForkProof, ShardId};
 /// uniformly, trusting the evidence rather than the messenger. Broadcast
 /// on first local verification (assembly or a verified gossip receipt) so
 /// the whole network converges on the fence.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ShardForkProofGossip {
     /// The self-proving fork evidence.
     pub proof: Arc<ShardForkProof>,
@@ -54,7 +54,7 @@ impl GossipMessage for ShardForkProofGossip {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::BlockHeight;
@@ -74,12 +74,12 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let gossip = ShardForkProofGossip {
             proof: Arc::new(sample_proof()),
         };
-        let bytes = basic_encode(&gossip).unwrap();
-        let decoded: ShardForkProofGossip = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&gossip).unwrap();
+        let decoded: ShardForkProofGossip = hbor_from_slice(&bytes).unwrap();
         assert_eq!(gossip, decoded);
     }
 

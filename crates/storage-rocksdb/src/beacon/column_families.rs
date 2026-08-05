@@ -17,13 +17,13 @@ use hyperscale_types::{BeaconState, CertifiedBeaconBlock, Hash, RatifyVoteRecord
 use rocksdb::{ColumnFamily, DB};
 
 use crate::shard::column_families::ValidatorIdCodec;
-use crate::typed_cf::{BeU64Codec, HashCodec, SborCodec, TypedCf};
+use crate::typed_cf::{BeU64Codec, HashCodec, HborCodec, TypedCf};
 
 /// Default CF (presence required by `RocksDB`; unused by beacon today).
 pub const DEFAULT_CF: &str = "default";
 
 /// Primary block store keyed by `Epoch` (big-endian `u64` for lex
-/// ordering). Value: SBOR-encoded
+/// ordering). Value: HBOR-encoded
 /// [`BeaconBlock`](hyperscale_types::BeaconBlock).
 pub const BEACON_BLOCKS_BY_EPOCH_CF: &str = "beacon_blocks_by_epoch";
 
@@ -33,13 +33,13 @@ pub const BEACON_BLOCKS_BY_EPOCH_CF: &str = "beacon_blocks_by_epoch";
 pub const BEACON_HASH_TO_EPOCH_CF: &str = "beacon_hash_to_epoch";
 
 /// Per-epoch `BeaconState` snapshot store keyed by `Epoch`. Value:
-/// SBOR-encoded [`BeaconState`](hyperscale_types::BeaconState).
+/// HBOR-encoded [`BeaconState`](hyperscale_types::BeaconState).
 /// Written in the same `WriteBatch` as the block CFs so the
 /// (block, state) pair is atomically consistent on disk.
 pub const BEACON_STATE_BY_EPOCH_CF: &str = "beacon_state_by_epoch";
 
 /// Per-validator durable ratification registers, keyed by validator id
-/// (big-endian `u64`). Value: SBOR-encoded
+/// (big-endian `u64`). Value: HBOR-encoded
 /// [`RatifyVoteRecord`](hyperscale_types::RatifyVoteRecord) — the
 /// validator's prevote/precommit per round for its newest epoch.
 /// Written with a synchronous (fsynced) write before the corresponding
@@ -92,14 +92,14 @@ impl<'a> CfHandles<'a> {
 // ─── Typed CF definitions ────────────────────────────────────────────────────
 
 /// Primary beacon-blocks-by-epoch CF. Key: `u64` epoch (BE-encoded for
-/// lex ordering). Value: SBOR-encoded `CertifiedBeaconBlock`.
+/// lex ordering). Value: HBOR-encoded `CertifiedBeaconBlock`.
 pub struct BeaconBlocksByEpochCf;
 impl TypedCf for BeaconBlocksByEpochCf {
     const NAME: &'static str = BEACON_BLOCKS_BY_EPOCH_CF;
     type Key = u64;
     type Value = CertifiedBeaconBlock;
     type KeyCodec = BeU64Codec;
-    type ValueCodec = SborCodec<CertifiedBeaconBlock>;
+    type ValueCodec = HborCodec<CertifiedBeaconBlock>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.blocks_by_epoch
@@ -122,14 +122,14 @@ impl TypedCf for BeaconHashToEpochCf {
 }
 
 /// Per-epoch `BeaconState` CF. Key: `u64` epoch (BE-encoded). Value:
-/// SBOR-encoded `BeaconState`.
+/// HBOR-encoded `BeaconState`.
 pub struct BeaconStateByEpochCf;
 impl TypedCf for BeaconStateByEpochCf {
     const NAME: &'static str = BEACON_STATE_BY_EPOCH_CF;
     type Key = u64;
     type Value = BeaconState;
     type KeyCodec = BeU64Codec;
-    type ValueCodec = SborCodec<BeaconState>;
+    type ValueCodec = HborCodec<BeaconState>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.state_by_epoch
@@ -143,7 +143,7 @@ impl TypedCf for RatifyRegistersCf {
     type Key = ValidatorId;
     type Value = RatifyVoteRecord;
     type KeyCodec = ValidatorIdCodec;
-    type ValueCodec = SborCodec<RatifyVoteRecord>;
+    type ValueCodec = HborCodec<RatifyVoteRecord>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.ratify_registers

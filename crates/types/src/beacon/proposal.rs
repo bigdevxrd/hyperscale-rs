@@ -6,9 +6,11 @@
 //! the slot, every accepted proposal lands in the resulting
 //! [`BeaconBlock::committed_proposals`](crate::BeaconBlock).
 
+use std::collections::BTreeMap;
+
 use blake3::Hasher;
 use hyperscale_crypto::{SignError, Signer, Verifier};
-use sbor::prelude::*;
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use thiserror::Error;
 
 use crate::{
@@ -24,7 +26,7 @@ use crate::{
 /// pubkey against the `(network.id, slot)` message, witnesses dedup
 /// against the per-shard high-water marks, etc.) is the beacon
 /// crate's job — this is a pure data container.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BeaconProposal {
     /// This proposer's view of where each live shard's chain sits at the
     /// epoch boundary: the **canonical** boundary QC per shard (the
@@ -176,13 +178,13 @@ impl BeaconProposal {
     ///
     /// # Panics
     ///
-    /// Never in practice: every field is `BasicSbor` and the struct is
+    /// Never in practice: every field is `Hbor` and the struct is
     /// closed, so encoding is total.
     #[must_use]
     pub fn pc_element_hash(&self, epoch: Epoch) -> PcValueElement {
         const DOMAIN: &[u8] = b"hyperscale-beacon-proposal-v1";
         const COLLISION_DOMAIN: &[u8] = b"hyperscale-beacon-proposal-bottom-collision-v1";
-        let encoded = basic_encode(self).expect("BeaconProposal SBOR encoding is infallible");
+        let encoded = hbor_to_vec(self).expect("BeaconProposal HBOR encoding is infallible");
         let mut hasher = Hasher::new();
         hasher.update(DOMAIN);
         hasher.update(&epoch.to_le_bytes());
@@ -342,6 +344,8 @@ impl Verified<BeaconProposal> {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
     use crate::{
         ChainOrigin, ConsensusSignature, PcValueElement, PcVector, PcVoteRound, ShardId, SpcView,
@@ -386,10 +390,10 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let original = sample_proposal();
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: BeaconProposal = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: BeaconProposal = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 

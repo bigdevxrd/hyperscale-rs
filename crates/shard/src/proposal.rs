@@ -417,7 +417,7 @@ pub fn assemble_build_action(
     };
 
     // The proposer's new BlockHeader will carry parent_qc in its wire
-    // form; SBOR encoding is byte-identical between the raw and
+    // form; HBOR encoding is byte-identical between the raw and
     // verified shapes, but the field type is raw.
     let parent_qc_raw = parent_qc.into_inner();
     let action = Action::BuildProposal {

@@ -1,6 +1,6 @@
 //! Snap-sync state range response.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     BoundedBytes, BoundedVec, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN,
@@ -23,7 +23,7 @@ pub const MAX_LEAVES_PER_STATE_RANGE: usize = 1_024;
 /// the raw key without needing the owner map — the high half is the
 /// owner-routing prefix, attested positionally by the proof), and the
 /// proof's claimed value hash must equal the hash of `value`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StateRangeLeaf {
     /// The 32-byte hashed JMT leaf key.
     pub leaf_key: Hash,
@@ -38,7 +38,7 @@ pub struct StateRangeLeaf {
 /// A served chunk of a shard's state at a pinned boundary: leaves in
 /// ascending hashed-key order plus the completeness-checked range proof
 /// over them.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StateRangeChunk {
     /// `(leaf, raw pair)` entries, strictly ascending by `leaf_key`.
     pub leaves: BoundedVec<StateRangeLeaf, MAX_LEAVES_PER_STATE_RANGE>,
@@ -54,7 +54,7 @@ pub struct StateRangeChunk {
 
 /// Response to a
 /// [`GetStateRangeRequest`](crate::network::request::GetStateRangeRequest).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetStateRangeResponse {
     /// The served chunk, or `None` when this peer cannot serve the
     /// requested boundary (never pinned, or evicted from its ring) —
@@ -74,21 +74,21 @@ impl NetworkMessage for GetStateRangeResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn test_sbor_roundtrip_unavailable() {
+    fn test_hbor_roundtrip_unavailable() {
         let response = GetStateRangeResponse { chunk: None };
 
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetStateRangeResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetStateRangeResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 
     #[test]
-    fn test_sbor_roundtrip_chunk() {
+    fn test_hbor_roundtrip_chunk() {
         let leaf = StateRangeLeaf {
             leaf_key: Hash::from_bytes(b"leaf"),
             storage_key: BoundedBytes::from(vec![7u8; 60]),
@@ -102,8 +102,8 @@ mod tests {
             }),
         };
 
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetStateRangeResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetStateRangeResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 }

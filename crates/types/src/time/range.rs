@@ -22,7 +22,7 @@
 
 use std::time::Duration;
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::WeightedTimestamp;
 
@@ -35,7 +35,7 @@ use crate::WeightedTimestamp;
 pub const MAX_VALIDITY_RANGE: Duration = Duration::from_mins(5);
 
 /// Half-open `[start, end)` range of [`WeightedTimestamp`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Hbor)]
 pub struct TimestampRange {
     /// Inclusive lower bound: a tx is in-range iff `start <= ts`.
     pub start_timestamp_inclusive: WeightedTimestamp,

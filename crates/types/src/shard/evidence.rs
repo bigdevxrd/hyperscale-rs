@@ -23,7 +23,7 @@
 //! sub-structure and is only a bonus.
 
 use hyperscale_crypto::Verifier;
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::shard::commit_proof::{CommitProof, CommitProofVerifyError, ResolvedCommittee};
@@ -42,7 +42,7 @@ use crate::{
 /// contradiction is `block_hash_a != block_hash_b`: an honest validator
 /// votes at most once per round, so two valid signatures over different
 /// block hashes at the same slot prove the key voted twice.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ShardVoteEquivocation {
     /// Validator that double-voted.
     pub validator: ValidatorId,
@@ -169,7 +169,7 @@ impl Verify<&ShardVoteEquivocationContext<'_>> for Box<ShardVoteEquivocation> {
 /// trust it. The cross-victim shape: victim B holds one commit proof,
 /// victim C the other, and together they are the fork proof. The consequence
 /// is fence + full committee re-draw.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum ShardForkProof {
     /// Two conflicting commits at one `(shard, height)`.
     ConflictingCommits {
@@ -359,6 +359,7 @@ impl ShardForkProof {
 mod tests {
     use hyperscale_crypto::Signer;
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{BlockVote, Hash, ProposerTimestamp};
@@ -518,10 +519,9 @@ mod tests {
         );
     }
 
-    /// Evidence round-trips through SBOR unchanged.
+    /// Evidence round-trips through the wire codec unchanged.
     #[test]
-    fn sbor_round_trip() {
-        use sbor::{basic_decode, basic_encode};
+    fn hbor_round_trip() {
         let ev = ShardVoteEquivocation {
             validator: ValidatorId::new(7),
             shard: ShardId::ROOT,
@@ -534,8 +534,8 @@ mod tests {
             parent_block_hash_b: hash(b"parent-b"),
             sig_b: ConsensusSignature::new([2u8; 96]),
         };
-        let bytes = basic_encode(&ev).unwrap();
-        let decoded: ShardVoteEquivocation = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&ev).unwrap();
+        let decoded: ShardVoteEquivocation = hbor_from_slice(&bytes).unwrap();
         assert_eq!(ev, decoded);
     }
 
@@ -545,6 +545,7 @@ mod tests {
         use std::sync::Arc;
 
         use hyperscale_crypto_bls::BlsVerifier;
+        use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
         use super::super::*;
         use crate::test_utils::{
@@ -825,12 +826,11 @@ mod tests {
         }
 
         #[test]
-        fn fork_proof_sbor_round_trip() {
-            use sbor::{basic_decode, basic_encode};
+        fn fork_proof_hbor_round_trip() {
             let committee = TestCommittee::new(4, 10);
             let proof = conflicting_commits(&committee);
-            let bytes = basic_encode(&proof).unwrap();
-            let decoded: ShardForkProof = basic_decode(&bytes).unwrap();
+            let bytes = hbor_to_vec(&proof).unwrap();
+            let decoded: ShardForkProof = hbor_from_slice(&bytes).unwrap();
             assert_eq!(proof, decoded);
         }
     }

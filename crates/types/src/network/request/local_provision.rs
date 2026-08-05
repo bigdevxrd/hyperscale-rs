@@ -1,6 +1,6 @@
 //! Local provisions fetch request (intra-shard DA).
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetLocalProvisionsResponse;
 use crate::{MessageClass, NetworkMessage, ProvisionHash, Request};
@@ -10,7 +10,7 @@ use crate::{MessageClass, NetworkMessage, ProvisionHash, Request};
 /// Used when a validator is missing provisions referenced by a pending
 /// block. The responder resolves each hash from the local provision store
 /// — no scope information is needed.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetLocalProvisionsRequest {
     /// Hashes of the provisions being requested.
     pub batch_hashes: Vec<ProvisionHash>,
@@ -44,21 +44,21 @@ impl Request for GetLocalProvisionsRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::Hash;
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let request = GetLocalProvisionsRequest {
             batch_hashes: vec![
                 ProvisionHash::from_raw(Hash::from_bytes(b"batch1")),
                 ProvisionHash::from_raw(Hash::from_bytes(b"batch2")),
             ],
         };
-        let encoded = basic_encode(&request).unwrap();
-        let decoded: GetLocalProvisionsRequest = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&request).unwrap();
+        let decoded: GetLocalProvisionsRequest = hbor_from_slice(&encoded).unwrap();
         assert_eq!(request, decoded);
     }
 }

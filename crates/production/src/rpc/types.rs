@@ -93,10 +93,10 @@ pub struct ShardSyncStatus {
 
 /// Request body for `POST /api/v1/transactions`.
 ///
-/// Accepts a transaction in hex-encoded SBOR format.
+/// Accepts a transaction in hex-encoded HBOR format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitTransactionRequest {
-    /// Hex-encoded SBOR-serialized `Transaction`.
+    /// Hex-encoded HBOR-serialized `Transaction`.
     pub transaction_hex: String,
 }
 

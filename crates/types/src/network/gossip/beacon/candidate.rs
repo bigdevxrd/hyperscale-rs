@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{CandidateBeaconBlock, MessageClass, NetworkMessage, Verifiable};
@@ -25,7 +25,7 @@ use crate::{CandidateBeaconBlock, MessageClass, NetworkMessage, Verifiable};
 ///
 /// `MessageClass::Consensus` — the candidate is ratification's input:
 /// until it reaches the pool, only the skip hash is prevotable.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BeaconCandidateGossip {
     /// The candidate block paired with its SPC proposal certificate.
     pub candidate: Arc<Verifiable<CandidateBeaconBlock>>,
@@ -73,7 +73,7 @@ impl GossipMessage for BeaconCandidateGossip {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{
@@ -112,10 +112,10 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let g = BeaconCandidateGossip::new(Arc::new(Verifiable::from(sample_candidate())));
-        let bytes = basic_encode(&g).unwrap();
-        let decoded: BeaconCandidateGossip = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&g).unwrap();
+        let decoded: BeaconCandidateGossip = hbor_from_slice(&bytes).unwrap();
         assert_eq!(g, decoded);
     }
 

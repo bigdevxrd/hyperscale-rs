@@ -103,7 +103,7 @@ impl NotifyStreamPool {
 
     /// Send a pre-compressed notification frame to a peer.
     ///
-    /// The caller is responsible for SBOR-encoding and LZ4-compressing the
+    /// The caller is responsible for encoding and LZ4-compressing the
     /// payload once; this method fans out the already-compressed bytes to
     /// each peer's stream actor without redundant compression.
     ///

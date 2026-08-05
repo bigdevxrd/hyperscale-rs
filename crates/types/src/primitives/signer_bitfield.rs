@@ -1,9 +1,8 @@
 //! Bitfield for tracking which validators have signed.
 
-use sbor::prelude::*;
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
+use hyperscale_hbor::error::{DecodeError as HborDecodeError, EncodeError as HborEncodeError};
+use hyperscale_hbor::{
+    Decoder, Encoder, HborDecode, HborEncode, HborWidth, bounded as hbor_bounded,
 };
 
 use crate::BoundedBytes;
@@ -125,54 +124,53 @@ impl Default for SignerBitfield {
     }
 }
 
-// Manual SBOR impl — `BoundedBytes` covers the byte-length cap on `bits`,
-// but the cross-field validation (bits.len() must equal num_validators
-// div_ceil 8, num_validators must not exceed MAX_SIGNERS, padding bits
-// in the trailing byte must be zero) doesn't fit a derive. Without these
-// checks a peer can supply num_validators = u64::MAX, hanging
-// set_indices() and panicking set().
+// Manual codec — the cross-field validation (bits.len() must equal
+// num_validators div_ceil 8, num_validators must not exceed MAX_SIGNERS,
+// padding bits in the trailing byte must be zero) doesn't fit a derive.
+// Without these checks a peer can supply an absurd num_validators, hanging
+// set_indices() and panicking set(). The count travels as a `u16`: the
+// signer cap fits one, and a fixed narrow width is not a claim a peer can
+// inflate.
 
-impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for SignerBitfield {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
+impl HborWidth for SignerBitfield {
+    const MIN_ENCODED_LEN: usize = 1 + 2;
+}
 
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_size(2)?;
-        encoder.encode(&self.bits)?;
-        encoder.encode(&self.num_validators)?;
-        Ok(())
+impl HborEncode for SignerBitfield {
+    fn encode(&self, encoder: &mut Encoder<'_>) -> Result<(), HborEncodeError> {
+        hbor_bounded::check_encoded_len("bits", self.bits.len(), MAX_BITS_BYTES_LEN)?;
+        encoder.descend(|encoder| hbor_bounded::encode_bytes(encoder, &self.bits))?;
+        let count =
+            u16::try_from(self.num_validators).map_err(|_| HborEncodeError::BoundExceeded {
+                field: "num_validators",
+                actual: self.num_validators,
+                max: MAX_SIGNERS,
+            })?;
+        encoder.nested(&count)
     }
 }
 
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for SignerBitfield {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 2 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: length,
-            });
-        }
-        let bits: BoundedBytes<MAX_BITS_BYTES_LEN> = decoder.decode()?;
-        let num_validators: usize = decoder.decode()?;
+impl HborDecode for SignerBitfield {
+    fn decode(decoder: &mut Decoder<'_>) -> Result<Self, HborDecodeError> {
+        let bits = decoder
+            .descend(|decoder| hbor_bounded::decode_bounded_bytes(decoder, MAX_BITS_BYTES_LEN))?;
+        let num_validators = usize::from(decoder.nested::<u16>()?);
         if num_validators > MAX_SIGNERS {
-            return Err(DecodeError::InvalidCustomValue);
+            return Err(HborDecodeError::FailedValidation(
+                "num_validators past the signer cap",
+            ));
         }
         if bits.len() != num_validators.div_ceil(8) {
-            return Err(DecodeError::InvalidCustomValue);
+            return Err(HborDecodeError::FailedValidation(
+                "bit bytes must match the validator count",
+            ));
         }
         // Reject non-canonical encodings where padding bits in the trailing
         // byte (positions ≥ num_validators within the final byte) are set.
         // `count_ones()` / `is_empty()` walk the raw `bits` vec, so a peer
-        // could inflate signer counts with up to 7 spurious bits per QC
-        // without this check — and two byte-distinct encodings would decode
-        // to functionally-equal bitfields, breaking content-addressed
-        // hashing.
+        // could inflate signer counts with spurious bits without this
+        // check — and two byte-distinct encodings would decode to
+        // functionally-equal bitfields, breaking content-addressed hashing.
         let used_bits_in_last_byte = num_validators % 8;
         if used_bits_in_last_byte != 0 {
             let last = *bits
@@ -180,33 +178,23 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for SignerBitfi
                 .expect("bits non-empty when num_validators % 8 != 0");
             let padding_mask = !((1u8 << used_bits_in_last_byte) - 1);
             if last & padding_mask != 0 {
-                return Err(DecodeError::InvalidCustomValue);
+                return Err(HborDecodeError::FailedValidation(
+                    "padding bits past the validator count are set",
+                ));
             }
         }
         Ok(Self {
-            bits,
+            bits: bits.into(),
             num_validators,
         })
     }
 }
 
-impl Categorize<NoCustomValueKind> for SignerBitfield {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl Describe<NoCustomTypeKind> for SignerBitfield {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("SignerBitfield", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{
+        DecodeError, Hbor, from_slice as hbor_from_slice, to_vec as hbor_to_vec,
+    };
 
     use super::*;
 
@@ -260,13 +248,13 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip() {
+    fn hbor_roundtrip() {
         let mut bf = SignerBitfield::new(100);
         for i in (0..100).step_by(3) {
             bf.set(i);
         }
-        let bytes = basic_encode(&bf).unwrap();
-        let decoded: SignerBitfield = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&bf).unwrap();
+        let decoded: SignerBitfield = hbor_from_slice(&bytes).unwrap();
         assert_eq!(bf, decoded);
     }
 
@@ -275,10 +263,10 @@ mod tests {
         // Hand-roll a bitfield with num_validators > MAX_SIGNERS.
         let attacker = ManualBitfield {
             bits: vec![0u8; (MAX_SIGNERS + 8).div_ceil(8)],
-            num_validators: MAX_SIGNERS + 1,
+            num_validators: u16::try_from(MAX_SIGNERS + 1).unwrap(),
         };
-        let bytes = basic_encode(&attacker).unwrap();
-        assert!(basic_decode::<SignerBitfield>(&bytes).is_err());
+        let bytes = hbor_to_vec(&attacker).unwrap();
+        assert!(hbor_from_slice::<SignerBitfield>(&bytes).is_err());
     }
 
     #[test]
@@ -288,8 +276,8 @@ mod tests {
             bits: vec![0u8; 1],
             num_validators: 100,
         };
-        let bytes = basic_encode(&attacker).unwrap();
-        assert!(basic_decode::<SignerBitfield>(&bytes).is_err());
+        let bytes = hbor_to_vec(&attacker).unwrap();
+        assert!(hbor_from_slice::<SignerBitfield>(&bytes).is_err());
     }
 
     #[test]
@@ -298,10 +286,10 @@ mod tests {
         // Pre-fix this would decode and then panic in set(0) / hang in set_indices().
         let attacker = ManualBitfield {
             bits: Vec::new(),
-            num_validators: usize::MAX,
+            num_validators: u16::MAX,
         };
-        let bytes = basic_encode(&attacker).unwrap();
-        assert!(basic_decode::<SignerBitfield>(&bytes).is_err());
+        let bytes = hbor_to_vec(&attacker).unwrap();
+        assert!(hbor_from_slice::<SignerBitfield>(&bytes).is_err());
     }
 
     #[test]
@@ -313,9 +301,9 @@ mod tests {
             bits: vec![0b1000_0000],
             num_validators: 5,
         };
-        let bytes = basic_encode(&attacker).unwrap();
-        let err = basic_decode::<SignerBitfield>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let bytes = hbor_to_vec(&attacker).unwrap();
+        let err = hbor_from_slice::<SignerBitfield>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     #[test]
@@ -326,17 +314,18 @@ mod tests {
             bits: vec![0b0001_1111],
             num_validators: 5,
         };
-        let bytes = basic_encode(&attacker).unwrap();
-        let decoded: SignerBitfield = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&attacker).unwrap();
+        let decoded: SignerBitfield = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded.num_validators(), 5);
         assert_eq!(decoded.count_ones(), 5);
     }
 
     /// Mirror of the `SignerBitfield` wire layout, used in tests to forge
-    /// payloads that the production decoder must reject.
-    #[derive(BasicSbor)]
+    /// payloads that the production decoder must reject. The count is a
+    /// `u16` on the wire, as the codec writes it.
+    #[derive(Hbor)]
     struct ManualBitfield {
         bits: Vec<u8>,
-        num_validators: usize,
+        num_validators: u16,
     }
 }

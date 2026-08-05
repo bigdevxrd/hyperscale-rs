@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{ConsensusSignature, ShardId, ValidatorId, WeightedTimestamp};
 
@@ -48,7 +48,7 @@ pub const fn ready_signal_window(epoch_duration_ms: u64) -> Duration {
 /// a reshape lapse cannot mark a seat the emitter never synced. Window
 /// enforcement is the proposer/voter's job; the type itself just carries
 /// the parameters.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ReadySignal {
     /// Validator emitting the signal.
     validator_id: ValidatorId,
@@ -119,12 +119,12 @@ impl ReadySignal {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let signal = ReadySignal::new(
             ValidatorId::new(7),
             ShardId::ROOT,
@@ -132,8 +132,8 @@ mod tests {
             WeightedTimestamp::from_millis(228),
             ConsensusSignature::new([0xAB; 96]),
         );
-        let bytes = basic_encode(&signal).unwrap();
-        let decoded: ReadySignal = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&signal).unwrap();
+        let decoded: ReadySignal = hbor_from_slice(&bytes).unwrap();
         assert_eq!(signal, decoded);
     }
 

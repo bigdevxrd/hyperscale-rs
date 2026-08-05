@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     ConsensusSignature, DOMAIN_SPC_NEW_COMMIT, Epoch, MessageClass, NetworkDefinition,
@@ -21,7 +21,7 @@ use crate::{
 /// pipeline slots. Wire decode lands the inner wrapper as
 /// `Verifiable::Unverified`; locally-dispatched sends preserve the
 /// `Verified` marker.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcNewCommitNotification {
     /// Epoch the inner SPC instance belongs to.
     pub epoch: Epoch,
@@ -102,7 +102,7 @@ impl NetworkMessage for SpcNewCommitNotification {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{
@@ -139,15 +139,15 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let n = SpcNewCommitNotification::new(
             Epoch::new(7),
             ValidatorId::new(3),
             ConsensusSignature::new([0x55; 96]),
             Arc::new(Verifiable::from(sample_msg())),
         );
-        let bytes = basic_encode(&n).unwrap();
-        let decoded: SpcNewCommitNotification = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&n).unwrap();
+        let decoded: SpcNewCommitNotification = hbor_from_slice(&bytes).unwrap();
         assert_eq!(n, decoded);
     }
 

@@ -40,6 +40,6 @@ fn append_ec_to_batch(
         primary_cf,
         cert.wave_id(),
         cert,
-        cert.cached_sbor_bytes(),
+        cert.cached_wire_bytes(),
     );
 }

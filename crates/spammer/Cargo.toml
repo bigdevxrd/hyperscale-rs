@@ -16,7 +16,7 @@ path = "src/bin/spammer.rs"
 hyperscale-effects-bridge.workspace = true
 hyperscale-types.workspace = true
 
-sbor.workspace = true
+hyperscale-hbor.workspace = true
 
 # Async runtime
 tokio.workspace = true

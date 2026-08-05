@@ -5,9 +5,9 @@ mod types;
 use std::time::Duration;
 
 use hex::encode as hex_encode;
+use hyperscale_hbor::to_vec as hbor_to_vec;
 use hyperscale_types::Transaction;
 use reqwest::{Client, Error as ReqwestError};
-use sbor::prelude::basic_encode;
 pub use types::*;
 
 /// Client for submitting transactions via RPC.
@@ -39,10 +39,10 @@ impl RpcClient {
     ///
     /// # Errors
     ///
-    /// Returns [`RpcError::EncodingFailed`] if SBOR encoding fails, or
+    /// Returns [`RpcError::EncodingFailed`] if HBOR encoding fails, or
     /// [`RpcError::Http`] for any HTTP-level failure.
     pub async fn submit_transaction(&self, tx: &Transaction) -> Result<SubmissionResult, RpcError> {
-        let tx_bytes = basic_encode(tx).map_err(|e| RpcError::EncodingFailed(format!("{e:?}")))?;
+        let tx_bytes = hbor_to_vec(tx).map_err(|e| RpcError::EncodingFailed(format!("{e:?}")))?;
         let tx_hex = hex_encode(tx_bytes);
 
         let request = SubmitTransactionRequest {
@@ -158,7 +158,7 @@ pub enum RpcError {
     #[error("HTTP error: {0}")]
     Http(#[from] ReqwestError),
 
-    /// SBOR encoding of the outgoing transaction failed.
+    /// HBOR encoding of the outgoing transaction failed.
     #[error("Failed to encode transaction: {0}")]
     EncodingFailed(String),
 

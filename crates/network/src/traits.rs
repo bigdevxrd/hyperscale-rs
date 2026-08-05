@@ -5,7 +5,7 @@
 //!
 //! Handler registration is fully typed: `register_gossip_handler<M>` accepts a
 //! `GossipHandler<M>` and `register_request_handler<R>` accepts a `RequestHandler<R>`.
-//! The `HandlerRegistry` owns SBOR serialization — `Network` impls just forward.
+//! The `HandlerRegistry` owns wire serialization — `Network` impls just forward.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -118,7 +118,7 @@ where
 
 /// Typed handler for inbound notification messages (fire-and-forget unicast).
 ///
-/// Called after the network layer SBOR-decodes the raw payload into `M`.
+/// Called after the network layer decodes the raw payload into `M`.
 /// No return value — notifications are one-way.
 pub trait NotificationHandler<M: NetworkMessage>: Send + Sync + 'static {
     /// Process a decoded notification.
@@ -134,8 +134,8 @@ impl<M: NetworkMessage, F: Fn(M) + Send + Sync + 'static> NotificationHandler<M>
 
 /// Typed handler for a single request message type.
 ///
-/// Called after the network layer SBOR-decodes the raw request into `R`.
-/// The returned `R::Response` is SBOR-encoded by the network layer before
+/// Called after the network layer decodes the raw request into `R`.
+/// The returned `R::Response` is encoded by the network layer before
 /// sending back to the requester.
 pub trait RequestHandler<R: Request>: Send + Sync + 'static {
     /// Produce a response for a decoded request.
@@ -169,7 +169,7 @@ pub trait Network: Send + Sync + 'static {
 
     /// Register a typed gossip handler for a message type.
     ///
-    /// The implementation SBOR-decodes the raw network payload into `M` before
+    /// The implementation decodes the raw network payload into `M` before
     /// calling the handler. Decode errors are logged and the message is dropped.
     ///
     /// In production, this also auto-subscribes to the corresponding
@@ -194,7 +194,7 @@ pub trait Network: Send + Sync + 'static {
 
     /// Register a typed request handler for a message type on `shard`.
     ///
-    /// The `HandlerRegistry` SBOR-decodes the raw request into `R` and SBOR-encodes
+    /// The `HandlerRegistry` decodes the raw request into `R` and encodes
     /// the `R::Response` before sending it back. Decode/encode errors are logged
     /// and an empty response is returned.
     ///
@@ -314,10 +314,10 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
+        use hyperscale_hbor::Hbor;
         use hyperscale_types::{GossipMessage, NetworkMessage, TopicScope};
-        use sbor::{Decode, Encode};
 
-        #[derive(Debug, Clone, Encode, Decode)]
+        #[derive(Debug, Clone, Hbor)]
         struct TestMsg(u32);
         impl NetworkMessage for TestMsg {
             fn message_type_id() -> &'static str {

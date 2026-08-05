@@ -19,13 +19,13 @@
 //!   crossings to other timestamp types are explicit per-method casts.
 //!
 //! All three wrap `u64` ms. `WeightedTimestamp` and `ProposerTimestamp` are
-//! `#[sbor(transparent)]` (they ride on QCs and headers); `LocalTimestamp`
+//! `#[hbor(transparent)]` (they ride on QCs and headers); `LocalTimestamp`
 //! is local-only and deliberately not wired.
 
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// BFT-authenticated block timestamp in milliseconds.
 ///
@@ -40,8 +40,8 @@ use sbor::prelude::*;
 /// never on a received block's own `qc().weighted_timestamp()`.
 ///
 /// This is the only timestamp type safe to anchor consensus deadlines on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor, Default)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor, Default)]
+#[hbor(transparent)]
 pub struct WeightedTimestamp(u64);
 
 impl WeightedTimestamp {
@@ -113,8 +113,8 @@ impl Display for WeightedTimestamp {
 ///   against the local validator's own clock).
 /// - Local-only latency metrics (no divergence consequence).
 /// - Input to stake-weighted aggregation when forming a QC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor, Default)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor, Default)]
+#[hbor(transparent)]
 pub struct ProposerTimestamp(u64);
 
 impl ProposerTimestamp {
@@ -167,7 +167,7 @@ impl Display for ProposerTimestamp {
 /// and `ProposerTimestamp` while preserving `Instant`-grade monotonicity
 /// against NTP steps.
 ///
-/// Deliberately has no `BasicSbor` derive and no `From`/`Into` to/from
+/// Deliberately has no `Hbor` derive and no `From`/`Into` to/from
 /// the shard consensus-authenticated timestamp types. Cross-clock comparisons require
 /// an explicit method, so the question "which clock am I anchoring on?"
 /// surfaces at every boundary instead of being lost to coercion.

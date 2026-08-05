@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{CertifiedBeaconBlock, MessageClass, NetworkMessage, Verifiable};
@@ -20,7 +20,7 @@ use crate::{CertifiedBeaconBlock, MessageClass, NetworkMessage, Verifiable};
 /// Wire decode lands the wrapper as `Verifiable::Unverified`;
 /// locally-dispatched sends from a colocated commit path preserve
 /// `Verifiable::Verified`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BeaconBlockGossip {
     /// The finalized beacon block paired with its authenticating cert.
     pub block: Arc<Verifiable<CertifiedBeaconBlock>>,
@@ -68,17 +68,17 @@ impl GossipMessage for BeaconBlockGossip {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::GenesisConfigHash;
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let block = CertifiedBeaconBlock::genesis(GenesisConfigHash::ZERO);
         let g = BeaconBlockGossip::new(Arc::new(Verifiable::from(block)));
-        let bytes = basic_encode(&g).unwrap();
-        let decoded: BeaconBlockGossip = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&g).unwrap();
+        let decoded: BeaconBlockGossip = hbor_from_slice(&bytes).unwrap();
         assert_eq!(g, decoded);
     }
 

@@ -1,8 +1,8 @@
-//! SBOR-serializable mirror types for JMT tree persistence.
+//! Wire-serializable mirror types for JMT tree persistence.
 //!
 //! The `hyperscale-jmt` crate keeps its own types ecosystem-neutral (no
-//! serde, no SBOR). This module provides `Stored*` mirrors that derive
-//! SBOR and convert both ways, plus a `RocksDB`-key encoding tuned for
+//! serde, no wire codec). This module provides `Stored*` mirrors that derive
+//! HBOR and convert both ways, plus a `RocksDB`-key encoding tuned for
 //! LSM-friendly sort order (version-first).
 //!
 //! Tree arity is fixed at binary for this backend. Switching arities
@@ -13,12 +13,12 @@
 // methods (`from_jmt`/`to_jmt`) say what they do.
 #![allow(missing_docs)]
 
+use hyperscale_hbor::Hbor;
 #[cfg(test)]
 use hyperscale_jmt::PathDecodeError;
 use hyperscale_jmt::{
     Child, ChildKind, Hash as JmtHash, InternalNode, Key as JmtKey, LeafNode, Node, NodeKey,
 };
-use sbor::prelude::*;
 
 /// Version = block height.
 pub type Version = u64;
@@ -31,11 +31,9 @@ const BACKEND_ARITY: usize = 1 << BACKEND_ARITY_BITS as usize;
 // StoredNodeKey
 // ============================================================
 
-/// SBOR-serializable form of [`NodeKey`]. Carries the path's bit
+/// Wire-serializable form of [`NodeKey`]. Carries the path's bit
 /// length explicitly so sub-byte paths (binary trees) roundtrip cleanly.
-#[derive(
-    Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, BasicCategorize, BasicEncode, BasicDecode,
-)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Hbor)]
 pub struct StoredNodeKey {
     version: Version,
     /// Number of meaningful bits in `path_bytes`.
@@ -90,7 +88,7 @@ pub fn encode_key(key: &StoredNodeKey) -> Vec<u8> {
 
 /// Versioned wrapper for schema evolution. Bump a new variant when the
 /// stored node layout changes incompatibly.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, BasicCategorize, BasicEncode, BasicDecode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Hbor)]
 pub enum VersionedStoredNode {
     V1(StoredNode),
 }
@@ -109,15 +107,15 @@ impl VersionedStoredNode {
     }
 }
 
-/// SBOR-serializable mirror of [`Node`].
-#[derive(Clone, PartialEq, Eq, Hash, Debug, BasicCategorize, BasicEncode, BasicDecode)]
+/// Wire-serializable mirror of [`Node`].
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Hbor)]
 pub enum StoredNode {
     Internal(StoredInternalNode),
     Leaf(StoredLeafNode),
 }
 
 /// Internal node: sparse children + cached content hash.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, BasicCategorize, BasicEncode, BasicDecode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Hbor)]
 pub struct StoredInternalNode {
     /// Sparse: only non-empty children, sorted by `bucket`.
     pub children: Vec<StoredChildEntry>,
@@ -126,7 +124,7 @@ pub struct StoredInternalNode {
 }
 
 /// A child reference held in an internal node.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, BasicCategorize, BasicEncode, BasicDecode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Hbor)]
 pub struct StoredChildEntry {
     pub bucket: u8,
     pub version: u64,
@@ -137,7 +135,7 @@ pub struct StoredChildEntry {
 }
 
 /// Leaf node: full key + value hash + value byte length.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, BasicCategorize, BasicEncode, BasicDecode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Hbor)]
 pub struct StoredLeafNode {
     pub key: Vec<u8>,
     pub value_hash: Vec<u8>,
@@ -152,7 +150,7 @@ pub struct StoredLeafNode {
 /// produces subtree-wide stale regions at its current arity. Kept as an
 /// enum so that future tree variants (e.g. higher-arity subtree stales)
 /// can be added without a schema change.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, BasicCategorize, BasicEncode, BasicDecode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Hbor)]
 pub enum StaleTreePart {
     /// A single node.
     Node(StoredNodeKey),

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     BlockHeader, BlockManifest, ConsensusSignature, MessageClass, NetworkDefinition,
@@ -14,7 +14,7 @@ use crate::{
 ///
 /// The `proposer_signature` is a signature by the proposer over a domain-separated
 /// message, ensuring that block proposals cannot be forged by non-proposers.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BlockHeaderNotification {
     /// The block header being proposed.
     pub header: Arc<BlockHeader>,

@@ -302,6 +302,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet, HashMap};
 
     use arc_swap::ArcSwap;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
     use hyperscale_network::{GossipHandler, NotificationHandler, RequestHandler};
     use hyperscale_node::{serve_state_range_request, serve_witness_history_request};
     use hyperscale_storage::test_helpers::{completed_import_progress, pin_snap_sync_replica};
@@ -312,7 +313,6 @@ mod tests {
         GossipMessage, MessageClass, NetworkDefinition, NetworkMessage, ShardAnchor,
         TopologySnapshot, ValidatorId, ValidatorSet,
     };
-    use sbor::{basic_decode, basic_encode};
 
     use super::*;
 
@@ -330,7 +330,7 @@ mod tests {
     /// Serves bootstrap requests from `honest`, except the first
     /// `flaky_failures` requests which fail at the transport level.
     /// Requests are matched by `message_type_id` and round-tripped
-    /// through SBOR to erase the generic.
+    /// through the wire codec to erase the generic.
     struct StubNetwork {
         honest: Arc<SimShardStorage>,
         pending_chain: PendingChain<SimShardStorage>,
@@ -369,21 +369,21 @@ mod tests {
                 on_response(Err(RequestError::Timeout));
                 return;
             }
-            let encoded = basic_encode(&request).expect("request encodes");
+            let encoded = hbor_to_vec(&request).expect("request encodes");
             let response = match R::message_type_id() {
                 "state_range.request" => {
                     self.state_ranges_served.fetch_add(1, Ordering::Relaxed);
-                    let req: GetStateRangeRequest = basic_decode(&encoded).expect("decode");
-                    basic_encode(&serve_state_range_request(&self.honest, &req)).expect("encode")
+                    let req: GetStateRangeRequest = hbor_from_slice(&encoded).expect("decode");
+                    hbor_to_vec(&serve_state_range_request(&self.honest, &req)).expect("encode")
                 }
                 "witness_history.request" => {
-                    let req: GetWitnessHistoryRequest = basic_decode(&encoded).expect("decode");
-                    basic_encode(&serve_witness_history_request(&self.pending_chain, &req))
+                    let req: GetWitnessHistoryRequest = hbor_from_slice(&encoded).expect("decode");
+                    hbor_to_vec(&serve_witness_history_request(&self.pending_chain, &req))
                         .expect("encode")
                 }
                 other => panic!("unexpected bootstrap request type {other}"),
             };
-            on_response(Ok(basic_decode(&response).expect("response decodes")));
+            on_response(Ok(hbor_from_slice(&response).expect("response decodes")));
         }
 
         fn broadcast_to_shard<M: GossipMessage + 'static>(&self, _shard: ShardId, _message: &M) {

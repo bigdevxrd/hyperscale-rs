@@ -1,6 +1,6 @@
 //! Block fetch request.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::BlockHeight;
 use crate::network::response::GetBlockResponse;
@@ -17,7 +17,7 @@ use crate::shard::inventory::Inventory;
 /// `inventory` advertises what the requester already has locally so the
 /// responder can elide transaction / certificate / provision bodies the
 /// requester can resolve without a re-download.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetBlockRequest {
     /// Height of the block being requested.
     pub height: BlockHeight,
@@ -86,7 +86,7 @@ impl Request for GetBlockRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{BloomFilter, Hash, TxHash};
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip_preserves_inventory() {
+    fn hbor_roundtrip_preserves_inventory() {
         let mut bf: BloomFilter<TxHash> = BloomFilter::with_capacity(100, 0.01).unwrap();
         let h = TxHash::from_raw(Hash::from_bytes(b"tx"));
         bf.insert(&h);
@@ -126,8 +126,8 @@ mod tests {
                 provision_have: None,
             },
         );
-        let bytes = basic_encode(&req).unwrap();
-        let decoded: GetBlockRequest = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&req).unwrap();
+        let decoded: GetBlockRequest = hbor_from_slice(&bytes).unwrap();
         assert_eq!(req, decoded);
         assert!(decoded.inventory.tx_have.as_ref().unwrap().contains(&h));
     }

@@ -9,7 +9,7 @@ hyperscale-network = { workspace = true, features = ["test-utils"] }
 hyperscale-types.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
-sbor.workspace = true
+hyperscale-hbor.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

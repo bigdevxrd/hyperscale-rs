@@ -1,6 +1,6 @@
 //! Transaction fetch request.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetTransactionsResponse;
 use crate::{MessageClass, NetworkMessage, Request, TxHash};
@@ -10,7 +10,7 @@ use crate::{MessageClass, NetworkMessage, Request, TxHash};
 /// Used when a validator is missing transactions referenced by a pending
 /// block (or by any other consumer waiting on tx data). The responder
 /// resolves each hash from local state — no scope information is needed.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetTransactionsRequest {
     /// Hashes of the transactions being requested.
     pub tx_hashes: Vec<TxHash>,
@@ -52,7 +52,7 @@ impl Request for GetTransactionsRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::Hash;
@@ -71,10 +71,10 @@ mod tests {
     }
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let request = GetTransactionsRequest::new(vec![TxHash::from_raw(Hash::from_bytes(b"tx1"))]);
-        let bytes = basic_encode(&request).unwrap();
-        let decoded: GetTransactionsRequest = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&request).unwrap();
+        let decoded: GetTransactionsRequest = hbor_from_slice(&bytes).unwrap();
         assert_eq!(request, decoded);
     }
 }

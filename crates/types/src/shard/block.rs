@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -27,7 +27,7 @@ use crate::{
 /// txs were admission-validated through `MempoolCoordinator`) preserves
 /// the [`Verified<Transaction>`] marker through block
 /// construction; wire-decoded blocks land at [`Verifiable::Unverified`]
-/// because SBOR decode is a transparent passthrough into that variant.
+/// because HBOR decode is a transparent passthrough into that variant.
 /// Same rationale as [`SharedCertificates`].
 pub type SharedTransactions = Arc<BoundedVec<Arc<Verifiable<Transaction>>, MAX_TXS_PER_BLOCK>>;
 
@@ -62,7 +62,7 @@ pub fn shared_transactions_from_raw(txs: Vec<Arc<Transaction>>) -> SharedTransac
 /// Elements are wrapped in [`Verifiable`] so an in-process upstream's
 /// [`Verified<FinalizedWave>`] marker survives across block construction
 /// and downstream dispatch; wire-decoded blocks land at
-/// [`Verifiable::Unverified`] because SBOR decode is a transparent
+/// [`Verifiable::Unverified`] because HBOR decode is a transparent
 /// passthrough into that variant. Same rationale as
 /// [`BlockHeader::parent_qc`](crate::BlockHeader) which carries
 /// `Verifiable<QuorumCertificate>` for the same reason.
@@ -105,10 +105,10 @@ pub fn work_over_certificates(certificates: &[Arc<Verifiable<FinalizedWave>>]) -
 /// The header's `provision_root` commits to the original provision set, so
 /// `Sealed` is self-consistent — a `Live` block matches its `Sealed` form
 /// modulo the provision payload.
-#[derive(Debug, Clone, BasicSbor)]
+#[derive(Debug, Clone, Hbor)]
 pub enum Block {
     /// Block within its cross-shard execution window — carries provisions.
-    #[sbor(discriminator(BLOCK_VARIANT_LIVE))]
+    #[hbor(discriminant = 0)]
     Live {
         /// Block header (contains all merkle roots).
         header: BlockHeader,
@@ -128,7 +128,7 @@ pub enum Block {
     /// the original `ProvisionHash` list is retained so sync-serving glue
     /// can still identify which bodies the block consumed and re-attach
     /// them from the in-memory cache when promoting back to `Live`.
-    #[sbor(discriminator(BLOCK_VARIANT_SEALED))]
+    #[hbor(discriminant = 1)]
     Sealed {
         /// Block header (contains all merkle roots).
         header: BlockHeader,
@@ -147,7 +147,7 @@ pub enum Block {
     },
 }
 
-// Variant discriminator constants — referenced by the `#[sbor(discriminator)]`
+// Variant discriminator constants — referenced by the `#[hbor(discriminant)]`
 // attributes above. Naming them explicitly means future variants can't
 /// One side of a merge: the terminal block a child's chain ends at, as
 /// much of it as the merged genesis derives from.
@@ -164,10 +164,6 @@ pub struct TerminalRef {
     /// The terminal's height.
     pub height: BlockHeight,
 }
-
-// silently renumber existing ones.
-const BLOCK_VARIANT_LIVE: u8 = 0;
-const BLOCK_VARIANT_SEALED: u8 = 1;
 
 // Manual PartialEq - compare transaction/certificate content, not Arc pointers.
 // Provisions are excluded from equality: the header's `provision_root` already

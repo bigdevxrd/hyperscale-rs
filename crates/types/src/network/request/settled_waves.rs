@@ -12,14 +12,14 @@
 //! absence of any wave from the verified-complete set is sound (see
 //! [`GetSettledWavesResponse`]).
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetSettledWavesResponse;
 use crate::{BlockHash, BlockHeight, MessageClass, NetworkMessage, Request};
 
 /// Request a terminated shard's complete settled-wave window list,
 /// anchored at its terminal block.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetSettledWavesRequest {
     /// Height of the terminal block `B` the window ends at.
     pub terminal_height: BlockHeight,
@@ -61,19 +61,19 @@ impl Request for GetSettledWavesRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::Hash;
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let request = GetSettledWavesRequest::new(
             BlockHeight::new(98),
             BlockHash::from_raw(Hash::from_bytes(b"terminal")),
         );
-        let encoded = basic_encode(&request).unwrap();
-        let decoded: GetSettledWavesRequest = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&request).unwrap();
+        let decoded: GetSettledWavesRequest = hbor_from_slice(&encoded).unwrap();
         assert_eq!(request, decoded);
     }
 }

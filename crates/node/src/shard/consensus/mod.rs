@@ -31,7 +31,7 @@ use crate::config::NodeConfig;
 /// [`ConsensusState::certified_header_batch`] and drained on the crypto pool.
 ///
 /// The wrapper carries verification state across the in-process gossip
-/// boundary — wire arrivals land as `Verifiable::Unverified` per SBOR
+/// boundary — wire arrivals land as `Verifiable::Unverified` by decode
 /// rules, local-dispatched arrivals from a colocated proposer ride as
 /// `Verifiable::Verified` so the flush step can fast-path them past the
 /// sender-signature batch.

@@ -45,7 +45,7 @@ libp2p.workspace = true
 igd-next = { version = "0.17.1", features = ["aio_tokio"] }
 
 # Serialization
-sbor.workspace = true
+hyperscale-hbor.workspace = true
 
 # Async runtime
 thiserror.workspace = true

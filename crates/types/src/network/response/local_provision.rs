@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     BoundedVec, CertifiedBlockHeader, MAX_PROVISIONS_PER_BLOCK, MessageClass, NetworkMessage,
@@ -25,7 +25,7 @@ use crate::{
 /// after admitting the batch can still serve the blob — the receiver
 /// gracefully falls back to the buffered path (which now correctly
 /// fails out on terminal drops).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct LocalProvisionEntry {
     /// The provisions batch.
     pub provisions: Arc<Provisions>,
@@ -40,7 +40,7 @@ pub struct LocalProvisionEntry {
 /// header for each. The requester knows the hashes it asked for, so missing
 /// hashes are computed client-side as `requested - returned`; the wire
 /// format does not duplicate that diff.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetLocalProvisionsResponse {
     /// Provision batches the responder had locally, each paired with the
     /// source-shard header that proved its provisions root (when still
@@ -88,9 +88,8 @@ impl NetworkMessage for GetLocalProvisionsResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -105,8 +104,8 @@ mod tests {
     #[test]
     fn empty_response_roundtrips() {
         let original = GetLocalProvisionsResponse::empty();
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: GetLocalProvisionsResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: GetLocalProvisionsResponse = hbor_from_slice(&bytes).unwrap();
         assert!(decoded.entries.is_empty());
     }
 
@@ -177,8 +176,8 @@ mod tests {
             provisions: Arc::clone(&provisions),
             source_header: Some(Arc::clone(&source_header)),
         }]);
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: GetLocalProvisionsResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: GetLocalProvisionsResponse = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded.entries.len(), 1);
         assert_eq!(decoded.entries[0].provisions.hash(), provisions.hash());
         let decoded_header = decoded.entries[0]
@@ -195,31 +194,26 @@ mod tests {
             provisions: Arc::clone(&provisions),
             source_header: None,
         }]);
-        let bytes = basic_encode(&stripped).unwrap();
-        let decoded: GetLocalProvisionsResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&stripped).unwrap();
+        let decoded: GetLocalProvisionsResponse = hbor_from_slice(&bytes).unwrap();
         assert!(decoded.entries[0].source_header.is_none());
     }
 
     /// Hand-roll a response whose `entries` length exceeds the cap. The
-    /// `BoundedVec` decoder fires before any per-entry decode work happens.
+    /// bound check fires before any per-entry decode work happens.
     #[test]
     fn decode_rejects_oversized_entry_count() {
-        let mut buf = Vec::with_capacity(32);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(1).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(MAX_PROVISIONS_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<GetLocalProvisionsResponse>(&buf).unwrap_err();
+        let mut buf = Vec::new();
+        varint::write(&mut buf, MAX_PROVISIONS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_PROVISIONS_PER_BLOCK + 1) * 256,
+        ));
+        let err = hbor_from_slice::<GetLocalProvisionsResponse>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_PROVISIONS_PER_BLOCK
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_PROVISIONS_PER_BLOCK
                     && actual == MAX_PROVISIONS_PER_BLOCK + 1
         ));
     }

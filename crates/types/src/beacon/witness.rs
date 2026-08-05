@@ -11,7 +11,7 @@
 //! [`BeaconWitnessRoot`](crate::BeaconWitnessRoot), so a payload cannot
 //! claim a position the fold didn't ask for.
 
-use sbor::prelude::*;
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 
 use crate::{
     BlockHeight, ConsensusPublicKey, ConsensusSignature, Hash, ParamVote, Round, ShardId, Stake,
@@ -20,7 +20,7 @@ use crate::{
 
 /// Domain tag for accumulator leaf hashing.
 ///
-/// Tag-prefixing the SBOR encoding of the payload prevents the leaf
+/// Tag-prefixing the HBOR encoding of the payload prevents the leaf
 /// hash from colliding with an internal merkle node (the merkle helpers
 /// pad with [`Hash::ZERO`] and combine sibling pairs without per-level
 /// domain separation, so every leaf encoder in this codebase must
@@ -37,7 +37,7 @@ pub const SHARD_WITNESS_LEAF_DOMAIN_TAG: &[u8] = b"hyperscale-shard-witness-leaf
 /// Provenance is carried by the enclosing chunk, not the payload: the
 /// source shard comes from the boundary header and the leaf position from
 /// the chunk's range.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum ShardWitnessPayload {
     /// A net deposit landed for `pool_id`. Increases the pool's
     /// `total_stake`. If `pool_id` is unknown, creates the pool entry.
@@ -176,7 +176,7 @@ pub enum ShardWitnessPayload {
 impl ShardWitnessPayload {
     /// Canonical accumulator leaf hash for this payload.
     ///
-    /// Produces `BLAKE3(SHARD_WITNESS_LEAF_DOMAIN_TAG ‖ sbor_encode(self))`.
+    /// Produces `BLAKE3(SHARD_WITNESS_LEAF_DOMAIN_TAG ‖ encode(self))`.
     /// Both the shard runtime (when computing
     /// [`BeaconWitnessRoot`](crate::BeaconWitnessRoot)) and the fetch
     /// responder (when constructing inclusion proofs) call this — the
@@ -185,11 +185,11 @@ impl ShardWitnessPayload {
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding fails. `ShardWitnessPayload` is a
-    /// closed SBOR type and encoding is infallible in practice.
+    /// Panics if HBOR encoding fails. `ShardWitnessPayload` is a
+    /// closed wire type and encoding is infallible in practice.
     #[must_use]
     pub fn leaf_hash(&self) -> Hash {
-        let encoded = basic_encode(self).expect("ShardWitnessPayload SBOR encode is infallible");
+        let encoded = hbor_to_vec(self).expect("ShardWitnessPayload HBOR encode is infallible");
         Hash::from_parts(&[SHARD_WITNESS_LEAF_DOMAIN_TAG, &encoded])
     }
 }
@@ -204,7 +204,7 @@ impl ShardWitnessPayload {
 /// receipt synthesised a witness that belongs to a different source.
 ///
 /// Conversion to [`ShardWitnessPayload`] is total; see the `From` impl.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum BeaconWitnessEvent {
     /// Mirrors [`ShardWitnessPayload::StakeDeposit`].
     StakeDeposit {
@@ -286,6 +286,8 @@ impl From<BeaconWitnessEvent> for ShardWitnessPayload {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     fn sample_param_vote() -> ParamVote {
@@ -303,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn shard_witness_payload_sbor_round_trip_all_variants() {
+    fn shard_witness_payload_hbor_round_trip_all_variants() {
         let pubkey = ConsensusPublicKey::new([0xAB; 48]);
         let payloads = vec![
             ShardWitnessPayload::StakeDeposit {
@@ -349,14 +351,14 @@ mod tests {
             ShardWitnessPayload::ParamVote(sample_param_vote()),
         ];
         for p in payloads {
-            let bytes = basic_encode(&p).unwrap();
-            let decoded: ShardWitnessPayload = basic_decode(&bytes).unwrap();
+            let bytes = hbor_to_vec(&p).unwrap();
+            let decoded: ShardWitnessPayload = hbor_from_slice(&bytes).unwrap();
             assert_eq!(p, decoded);
         }
     }
 
     #[test]
-    fn beacon_witness_event_sbor_round_trip_all_variants() {
+    fn beacon_witness_event_hbor_round_trip_all_variants() {
         let pubkey = ConsensusPublicKey::new([0xCD; 48]);
         let events = vec![
             BeaconWitnessEvent::StakeDeposit {
@@ -389,8 +391,8 @@ mod tests {
             }),
         ];
         for e in events {
-            let bytes = basic_encode(&e).unwrap();
-            let decoded: BeaconWitnessEvent = basic_decode(&bytes).unwrap();
+            let bytes = hbor_to_vec(&e).unwrap();
+            let decoded: BeaconWitnessEvent = hbor_from_slice(&bytes).unwrap();
             assert_eq!(e, decoded);
         }
     }

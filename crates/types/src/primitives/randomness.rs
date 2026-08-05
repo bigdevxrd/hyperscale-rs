@@ -1,6 +1,6 @@
 //! The beacon's running randomness seed.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// Wire length of a [`Randomness`] in bytes.
 pub const RANDOMNESS_BYTES: usize = 32;
@@ -17,8 +17,8 @@ pub const RANDOMNESS_BYTES: usize = 32;
 /// is the running beacon seed, not a free-floating digest or a per-slot
 /// VRF output. The type forces call sites to be explicit about which
 /// 32-byte input the PRNG seed actually is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
+#[hbor(transparent)]
 pub struct Randomness([u8; RANDOMNESS_BYTES]);
 
 impl Randomness {
@@ -41,13 +41,15 @@ impl Randomness {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     #[test]
-    fn randomness_sbor_round_trip() {
+    fn randomness_hbor_round_trip() {
         let original = Randomness::new([0x42; RANDOMNESS_BYTES]);
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: Randomness = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: Randomness = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 

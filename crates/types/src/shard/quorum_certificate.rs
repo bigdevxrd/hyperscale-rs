@@ -5,7 +5,7 @@
 //! [`impl Verify<&QcContext<'_>>`](Verify::verify) below.
 
 use hyperscale_crypto::Verifier;
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
 /// A quorum certificate proving 2f+1 validators voted for a block.
 ///
 /// Contains an aggregated signature from the voting validators.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct QuorumCertificate {
     block_hash: BlockHash,
     shard_id: ShardId,

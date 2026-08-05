@@ -46,7 +46,7 @@ pub const MAX_STATE_ENTRY_KEY_LEN: usize = 4 * 1024;
 /// Decode cap on a raw substate value, shared by the same wire objects
 /// as [`MAX_STATE_ENTRY_KEY_LEN`].
 ///
-/// Bounds the SBOR `Vec<u8>` pre-allocation a peer can force on a single
+/// Bounds the wire `Vec<u8>` pre-allocation a peer can force on a single
 /// `value` field, and sets the largest thing state can hold in one cell.
 /// Twice [`crate::MAX_TX_BYTES_LEN`], so anything a transaction can carry
 /// still fits a cell with the framing around it — which is what lets a

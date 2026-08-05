@@ -1,11 +1,11 @@
 //! Sync-related request messages.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{BlockHeight, ConsensusSignature, MessageClass, NetworkMessage, ValidatorId};
 
 /// Broadcast that validator has caught up to network head and is ready to participate.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SyncCompleteAnnouncement {
     /// Height synced to
     pub synced_height: BlockHeight,

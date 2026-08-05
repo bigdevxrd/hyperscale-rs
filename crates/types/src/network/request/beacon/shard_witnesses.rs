@@ -1,7 +1,7 @@
 //! Shard-witness fetch request — beacon validator pulls witnesses
 //! lifted by a shard whose committee they're not a member of.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::beacon::GetShardWitnessesResponse;
 use crate::{BlockHash, BlockHeight, LeafIndex, MessageClass, NetworkMessage, Request, ShardId};
@@ -22,7 +22,7 @@ use crate::{BlockHash, BlockHeight, LeafIndex, MessageClass, NetworkMessage, Req
 /// `committed_block_hash` is the fork-divergence guard so a responder
 /// on a different fork returns empty rather than a proof against a
 /// silently mismatched root.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetShardWitnessesRequest {
     /// Shard whose witnesses are being fetched.
     pub shard_id: ShardId,
@@ -82,12 +82,12 @@ impl Request for GetShardWitnessesRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let req = GetShardWitnessesRequest::new(
             ShardId::ROOT,
             BlockHeight::new(42),
@@ -95,8 +95,8 @@ mod tests {
             LeafIndex::new(1),
             LeafIndex::new(42),
         );
-        let bytes = basic_encode(&req).unwrap();
-        let decoded: GetShardWitnessesRequest = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&req).unwrap();
+        let decoded: GetShardWitnessesRequest = hbor_from_slice(&bytes).unwrap();
         assert_eq!(req, decoded);
     }
 

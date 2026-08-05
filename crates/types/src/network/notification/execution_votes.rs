@@ -1,6 +1,6 @@
 //! `ExecutionVotesNotification` message.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     ConsensusSignature, ExecutionVote, MessageClass, NetworkDefinition, NetworkMessage, ShardId,
@@ -11,7 +11,7 @@ use crate::{
 ///
 /// Each vote covers all transactions in a deterministic wave partition
 /// of a block. 2f+1 matching votes create an `ExecutionCertificate`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ExecutionVotesNotification {
     /// The execution votes being sent. Wire bytes always land in
     /// [`Verifiable::Unverified`]; local-dispatched sends from a

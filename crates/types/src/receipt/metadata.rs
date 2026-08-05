@@ -1,6 +1,6 @@
 //! Fee summary, log levels, and node-local execution metadata.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{BoundedString, BoundedVec};
 
@@ -23,7 +23,7 @@ pub const MAX_DIAGNOSTIC_STRING_LEN: usize = 4 * 1024;
 /// ([`ExecutionMetadata::empty`]) where the executor never reached the
 /// guest and has no fees to report.
 #[allow(missing_docs)] // the field names are the documentation
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct FeeSummary {
     pub total_execution_cost: Option<u128>,
     pub total_royalty_cost: Option<u128>,
@@ -34,7 +34,7 @@ pub struct FeeSummary {
 /// Log severity level from transaction execution. Variants follow the
 /// standard `tracing` severity ordering.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, sbor::prelude::BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Hbor)]
 pub enum LogLevel {
     Error,
     Warn,
@@ -50,7 +50,7 @@ pub enum LogLevel {
 ///
 /// Written atomically with block commit but on a separate pruning cycle
 /// (can be pruned earlier than the consensus receipt since not needed for state verification).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ExecutionMetadata {
     /// Fee breakdown reported by the engine.
     pub fee_summary: FeeSummary,
@@ -111,9 +111,8 @@ impl ExecutionMetadata {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -127,8 +126,8 @@ mod tests {
             total_storage_cost: Some(0),
             total_tipping_cost: Some(0),
         };
-        let bytes = basic_encode(&fs).unwrap();
-        let decoded: FeeSummary = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&fs).unwrap();
+        let decoded: FeeSummary = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, fs);
     }
 
@@ -140,8 +139,8 @@ mod tests {
             total_storage_cost: None,
             total_tipping_cost: None,
         };
-        let bytes = basic_encode(&fs).unwrap();
-        let decoded: FeeSummary = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&fs).unwrap();
+        let decoded: FeeSummary = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, fs);
     }
 
@@ -164,16 +163,16 @@ mod tests {
     #[test]
     fn execution_metadata_roundtrip() {
         let meta = sample_metadata();
-        let bytes = basic_encode(&meta).unwrap();
-        let decoded: ExecutionMetadata = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&meta).unwrap();
+        let decoded: ExecutionMetadata = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, meta);
     }
 
     #[test]
     fn execution_metadata_roundtrip_empty() {
         let meta = ExecutionMetadata::empty();
-        let bytes = basic_encode(&meta).unwrap();
-        let decoded: ExecutionMetadata = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&meta).unwrap();
+        let decoded: ExecutionMetadata = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, meta);
     }
 
@@ -181,29 +180,20 @@ mod tests {
     /// verify decode rejects it before iterating.
     #[test]
     fn execution_metadata_decode_rejects_oversized_log_messages_count() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(3).unwrap();
-        enc.encode(&FeeSummary {
+        let mut buf = hbor_to_vec(&FeeSummary {
             total_execution_cost: None,
             total_royalty_cost: None,
             total_storage_cost: None,
             total_tipping_cost: None,
         })
         .unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(MAX_LOG_MESSAGES_PER_TX + 1).unwrap();
-        let err = basic_decode::<ExecutionMetadata>(&buf).unwrap_err();
+        varint::write(&mut buf, MAX_LOG_MESSAGES_PER_TX + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_LOG_MESSAGES_PER_TX + 1) * 8));
+        let err = hbor_from_slice::<ExecutionMetadata>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_LOG_MESSAGES_PER_TX,
-                actual,
-            } if actual == MAX_LOG_MESSAGES_PER_TX + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_LOG_MESSAGES_PER_TX && actual == MAX_LOG_MESSAGES_PER_TX + 1
         ));
     }
 
@@ -211,13 +201,7 @@ mod tests {
     /// verify decode rejects it before allocating the string buffer.
     #[test]
     fn execution_metadata_decode_rejects_oversized_log_message_string() {
-        let mut buf = Vec::with_capacity(128);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(3).unwrap();
-        enc.encode(&FeeSummary {
+        let mut buf = hbor_to_vec(&FeeSummary {
             total_execution_cost: None,
             total_royalty_cost: None,
             total_storage_cost: None,
@@ -226,20 +210,15 @@ mod tests {
         .unwrap();
         // log_messages: Vec<(LogLevel, String)> with one entry whose string
         // is oversized.
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(1).unwrap();
-        enc.write_size(2).unwrap();
-        enc.encode(&LogLevel::Info).unwrap();
-        enc.write_value_kind(ValueKind::String).unwrap();
-        enc.write_size(MAX_DIAGNOSTIC_STRING_LEN + 1).unwrap();
-        let err = basic_decode::<ExecutionMetadata>(&buf).unwrap_err();
+        varint::write(&mut buf, 1).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&LogLevel::Info).unwrap());
+        varint::write(&mut buf, MAX_DIAGNOSTIC_STRING_LEN + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, MAX_DIAGNOSTIC_STRING_LEN + 1));
+        let err = hbor_from_slice::<ExecutionMetadata>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_DIAGNOSTIC_STRING_LEN,
-                actual,
-            } if actual == MAX_DIAGNOSTIC_STRING_LEN + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_DIAGNOSTIC_STRING_LEN && actual == MAX_DIAGNOSTIC_STRING_LEN + 1
         ));
     }
 
@@ -247,13 +226,7 @@ mod tests {
     /// verify decode rejects it before allocating the string buffer.
     #[test]
     fn execution_metadata_decode_rejects_oversized_error_message() {
-        let mut buf = Vec::with_capacity(128);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(3).unwrap();
-        enc.encode(&FeeSummary {
+        let mut buf = hbor_to_vec(&FeeSummary {
             total_execution_cost: None,
             total_royalty_cost: None,
             total_storage_cost: None,
@@ -261,20 +234,16 @@ mod tests {
         })
         .unwrap();
         // log_messages: empty.
-        enc.encode(&Vec::<(LogLevel, String)>::new()).unwrap();
-        // error_message: Option::Some<String> with oversized length.
-        enc.write_value_kind(ValueKind::Enum).unwrap();
-        enc.write_discriminator(1).unwrap();
-        enc.write_size(1).unwrap();
-        enc.write_value_kind(ValueKind::String).unwrap();
-        enc.write_size(MAX_DIAGNOSTIC_STRING_LEN + 1).unwrap();
-        let err = basic_decode::<ExecutionMetadata>(&buf).unwrap_err();
+        buf.extend_from_slice(&hbor_to_vec(&Vec::<(LogLevel, String)>::new()).unwrap());
+        // error_message: Some with an oversized string length.
+        buf.push(1);
+        varint::write(&mut buf, MAX_DIAGNOSTIC_STRING_LEN + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, MAX_DIAGNOSTIC_STRING_LEN + 1));
+        let err = hbor_from_slice::<ExecutionMetadata>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_DIAGNOSTIC_STRING_LEN,
-                actual,
-            } if actual == MAX_DIAGNOSTIC_STRING_LEN + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_DIAGNOSTIC_STRING_LEN && actual == MAX_DIAGNOSTIC_STRING_LEN + 1
         ));
     }
 }

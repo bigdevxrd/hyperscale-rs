@@ -1,6 +1,6 @@
 //! Snap-sync state range request.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetStateRangeResponse;
 use crate::{BlockHeight, Hash, MessageClass, NetworkMessage, Request};
@@ -13,7 +13,7 @@ use crate::{BlockHeight, Hash, MessageClass, NetworkMessage, Request};
 /// the boundary pinned at `height` and answers leaves in hashed-key
 /// order over `[start, end]`, with a completeness-checked range proof
 /// against the boundary's `state_root`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetStateRangeRequest {
     /// The pinned boundary height — the anchor's block height, read from
     /// the projected `TopologySnapshot`.
@@ -48,12 +48,12 @@ impl Request for GetStateRangeRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let request = GetStateRangeRequest {
             height: BlockHeight::new(42),
             start: Hash::from_bytes(b"start"),
@@ -61,8 +61,8 @@ mod tests {
             limit: 512,
         };
 
-        let encoded = basic_encode(&request).unwrap();
-        let decoded: GetStateRangeRequest = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&request).unwrap();
+        let decoded: GetStateRangeRequest = hbor_from_slice(&encoded).unwrap();
         assert_eq!(request, decoded);
     }
 }

@@ -1,11 +1,11 @@
 //! Validator set types.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{ConsensusPublicKey, ValidatorId, VoteCount};
 
 /// Information about a validator.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ValidatorInfo {
     /// Unique identifier for this validator.
     pub validator_id: ValidatorId,
@@ -15,7 +15,7 @@ pub struct ValidatorInfo {
 }
 
 /// A set of validators.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor, Default)]
 pub struct ValidatorSet {
     /// The validators, ordered by validator ID.
     pub validators: Vec<ValidatorInfo>,

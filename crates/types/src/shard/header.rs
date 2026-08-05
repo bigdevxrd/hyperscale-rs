@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use sbor::prelude::*;
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use thiserror::Error;
 
 use crate::{
@@ -26,7 +26,7 @@ use crate::{
 /// - Proof of parent commitment (parent QC)
 /// - State commitment (JMT root after applying committed certificates)
 /// - Transaction commitment (merkle root of all transactions in the block)
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BlockHeader {
     shard_id: ShardId,
     height: BlockHeight,
@@ -621,11 +621,11 @@ impl BlockHeader {
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding fails — `BlockHeader` is a closed SBOR
+    /// Panics if HBOR encoding fails — `BlockHeader` is a closed wire
     /// type and encoding is infallible in practice.
     #[must_use]
     pub fn hash(&self) -> BlockHash {
-        let bytes = basic_encode(self).expect("BlockHeader serialization should never fail");
+        let bytes = hbor_to_vec(self).expect("BlockHeader serialization should never fail");
         BlockHash::from_raw(Hash::from_bytes(&bytes))
     }
 
@@ -756,9 +756,8 @@ impl Verified<BlockHeader> {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -899,7 +898,7 @@ mod tests {
             ShardLoad::ZERO,
         );
 
-        let decoded: BlockHeader = basic_decode(&basic_encode(&carrying).unwrap()).unwrap();
+        let decoded: BlockHeader = hbor_from_slice(&hbor_to_vec(&carrying).unwrap()).unwrap();
         assert_eq!(decoded.split_child_roots(), Some(pair));
         assert_ne!(carrying.hash(), bare.hash());
     }
@@ -962,89 +961,81 @@ mod tests {
             ShardLoad::ZERO,
         );
 
-        let decoded: BlockHeader = basic_decode(&basic_encode(&carrying).unwrap()).unwrap();
+        let decoded: BlockHeader = hbor_from_slice(&hbor_to_vec(&carrying).unwrap()).unwrap();
         assert_eq!(decoded.settled_waves_root(), Some(root));
         assert_ne!(carrying.hash(), bare.hash());
     }
 
-    /// Hand-roll a `BlockHeader` whose `waves` length prefix exceeds the cap.
-    /// The `BoundedVec` decoder fires before any per-element work happens.
+    /// Forge a `BlockHeader` whose `waves` length claims one past the cap,
+    /// padded so the claim is input-satisfiable — the protocol cap, not the
+    /// wire-level length bound, is what must fire, before any per-element
+    /// work happens.
     #[test]
     fn decode_rejects_oversized_waves_count() {
         let h = sample_header();
-        let mut buf = Vec::with_capacity(256);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            // BlockHeader has 23 fields.
-            enc.write_size(23).unwrap();
-            enc.encode(&h.shard_id).unwrap();
-            enc.encode(&h.height).unwrap();
-            enc.encode(&h.parent_block_hash).unwrap();
-            enc.encode(&h.parent_qc).unwrap();
-            enc.encode(&h.proposer).unwrap();
-            enc.encode(&h.timestamp).unwrap();
-            enc.encode(&h.round).unwrap();
-            enc.encode(&h.is_fallback).unwrap();
-            enc.encode(&h.state_root).unwrap();
-            enc.encode(&h.transaction_root).unwrap();
-            enc.encode(&h.certificate_root).unwrap();
-            enc.encode(&h.local_receipt_root).unwrap();
-            enc.encode(&h.provision_root).unwrap();
-            // Oversized waves array.
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(WaveId::value_kind()).unwrap();
-            enc.write_size(MAX_TXS_PER_BLOCK + 1).unwrap();
+        let mut buf = Vec::new();
+        for part in [
+            hbor_to_vec(&h.shard_id).unwrap(),
+            hbor_to_vec(&h.height).unwrap(),
+            hbor_to_vec(&h.parent_block_hash).unwrap(),
+            hbor_to_vec(&h.parent_qc).unwrap(),
+            hbor_to_vec(&h.proposer).unwrap(),
+            hbor_to_vec(&h.timestamp).unwrap(),
+            hbor_to_vec(&h.round).unwrap(),
+            hbor_to_vec(&h.is_fallback).unwrap(),
+            hbor_to_vec(&h.state_root).unwrap(),
+            hbor_to_vec(&h.transaction_root).unwrap(),
+            hbor_to_vec(&h.certificate_root).unwrap(),
+            hbor_to_vec(&h.local_receipt_root).unwrap(),
+            hbor_to_vec(&h.provision_root).unwrap(),
+        ] {
+            buf.extend_from_slice(&part);
         }
-        let err = basic_decode::<BlockHeader>(&buf).unwrap_err();
+        varint::write(&mut buf, MAX_TXS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_TXS_PER_BLOCK + 1) * 32));
+        let err = hbor_from_slice::<BlockHeader>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
         ));
     }
 
-    /// Hand-roll a `BlockHeader` whose `provision_tx_roots` map size exceeds
-    /// the cap. The `BoundedBTreeMap` decoder fires before any per-entry
-    /// work happens.
+    /// The same forgery against the `provision_tx_roots` map cap.
     #[test]
     fn decode_rejects_oversized_provision_tx_roots_count() {
         let h = sample_header();
-        let mut buf = Vec::with_capacity(256);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(23).unwrap();
-            enc.encode(&h.shard_id).unwrap();
-            enc.encode(&h.height).unwrap();
-            enc.encode(&h.parent_block_hash).unwrap();
-            enc.encode(&h.parent_qc).unwrap();
-            enc.encode(&h.proposer).unwrap();
-            enc.encode(&h.timestamp).unwrap();
-            enc.encode(&h.round).unwrap();
-            enc.encode(&h.is_fallback).unwrap();
-            enc.encode(&h.state_root).unwrap();
-            enc.encode(&h.transaction_root).unwrap();
-            enc.encode(&h.certificate_root).unwrap();
-            enc.encode(&h.local_receipt_root).unwrap();
-            enc.encode(&h.provision_root).unwrap();
-            // Empty waves.
-            enc.encode(&Vec::<WaveId>::new()).unwrap();
-            // Oversized provision_tx_roots map.
-            enc.write_value_kind(ValueKind::Map).unwrap();
-            enc.write_value_kind(ShardId::value_kind()).unwrap();
-            enc.write_value_kind(ProvisionTxRoot::value_kind()).unwrap();
-            enc.write_size(MAX_REMOTE_SHARDS_PER_WAVE + 1).unwrap();
+        let mut buf = Vec::new();
+        for part in [
+            hbor_to_vec(&h.shard_id).unwrap(),
+            hbor_to_vec(&h.height).unwrap(),
+            hbor_to_vec(&h.parent_block_hash).unwrap(),
+            hbor_to_vec(&h.parent_qc).unwrap(),
+            hbor_to_vec(&h.proposer).unwrap(),
+            hbor_to_vec(&h.timestamp).unwrap(),
+            hbor_to_vec(&h.round).unwrap(),
+            hbor_to_vec(&h.is_fallback).unwrap(),
+            hbor_to_vec(&h.state_root).unwrap(),
+            hbor_to_vec(&h.transaction_root).unwrap(),
+            hbor_to_vec(&h.certificate_root).unwrap(),
+            hbor_to_vec(&h.local_receipt_root).unwrap(),
+            hbor_to_vec(&h.provision_root).unwrap(),
+        ] {
+            buf.extend_from_slice(&part);
         }
-        let err = basic_decode::<BlockHeader>(&buf).unwrap_err();
+        // Empty waves.
+        buf.extend_from_slice(&hbor_to_vec(&Vec::<WaveId>::new()).unwrap());
+        // Oversized provision_tx_roots claim, padded to satisfiability.
+        varint::write(&mut buf, MAX_REMOTE_SHARDS_PER_WAVE + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_REMOTE_SHARDS_PER_WAVE + 1) * 64,
+        ));
+        let err = hbor_from_slice::<BlockHeader>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_REMOTE_SHARDS_PER_WAVE
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_REMOTE_SHARDS_PER_WAVE
                     && actual == MAX_REMOTE_SHARDS_PER_WAVE + 1
         ));
     }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     ConsensusSignature, MessageClass, NetworkDefinition, NetworkMessage, Provisions, Signed,
@@ -14,7 +14,7 @@ use crate::{
 /// Only the block proposer sends these. The sender signature authenticates
 /// the notification, allowing receivers to reject forged provisions before
 /// doing expensive merkle proof verification.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ProvisionsNotification {
     /// The provisions bundle being sent (one bundle per target shard).
     /// Wire bytes always land in [`Verifiable::Unverified`];

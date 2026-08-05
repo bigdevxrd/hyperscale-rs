@@ -12,6 +12,7 @@
 //! pacemaker work without a timeout certificate on the wire.
 
 use hyperscale_crypto::{SignError, Signer, Verifier};
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::signing::timeout_message;
@@ -26,7 +27,7 @@ use crate::{
 /// `2f+1` timeouts for a round, every honest replica adopts the maximum
 /// `high_qc` among them and advances together — the quorum-driven view change
 /// that keeps voters synchronised.
-#[derive(Debug, Clone, PartialEq, Eq, sbor::prelude::BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct Timeout {
     shard_id: ShardId,
     round: Round,

@@ -1,6 +1,6 @@
 //! Per-transaction state entries within a provision.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{BoundedVec, MAX_STATE_ENTRIES_PER_TX, SubstateEntry, TxHash};
 
@@ -9,7 +9,7 @@ use crate::{BoundedVec, MAX_STATE_ENTRIES_PER_TX, SubstateEntry, TxHash};
 /// Identifies which transaction and what state it touched on the source
 /// shard. Nothing names what the receiver needs: the receiver derives
 /// that from the envelope, so a bundle carries values and nothing else.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ProvisionEntry {
     /// Hash of the transaction.
     pub tx_hash: TxHash,
@@ -39,9 +39,8 @@ impl ProvisionEntry {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -52,13 +51,13 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip() {
+    fn hbor_roundtrip() {
         let entry = ProvisionEntry::new(
             TxHash::from_raw(Hash::from_bytes(b"tx")),
             vec![sample_entry(1), sample_entry(2)],
         );
-        let bytes = basic_encode(&entry).unwrap();
-        let decoded: ProvisionEntry = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&entry).unwrap();
+        let decoded: ProvisionEntry = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, entry);
     }
 
@@ -72,31 +71,21 @@ mod tests {
         let reverse = ProvisionEntry::new(tx_hash, vec![sample_entry(2), sample_entry(1)]);
         assert_eq!(forward, reverse);
         assert_eq!(
-            basic_encode(&forward).unwrap(),
-            basic_encode(&reverse).unwrap()
+            hbor_to_vec(&forward).unwrap(),
+            hbor_to_vec(&reverse).unwrap()
         );
     }
 
     #[test]
     fn decode_rejects_oversized_entries() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(2).unwrap();
-        enc.encode(&TxHash::from_raw(Hash::from_bytes(b"tx")))
-            .unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(SubstateEntry::value_kind()).unwrap();
-        enc.write_size(MAX_STATE_ENTRIES_PER_TX + 1).unwrap();
-        let err = basic_decode::<ProvisionEntry>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&TxHash::from_raw(Hash::from_bytes(b"tx"))).unwrap();
+        varint::write(&mut buf, MAX_STATE_ENTRIES_PER_TX + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_STATE_ENTRIES_PER_TX + 1) * 8));
+        let err = hbor_from_slice::<ProvisionEntry>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_STATE_ENTRIES_PER_TX,
-                actual,
-            } if actual == MAX_STATE_ENTRIES_PER_TX + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_STATE_ENTRIES_PER_TX && actual == MAX_STATE_ENTRIES_PER_TX + 1
         ));
     }
 
@@ -105,21 +94,11 @@ mod tests {
         // Hand-roll the prior wire layout — entries plus target and owned
         // node lists — to confirm a peer can't keep shipping node sets the
         // receiver now derives for itself.
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(4).unwrap();
-        enc.encode(&TxHash::from_raw(Hash::from_bytes(b"tx")))
-            .unwrap();
-        let err = basic_decode::<ProvisionEntry>(&buf).unwrap_err();
-        assert!(matches!(
-            err,
-            DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: 4
-            }
-        ));
+        let entry = ProvisionEntry::new(TxHash::from_raw(Hash::from_bytes(b"tx")), vec![]);
+        let mut buf = hbor_to_vec(&entry).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());
+        buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());
+        let err = hbor_from_slice::<ProvisionEntry>(&buf).unwrap_err();
+        assert!(matches!(err, DecodeError::TrailingBytes { .. }));
     }
 }

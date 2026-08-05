@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{ExecutionCertificate, MessageClass, NetworkMessage};
 
@@ -11,7 +11,7 @@ use crate::{ExecutionCertificate, MessageClass, NetworkMessage};
 /// Returns the requested execution certificates from the source shard's cache.
 /// `None` means the source shard cannot serve this request (cert not cached,
 /// or the block has been pruned). The requester should try a different peer.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetExecutionCertsResponse {
     /// The requested execution certificates.
     ///
@@ -36,27 +36,27 @@ impl NetworkMessage for GetExecutionCertsResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn test_sbor_roundtrip_empty() {
+    fn test_hbor_roundtrip_empty() {
         let response = GetExecutionCertsResponse {
             certificates: Some(vec![]),
         };
 
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetExecutionCertsResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetExecutionCertsResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 
     #[test]
-    fn test_sbor_roundtrip_unavailable() {
+    fn test_hbor_roundtrip_unavailable() {
         let response = GetExecutionCertsResponse { certificates: None };
 
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetExecutionCertsResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetExecutionCertsResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 }

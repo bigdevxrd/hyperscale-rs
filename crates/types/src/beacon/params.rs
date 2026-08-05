@@ -20,7 +20,7 @@
 //! as ground truth — the stake pool owner's authority over the vote is
 //! checked in the VM when stake pools land there, not at the beacon.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -35,7 +35,7 @@ use crate::{
 /// [`Self::from_genesis`]) and mutated only by the fold. New rows are
 /// added one at a time as each parameter's activation semantics are
 /// worked out; today the set is `reshape_thresholds` alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub struct NetworkParams {
     /// Substate-byte thresholds driving automatic shard reshaping. The
     /// live source for the split/merge predicate; the genesis copy on
@@ -115,7 +115,7 @@ pub enum ParamBoundsError {
 /// the same change only if they agree on both the value and the epoch.
 /// `activate_at` doubles as the prepare window / timelock: the change
 /// applies at that epoch iff it still holds a majority then.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub struct ParamProposal {
     /// The parameter values this proposal would install.
     pub params: NetworkParams,
@@ -131,7 +131,7 @@ pub struct ParamProposal {
 /// as authoritative — that `pool` voted this way — and weights the tally
 /// by `pool`'s stake; the signer's authority over the pool is enforced in
 /// the VM, not here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct ParamVote {
     /// The stake pool casting the vote — the unit the tally weights by.
     pub pool: StakePoolId,
@@ -141,6 +141,8 @@ pub struct ParamVote {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     #[test]
@@ -184,17 +186,17 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let params = NetworkParams {
             reshape_thresholds: ReshapeThresholds { split_bytes: 1_234 },
             ..NetworkParams::default()
         };
-        let bytes = basic_encode(&params).unwrap();
-        assert_eq!(basic_decode::<NetworkParams>(&bytes).unwrap(), params);
+        let bytes = hbor_to_vec(&params).unwrap();
+        assert_eq!(hbor_from_slice::<NetworkParams>(&bytes).unwrap(), params);
     }
 
     #[test]
-    fn vote_sbor_round_trip() {
+    fn vote_hbor_round_trip() {
         let votes = [
             ParamVote {
                 pool: StakePoolId::new(3),
@@ -212,8 +214,8 @@ mod tests {
             },
         ];
         for vote in votes {
-            let bytes = basic_encode(&vote).unwrap();
-            assert_eq!(basic_decode::<ParamVote>(&bytes).unwrap(), vote);
+            let bytes = hbor_to_vec(&vote).unwrap();
+            assert_eq!(hbor_from_slice::<ParamVote>(&bytes).unwrap(), vote);
         }
     }
 }

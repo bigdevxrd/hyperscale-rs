@@ -14,7 +14,7 @@
 //! signatures or general-purpose digests at every call site.
 
 use blake3::Hasher;
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// Domain tag for hashing a [`VrfProof`] into its [`VrfOutput`]. Binds
 /// the output to the specific proof bytes so a forged output paired
@@ -48,8 +48,8 @@ pub const VRF_PROOF_BYTES: usize = 96;
 /// `(signer, slot, network.id)` binding, not a free-floating 32-byte
 /// hash. Type confusion between the two would silently break randomness
 /// derivation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
+#[hbor(transparent)]
 pub struct VrfOutput([u8; VRF_OUTPUT_BYTES]);
 
 impl VrfOutput {
@@ -86,8 +86,8 @@ impl VrfOutput {
 /// container width but sign under different domain tags, verify against
 /// different message constructions, and the VRF path requires the
 /// scheme's deterministic signing core.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
+#[hbor(transparent)]
 pub struct VrfProof([u8; VRF_PROOF_BYTES]);
 
 impl VrfProof {
@@ -113,21 +113,23 @@ impl VrfProof {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     #[test]
-    fn vrf_output_sbor_round_trip() {
+    fn vrf_output_hbor_round_trip() {
         let original = VrfOutput::new([0xAB; VRF_OUTPUT_BYTES]);
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: VrfOutput = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: VrfOutput = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 
     #[test]
-    fn vrf_proof_sbor_round_trip() {
+    fn vrf_proof_hbor_round_trip() {
         let original = VrfProof::new([0xCD; VRF_PROOF_BYTES]);
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: VrfProof = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: VrfProof = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 
@@ -149,14 +151,14 @@ mod tests {
     }
 
     #[test]
-    fn sbor_encoding_is_transparent_to_inner_bytes() {
+    fn hbor_encoding_is_transparent_to_inner_bytes() {
         let raw: [u8; VRF_OUTPUT_BYTES] = [0xAB; VRF_OUTPUT_BYTES];
         let wrapped = VrfOutput::new(raw);
-        let raw_bytes = basic_encode(&raw).unwrap();
-        let wrapped_bytes = basic_encode(&wrapped).unwrap();
+        let raw_bytes = hbor_to_vec(&raw).unwrap();
+        let wrapped_bytes = hbor_to_vec(&wrapped).unwrap();
         assert_eq!(
             raw_bytes, wrapped_bytes,
-            "#[sbor(transparent)] must make newtype encoding byte-identical to inner array"
+            "#[hbor(transparent)] must make newtype encoding byte-identical to inner array"
         );
     }
 }

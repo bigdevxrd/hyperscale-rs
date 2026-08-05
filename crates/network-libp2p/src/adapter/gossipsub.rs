@@ -210,7 +210,7 @@ pub(super) fn handle_gossipsub_event(
 
             // Spawn decompress + handler off the event loop.
             // LZ4 decompression is fast (~4GB/s) but the handler includes
-            // SBOR decode which we don't want to stall the swarm poll on.
+            // HBOR decode which we don't want to stall the swarm poll on.
             // `VerdictGuard` ensures gossipsub gets exactly one verdict per
             // message even if `handler` panics or the task is cancelled.
             let vtx = validation_tx.clone();

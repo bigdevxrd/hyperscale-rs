@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use hyperscale_crypto::Verifier;
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -37,7 +37,7 @@ use crate::{
 ///
 /// Shared via `Arc` across the system — flows from execution state through
 /// pending blocks, actions, and into the commit path.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct FinalizedWave {
     certificate: Arc<WaveCertificate>,
     receipts: BoundedVec<StoredReceipt, MAX_TXS_PER_BLOCK>,

@@ -1,6 +1,6 @@
 //! Settled-waves window response for the split-boundary fence.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{BoundedVec, MAX_FINALIZED_TX_PER_BLOCK, MessageClass, NetworkMessage, WaveId};
 
@@ -15,7 +15,7 @@ use crate::{BoundedVec, MAX_FINALIZED_TX_PER_BLOCK, MessageClass, NetworkMessage
 /// Because the root commits the whole set, a server can neither hide a
 /// settled wave (a missing leaf changes the root) nor fabricate one, so the
 /// verified-complete set makes the absence of any wave from it sound.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetSettledWavesResponse {
     /// The terminated shard's complete settled-wave window list, or `None`
     /// when this peer doesn't hold the terminal block — the requester
@@ -49,29 +49,29 @@ impl NetworkMessage for GetSettledWavesResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{BlockHeight, ShardId};
 
     #[test]
-    fn test_sbor_roundtrip_not_found() {
+    fn test_hbor_roundtrip_not_found() {
         let response = GetSettledWavesResponse::not_found();
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetSettledWavesResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetSettledWavesResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 
     #[test]
-    fn test_sbor_roundtrip_found() {
+    fn test_hbor_roundtrip_found() {
         let wave = WaveId::new(
             ShardId::ROOT,
             BlockHeight::new(7),
             std::iter::empty().collect(),
         );
         let response = GetSettledWavesResponse::found(vec![wave].into());
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetSettledWavesResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetSettledWavesResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 }

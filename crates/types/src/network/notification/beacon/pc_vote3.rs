@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{MessageClass, NetworkMessage, PcVote3, SpcView, Verifiable};
 
@@ -14,7 +14,7 @@ use crate::{MessageClass, NetworkMessage, PcVote3, SpcView, Verifiable};
 /// votes don't carry their SPC view internally. Wire decode lands the
 /// wrapper as `Verifiable::Unverified`; local-dispatched sends from a
 /// colocated voter preserve `Verifiable::Verified`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcVote3Notification {
     /// SPC view whose inner PC produced this vote.
     pub view: SpcView,
@@ -59,7 +59,7 @@ impl NetworkMessage for PcVote3Notification {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{
@@ -88,11 +88,11 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let n =
             PcVote3Notification::new(SpcView::new(2), Arc::new(Verifiable::from(sample_vote())));
-        let bytes = basic_encode(&n).unwrap();
-        let decoded: PcVote3Notification = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&n).unwrap();
+        let decoded: PcVote3Notification = hbor_from_slice(&bytes).unwrap();
         assert_eq!(n, decoded);
     }
 

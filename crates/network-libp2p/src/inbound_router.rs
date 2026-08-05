@@ -216,8 +216,8 @@ fn spawn_request_loop(
 ///
 /// The router accepts incoming streams and for each:
 /// 1. Checks per-peer and global concurrency limits
-/// 2. Reads the typed frame header (`type_id`) + compressed SBOR payload
-/// 3. Looks up the handler in the registry and calls it with the SBOR payload
+/// 2. Reads the typed frame header (`type_id`) + compressed wire payload
+/// 3. Looks up the handler in the registry and calls it with the wire payload
 /// 4. Compresses and writes the length-prefixed response
 /// 5. Closes the stream
 struct InboundRouter {
@@ -451,7 +451,7 @@ impl InboundRouter {
             )
             .await;
 
-            let (type_id, sbor_payload, req_wire_bytes) = match read_result {
+            let (type_id, wire_payload, req_wire_bytes) = match read_result {
                 Ok(Ok(frame)) => frame,
                 Ok(Err(FrameError::Io(ref e))) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     // Client closed the stream cleanly between requests.
@@ -481,14 +481,14 @@ impl InboundRouter {
             // Handlers like provision.request do heavy work (merkle proof
             // generation) that would starve the async runtime if run on a
             // worker thread.
-            let response_sbor = spawn_blocking(move || handler(&sbor_payload))
+            let response_bytes = spawn_blocking(move || handler(&wire_payload))
                 .await
                 .expect("request handler task panicked");
 
             // Write length-prefixed compressed response with timeout.
             let resp_wire_bytes = timeout(
                 STREAM_IO_TIMEOUT,
-                stream_framing::write_frame(&mut stream, &response_sbor),
+                stream_framing::write_frame(&mut stream, &response_bytes),
             )
             .await
             .map_err(|_| StreamError::Timeout)?
@@ -515,7 +515,7 @@ impl InboundRouter {
             )
             .await;
 
-            let (type_id, sbor_payload, wire_bytes) = match read_result {
+            let (type_id, wire_payload, wire_bytes) = match read_result {
                 Ok(Ok(frame)) => frame,
                 Ok(Err(FrameError::Io(ref e))) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     // Clean stream closure by sender.
@@ -538,7 +538,7 @@ impl InboundRouter {
 
             // Look up the per-type notification handler.
             if let Some(handler) = self.registry.get_notification(&type_id) {
-                spawn(async move { handler(sbor_payload) });
+                spawn(async move { handler(wire_payload) });
             } else {
                 warn!(
                     peer = %peer,

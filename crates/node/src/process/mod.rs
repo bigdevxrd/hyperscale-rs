@@ -216,7 +216,7 @@ where
     /// Canonical `Transaction` instance per tx hash, so
     /// co-hosted shards validating the same transaction share one
     /// `OnceLock` verdict instead of each running the full
-    /// signature/SBOR validation. `Arc` so the gossip handler closure
+    /// signature/decode validation. `Arc` so the gossip handler closure
     /// can hold it without capturing the whole `ProcessIo`.
     pub(crate) canonical_txs: Arc<CanonicalTxs>,
 

@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{BoundedVec, MessageClass, NetworkMessage, Transaction};
@@ -27,7 +27,7 @@ const MAX_GOSSIP_TX_BATCH: usize = 1_000;
 ///
 /// Each tx is broadcast on its declared (read ∪ write) shard set; a tx
 /// touching multiple shards appears in multiple batches, one per audience.
-#[derive(Debug, Clone, BasicSbor)]
+#[derive(Debug, Clone, Hbor)]
 pub struct TransactionGossip {
     /// The transactions in this batch.
     pub transactions: BoundedVec<Arc<Transaction>, MAX_GOSSIP_TX_BATCH>,
@@ -94,7 +94,9 @@ impl GossipMessage for TransactionGossip {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
+    };
 
     use super::*;
     use crate::test_utils::{test_prefix, test_transaction_with_prefixes};
@@ -127,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip_multi_tx() {
+    fn hbor_roundtrip_multi_tx() {
         let txs: Vec<Arc<Transaction>> = (0..5)
             .map(|i| {
                 Arc::new(test_transaction_with_prefixes(
@@ -139,18 +141,18 @@ mod tests {
             .collect();
         let original = TransactionGossip::new(txs);
 
-        let bytes = basic_encode(&original).expect("encode");
-        let decoded: TransactionGossip = basic_decode(&bytes).expect("decode");
+        let bytes = hbor_to_vec(&original).expect("encode");
+        let decoded: TransactionGossip = hbor_from_slice(&bytes).expect("decode");
 
         assert_eq!(original, decoded);
         assert_eq!(decoded.len(), 5);
     }
 
     #[test]
-    fn sbor_roundtrip_empty() {
+    fn hbor_roundtrip_empty() {
         let original = TransactionGossip::new(vec![]);
-        let bytes = basic_encode(&original).expect("encode");
-        let decoded: TransactionGossip = basic_decode(&bytes).expect("decode");
+        let bytes = hbor_to_vec(&original).expect("encode");
+        let decoded: TransactionGossip = hbor_from_slice(&bytes).expect("decode");
         assert_eq!(original, decoded);
         assert!(decoded.is_empty());
     }
@@ -161,28 +163,14 @@ mod tests {
         // MAX_GOSSIP_TX_BATCH. Without the cap the decoder would call
         // Vec::with_capacity(huge) and OOM; with the cap it errors before
         // touching memory.
-        use sbor::{
-            BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder,
-            NoCustomValueKind, ValueKind, VecEncoder,
-        };
-        let mut buf = Vec::with_capacity(32);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(1).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(MAX_GOSSIP_TX_BATCH + 1).unwrap();
-        }
-        let err = basic_decode::<TransactionGossip>(&buf).unwrap_err();
+        let mut buf = Vec::new();
+        varint::write(&mut buf, MAX_GOSSIP_TX_BATCH + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_GOSSIP_TX_BATCH + 1) * 256));
+        let err = hbor_from_slice::<TransactionGossip>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected,
-                actual,
-            } if expected == MAX_GOSSIP_TX_BATCH && actual == MAX_GOSSIP_TX_BATCH + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_GOSSIP_TX_BATCH && actual == MAX_GOSSIP_TX_BATCH + 1
         ));
     }
 }

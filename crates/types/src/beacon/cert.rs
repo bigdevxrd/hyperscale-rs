@@ -5,7 +5,7 @@
 //! [`CertifiedBeaconBlock`](crate::CertifiedBeaconBlock) wrapper, never
 //! a field on the block itself.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{GenesisConfigHash, RatifyCert, SpcCert};
 
@@ -35,7 +35,7 @@ use crate::{GenesisConfigHash, RatifyCert, SpcCert};
 /// - `Skip` ⇔ `block.epoch > GENESIS` ∧ `committed_proposals.is_empty()`
 /// - non-genesis ⇒ the ratify cert names the block's hash, epoch, and
 ///   parent
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum BeaconCert {
     /// Bootstrap-only cert; binds the chain to a `BeaconGenesisConfig`.
     Genesis(GenesisConfigHash),
@@ -67,6 +67,8 @@ impl BeaconCert {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
     use crate::{AggregateSignature, BeaconBlockHash, Epoch, Hash, RatifyRound, SignerBitfield};
 
@@ -88,16 +90,16 @@ mod tests {
     #[test]
     fn genesis_round_trip() {
         let original = BeaconCert::Genesis(GenesisConfigHash::from_raw(Hash::from_bytes(b"cfg")));
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: BeaconCert = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: BeaconCert = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 
     #[test]
     fn skip_round_trip() {
         let original = BeaconCert::Skip(sample_ratify_cert());
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: BeaconCert = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: BeaconCert = hbor_from_slice(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 

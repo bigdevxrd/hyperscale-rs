@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
 /// the certified header (header + QC) is broadcast globally so remote
 /// shards can verify state roots and validate merkle inclusion proofs
 /// for provisions.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct CertifiedBlockHeaderGossip {
     /// The committed block header (header + QC). Wire bytes always land
     /// in [`Verifiable::Unverified`]; local-dispatched broadcasts from a
@@ -81,7 +81,7 @@ impl GossipMessage for CertifiedBlockHeaderGossip {
 mod tests {
     use std::collections::BTreeMap;
 
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{BlockHash, InFlightCount, ProposerTimestamp};
@@ -95,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         use crate::{
             BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHeader, BlockHeight, CertificateRoot,
             ChainOrigin, Hash, LocalReceiptRoot, ProvisionsRoot, QuorumCertificate, RevealChain,
@@ -135,8 +135,8 @@ mod tests {
             sender_signature: ConsensusSignature::ZERO,
         };
 
-        let encoded = basic_encode(&gossip).unwrap();
-        let decoded: CertifiedBlockHeaderGossip = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&gossip).unwrap();
+        let decoded: CertifiedBlockHeaderGossip = hbor_from_slice(&encoded).unwrap();
         assert_eq!(gossip, decoded);
     }
 }

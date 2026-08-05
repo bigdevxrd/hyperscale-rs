@@ -4,12 +4,9 @@
 use std::sync::Arc;
 
 use blake3::Hasher;
-use sbor::prelude::*;
-use sbor::{Decode, DecodeError, Decoder, NoCustomValueKind, ValueKind};
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 
-use crate::{
-    BoundedVec, ExecutionCertificate, Hash, Verifiable, Verified, WaveId, WaveReceiptHash,
-};
+use crate::{ExecutionCertificate, Hash, Verifiable, Verified, WaveId, WaveReceiptHash};
 
 /// Cap on execution certificates accepted in a single `WaveCertificate` at
 /// decode time.
@@ -34,14 +31,14 @@ pub const MAX_EXECUTION_CERTIFICATES_PER_WAVE: usize = 1024;
 ///
 /// # Panics
 ///
-/// Panics if SBOR encoding of a `ShardId` or `WaveId` fails — closed
-/// SBOR types, infallible in practice.
+/// Panics if HBOR encoding of a `ShardId` or `WaveId` fails — closed
+/// wire types, infallible in practice.
 #[must_use]
 pub fn wave_receipt_hash<'a>(ec_wave_ids: impl IntoIterator<Item = &'a WaveId>) -> WaveReceiptHash {
     let mut hasher = Hasher::new();
     for wave_id in ec_wave_ids {
-        hasher.update(&basic_encode(&wave_id.shard_id()).unwrap());
-        hasher.update(&basic_encode(wave_id).unwrap());
+        hasher.update(&hbor_to_vec(&wave_id.shard_id()).unwrap());
+        hasher.update(&hbor_to_vec(wave_id).unwrap());
     }
     WaveReceiptHash::from_raw(Hash::from_hash_bytes(hasher.finalize().as_bytes()))
 }
@@ -61,14 +58,32 @@ pub fn wave_receipt_hash<'a>(ec_wave_ids: impl IntoIterator<Item = &'a WaveId>) 
 /// the local shard, by construction, produces a single EC per wave.
 ///
 /// Enforced at construction by `WaveCertificateTracker::create_wave_certificate`
-/// and at the wire boundary by `WaveCertificate`'s SBOR `Decode` impl.
+/// and at the wire boundary by `WaveCertificate`'s decode impl.
 /// Downstream helpers like [`FinalizedWave::local_ec`](crate::FinalizedWave::local_ec)
 /// `expect` this invariant.
-#[derive(Debug, Clone, PartialEq, Eq, BasicEncode, BasicCategorize, BasicDescribe)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(validate = check_wave_certificate)]
 pub struct WaveCertificate {
     wave_id: WaveId,
-    execution_certificates:
-        BoundedVec<Arc<Verifiable<ExecutionCertificate>>, MAX_EXECUTION_CERTIFICATES_PER_WAVE>,
+    #[hbor(max = MAX_EXECUTION_CERTIFICATES_PER_WAVE)]
+    execution_certificates: Vec<Arc<Verifiable<ExecutionCertificate>>>,
+}
+
+/// The exactly-one-local-EC invariant, enforced at the wire boundary. Zero
+/// local ECs would crash `FinalizedWave::local_ec()`; multiple would let
+/// downstream code silently disagree on which EC is authoritative for tx
+/// ordering.
+fn check_wave_certificate(wc: &WaveCertificate) -> Result<(), &'static str> {
+    let local = wc
+        .execution_certificates
+        .iter()
+        .filter(|ec| ec.wave_id() == &wc.wave_id)
+        .count();
+    if local == 1 {
+        Ok(())
+    } else {
+        Err("a wave certificate carries exactly one local execution certificate")
+    }
 }
 
 impl WaveCertificate {
@@ -93,8 +108,7 @@ impl WaveCertificate {
             execution_certificates: execution_certificates
                 .into_iter()
                 .map(|ec| Arc::new(Verifiable::from(Arc::unwrap_or_clone(ec))))
-                .collect::<Vec<_>>()
-                .into(),
+                .collect(),
         }
     }
 
@@ -126,8 +140,7 @@ impl WaveCertificate {
             execution_certificates: execution_certificates
                 .into_iter()
                 .map(|ec| Arc::new(Verifiable::from(ec)))
-                .collect::<Vec<_>>()
-                .into(),
+                .collect(),
         }
     }
 
@@ -175,43 +188,5 @@ impl WaveCertificate {
             .iter()
             .map(|ec| ec.wave_id().clone())
             .collect()
-    }
-}
-
-// Manual `Decode` enforces the exactly-one-local-EC invariant at the
-// wire boundary.
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for WaveCertificate {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 2 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: length,
-            });
-        }
-        let wave_id: WaveId = decoder.decode()?;
-        let execution_certificates: BoundedVec<
-            Arc<Verifiable<ExecutionCertificate>>,
-            MAX_EXECUTION_CERTIFICATES_PER_WAVE,
-        > = decoder.decode()?;
-        // Reject any WC that violates the exactly-one-local-EC invariant.
-        // Zero local ECs would crash `FinalizedWave::local_ec()`; multiple
-        // would let downstream code silently disagree on which EC is
-        // authoritative for tx ordering.
-        let local_ec_count = execution_certificates
-            .iter()
-            .filter(|ec| ec.wave_id() == &wave_id)
-            .count();
-        if local_ec_count != 1 {
-            return Err(DecodeError::InvalidCustomValue);
-        }
-        Ok(Self {
-            wave_id,
-            execution_certificates,
-        })
     }
 }

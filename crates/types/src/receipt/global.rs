@@ -1,5 +1,7 @@
 //! Cross-shard agreement receipt (Tier 1).
 
+use hyperscale_hbor::Hbor;
+
 use crate::{BeaconWitnessRoot, EventRoot, GlobalReceiptHash, Hash, OwnershipRoot, WritesRoot};
 
 /// Cross-shard agreement receipt — ensures validators on different shards
@@ -11,7 +13,7 @@ use crate::{BeaconWitnessRoot, EventRoot, GlobalReceiptHash, Hash, OwnershipRoot
 ///
 /// This hash is what validators sign over in execution votes.
 /// Ephemeral — never written to storage, only lives for EC aggregation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, sbor::prelude::BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Hbor)]
 pub struct GlobalReceipt {
     success: bool,
     event_root: EventRoot,

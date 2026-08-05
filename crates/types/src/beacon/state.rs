@@ -29,7 +29,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::beacon::constants::{HALT_THRESHOLD_EPOCHS, MIN_STAKE_FLOOR, POOL_BUFFER_TARGET};
 use crate::beacon::genesis::BeaconChainConfig;
@@ -52,7 +52,7 @@ use crate::{
 /// reflects the withdrawal even though `total_stake` does not — so
 /// new registrations can't lean on stake that's already pledged to
 /// leave.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PendingWithdrawal {
     /// Amount the withdrawal removes from effective stake immediately
     /// and from total stake on unbonding completion.
@@ -70,7 +70,7 @@ pub struct PendingWithdrawal {
 /// reject — and its withdrawals are impounded until `lifts_at`, after
 /// which the stake exits whole through the normal unbonding path. The
 /// punishment is the time-premium of the capital, never the capital.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct PoolConviction {
     /// Epoch the convicting evidence folded.
     pub convicted_at: Epoch,
@@ -86,7 +86,7 @@ pub struct PoolConviction {
 /// shard layer; beacon tracks only the aggregate state that determines
 /// validator activation count. Pool entries are created implicitly on
 /// the first `StakeDeposit` witness for an unknown id.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StakePool {
     /// Identifier — same key the pool sits under in
     /// [`BeaconState::pools`].
@@ -124,7 +124,7 @@ pub struct StakePool {
 /// Every jail is temporary: it determines the cooldown an `Unjail`
 /// witness must wait out. Provably byzantine signing is not a jail —
 /// it revokes the key permanently ([`ValidatorStatus::Revoked`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hbor)]
 pub enum JailReason {
     /// Performance failure. Surfaces from a shard's local miss-counter
     /// crossing threshold (witness emits with this reason), from the
@@ -149,7 +149,7 @@ pub enum JailReason {
 ///
 /// Transitions are driven by `apply_epoch` from witnesses, withdrawal
 /// completion, jail cascades, and pool draws.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub enum ValidatorStatus {
     /// In the global pool. Registered, supported by stake, but not
     /// placed on any shard. Picked up by the next pool draw driven by
@@ -213,7 +213,7 @@ pub enum ValidatorStatus {
 /// On-chain record for one validator node.
 ///
 /// Stake lives on the validator's [`StakePool`], not here.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ValidatorRecord {
     /// Same id this record sits under in [`BeaconState::validators`].
     pub id: ValidatorId,
@@ -250,7 +250,7 @@ pub struct ValidatorRecord {
 /// [`BeaconChainConfig::max_rotations_in_flight`]) at every epoch
 /// boundary; the list shrinks transiently when an epoch opens, then
 /// refills via `pool_draw` within the same step.
-#[derive(Debug, Default, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hbor)]
 pub struct ShardCommittee {
     /// Ordered list of validators on this shard.
     pub members: Vec<ValidatorId>,
@@ -270,7 +270,7 @@ pub struct ShardCommittee {
 /// the per-*shard* counter (distinct from the per-*validator*
 /// [`BeaconState::miss_counters`]) bumped each epoch the beacon committee
 /// observes no boundary crossing for this shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct ShardBoundary {
     /// Subtree root at the shard's most recent committed boundary block —
     /// the snap-sync anchor.
@@ -348,7 +348,7 @@ pub struct ShardBoundary {
 }
 
 /// One observer drawn into a pending split's cohort.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct CohortSeat {
     /// Pending child the observer syncs and joins at execution.
     pub child: ShardId,
@@ -362,7 +362,7 @@ pub struct CohortSeat {
 /// running that chain and hard-links the merged store from it — so a
 /// seat carries no status, only the child it runs and whether it has
 /// synced the sibling half into the merged `p`-rooted store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct KeeperSeat {
     /// The child whose half this keeper runs and hard-links from.
     pub child: ShardId,
@@ -391,7 +391,7 @@ pub struct KeeperSeat {
 /// Once the readiness gate passes the record is *scheduled*: its cut is
 /// fixed a window out and neither TTL can retract it. The fold at that
 /// cut consumes the record and applies the reshape.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum PendingReshape {
     /// The target shard splits into its two children.
     Split {
@@ -453,7 +453,7 @@ pub enum PendingReshape {
 /// schedule is irrevocable, so there is no second gate to re-approve a
 /// different carve. Membership holds still across the scheduled window
 /// because rotation skips a shard with a live split record.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ScheduledSplit {
     /// The parent's final epoch window — the cut its chain terminates on
     /// and the children take over at.
@@ -494,7 +494,7 @@ impl PendingReshape {
 /// takes. The rotation resolves in the fold after the entrant's
 /// readiness lands, and every entrant becomes ready — by witness or by
 /// the auto-ready timeout — so no rotation stays open indefinitely.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct PendingRotation {
     /// The drawn member syncing into the seat, `OnShard { ready: false }`
     /// until its readiness folds.
@@ -507,7 +507,7 @@ pub struct PendingRotation {
 /// Why a shard's committee was recovered. Fence, re-draw, retention,
 /// bridge, and clearing are identical across causes; the cause records
 /// provenance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub enum RecoveryCause {
     /// The committee went quiet: its committed-boundary watermark
     /// stopped advancing past the halt threshold.
@@ -532,7 +532,7 @@ pub enum RecoveryCause {
 /// they prove themselves serving only at that first crossing), and
 /// [`rotated_at`](Self::rotated_at) anchors the recovery bridge that
 /// binds blocks extending the retained tip to the fresh committee.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ShardRecovery {
     /// What the recovery answers. Provenance only: every consequence of
     /// the record is cause-agnostic.
@@ -561,7 +561,7 @@ pub struct ShardRecovery {
 /// Stamped when the pending [`ShardRecovery`] clears on the shard's
 /// first observed crossing under its fresh committee. One entry per
 /// recovered shard, overwritten by a later recovery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct CompletedRecovery {
     /// Epoch the fresh committee was seated
     /// ([`ShardRecovery::rotated_at`]). Certified resolution of the
@@ -578,7 +578,7 @@ pub struct CompletedRecovery {
 
 /// The window-frozen half of a beacon projection — see
 /// [`BeaconState::window`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hbor)]
 pub struct FrozenWindow {
     /// Each shard's beacon-witness accumulator base for this window: the
     /// applied watermark (`boundaries[shard].witness_leaf_count`) as it
@@ -627,7 +627,7 @@ pub struct FrozenWindow {
 /// `apply_epoch` being a pure deterministic function of `(state, epoch,
 /// committed)` and SPC's Agreement guaranteeing all honest parties see
 /// the same `committed` argument.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BeaconState {
     /// Sizing knobs copied from `BeaconGenesisConfig.chain_config` at
     /// genesis. Frozen for the chain's lifetime and authenticated by the
@@ -834,7 +834,7 @@ pub struct BeaconState {
 /// The runner uses this to tell "scheduled rotation, no anomaly" apart
 /// from "the old committee failed and was replaced" — different
 /// operator-facing signals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub enum TransitionCause {
     /// Natural rotation at an epoch boundary — the trickled shuffle for
     /// per-shard committees, the epoch-rotation step for the beacon
@@ -869,7 +869,7 @@ pub enum TransitionCause {
 /// Cross-validator agreement on `(from, to, cause, at_slot)` follows
 /// from `apply_epoch` being deterministic; every honest party computes
 /// the same transition.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct CommitteeTransition {
     /// Outgoing committee.
     pub from: Vec<ValidatorId>,
@@ -884,7 +884,7 @@ pub struct CommitteeTransition {
 /// One observer seat of a pending split, as surfaced in
 /// [`SlotEffects`]: who holds it, the splitting shard whose committee
 /// carries it, and the assigned pending child.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct ObserverSeat {
     /// Validator holding the seat.
     pub validator: ValidatorId,
@@ -897,7 +897,7 @@ pub struct ObserverSeat {
 /// One keeper seat of a pending merge, as surfaced in [`SlotEffects`]:
 /// who holds it, the parent they reform, and the child they run (and
 /// hard-link the merged store from).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct KeptSeat {
     /// Validator holding the seat.
     pub validator: ValidatorId,
@@ -913,7 +913,7 @@ pub struct KeptSeat {
 /// detection), and tests. Empty defaults match "nothing happened" — an
 /// epoch with no commits and no boundary crossings returns
 /// [`SlotEffects::default()`].
-#[derive(Debug, Default, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hbor)]
 pub struct SlotEffects {
     /// New validators registered via a `RegisterValidator` witness.
     pub registered: Vec<ValidatorId>,

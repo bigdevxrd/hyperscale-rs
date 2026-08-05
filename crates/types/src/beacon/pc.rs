@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use blake3::Hasher;
 use hyperscale_crypto::{SignError, Signer, Verifier};
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::beacon::prefix_ops::{mce, mcp, qc1_certify};
@@ -40,8 +40,8 @@ pub const PC_VALUE_ELEMENT_BYTES: usize = 32;
 /// digest so committed vectors retain the hash function's collision
 /// resistance (~2^128 birthday work for the 32-byte digest) rather
 /// than the ~2^32 a truncated `u64` would give.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hbor)]
+#[hbor(transparent)]
 pub struct PcValueElement([u8; PC_VALUE_ELEMENT_BYTES]);
 
 impl PcValueElement {
@@ -108,8 +108,8 @@ impl PcValueElement {
 /// committed vector ("Lemma 3.1"). Carrying the full vector at every
 /// round (rather than a hash) lets verifiers run the prefix-consistency
 /// arithmetic without having to fetch additional preimages.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(transparent)]
 pub struct PcVector(BoundedVec<PcValueElement, MAX_VOTE_VECTOR_LEN>);
 
 impl PcVector {
@@ -182,7 +182,7 @@ impl<'a> IntoIterator for &'a PcVector {
 /// Round-1 vote — a signer's input vector with a `|v_in| + 1`
 /// prefix-sig fan-out (one signature per prefix of `v_in`, including
 /// the empty prefix).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcVote1 {
     validator: ValidatorId,
     v_in: PcVector,
@@ -240,7 +240,7 @@ impl PcVote1 {
 ///
 /// Validator identity is carried positionally by the enclosing
 /// [`PositionalBundle`] in [`PcQc1::x_signers`].
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcCompactVote {
     /// `|mcp(v_in_i, x)|` — fixed-width on the wire across host word
     /// sizes; bounded above by [`MAX_VOTE_VECTOR_LEN`].
@@ -283,7 +283,7 @@ impl PcCompactVote {
 /// `v'_i` from the compact encoding and re-runs the max-subset check
 /// over all `n-f` signers. Carrying the full signer set (not just the
 /// achieving `(f+1)`-subset) is load-bearing for soundness.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcQc1 {
     x: PcVector,
     /// Round-1 quorum (`n - f` signers), each compact-encoded against
@@ -337,7 +337,7 @@ impl PcQc1 {
 /// The length attestation pins each signer's `|x|` so a third-party
 /// prover can't splice their prefix sigs to forge a shorter-`x` claim.
 /// Required by `XpProof::ShortWitness` verification.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcVote2 {
     validator: ValidatorId,
     x: PcVector,
@@ -421,7 +421,7 @@ impl PcVote2 {
 /// Detailed payload for [`PcXpProof::Diverging`]. Boxed inside the
 /// enum variant so the enum's stack size stays balanced with the
 /// other variants.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcDivergingProof {
     /// First diverging signer.
     pub j: ValidatorId,
@@ -446,7 +446,7 @@ pub struct PcDivergingProof {
 /// Required because the multi-sig alone only proves `n - f` signers
 /// signed `x_p` — it doesn't prove `x_p` is the *longest* prefix they
 /// all agree on.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum PcXpProof {
     /// Every signer's `x` equals `x_p` exactly. The cert's
     /// [`PcQc2::combined_sig`] folds the per-signer `[|x_p|]` length
@@ -481,7 +481,7 @@ pub enum PcXpProof {
 /// - [`PcXpProof::Diverging`] / [`PcXpProof::ShortWitness`]:
 ///   same-message multi-sig over `x_p` only; the witness contributes
 ///   the length-binding evidence separately.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcQc2 {
     x_p: PcVector,
     /// `n - f` signers in the quorum (positional against the
@@ -541,7 +541,7 @@ impl PcQc2 {
 
 /// Round-3 vote — carries the certified mcp `x_p` from a [`PcQc2`],
 /// the signer's individual sig over `x_p`, and the [`PcQc2`] itself.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcVote3 {
     validator: ValidatorId,
     x_p: PcVector,
@@ -613,7 +613,7 @@ impl PcVote3 {
 /// and the encoding collapses to a single `u32`; otherwise the
 /// per-signer lengths ride in set-bit order matching the parent
 /// bundle's bitfield.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum PcSignerLengths {
     /// Every signer's `|x_p_i|` equals this value. Common case.
     Uniform(u32),
@@ -674,7 +674,7 @@ impl PcSignerLengths {
 /// every signer's `x_p` equal). [`PcQc3::x_pe`] /
 /// [`PcQc3::qc2_xpe`] resolve the dedup encoding back to the live
 /// reference.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcQc3 {
     x_pp: PcVector,
     /// `PcQc2` contributed by the round-3 vote that attained `x_pp`.
@@ -796,7 +796,7 @@ impl PcQc3 {
 /// equivocating on the [`PcVote2`] value (different lengths ⇒ different
 /// vectors), so any length-attestation double-sign is already captured
 /// by the [`Self::Vote2`] flavor's value-inequality check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hbor)]
 pub enum PcVoteRound {
     /// Equivocation on a [`PcVote1`].
     Vote1,
@@ -815,7 +815,7 @@ pub enum PcVoteRound {
 /// reconstructs the canonical signing bytes and runs signature verify under
 /// the equivocator's pubkey. Both sides must verify and the values
 /// must differ.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct PcVoteEquivocation {
     /// Validator that double-signed.
     pub validator: ValidatorId,
@@ -2238,6 +2238,8 @@ impl Verified<PcQc3> {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     fn sample_value(n: u8) -> PcValueElement {
@@ -2301,19 +2303,19 @@ mod tests {
     }
 
     #[test]
-    fn vote1_sbor_round_trip() {
+    fn vote1_hbor_round_trip() {
         let v = PcVote1::new(
             ValidatorId::new(7),
             sample_vector(3),
             vec![sample_sig(1), sample_sig(2), sample_sig(3), sample_sig(4)],
         );
-        let bytes = basic_encode(&v).unwrap();
-        let decoded: PcVote1 = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&v).unwrap();
+        let decoded: PcVote1 = hbor_from_slice(&bytes).unwrap();
         assert_eq!(v, decoded);
     }
 
     #[test]
-    fn vote2_sbor_round_trip() {
+    fn vote2_hbor_round_trip() {
         let v = PcVote2::new(
             ValidatorId::new(7),
             sample_vector(2),
@@ -2321,34 +2323,34 @@ mod tests {
             sample_qc1(),
             sample_sig(0x55),
         );
-        let bytes = basic_encode(&v).unwrap();
-        let decoded: PcVote2 = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&v).unwrap();
+        let decoded: PcVote2 = hbor_from_slice(&bytes).unwrap();
         assert_eq!(v, decoded);
     }
 
     #[test]
-    fn vote3_sbor_round_trip() {
+    fn vote3_hbor_round_trip() {
         let v = PcVote3::new(
             ValidatorId::new(7),
             sample_vector(2),
             sample_sig(0x77),
             sample_qc2(),
         );
-        let bytes = basic_encode(&v).unwrap();
-        let decoded: PcVote3 = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&v).unwrap();
+        let decoded: PcVote3 = hbor_from_slice(&bytes).unwrap();
         assert_eq!(v, decoded);
     }
 
     #[test]
-    fn qc1_sbor_round_trip() {
+    fn qc1_hbor_round_trip() {
         let qc = sample_qc1();
-        let bytes = basic_encode(&qc).unwrap();
-        let decoded: PcQc1 = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&qc).unwrap();
+        let decoded: PcQc1 = hbor_from_slice(&bytes).unwrap();
         assert_eq!(qc, decoded);
     }
 
     #[test]
-    fn qc2_sbor_round_trip_all_xp_proof_variants() {
+    fn qc2_hbor_round_trip_all_xp_proof_variants() {
         let bitfield = {
             let mut b = SignerBitfield::new(4);
             b.set(0);
@@ -2381,8 +2383,8 @@ mod tests {
 
         for pi in variants {
             let qc = PcQc2::new(sample_vector(2), bitfield.clone(), sample_agg(0xDD), pi);
-            let bytes = basic_encode(&qc).unwrap();
-            let decoded: PcQc2 = basic_decode(&bytes).unwrap();
+            let bytes = hbor_to_vec(&qc).unwrap();
+            let decoded: PcQc2 = hbor_from_slice(&bytes).unwrap();
             assert_eq!(qc, decoded);
         }
     }
@@ -2432,7 +2434,7 @@ mod tests {
     }
 
     #[test]
-    fn qc3_sbor_round_trip() {
+    fn qc3_hbor_round_trip() {
         let qc = PcQc3::new(
             sample_vector(2),
             sample_qc2(),
@@ -2442,8 +2444,8 @@ mod tests {
             PcSignerLengths::PerSigner(vec![2u32, 3].into()),
             sample_agg(0xEE),
         );
-        let bytes = basic_encode(&qc).unwrap();
-        let decoded: PcQc3 = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&qc).unwrap();
+        let decoded: PcQc3 = hbor_from_slice(&bytes).unwrap();
         assert_eq!(qc, decoded);
     }
 
@@ -2471,26 +2473,26 @@ mod tests {
     }
 
     #[test]
-    fn value_element_sbor_transparent() {
+    fn value_element_hbor_transparent() {
         let raw: [u8; PC_VALUE_ELEMENT_BYTES] = [0xAB; PC_VALUE_ELEMENT_BYTES];
         let wrapped = PcValueElement::new(raw);
-        let raw_bytes = basic_encode(&raw).unwrap();
-        let wrapped_bytes = basic_encode(&wrapped).unwrap();
+        let raw_bytes = hbor_to_vec(&raw).unwrap();
+        let wrapped_bytes = hbor_to_vec(&wrapped).unwrap();
         assert_eq!(raw_bytes, wrapped_bytes);
     }
 
     #[test]
-    fn pc_vector_sbor_transparent() {
+    fn pc_vector_hbor_transparent() {
         let inner: BoundedVec<PcValueElement, MAX_VOTE_VECTOR_LEN> =
             (0..3u8).map(sample_value).collect::<Vec<_>>().into();
         let wrapped = PcVector(inner.clone());
-        let inner_bytes = basic_encode(&inner).unwrap();
-        let wrapped_bytes = basic_encode(&wrapped).unwrap();
+        let inner_bytes = hbor_to_vec(&inner).unwrap();
+        let wrapped_bytes = hbor_to_vec(&wrapped).unwrap();
         assert_eq!(inner_bytes, wrapped_bytes);
     }
 
     #[test]
-    fn pc_vote_equivocation_sbor_round_trip_all_rounds() {
+    fn pc_vote_equivocation_hbor_round_trip_all_rounds() {
         for round in [PcVoteRound::Vote1, PcVoteRound::Vote2, PcVoteRound::Vote3] {
             let e = PcVoteEquivocation {
                 validator: ValidatorId::new(7),
@@ -2502,17 +2504,17 @@ mod tests {
                 value_b: sample_vector(3),
                 sig_b: sample_sig(0x22),
             };
-            let bytes = basic_encode(&e).unwrap();
-            let decoded: PcVoteEquivocation = basic_decode(&bytes).unwrap();
+            let bytes = hbor_to_vec(&e).unwrap();
+            let decoded: PcVoteEquivocation = hbor_from_slice(&bytes).unwrap();
             assert_eq!(e, decoded);
         }
     }
 
     #[test]
-    fn pc_vote_round_sbor_round_trip_all_variants() {
+    fn pc_vote_round_hbor_round_trip_all_variants() {
         for r in [PcVoteRound::Vote1, PcVoteRound::Vote2, PcVoteRound::Vote3] {
-            let bytes = basic_encode(&r).unwrap();
-            let decoded: PcVoteRound = basic_decode(&bytes).unwrap();
+            let bytes = hbor_to_vec(&r).unwrap();
+            let decoded: PcVoteRound = hbor_from_slice(&bytes).unwrap();
             assert_eq!(r, decoded);
         }
     }

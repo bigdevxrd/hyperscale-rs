@@ -1,6 +1,6 @@
 //! Block fetch response.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{MessageClass, NetworkMessage};
 use crate::shard::inventory::ElidedCertifiedBlock;
@@ -10,7 +10,7 @@ use crate::shard::inventory::ElidedCertifiedBlock;
 /// Carries a block in elided form together with its certifying QC.
 /// Inline bodies may be omitted for items the requester already holds
 /// (see [`ElidedCertifiedBlock`]); hash lists are always complete.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetBlockResponse {
     /// The requested block (elided) + certifying QC. `None` when the
     /// serving peer doesn't have the block.

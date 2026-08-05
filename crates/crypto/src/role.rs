@@ -6,7 +6,7 @@
 //! signature need not be a valid G2 point). Widths match the current
 //! scheme's compressed encodings so wire encodings stay byte-identical.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// Wire length of a [`ConsensusPublicKey`] in bytes.
 pub const CONSENSUS_PUBLIC_KEY_BYTES: usize = 48;
@@ -21,8 +21,8 @@ pub const AGGREGATE_SIGNATURE_BYTES: usize = 96;
 ///
 /// Identifies a validator for vote, timeout, proposal, and possession
 /// proof verification. Only scheme impl crates interpret the bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor)]
+#[hbor(transparent)]
 pub struct ConsensusPublicKey([u8; CONSENSUS_PUBLIC_KEY_BYTES]);
 
 impl ConsensusPublicKey {
@@ -48,8 +48,8 @@ impl ConsensusPublicKey {
 ///
 /// Carried by block votes, timeouts, proposer signatures, ready signals,
 /// possession proofs, and signed network envelopes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Hbor)]
+#[hbor(transparent)]
 pub struct ConsensusSignature([u8; CONSENSUS_SIGNATURE_BYTES]);
 
 impl ConsensusSignature {
@@ -77,8 +77,8 @@ impl ConsensusSignature {
 /// Carried by quorum certificates, beacon PC/SPC certificates, ratify
 /// certificates, and execution certificates. The signer set travels
 /// beside it (as a bitfield or positional bundle), never inside it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Hbor)]
+#[hbor(transparent)]
 pub struct AggregateSignature([u8; AGGREGATE_SIGNATURE_BYTES]);
 
 impl AggregateSignature {
@@ -104,34 +104,36 @@ impl AggregateSignature {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     #[test]
-    fn sbor_encoding_is_transparent_to_inner_bytes() {
+    fn hbor_encoding_is_transparent_to_inner_bytes() {
         let raw = [0xABu8; CONSENSUS_PUBLIC_KEY_BYTES];
-        let raw_bytes = basic_encode(&raw).unwrap();
-        let wrapped_bytes = basic_encode(&ConsensusPublicKey::new(raw)).unwrap();
+        let raw_bytes = hbor_to_vec(&raw).unwrap();
+        let wrapped_bytes = hbor_to_vec(&ConsensusPublicKey::new(raw)).unwrap();
         assert_eq!(
             raw_bytes, wrapped_bytes,
-            "#[sbor(transparent)] must make newtype encoding byte-identical to inner array"
+            "#[hbor(transparent)] must make newtype encoding byte-identical to inner array"
         );
     }
 
     #[test]
-    fn sbor_round_trips() {
+    fn hbor_round_trips() {
         let key = ConsensusPublicKey::new([0x11; CONSENSUS_PUBLIC_KEY_BYTES]);
         let sig = ConsensusSignature::new([0x22; CONSENSUS_SIGNATURE_BYTES]);
         let agg = AggregateSignature::new([0x33; AGGREGATE_SIGNATURE_BYTES]);
         assert_eq!(
-            basic_decode::<ConsensusPublicKey>(&basic_encode(&key).unwrap()).unwrap(),
+            hbor_from_slice::<ConsensusPublicKey>(&hbor_to_vec(&key).unwrap()).unwrap(),
             key
         );
         assert_eq!(
-            basic_decode::<ConsensusSignature>(&basic_encode(&sig).unwrap()).unwrap(),
+            hbor_from_slice::<ConsensusSignature>(&hbor_to_vec(&sig).unwrap()).unwrap(),
             sig
         );
         assert_eq!(
-            basic_decode::<AggregateSignature>(&basic_encode(&agg).unwrap()).unwrap(),
+            hbor_from_slice::<AggregateSignature>(&hbor_to_vec(&agg).unwrap()).unwrap(),
             agg
         );
     }

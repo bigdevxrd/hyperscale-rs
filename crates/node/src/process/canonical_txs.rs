@@ -17,7 +17,7 @@ const CANONICAL_TX_CACHE_SIZE: usize = 10_000;
 /// hosted shard (per-shard gossip topics, per-shard fetch responses),
 /// and every arrival decodes a fresh allocation with an empty
 /// `validated` cache — left alone, each shard re-runs the full
-/// signature/SBOR validation. Mapping every ingress onto one canonical
+/// signature/decode validation. Mapping every ingress onto one canonical
 /// `Arc` shares the instance's `OnceLock` validation verdict instead:
 /// the first shard to validate populates it, concurrent shards block
 /// on the in-flight init rather than racing, and failed verdicts

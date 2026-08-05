@@ -31,9 +31,9 @@ use std::f64::consts::LN_2;
 use std::fmt;
 use std::marker::PhantomData;
 
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
+use hyperscale_hbor::error::{DecodeError as HborDecodeError, EncodeError as HborEncodeError};
+use hyperscale_hbor::{
+    Decoder as HborDecoder, Encoder as HborEncoder, HborDecode, HborEncode, HborWidth,
 };
 
 use crate::TypedHash;
@@ -228,47 +228,39 @@ impl<T> fmt::Debug for BloomFilter<T> {
     }
 }
 
-// ── SBOR: encode as `(Vec<u64>, u8)`; phantom is not serialized. ─────────────
+// ── Wire codec: encode as `(Vec<u64>, u8)`; phantom is not serialized. ─────────────
 
-impl<T, E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for BloomFilter<T> {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
+// Manual codec — the decode-side sanity bounds don't fit a derive, and
+// every one is reachable from a single peer over `block.request`:
+// bits.len() == 0 lets `probe(...) % m` divide by zero in contains/insert;
+// bits.len() > MAX_BITS/64 lets a peer push a ~128 KiB filter past our own
+// outbound cap; k == 0 makes contains() vacuously true (peer claims to have
+// everything); k > MAX_K lets a peer multiply per-item probe work.
 
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_size(2)?;
-        encoder.encode(&self.bits)?;
-        encoder.encode(&self.k)?;
-        Ok(())
+impl<T> HborWidth for BloomFilter<T> {
+    const MIN_ENCODED_LEN: usize = 1 + 1;
+}
+
+impl<T> HborEncode for BloomFilter<T> {
+    fn encode(&self, encoder: &mut HborEncoder<'_>) -> Result<(), HborEncodeError> {
+        encoder.nested(&self.bits)?;
+        encoder.nested(&self.k)
     }
 }
 
-impl<T, D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for BloomFilter<T> {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 2 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: length,
-            });
-        }
-        let bits: Vec<u64> = decoder.decode()?;
-        let k: u8 = decoder.decode()?;
-        // bits.len() == 0 lets `probe(...) % m` divide by zero in
-        // contains/insert; bits.len() > MAX_BITS/64 lets a peer push a
-        // ~128 KiB filter past our own outbound cap; k == 0 makes
-        // contains() vacuously true (peer claims to have everything);
-        // k > MAX_K lets a peer multiply per-item probe work. All of
-        // these are reachable from a single peer over `block.request`.
+impl<T> HborDecode for BloomFilter<T> {
+    fn decode(decoder: &mut HborDecoder<'_>) -> Result<Self, HborDecodeError> {
+        let bits: Vec<u64> = decoder.nested()?;
+        let k: u8 = decoder.nested()?;
         if bits.is_empty() || bits.len() > MAX_BITS / 64 {
-            return Err(DecodeError::InvalidCustomValue);
+            return Err(HborDecodeError::FailedValidation(
+                "filter bits empty or past the size cap",
+            ));
         }
         if k == 0 || k > MAX_K {
-            return Err(DecodeError::InvalidCustomValue);
+            return Err(HborDecodeError::FailedValidation(
+                "probe count zero or past the cap",
+            ));
         }
         Ok(Self {
             bits,
@@ -278,23 +270,11 @@ impl<T, D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for BloomFil
     }
 }
 
-impl<T> Categorize<NoCustomValueKind> for BloomFilter<T> {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl<T> Describe<NoCustomTypeKind> for BloomFilter<T> {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("BloomFilter", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{
+        DecodeError, Hbor, from_slice as hbor_from_slice, to_vec as hbor_to_vec,
+    };
 
     use super::*;
     use crate::{Hash, ProvisionHash, TxHash};
@@ -360,13 +340,13 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip_preserves_bits() {
+    fn hbor_roundtrip_preserves_bits() {
         let mut bf: BloomFilter<TxHash> = BloomFilter::with_capacity(100, 0.01).unwrap();
         for i in 0..50 {
             bf.insert(&tx(i));
         }
-        let bytes = basic_encode(&bf).unwrap();
-        let decoded: BloomFilter<TxHash> = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&bf).unwrap();
+        let decoded: BloomFilter<TxHash> = hbor_from_slice(&bytes).unwrap();
         assert_eq!(bf, decoded);
         for i in 0..50 {
             assert!(decoded.contains(&tx(i)));
@@ -377,16 +357,16 @@ mod tests {
     fn phantom_tag_is_compile_time_only() {
         // Same wire bytes regardless of tag; the tag is a source-level label.
         let bf_tx: BloomFilter<TxHash> = BloomFilter::empty();
-        let bytes_tx = basic_encode(&bf_tx).unwrap();
+        let bytes_tx = hbor_to_vec(&bf_tx).unwrap();
         let bf_prov: BloomFilter<ProvisionHash> = BloomFilter::empty();
-        let bytes_prov = basic_encode(&bf_prov).unwrap();
+        let bytes_prov = hbor_to_vec(&bf_prov).unwrap();
         assert_eq!(bytes_tx, bytes_prov);
     }
 
     /// Mirror of the `BloomFilter` wire layout, used to forge payloads
     /// that the production decoder must reject. The derive emits the
     /// same `(Vec<u64>, u8)` tuple shape as the manual codec.
-    #[derive(sbor::BasicSbor)]
+    #[derive(Hbor)]
     struct ManualBloom {
         bits: Vec<u64>,
         k: u8,
@@ -400,10 +380,10 @@ mod tests {
             bits: Vec::new(),
             k: 1,
         };
-        let bytes = basic_encode(&attacker).unwrap();
+        let bytes = hbor_to_vec(&attacker).unwrap();
         assert!(matches!(
-            basic_decode::<BloomFilter<TxHash>>(&bytes),
-            Err(DecodeError::InvalidCustomValue),
+            hbor_from_slice::<BloomFilter<TxHash>>(&bytes),
+            Err(DecodeError::FailedValidation(_)),
         ));
     }
 
@@ -415,10 +395,10 @@ mod tests {
             bits: vec![0u64; (MAX_BITS / 64) + 1],
             k: 1,
         };
-        let bytes = basic_encode(&attacker).unwrap();
+        let bytes = hbor_to_vec(&attacker).unwrap();
         assert!(matches!(
-            basic_decode::<BloomFilter<TxHash>>(&bytes),
-            Err(DecodeError::InvalidCustomValue),
+            hbor_from_slice::<BloomFilter<TxHash>>(&bytes),
+            Err(DecodeError::FailedValidation(_)),
         ));
     }
 
@@ -430,10 +410,10 @@ mod tests {
             bits: vec![0u64; 1],
             k: 0,
         };
-        let bytes = basic_encode(&attacker).unwrap();
+        let bytes = hbor_to_vec(&attacker).unwrap();
         assert!(matches!(
-            basic_decode::<BloomFilter<TxHash>>(&bytes),
-            Err(DecodeError::InvalidCustomValue),
+            hbor_from_slice::<BloomFilter<TxHash>>(&bytes),
+            Err(DecodeError::FailedValidation(_)),
         ));
     }
 
@@ -444,10 +424,10 @@ mod tests {
             bits: vec![0u64; 1],
             k: MAX_K + 1,
         };
-        let bytes = basic_encode(&attacker).unwrap();
+        let bytes = hbor_to_vec(&attacker).unwrap();
         assert!(matches!(
-            basic_decode::<BloomFilter<TxHash>>(&bytes),
-            Err(DecodeError::InvalidCustomValue),
+            hbor_from_slice::<BloomFilter<TxHash>>(&bytes),
+            Err(DecodeError::FailedValidation(_)),
         ));
     }
 }

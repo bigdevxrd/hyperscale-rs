@@ -34,7 +34,7 @@
 
 use blake3::Hasher;
 use hyperscale_crypto::{SignError, Signer, Verifier};
-use sbor::prelude::*;
+use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use thiserror::Error;
 
 use crate::signing::{DOMAIN_PC_EMPTY_VIEW, SpcContext};
@@ -55,7 +55,7 @@ use crate::{
 /// from [`Verified::<SpcHighTriple>::from_verified_proof`] preserve
 /// the marker so the triple's verifier short-circuits the embedded
 /// QC3 check.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcHighTriple {
     /// View this triple was produced in.
     pub view: SpcView,
@@ -73,7 +73,7 @@ pub struct SpcHighTriple {
 /// `(skip_target, EmptyView_tag)` bytes for `view` and
 /// `reported.view`. Aggregating `f+1` of these into an
 /// [`SpcCert::Indirect`] authorises entry to view `view + 1`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcEmptyViewMsg {
     /// The empty view.
     pub view: SpcView,
@@ -97,7 +97,7 @@ pub struct SpcEmptyViewMsg {
 /// [`PositionalBundle`] in [`SpcCert::Indirect::skip_reports`]; the
 /// signature is folded into the cert-level
 /// [`SpcCert::Indirect::skip_aggregate_sig`].
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SkipReport {
     /// View of the signer's `max_high` at the time of the skip.
     pub reported_view: SpcView,
@@ -119,7 +119,7 @@ pub struct SkipReport {
 /// [`BeaconCert::Genesis`](crate::BeaconCert::Genesis), which carries
 /// the operator-config hash directly; the SPC FSM never sees a
 /// genesis-shaped cert.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum SpcCert {
     /// `cert^dir(prev_view, value, proof)` — the verifiable high
     /// output of `prev_view`, authorising entry to `prev_view + 1`.
@@ -161,7 +161,7 @@ pub enum SpcCert {
 
 /// `P_p,w` — the proposal object a leader sends to authorise entry to
 /// view `view`. Pairs the cert with the view it authorises.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcProposalObject {
     /// View this proposal authorises entry to.
     pub view: SpcView,
@@ -170,17 +170,17 @@ pub struct SpcProposalObject {
 }
 
 impl SpcProposalObject {
-    /// Content hash over the SBOR encoding. Used by sender-signature
+    /// Content hash over the HBOR encoding. Used by sender-signature
     /// schemes (see [`SpcNewViewNotification`](crate::network::notification::beacon::SpcNewViewNotification))
     /// to bind a relay attestation to the exact payload being relayed.
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding fails — `SpcProposalObject` is a closed
-    /// SBOR type and encoding is infallible in practice.
+    /// Panics if HBOR encoding fails — `SpcProposalObject` is a closed
+    /// wire type and encoding is infallible in practice.
     #[must_use]
     pub fn hash(&self) -> Hash {
-        let bytes = basic_encode(self).expect("SpcProposalObject serialization should never fail");
+        let bytes = hbor_to_vec(self).expect("SpcProposalObject serialization should never fail");
         Hash::from_bytes(&bytes)
     }
 }
@@ -192,7 +192,7 @@ impl SpcProposalObject {
 /// Self-authenticating via the embedded `PcQc3`; no outer signature.
 /// Verifier predicate: the embedded QC3 verifies under
 /// `pc_context(spc_ctx, view)` and `proof.x_pp() == value`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcNewCommitMsg {
     /// View whose inner PC produced this commit.
     pub view: SpcView,
@@ -207,32 +207,32 @@ pub struct SpcNewCommitMsg {
 }
 
 impl SpcNewCommitMsg {
-    /// Content hash over the SBOR encoding. Used by sender-signature
+    /// Content hash over the HBOR encoding. Used by sender-signature
     /// schemes (see [`SpcNewCommitNotification`](crate::network::notification::beacon::SpcNewCommitNotification))
     /// to bind a relay attestation to the exact payload being relayed.
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding fails — `SpcNewCommitMsg` is a closed
-    /// SBOR type and encoding is infallible in practice.
+    /// Panics if HBOR encoding fails — `SpcNewCommitMsg` is a closed
+    /// wire type and encoding is infallible in practice.
     #[must_use]
     pub fn hash(&self) -> Hash {
-        let bytes = basic_encode(self).expect("SpcNewCommitMsg serialization should never fail");
+        let bytes = hbor_to_vec(self).expect("SpcNewCommitMsg serialization should never fail");
         Hash::from_bytes(&bytes)
     }
 }
 
 impl SpcCert {
-    /// SBOR-encoded canonical bytes of this cert. Used by SPC
+    /// HBOR-encoded canonical bytes of this cert. Used by SPC
     /// proposal-object hashing to bind the cert into the input vector.
     ///
     /// # Panics
     ///
-    /// Never in practice: every field is `BasicSbor` and the enum is
+    /// Never in practice: every field is `Hbor` and the enum is
     /// closed, so encoding is total.
     #[must_use]
     pub fn encode_bytes(&self) -> Vec<u8> {
-        basic_encode(self).expect("SpcCert SBOR encoding is infallible")
+        hbor_to_vec(self).expect("SpcCert HBOR encoding is infallible")
     }
 
     /// The agreement `PcVector` this cert authenticates — the high value
@@ -1126,6 +1126,7 @@ impl Verified<SpcNewCommitMsg> {
 #[cfg(test)]
 mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{PcQc2, PcSignerLengths, PcValueElement, PcXpProof, SignerBitfield};
@@ -1164,40 +1165,40 @@ mod tests {
     }
 
     #[test]
-    fn high_triple_sbor_round_trip() {
+    fn high_triple_hbor_round_trip() {
         let t = sample_high_triple();
-        let bytes = basic_encode(&t).unwrap();
-        let decoded: SpcHighTriple = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&t).unwrap();
+        let decoded: SpcHighTriple = hbor_from_slice(&bytes).unwrap();
         assert_eq!(t, decoded);
     }
 
     #[test]
-    fn empty_view_msg_sbor_round_trip() {
+    fn empty_view_msg_hbor_round_trip() {
         let m = SpcEmptyViewMsg {
             view: SpcView::new(5),
             reported: sample_high_triple(),
             signer: ValidatorId::new(2),
             sig: ConsensusSignature::new([0x44; 96]),
         };
-        let bytes = basic_encode(&m).unwrap();
-        let decoded: SpcEmptyViewMsg = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&m).unwrap();
+        let decoded: SpcEmptyViewMsg = hbor_from_slice(&bytes).unwrap();
         assert_eq!(m, decoded);
     }
 
     #[test]
-    fn cert_direct_sbor_round_trip() {
+    fn cert_direct_hbor_round_trip() {
         let c = SpcCert::Direct {
             prev_view: SpcView::new(2),
             value: sample_pc_vector(3),
             proof: sample_pc_qc3().into(),
         };
-        let bytes = basic_encode(&c).unwrap();
-        let decoded: SpcCert = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&c).unwrap();
+        let decoded: SpcCert = hbor_from_slice(&bytes).unwrap();
         assert_eq!(c, decoded);
     }
 
     #[test]
-    fn cert_indirect_sbor_round_trip() {
+    fn cert_indirect_hbor_round_trip() {
         let mut signers = SignerBitfield::new(4);
         signers.set(0);
         signers.set(1);
@@ -1219,13 +1220,13 @@ mod tests {
             skip_reports: PositionalBundle::new(signers, reports),
             skip_aggregate_sig: AggregateSignature::new([0xCC; 96]),
         };
-        let bytes = basic_encode(&c).unwrap();
-        let decoded: SpcCert = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&c).unwrap();
+        let decoded: SpcCert = hbor_from_slice(&bytes).unwrap();
         assert_eq!(c, decoded);
     }
 
     #[test]
-    fn proposal_object_sbor_round_trip() {
+    fn proposal_object_hbor_round_trip() {
         let p = SpcProposalObject {
             view: SpcView::new(2),
             cert: SpcCert::Direct {
@@ -1234,8 +1235,8 @@ mod tests {
                 proof: sample_pc_qc3().into(),
             },
         };
-        let bytes = basic_encode(&p).unwrap();
-        let decoded: SpcProposalObject = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&p).unwrap();
+        let decoded: SpcProposalObject = hbor_from_slice(&bytes).unwrap();
         assert_eq!(p, decoded);
     }
 

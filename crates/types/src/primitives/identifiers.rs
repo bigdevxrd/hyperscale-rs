@@ -5,11 +5,11 @@ use std::iter::Sum;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 use hyperscale_crypto::ConsensusPublicKey;
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// Validator identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor)]
+#[hbor(transparent)]
 pub struct ValidatorId(u64);
 
 impl ValidatorId {
@@ -52,7 +52,7 @@ impl Display for ValidatorId {
 /// self-describing — depth, path, ancestors, and children need no external
 /// context — and orders by keyspace position (left to right), shallower
 /// ancestors before their descendants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Hbor)]
 pub struct ShardId {
     /// Trie depth; 0 is the root, at most 63. (Padded to a `u64` boundary by
     /// `path`'s alignment, so `u32` costs nothing over `u8` and avoids casts
@@ -204,8 +204,8 @@ impl Display for ShardId {
 }
 
 /// Block height.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct BlockHeight(u64);
 
 impl BlockHeight {
@@ -316,8 +316,8 @@ impl Display for BlockHeight {
 /// Coarse grouping of slots; increments on epoch boundaries (committee
 /// resample, validator-set rotation). Stored on `BeaconState`; not
 /// generally on the wire except inside state-root proofs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct Epoch(u64);
 
 impl Epoch {
@@ -382,8 +382,8 @@ impl Display for Epoch {
 /// ~3.4 × 10²⁰ whole tokens of headroom — vastly more than any realistic
 /// supply, so arithmetic doesn't need to be defensive against overflow
 /// at protocol-reasonable values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct Stake(u128);
 
 impl Stake {
@@ -466,8 +466,8 @@ impl Display for Stake {
 
 /// Identifier for a beacon-chain stake pool — a dPoS-style aggregation
 /// of delegator stake that operates one or more validator nodes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct StakePoolId(u32);
 
 impl StakePoolId {
@@ -513,7 +513,7 @@ impl Display for StakePoolId {
 /// one. Seeding those records at genesis is what keeps the contract's
 /// view and the beacon's agreeing from the first block; after genesis
 /// only the contract creates memberships, so they never drift again.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub struct StakePoolSeat {
     /// The pool instance's owner prefix.
     pub address: [u8; 16],
@@ -532,8 +532,8 @@ pub struct StakePoolSeat {
 /// Stable across the shard's lifetime — leaf `N` is leaf `N` forever.
 /// Used by the beacon's per-shard high-water mark for witness replay
 /// protection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct LeafIndex(u64);
 
 impl LeafIndex {
@@ -565,8 +565,8 @@ impl Display for LeafIndex {
 /// header can check any inclusion proof anchored at that block — the
 /// padded-perfect-tree shape that the accumulator produces is fully
 /// determined by the count, so no side-channel hint is needed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct BeaconWitnessLeafCount(u64);
 
 impl BeaconWitnessLeafCount {
@@ -600,8 +600,8 @@ impl Display for BeaconWitnessLeafCount {
 /// (`spc_ctx || view.to_le_bytes()`); a `(slot, view)` pair uniquely
 /// identifies the PC instance whose round-3 cert any embedded `PcQc3`
 /// belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct SpcView(u32);
 
 impl SpcView {
@@ -646,8 +646,8 @@ impl Display for SpcView {
 /// rounds; each round admits one prevote and one precommit per member.
 /// A `(anchor, epoch, round, phase)` tuple scopes every ratify vote's
 /// signing bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct RatifyRound(u32);
 
 impl RatifyRound {
@@ -687,8 +687,8 @@ impl Display for RatifyRound {
 }
 
 /// shard round / view number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct Round(u64);
 
 impl Round {
@@ -768,8 +768,8 @@ impl Display for Round {
 }
 
 /// Wave-leader rotation counter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct Attempt(u32);
 
 impl Attempt {
@@ -840,8 +840,8 @@ impl Display for Attempt {
 /// a quorum, committee size as the denominator. It is a count, not a stake
 /// weight: stake gates how many validators a pool may run, not how much any one
 /// validator's vote is worth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hbor)]
+#[hbor(transparent)]
 pub struct VoteCount(u64);
 
 impl VoteCount {
@@ -970,8 +970,8 @@ impl Display for VoteCount {
 /// by a wave certificate. Carried in `BlockHeader` and gossiped cross-shard so
 /// remote nodes can shed RPC submissions targeting congested shards. Verified
 /// deterministically as `parent + new - finalized`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct InFlightCount(u32);
 
 impl InFlightCount {
@@ -1022,8 +1022,8 @@ impl Display for InFlightCount {
 /// and responders clamp the field again before iterating storage. Lives next
 /// to `BlockHeight` on the wire — typing it prevents an argument-order swap
 /// between the two `u64` fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
+#[hbor(transparent)]
 pub struct HeaderFetchCount(u64);
 
 impl HeaderFetchCount {

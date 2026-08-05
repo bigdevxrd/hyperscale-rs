@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{MessageClass, NetworkMessage, ShardId, ShardVoteEquivocation};
@@ -16,7 +16,7 @@ use crate::{MessageClass, NetworkMessage, ShardId, ShardVoteEquivocation};
 /// first local verification (vote-keeper detection or a verified gossip
 /// receipt) so the evidence reaches the beacon even after every holder
 /// has left the source committee.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ShardVoteEquivocationGossip {
     /// The self-proving double-vote pair.
     pub evidence: Arc<ShardVoteEquivocation>,
@@ -55,7 +55,7 @@ impl GossipMessage for ShardVoteEquivocationGossip {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{BlockHash, BlockHeight, ConsensusSignature, Hash, Round, ValidatorId};
@@ -84,12 +84,12 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let gossip = ShardVoteEquivocationGossip {
             evidence: Arc::new(sample()),
         };
-        let bytes = basic_encode(&gossip).unwrap();
-        let decoded: ShardVoteEquivocationGossip = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&gossip).unwrap();
+        let decoded: ShardVoteEquivocationGossip = hbor_from_slice(&bytes).unwrap();
         assert_eq!(gossip, decoded);
     }
 

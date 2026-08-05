@@ -6,7 +6,7 @@
 //! effect set is derived from the manifest and published metadata on each
 //! node.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// One declared access target: an owner prefix, optionally narrowed to
 /// one substate's local half — together exactly the state leaf key.
@@ -14,7 +14,7 @@ use sbor::prelude::*;
 /// Two keys conflict only when equal — an owner-granular key
 /// (`local: None`) and a slot under the same owner are distinct keys, so
 /// a producer narrowing its declarations must narrow them consistently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub struct DeclaredKey {
     /// The owning address: the leaf key's owner half.
     pub owner: [u8; 16],

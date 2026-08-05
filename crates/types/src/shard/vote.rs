@@ -5,7 +5,7 @@
 //! [`impl Verify<&BlockVoteContext<'_>>`](Verify::verify) below.
 
 use hyperscale_crypto::{SignError, Signer, Verifier};
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// Block vote for shard consensus.
-#[derive(Debug, Clone, PartialEq, Eq, sbor::prelude::BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BlockVote {
     block_hash: BlockHash,
     shard_id: ShardId,

@@ -1,6 +1,6 @@
 //! Shard-witness fetch response.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     BoundedVec, Hash, MAX_RANGE_PROOF_NODES, MAX_WITNESSES_PER_SHARD, MessageClass, NetworkMessage,
@@ -27,7 +27,7 @@ use crate::{
 /// The run's width is bounded by the fold's per-epoch budget
 /// ([`MAX_WITNESSES_PER_SHARD`]) — the same bound the beacon block itself
 /// carries, so a servable chunk always fits in the block that commits it.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetShardWitnessesResponse {
     /// Witness payloads in leaf-index order, starting at the request's
     /// `lo`.
@@ -74,7 +74,7 @@ impl NetworkMessage for GetShardWitnessesResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{Stake, StakePoolId};
@@ -87,21 +87,21 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip_populated() {
+    fn hbor_round_trip_populated() {
         let resp = GetShardWitnessesResponse::new(
             vec![sample_payload(1), sample_payload(2), sample_payload(42)],
             vec![Hash::from_bytes(b"flank0"), Hash::from_bytes(b"flank1")],
         );
-        let bytes = basic_encode(&resp).unwrap();
-        let decoded: GetShardWitnessesResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&resp).unwrap();
+        let decoded: GetShardWitnessesResponse = hbor_from_slice(&bytes).unwrap();
         assert_eq!(resp, decoded);
     }
 
     #[test]
-    fn sbor_round_trip_empty() {
+    fn hbor_round_trip_empty() {
         let resp = GetShardWitnessesResponse::empty();
-        let bytes = basic_encode(&resp).unwrap();
-        let decoded: GetShardWitnessesResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&resp).unwrap();
+        let decoded: GetShardWitnessesResponse = hbor_from_slice(&bytes).unwrap();
         assert_eq!(resp, decoded);
     }
 

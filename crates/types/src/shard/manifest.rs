@@ -1,7 +1,7 @@
 //! Hash-level block contents (`BlockManifest`) and denormalized storage form
 //! (`BlockMetadata`).
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     BeaconWitnessLeafCount, Block, BlockHash, BlockHeader, BlockHeight, BoundedVec,
@@ -17,7 +17,7 @@ use crate::{
 ///
 /// Per-collection caps mirror [`Block`]'s caps one-to-one — a manifest is a
 /// hash-only projection of a `Block` and inherits its natural ceilings.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BlockManifest {
     tx_hashes: BoundedVec<TxHash, MAX_TXS_PER_BLOCK>,
     cert_ids: BoundedVec<WaveId, MAX_FINALIZED_TX_PER_BLOCK>,
@@ -140,7 +140,7 @@ impl BlockManifest {
 ///
 /// To reconstruct a full `Block`, fetch the metadata, then batch-fetch
 /// transactions and certificates using the stored hashes.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BlockMetadata {
     header: BlockHeader,
     manifest: BlockManifest,
@@ -240,83 +240,61 @@ impl BlockMetadata {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
 
     /// Hand-roll a `BlockManifest` whose `tx_hashes` length prefix exceeds
-    /// the cap. The `BoundedVec` decoder fires before any per-element
-    /// allocation.
+    /// the cap. The bound check fires before any per-element allocation.
     #[test]
     fn decode_rejects_oversized_tx_hashes_count() {
-        let mut buf = Vec::with_capacity(32);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(4).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(TxHash::value_kind()).unwrap();
-            enc.write_size(MAX_TXS_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<BlockManifest>(&buf).unwrap_err();
+        let mut buf = Vec::new();
+        varint::write(&mut buf, MAX_TXS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_TXS_PER_BLOCK + 1) * 32));
+        let err = hbor_from_slice::<BlockManifest>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
         ));
     }
 
     #[test]
     fn decode_rejects_oversized_cert_ids_count() {
-        let mut buf = Vec::with_capacity(32);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(4).unwrap();
-            // Empty tx_hashes.
-            enc.encode(&Vec::<TxHash>::new()).unwrap();
-            // Oversized cert_ids.
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(WaveId::value_kind()).unwrap();
-            enc.write_size(MAX_FINALIZED_TX_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<BlockManifest>(&buf).unwrap_err();
+        // Empty tx_hashes.
+        let mut buf = hbor_to_vec(&Vec::<TxHash>::new()).unwrap();
+        // Oversized cert_ids.
+        varint::write(&mut buf, MAX_FINALIZED_TX_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_FINALIZED_TX_PER_BLOCK + 1) * 32,
+        ));
+        let err = hbor_from_slice::<BlockManifest>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_FINALIZED_TX_PER_BLOCK
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_FINALIZED_TX_PER_BLOCK
                     && actual == MAX_FINALIZED_TX_PER_BLOCK + 1
         ));
     }
 
     #[test]
     fn decode_rejects_oversized_provision_hashes_count() {
-        let mut buf = Vec::with_capacity(32);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(4).unwrap();
-            enc.encode(&Vec::<TxHash>::new()).unwrap();
-            enc.encode(&Vec::<WaveId>::new()).unwrap();
-            // Oversized provision_hashes.
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ProvisionHash::value_kind()).unwrap();
-            enc.write_size(MAX_PROVISIONS_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<BlockManifest>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&Vec::<TxHash>::new()).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&Vec::<WaveId>::new()).unwrap());
+        // Oversized provision_hashes.
+        varint::write(&mut buf, MAX_PROVISIONS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_PROVISIONS_PER_BLOCK + 1) * 32,
+        ));
+        let err = hbor_from_slice::<BlockManifest>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_PROVISIONS_PER_BLOCK
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_PROVISIONS_PER_BLOCK
                     && actual == MAX_PROVISIONS_PER_BLOCK + 1
         ));
     }

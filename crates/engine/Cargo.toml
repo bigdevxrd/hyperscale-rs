@@ -20,7 +20,7 @@ dashmap.workspace = true
 indexmap.workspace = true
 tracing.workspace = true
 
-sbor.workspace = true
+hyperscale-hbor.workspace = true
 
 # The blessed engine runs native; the reference interpreter is the
 # wasm32 implementation by decision (the in-browser simulation), not a

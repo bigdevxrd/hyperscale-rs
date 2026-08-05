@@ -224,7 +224,7 @@ pub struct ExecutionCoordinator {
     exec_certs: Arc<ExecCertStore>,
 
     /// In-flight EC verifications, keyed by a content hash over the
-    /// cached SBOR bytes. A flooding peer would otherwise re-trigger a
+    /// cached wire bytes. A flooding peer would otherwise re-trigger a
     /// dispatch on every byte-identical retransmit. Different aggregations
     /// of the same logical EC produce distinct wire bytes and so still
     /// dispatch — important when a first aggregation's signature is bad and

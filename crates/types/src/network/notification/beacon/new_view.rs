@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     ConsensusSignature, DOMAIN_SPC_NEW_VIEW, Epoch, MessageClass, NetworkDefinition,
@@ -29,7 +29,7 @@ use crate::{
 ///
 /// Wire decode lands the inner wrapper as `Verifiable::Unverified`;
 /// locally-dispatched sends preserve the `Verified` marker.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcNewViewNotification {
     /// Epoch the inner SPC instance belongs to. Bound into the
     /// signing message so a swap across epochs invalidates the sig.
@@ -111,7 +111,7 @@ impl NetworkMessage for SpcNewViewNotification {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{
@@ -151,15 +151,15 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let n = SpcNewViewNotification::new(
             Epoch::new(7),
             ValidatorId::new(3),
             ConsensusSignature::new([0x44; 96]),
             Arc::new(Verifiable::from(sample_proposal())),
         );
-        let bytes = basic_encode(&n).unwrap();
-        let decoded: SpcNewViewNotification = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&n).unwrap();
+        let decoded: SpcNewViewNotification = hbor_from_slice(&bytes).unwrap();
         assert_eq!(n, decoded);
     }
 

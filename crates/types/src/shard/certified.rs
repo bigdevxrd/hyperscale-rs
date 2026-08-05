@@ -2,10 +2,9 @@
 //!
 //! Every committed block has exactly one QC where `qc.block_hash == block.hash()`.
 
-use sbor::prelude::*;
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
+use hyperscale_hbor::error::{DecodeError as HborDecodeError, EncodeError as HborEncodeError};
+use hyperscale_hbor::{
+    Decoder as HborDecoder, Encoder as HborEncoder, HborDecode, HborEncode, HborWidth,
 };
 use thiserror::Error;
 
@@ -130,51 +129,26 @@ impl CertifiedBlock {
     }
 }
 
-impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for CertifiedBlock {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
+impl HborWidth for CertifiedBlock {
+    const MIN_ENCODED_LEN: usize = 2;
+}
 
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_size(2)?;
-        encoder.encode(&self.block)?;
-        encoder.encode(&self.qc)?;
-        Ok(())
+impl HborEncode for CertifiedBlock {
+    fn encode(&self, encoder: &mut HborEncoder<'_>) -> Result<(), HborEncodeError> {
+        encoder.nested(&self.block)?;
+        encoder.nested(&self.qc)
     }
 }
 
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for CertifiedBlock {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 2 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: length,
-            });
-        }
-        let block: Block = decoder.decode()?;
-        let qc: QuorumCertificate = decoder.decode()?;
+impl HborDecode for CertifiedBlock {
+    fn decode(decoder: &mut HborDecoder<'_>) -> Result<Self, HborDecodeError> {
+        let block: Block = decoder.nested()?;
+        let qc: QuorumCertificate = decoder.nested()?;
         // Wire decode always produces an unverified QC; verification
-        // happens at the admission layer.
-        Self::new_checked(block, qc).map_err(|_| DecodeError::InvalidCustomValue)
-    }
-}
-
-impl Categorize<NoCustomValueKind> for CertifiedBlock {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl Describe<NoCustomTypeKind> for CertifiedBlock {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("CertifiedBlock", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
+        // happens at the admission layer. Linkage, though, is structural:
+        // a pair whose QC names another block is not a certified block.
+        Self::new_checked(block, qc)
+            .map_err(|_| HborDecodeError::FailedValidation("qc does not certify this block"))
     }
 }
 
@@ -435,7 +409,7 @@ impl Verified<CertifiedBlock> {
 
 #[cfg(test)]
 mod tests {
-    use sbor::basic_encode;
+    use hyperscale_hbor::to_vec as hbor_to_vec;
 
     use super::*;
     use crate::{
@@ -443,7 +417,7 @@ mod tests {
         WeightedTimestamp,
     };
 
-    /// A [`CertifiedBlock`]'s SBOR encoding does not depend on whether its
+    /// A [`CertifiedBlock`]'s HBOR encoding does not depend on whether its
     /// QC is wrapped as [`Verifiable::Unverified`] or [`Verifiable::Verified`].
     /// This is the invariant that keeps wire bytes (and every merkle root or
     /// signature computed over them) stable across the field's type change
@@ -471,8 +445,8 @@ mod tests {
         let verified =
             CertifiedBlock::new_unchecked(block, Verified::<QuorumCertificate>::new_unchecked(qc));
 
-        let bytes_unverified = basic_encode(&unverified).unwrap();
-        let bytes_verified = basic_encode(&verified).unwrap();
+        let bytes_unverified = hbor_to_vec(&unverified).unwrap();
+        let bytes_verified = hbor_to_vec(&verified).unwrap();
         assert_eq!(bytes_unverified, bytes_verified);
     }
 

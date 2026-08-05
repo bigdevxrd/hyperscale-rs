@@ -38,19 +38,21 @@ mod tests {
 
     use hyperscale_crypto::Signer;
     use hyperscale_crypto_bls::BlsSigner;
-    use sbor::BASIC_SBOR_V1_MAX_DEPTH;
-    use sbor::prelude::*;
+    use hyperscale_hbor::{
+        DecodeError, Hbor, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
+    };
 
     use crate::test_utils::test_transaction_with_prefixes;
     use crate::{
         AggregateSignature, Attempt, BlockHeight, ConsensusReceipt, DatabaseUpdates,
         ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
-        GlobalReceiptRoot, Hash, NetworkDefinition, ProvisionTxRoot, ProvisionTxRootsMap,
-        RETENTION_HORIZON, ReceiptValidationError, ShardId, SignerBitfield, StoredReceipt,
-        TopologySnapshot, TxHash, TxOutcome, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
-        Verified, WaveCertificate, WaveId, WaveReceiptHash, WeightedTimestamp,
-        compute_global_receipt_root, compute_global_receipt_root_with_proof, compute_merkle_root,
-        tx_outcome_leaf, verify_merkle_inclusion, wave_leader, wave_leader_at,
+        GlobalReceiptRoot, Hash, MAX_EXECUTION_CERTIFICATES_PER_WAVE, NetworkDefinition,
+        ProvisionTxRoot, ProvisionTxRootsMap, RETENTION_HORIZON, ReceiptValidationError, ShardId,
+        SignerBitfield, StoredReceipt, TopologySnapshot, TxHash, TxOutcome, ValidatorId,
+        ValidatorInfo, ValidatorSet, Verifiable, Verified, WaveCertificate, WaveId,
+        WaveReceiptHash, WeightedTimestamp, compute_global_receipt_root,
+        compute_global_receipt_root_with_proof, compute_merkle_root, tx_outcome_leaf,
+        verify_merkle_inclusion, wave_leader, wave_leader_at,
     };
 
     /// Build a 2-shard topology with validator 0 on shard 0.
@@ -322,19 +324,18 @@ mod tests {
     }
 
     #[test]
-    fn test_wave_cert_sbor_roundtrip() {
+    fn test_wave_cert_hbor_roundtrip() {
         let wc = WaveCertificate::new(
             make_wave_id(0, BlockHeight::new(42), &[1]),
             vec![make_test_wave_ec(0, 1), make_test_wave_ec(1, 2)],
         );
-        let encoded = basic_encode(&wc).unwrap();
-        let decoded: WaveCertificate = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&wc).unwrap();
+        let decoded: WaveCertificate = hbor_from_slice(&encoded).unwrap();
         assert_eq!(wc, decoded);
     }
 
     #[test]
     fn decode_rejects_wave_cert_missing_local_ec() {
-        use sbor::DecodeError;
         // WC's wave_id has shard=0 but its only EC is for shard=1, so no
         // ec.wave_id() matches wc.wave_id. Pre-fix this decoded successfully
         // and then panicked the IO loop on first call to local_ec().
@@ -342,9 +343,9 @@ mod tests {
             make_wave_id(0, BlockHeight::new(42), &[1]),
             vec![make_test_wave_ec(1, 1)],
         );
-        let bytes = basic_encode(&wc).unwrap();
-        let err = basic_decode::<WaveCertificate>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let bytes = hbor_to_vec(&wc).unwrap();
+        let err = hbor_from_slice::<WaveCertificate>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     /// The exactly-one-local-EC invariant rejects WCs with more than one
@@ -353,8 +354,6 @@ mod tests {
     /// letting two paths disagree on which EC is authoritative.
     #[test]
     fn decode_rejects_wave_cert_with_multiple_local_ecs() {
-        use sbor::DecodeError;
-
         // Build two ECs both keyed to the same wave_id (shard=0, h=42, deps={1}).
         // Distinct seeds yield distinct canonical hashes so the inner
         // EC-decode invariants don't reject before we get to the local-EC
@@ -363,153 +362,106 @@ mod tests {
         let ec_a = make_local_ec(&wave_id, vec![make_outcome(1)]);
         let ec_b = make_local_ec(&wave_id, vec![make_outcome(2)]);
         let wc = WaveCertificate::new(wave_id, vec![ec_a, ec_b]);
-        let bytes = basic_encode(&wc).unwrap();
-        let err = basic_decode::<WaveCertificate>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let bytes = hbor_to_vec(&wc).unwrap();
+        let err = hbor_from_slice::<WaveCertificate>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     #[test]
     fn decode_rejects_wave_cert_with_oversized_ec_count() {
-        use sbor::{
-            BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder, NoCustomValueKind, ValueKind,
-            VecEncoder,
-        };
-        // Hand-roll a WC whose execution_certificates count exceeds the
-        // decoder cap, before any per-EC decode work happens.
+        // Forge a WC whose execution_certificates count claims one past the
+        // cap, padded to input-satisfiability so the protocol cap is what
+        // fires, before any per-EC decode work happens.
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let mut buf = Vec::with_capacity(64);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(2).unwrap();
-            enc.encode(&wave_id).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            // 1024 + 1 — first value above the decoder cap.
-            enc.write_size(1025).unwrap();
-        }
-        let err = basic_decode::<WaveCertificate>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&wave_id).unwrap();
+        varint::write(&mut buf, MAX_EXECUTION_CERTIFICATES_PER_WAVE + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_EXECUTION_CERTIFICATES_PER_WAVE + 1) * 256,
+        ));
+        let err = hbor_from_slice::<WaveCertificate>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: 1024,
-                actual: 1025
-            }
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_EXECUTION_CERTIFICATES_PER_WAVE
+                    && actual == MAX_EXECUTION_CERTIFICATES_PER_WAVE + 1
         ));
     }
 
     #[test]
     fn decode_rejects_oversized_tx_outcomes_count() {
-        use sbor::{
-            BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder, NoCustomValueKind, ValueKind,
-            VecEncoder,
-        };
-
-        use crate::{GlobalReceiptRoot, MAX_TXS_PER_BLOCK, TxOutcome};
+        use crate::{GlobalReceiptRoot, MAX_TXS_PER_BLOCK};
 
         let wave_id = make_wave_id(0, BlockHeight::new(1), &[1]);
-        let mut buf = Vec::with_capacity(128);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(6).unwrap();
-            enc.encode(&wave_id).unwrap();
-            enc.encode(&WeightedTimestamp::ZERO).unwrap();
-            enc.encode(&GlobalReceiptRoot::ZERO).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(TxOutcome::value_kind()).unwrap();
-            enc.write_size(MAX_TXS_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<ExecutionCertificate>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&wave_id).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&WeightedTimestamp::ZERO).unwrap());
+        buf.extend_from_slice(&hbor_to_vec(&GlobalReceiptRoot::ZERO).unwrap());
+        varint::write(&mut buf, MAX_TXS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_TXS_PER_BLOCK + 1) * 128));
+        let err = hbor_from_slice::<ExecutionCertificate>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_TXS_PER_BLOCK,
-                actual,
-            } if actual == MAX_TXS_PER_BLOCK + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
         ));
     }
 
     #[test]
     fn decode_rejects_tx_outcomes_not_matching_receipt_root() {
-        use sbor::{
-            BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder, NoCustomValueKind, ValueKind,
-            VecEncoder, basic_decode,
-        };
-
         use crate::{AggregateSignature, GlobalReceiptRoot, SignerBitfield, TxOutcome};
 
-        // Encode an EC where global_receipt_root is ZERO but tx_outcomes is
-        // a non-empty list whose merkle root is non-zero. The signature aggregate
-        // commits only to (root, count); without the decode-time check a
-        // peer could ship this through every downstream consumer.
+        // A field-for-field twin without the decode check: the only way to
+        // spell an EC whose carried outcomes do not hash to its signed
+        // root. The signature aggregate commits only to (root, count);
+        // without the decode-time check a peer could ship this through
+        // every downstream consumer.
+        #[derive(Hbor)]
+        struct Forged {
+            wave_id: WaveId,
+            vote_anchor_ts: WeightedTimestamp,
+            global_receipt_root: GlobalReceiptRoot,
+            tx_outcomes: Vec<TxOutcome>,
+            aggregated_signature: AggregateSignature,
+            signers: SignerBitfield,
+        }
+
         let wave_id = make_wave_id(0, BlockHeight::new(7), &[1]);
         let outcomes = vec![make_outcome(1), make_outcome(2)];
-        let real_root = compute_global_receipt_root(&outcomes);
-        assert_ne!(real_root, GlobalReceiptRoot::ZERO);
-
-        let mut buf = Vec::with_capacity(256);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(6).unwrap();
-            enc.encode(&wave_id).unwrap();
-            enc.encode(&WeightedTimestamp::from_millis(1)).unwrap();
-            enc.encode(&GlobalReceiptRoot::ZERO).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(TxOutcome::value_kind()).unwrap();
-            enc.write_size(outcomes.len()).unwrap();
-            for outcome in &outcomes {
-                enc.encode_deeper_body(outcome).unwrap();
-            }
-            enc.encode(&AggregateSignature::ZERO).unwrap();
-            enc.encode(&SignerBitfield::new(4)).unwrap();
-        }
-        let err = basic_decode::<ExecutionCertificate>(&buf).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        assert_ne!(
+            compute_global_receipt_root(&outcomes),
+            GlobalReceiptRoot::ZERO
+        );
+        let buf = hbor_to_vec(&Forged {
+            wave_id,
+            vote_anchor_ts: WeightedTimestamp::from_millis(1),
+            global_receipt_root: GlobalReceiptRoot::ZERO,
+            tx_outcomes: outcomes,
+            aggregated_signature: AggregateSignature::ZERO,
+            signers: SignerBitfield::new(4),
+        })
+        .unwrap();
+        let err = hbor_from_slice::<ExecutionCertificate>(&buf).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
-    /// Decoding a single `FinalizedWave` directly (not through
-    /// `decode_finalized_wave_vec`) must still bound the receipts vec.
-    /// Without the inline cap a peer could ship a basic-decoded
-    /// `FinalizedWave` with billions of claimed receipts.
+    /// Decoding a single `FinalizedWave` directly must still bound the
+    /// receipts vec: without the cap a peer could claim billions of
+    /// receipts on one wave.
     #[test]
     fn decode_rejects_finalized_wave_with_oversized_receipts_count() {
-        use sbor::{
-            BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder, NoCustomValueKind, ValueKind,
-            VecEncoder, basic_decode,
-        };
-
         use crate::MAX_TXS_PER_BLOCK;
 
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
         let wc = WaveCertificate::new(wave_id.clone(), vec![make_local_ec(&wave_id, vec![])]);
 
-        let mut buf = Vec::with_capacity(256);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(2).unwrap();
-            enc.encode(&wc).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(StoredReceipt::value_kind()).unwrap();
-            enc.write_size(MAX_TXS_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<FinalizedWave>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&wc).unwrap();
+        varint::write(&mut buf, MAX_TXS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_TXS_PER_BLOCK + 1) * 256));
+        let err = hbor_from_slice::<FinalizedWave>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_TXS_PER_BLOCK,
-                actual,
-            } if actual == MAX_TXS_PER_BLOCK + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
         ));
     }
 

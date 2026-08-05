@@ -12,7 +12,7 @@
 //!
 //! ## Typed frame (requests)
 //! ```text
-//! [2-byte LE type_id_len][type_id bytes][4-byte BE length][LZ4-compressed SBOR]
+//! [2-byte LE type_id_len][type_id bytes][4-byte BE length][LZ4-compressed payload]
 //! ```
 //!
 //! The `type_id` sits outside the compressed payload so the receiver can route
@@ -118,7 +118,7 @@ pub async fn read_frame_len<S: AsyncReadExt + Unpin>(
 /// Maximum `type_id` length (sanity bound to prevent allocation bombs).
 const MAX_TYPE_ID_LEN: usize = 256;
 
-/// Write a typed request frame: `type_id` header followed by compressed SBOR payload.
+/// Write a typed request frame: `type_id` header followed by compressed wire payload.
 ///
 /// Writes and flushes, but does not close. The reader frames the request with
 /// `read_exact` against the length prefix, so no end-of-stream signal is needed.
@@ -126,9 +126,9 @@ const MAX_TYPE_ID_LEN: usize = 256;
 pub async fn write_typed_frame<S: AsyncWrite + Unpin>(
     stream: &mut S,
     type_id: &str,
-    sbor_data: &[u8],
+    payload_data: &[u8],
 ) -> Result<usize, io::Error> {
-    write_typed_frame_no_close(stream, type_id, sbor_data).await
+    write_typed_frame_no_close(stream, type_id, payload_data).await
 }
 
 /// Write a typed frame WITHOUT closing the stream.
@@ -141,16 +141,16 @@ pub async fn write_typed_frame<S: AsyncWrite + Unpin>(
 pub async fn write_typed_frame_no_close<S: AsyncWrite + Unpin>(
     stream: &mut S,
     type_id: &str,
-    sbor_data: &[u8],
+    payload_data: &[u8],
 ) -> Result<usize, io::Error> {
-    let compressed = compress(sbor_data);
+    let compressed = compress(payload_data);
     write_precompressed_typed_frame_no_close(stream, type_id, &compressed).await
 }
 
 /// Write a typed frame with an already-compressed payload, WITHOUT closing the stream.
 ///
 /// Like [`write_typed_frame_no_close`], but skips compression. The caller is
-/// responsible for LZ4-compressing the SBOR payload before calling this.
+/// responsible for LZ4-compressing the wire payload before calling this.
 /// This avoids redundant compression when the same payload is sent to many peers.
 ///
 /// Returns the number of bytes written on the wire (type header + compressed payload).
@@ -191,7 +191,7 @@ pub async fn write_precompressed_typed_frame_no_close<S: AsyncWrite + Unpin>(
     Ok(wire_len)
 }
 
-/// Read a typed request frame: `type_id` header followed by compressed SBOR payload.
+/// Read a typed request frame: `type_id` header followed by compressed wire payload.
 ///
 /// Returns `(type_id, decompressed_payload, wire_bytes_read)`.
 pub async fn read_typed_frame<S: AsyncReadExt + Unpin>(
@@ -340,7 +340,7 @@ mod tests {
     }
 
     /// Build a typed frame buffer (without calling close) for read tests.
-    async fn write_typed_to_buf(type_id: &str, sbor_data: &[u8]) -> Vec<u8> {
+    async fn write_typed_to_buf(type_id: &str, payload_data: &[u8]) -> Vec<u8> {
         let mut buf = Vec::new();
         let type_id_bytes = type_id.as_bytes();
         let type_id_len = u16::try_from(type_id_bytes.len()).unwrap_or(u16::MAX);
@@ -350,7 +350,7 @@ mod tests {
         AsyncWriteExt::write_all(&mut buf, type_id_bytes)
             .await
             .unwrap();
-        let compressed = compress(sbor_data);
+        let compressed = compress(payload_data);
         let len = u32::try_from(compressed.len()).unwrap_or(u32::MAX);
         AsyncWriteExt::write_all(&mut buf, &len.to_be_bytes())
             .await
@@ -364,7 +364,7 @@ mod tests {
     #[tokio::test]
     async fn test_typed_frame_roundtrip() {
         let type_id = "block.request";
-        let payload = b"some sbor data here";
+        let payload = b"some wire data here";
         let buf = write_typed_to_buf(type_id, payload).await;
         let expected_wire_bytes = buf.len();
         let mut cursor = Cursor::new(buf);

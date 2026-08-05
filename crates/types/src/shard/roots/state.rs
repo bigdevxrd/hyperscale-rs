@@ -15,8 +15,8 @@
 //! [`StateRoot`]: crate::StateRoot
 //! [`PreparedCommit`]: crate::PreparedCommit
 
+use hyperscale_hbor::Hbor;
 use hyperscale_jmt::{Blake3Hasher, Hasher};
-use sbor::prelude::*;
 use thiserror::Error;
 
 use crate::{Hash, SettledWavesRoot, StateRoot, Verified, Verify};
@@ -35,7 +35,7 @@ use crate::{Hash, SettledWavesRoot, StateRoot, Verified, Verify};
 /// resistance. A ≤1-key tree has a leaf root, and leaf/internal hashing
 /// is domain-separated, so no pair verifies against it — the check fails
 /// closed on the degenerate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct SplitChildRoots {
     /// Subtree root at the left child's prefix (`path‖0`).
     pub left: StateRoot,

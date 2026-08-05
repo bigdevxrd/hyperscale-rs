@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{MessageClass, NetworkMessage, RatifyVote, Verifiable};
@@ -28,7 +28,7 @@ use crate::{MessageClass, NetworkMessage, RatifyVote, Verifiable};
 ///
 /// `MessageClass::Consensus` — ratification is commit-blocking: until
 /// a precommit quorum assembles, the epoch's block doesn't exist.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct RatifyVoteGossip {
     /// The signed ratification vote.
     pub vote: Arc<Verifiable<RatifyVote>>,
@@ -73,7 +73,7 @@ impl GossipMessage for RatifyVoteGossip {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::*;
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{
@@ -93,10 +93,10 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let g = RatifyVoteGossip::new(Arc::new(Verifiable::from(sample_vote())));
-        let bytes = basic_encode(&g).unwrap();
-        let decoded: RatifyVoteGossip = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&g).unwrap();
+        let decoded: RatifyVoteGossip = hbor_from_slice(&bytes).unwrap();
         assert_eq!(g, decoded);
     }
 

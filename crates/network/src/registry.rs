@@ -5,7 +5,7 @@
 //! instance between the Network impl and the transport layer.
 //!
 //! The typed `register_gossip<M>` / `register_request<R>` methods
-//! handle SBOR encode/decode, so `Network` impls just forward calls.
+//! handle wire encode/decode, so `Network` impls just forward calls.
 //!
 //! Handlers are stored as type-erased closures. Typed wrappers are
 //! created by the typed registration methods in this module.
@@ -23,18 +23,18 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use hyperscale_types::{GossipMessage, NetworkMessage, Request, ShardId, TopicScope};
 use quick_cache::sync::Cache as QuickCache;
-use sbor::{basic_decode, basic_encode};
 
 use crate::traits::{GossipHandler, GossipVerdict, NotificationHandler, RequestHandler};
 
-/// Type-erased gossip handler: receives decompressed SBOR bytes plus the
+/// Type-erased gossip handler: receives decompressed wire bytes plus the
 /// shard the topic encoded (`None` for global-scoped topics), returns
 /// verdict.
 pub type RawGossipHandler = dyn Fn(Vec<u8>, Option<ShardId>) -> GossipVerdict + Send + Sync;
 
-/// Type-erased host-level gossip handler: receives decompressed SBOR bytes.
+/// Type-erased host-level gossip handler: receives decompressed wire bytes.
 ///
 /// Invoked once per host for a [`TopicScope::Global`],
 /// [`source_shard`](GossipMessage::source_shard) `None` gossip message to
@@ -42,10 +42,10 @@ pub type RawGossipHandler = dyn Fn(Vec<u8>, Option<ShardId>) -> GossipVerdict + 
 /// Global fan owns the forward verdict.
 pub type RawHostGossipHandler = dyn Fn(Vec<u8>) + Send + Sync;
 
-/// Type-erased notification handler: receives decompressed SBOR bytes, no return value.
+/// Type-erased notification handler: receives decompressed wire bytes, no return value.
 pub type RawNotificationHandler = dyn Fn(Vec<u8>) + Send + Sync;
 
-/// Type-erased request handler: receives SBOR request bytes, returns SBOR response bytes.
+/// Type-erased request handler: receives request wire bytes, returns response wire bytes.
 pub type RawRequestHandler = dyn Fn(&[u8]) -> Vec<u8> + Send + Sync;
 
 /// Insert into an [`ArcSwap`]-backed map by cloning the current snapshot,
@@ -64,7 +64,7 @@ where
     prior
 }
 
-/// Dispatch a typed gossip message into its handler without SBOR
+/// Dispatch a typed gossip message into its handler without wire
 /// encode/decode. Used by network backends to deliver locally-published
 /// messages to in-process subscribers.
 pub trait LocalGossipDispatcher: Send + Sync {
@@ -95,7 +95,7 @@ pub trait LocalNotificationDispatcher: Send + Sync {
 ///
 /// Takes ownership of the typed request (so callers don't have to
 /// clone) and returns the typed response as `Box<dyn Any + Send>` for
-/// the caller to downcast back. Skipping SBOR keeps `Arc`-shared
+/// the caller to downcast back. Skipping the codec keeps `Arc`-shared
 /// payloads (transactions, finalized waves, execution certificates)
 /// reference-counted instead of deep-copied through bytes.
 pub trait LocalRequestDispatcher: Send + Sync {
@@ -360,7 +360,7 @@ impl HandlerRegistry {
 
     /// Register a typed gossip handler for a message type.
     ///
-    /// SBOR-decodes the payload (wire path only), then dispatches the
+    /// decodes the payload (wire path only), then dispatches the
     /// user handler once per target hosted shard as computed by
     /// [`TypedGossipDispatcher::target_shards`]. The handler closure
     /// makes no routing decisions and sees only well-formed
@@ -384,7 +384,7 @@ impl HandlerRegistry {
         let bytes_dispatcher = Arc::clone(&dispatcher);
         let raw: Arc<RawGossipHandler> =
             Arc::new(move |payload: Vec<u8>, shard: Option<ShardId>| {
-                match basic_decode::<M>(&payload) {
+                match hbor_from_slice::<M>(&payload) {
                     Ok(msg) => {
                         if !bytes_dispatcher.admit(&msg) {
                             return GossipVerdict::Accept;
@@ -400,7 +400,7 @@ impl HandlerRegistry {
                         tracing::warn!(
                             message_type = M::message_type_id(),
                             error = ?e,
-                            "Failed to SBOR-decode gossip message — rejecting"
+                            "Failed to decode gossip message — rejecting"
                         );
                         GossipVerdict::Reject
                     }
@@ -439,17 +439,18 @@ impl HandlerRegistry {
         let handler = Arc::new(handler);
 
         let bytes_handler = Arc::clone(&handler);
-        let raw: Arc<RawHostGossipHandler> =
-            Arc::new(move |payload: Vec<u8>| match basic_decode::<M>(&payload) {
+        let raw: Arc<RawHostGossipHandler> = Arc::new(
+            move |payload: Vec<u8>| match hbor_from_slice::<M>(&payload) {
                 Ok(msg) => bytes_handler(msg),
                 Err(e) => {
                     tracing::warn!(
                         message_type = M::message_type_id(),
                         error = ?e,
-                        "Failed to SBOR-decode host-level gossip — dropping"
+                        "Failed to decode host-level gossip — dropping"
                     );
                 }
-            });
+            },
+        );
         let prior = arcswap_insert(&self.host_gossip, M::message_type_id(), raw);
         assert!(
             prior.is_none(),
@@ -471,8 +472,8 @@ impl HandlerRegistry {
     /// inbound router looks up `(type_id, shard)` based on which per-shard
     /// stream protocol the request arrived on.
     ///
-    /// Wraps the handler in a closure that SBOR-decodes the request,
-    /// calls the handler, and SBOR-encodes the response.
+    /// Wraps the handler in a closure that decodes the request,
+    /// calls the handler, and encodes the response.
     ///
     /// # Panics
     ///
@@ -490,25 +491,25 @@ impl HandlerRegistry {
 
         let bytes_handler = Arc::clone(&handler);
         let raw: Arc<RawRequestHandler> = Arc::new(move |payload: &[u8]| -> Vec<u8> {
-            let req = match basic_decode::<R>(payload) {
+            let req = match hbor_from_slice::<R>(payload) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(
                         message_type = R::message_type_id(),
                         error = ?e,
-                        "Failed to SBOR-decode request — returning empty response"
+                        "Failed to decode request — returning empty response"
                     );
                     return vec![];
                 }
             };
             let response = bytes_handler.handle_request(req);
-            match basic_encode(&response) {
+            match hbor_to_vec(&response) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     tracing::warn!(
                         message_type = R::message_type_id(),
                         error = ?e,
-                        "Failed to SBOR-encode response — returning empty response"
+                        "Failed to encode response — returning empty response"
                     );
                     vec![]
                 }
@@ -531,7 +532,7 @@ impl HandlerRegistry {
 
     /// Register a typed notification handler for a message type.
     ///
-    /// SBOR-decodes the payload before calling the handler. Stored in a separate
+    /// decodes the payload before calling the handler. Stored in a separate
     /// map so a message type can be registered as both gossip and notification.
     ///
     /// # Panics
@@ -546,16 +547,18 @@ impl HandlerRegistry {
 
         let bytes_handler = Arc::clone(&handler);
         let raw: Arc<RawNotificationHandler> =
-            Arc::new(move |payload: Vec<u8>| match basic_decode::<M>(&payload) {
-                Ok(msg) => bytes_handler.on_notification(msg),
-                Err(e) => {
-                    tracing::warn!(
-                        message_type = M::message_type_id(),
-                        error = ?e,
-                        "Failed to SBOR-decode notification message — dropping"
-                    );
-                }
-            });
+            Arc::new(
+                move |payload: Vec<u8>| match hbor_from_slice::<M>(&payload) {
+                    Ok(msg) => bytes_handler.on_notification(msg),
+                    Err(e) => {
+                        tracing::warn!(
+                            message_type = M::message_type_id(),
+                            error = ?e,
+                            "Failed to decode notification message — dropping"
+                        );
+                    }
+                },
+            );
         let prior = arcswap_insert(&self.notification, M::message_type_id(), raw);
         assert!(
             prior.is_none(),
@@ -640,7 +643,7 @@ impl HandlerRegistry {
     }
 
     /// Dispatch a typed gossip message into its in-process handler,
-    /// skipping SBOR encode/decode. Returns `None` if no handler for
+    /// skipping wire encode/decode. Returns `None` if no handler for
     /// `M` is registered. Network backends use this to short-circuit
     /// local delivery for messages they publish. `shard` is the
     /// broadcast target shard for shard-scoped publishes and `None`
@@ -668,7 +671,7 @@ impl HandlerRegistry {
     }
 
     /// Dispatch a typed notification message into its in-process handler,
-    /// skipping SBOR encode/decode. Returns `false` if no handler for
+    /// skipping wire encode/decode. Returns `false` if no handler for
     /// `M` is registered.
     pub fn local_dispatch_notification<M>(&self, msg: &M) -> bool
     where
@@ -683,13 +686,13 @@ impl HandlerRegistry {
             })
     }
 
-    /// Dispatch a typed request to its in-process handler, skipping SBOR
+    /// Dispatch a typed request to its in-process handler, skipping wire
     /// encode/decode. Returns `None` if no handler is registered for
     /// `(R, shard)`. Used by network backends to serve requests for
     /// shards the host carries on-process — `Arc`-shared payloads on the
     /// response (transactions, finalized waves, execution certificates)
     /// flow through reference-counted instead of being deep-copied
-    /// through SBOR bytes.
+    /// through wire bytes.
     ///
     /// # Panics
     ///
@@ -731,10 +734,10 @@ mod tests {
 
     #[test]
     fn test_register_and_lookup_gossip() {
+        use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
         use hyperscale_types::NetworkMessage;
-        use sbor::{Decode, Encode, basic_encode};
 
-        #[derive(Debug, Clone, Encode, Decode)]
+        #[derive(Debug, Clone, Hbor)]
         struct TestMsg(u32);
         impl NetworkMessage for TestMsg {
             fn message_type_id() -> &'static str {
@@ -756,12 +759,12 @@ mod tests {
         });
 
         let handler = registry.get_gossip("test.gossip").unwrap();
-        let encoded = basic_encode(&TestMsg(42)).unwrap();
+        let encoded = hbor_to_vec(&TestMsg(42)).unwrap();
         let verdict = handler(encoded, Some(ShardId::leaf(1, 0)));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
         assert_eq!(verdict, GossipVerdict::Accept);
 
-        // SBOR decode failure should return Reject.
+        // Decode failure should return Reject.
         let verdict = handler(vec![0xFF, 0xFE], Some(ShardId::leaf(1, 0)));
         assert_eq!(verdict, GossipVerdict::Reject);
         assert_eq!(counter.load(Ordering::SeqCst), 1); // handler not called
@@ -771,10 +774,10 @@ mod tests {
 
     #[test]
     fn test_register_and_lookup_request() {
+        use hyperscale_hbor::{Hbor, from_slice as hbor_from_slice, to_vec as hbor_to_vec};
         use hyperscale_types::{NetworkMessage, Request};
-        use sbor::{Decode, Encode, basic_decode, basic_encode};
 
-        #[derive(Debug, Encode, Decode)]
+        #[derive(Debug, Hbor)]
         struct TestReq(u32);
         impl NetworkMessage for TestReq {
             fn message_type_id() -> &'static str {
@@ -782,7 +785,7 @@ mod tests {
             }
         }
 
-        #[derive(Debug, Encode, Decode, PartialEq)]
+        #[derive(Debug, Hbor, PartialEq)]
         struct TestResp(u32);
         impl NetworkMessage for TestResp {
             fn message_type_id() -> &'static str {
@@ -800,9 +803,9 @@ mod tests {
         registry.register_request(shard, |req: TestReq| TestResp(req.0 * 2));
 
         let handler = registry.get_request("test.request", shard).unwrap();
-        let req_bytes = basic_encode(&TestReq(21)).unwrap();
+        let req_bytes = hbor_to_vec(&TestReq(21)).unwrap();
         let response_bytes = handler(&req_bytes);
-        let response: TestResp = basic_decode(&response_bytes).unwrap();
+        let response: TestResp = hbor_from_slice(&response_bytes).unwrap();
         assert_eq!(response, TestResp(42));
 
         assert!(registry.get_request("unknown.request", shard).is_none());
@@ -818,10 +821,10 @@ mod tests {
     /// next message.
     #[test]
     fn gossip_fanout_observes_hosted_shard_swap() {
+        use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
         use hyperscale_types::NetworkMessage;
-        use sbor::{Decode, Encode, basic_encode};
 
-        #[derive(Debug, Clone, Encode, Decode)]
+        #[derive(Debug, Clone, Hbor)]
         struct SwapMsg(u32);
         impl NetworkMessage for SwapMsg {
             fn message_type_id() -> &'static str {
@@ -842,7 +845,7 @@ mod tests {
             GossipVerdict::Accept
         });
         let handler = registry.get_gossip("test.hosted_swap").unwrap();
-        let encoded = basic_encode(&SwapMsg(1)).unwrap();
+        let encoded = hbor_to_vec(&SwapMsg(1)).unwrap();
 
         // Shard B isn't hosted — the message is forwarded but not delivered.
         let _ = handler(encoded.clone(), Some(shard_b));
@@ -863,17 +866,17 @@ mod tests {
     /// registration assert; other shards' handlers are untouched.
     #[test]
     fn unregister_requests_for_shard_clears_and_allows_rejoin() {
+        use hyperscale_hbor::Hbor;
         use hyperscale_types::{NetworkMessage, Request};
-        use sbor::{Decode, Encode};
 
-        #[derive(Debug, Encode, Decode)]
+        #[derive(Debug, Hbor)]
         struct RejoinReq(u32);
         impl NetworkMessage for RejoinReq {
             fn message_type_id() -> &'static str {
                 "test.rejoin_request"
             }
         }
-        #[derive(Debug, Encode, Decode, PartialEq)]
+        #[derive(Debug, Hbor, PartialEq)]
         struct RejoinResp(u32);
         impl NetworkMessage for RejoinResp {
             fn message_type_id() -> &'static str {
@@ -918,10 +921,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "duplicate gossip handler registration")]
     fn test_double_registration_panics() {
+        use hyperscale_hbor::Hbor;
         use hyperscale_types::NetworkMessage;
-        use sbor::{Decode, Encode};
 
-        #[derive(Debug, Clone, Encode, Decode)]
+        #[derive(Debug, Clone, Hbor)]
         struct TestMsg(u32);
         impl NetworkMessage for TestMsg {
             fn message_type_id() -> &'static str {
@@ -950,10 +953,10 @@ mod tests {
     fn local_dispatch_gossip_preserves_verified_marker() {
         use std::sync::Mutex;
 
+        use hyperscale_hbor::Hbor;
         use hyperscale_types::{NetworkMessage, Verifiable, Verified};
-        use sbor::prelude::BasicSbor;
 
-        #[derive(Debug, Clone, BasicSbor)]
+        #[derive(Debug, Clone, Hbor)]
         struct VTestMsg {
             payload: Verifiable<u32>,
         }
@@ -1002,10 +1005,10 @@ mod tests {
     /// shard-scoped publish never reaches it.
     #[test]
     fn host_gossip_receives_source_none_global_gossip() {
+        use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
         use hyperscale_types::NetworkMessage;
-        use sbor::{Decode, Encode, basic_encode};
 
-        #[derive(Debug, Clone, Encode, Decode)]
+        #[derive(Debug, Clone, Hbor)]
         struct GlobalMsg(u32);
         impl NetworkMessage for GlobalMsg {
             fn message_type_id() -> &'static str {
@@ -1026,7 +1029,7 @@ mod tests {
 
         // Wire path.
         let host_handler = registry.get_host_gossip("test.host_gossip").unwrap();
-        host_handler(basic_encode(&GlobalMsg(1)).unwrap());
+        host_handler(hbor_to_vec(&GlobalMsg(1)).unwrap());
         assert_eq!(hits.load(Ordering::SeqCst), 1);
 
         // Local-dispatch path (global publish carries `shard == None`).
@@ -1041,10 +1044,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "duplicate host gossip handler registration")]
     fn host_gossip_double_registration_panics() {
+        use hyperscale_hbor::Hbor;
         use hyperscale_types::NetworkMessage;
-        use sbor::{Decode, Encode};
 
-        #[derive(Debug, Clone, Encode, Decode)]
+        #[derive(Debug, Clone, Hbor)]
         struct GlobalMsg(u32);
         impl NetworkMessage for GlobalMsg {
             fn message_type_id() -> &'static str {

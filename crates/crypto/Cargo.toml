@@ -13,7 +13,7 @@ test-utils = []
 # plus one impl crate without dragging in the workspace. Keep it this way —
 # blake3 is here for the canonical proof-to-output VRF digest, nothing else.
 blake3.workspace = true
-sbor.workspace = true
+hyperscale-hbor.workspace = true
 thiserror.workspace = true
 
 [lints]

@@ -10,9 +10,9 @@
 //! - [`request`] / [`response`]: paired request-reply messages used by the
 //!   per-payload fetch protocols.
 //!
-//! All messages are encoded with SBOR (not serde). Per-message wrappers
+//! All messages are encoded with HBOR (not serde). Per-message wrappers
 //! exist mostly to register typed handlers via the network registry; the
-//! files in each subdirectory are thin SBOR wire-types — see the
+//! files in each subdirectory are thin HBOR wire-types — see the
 //! containing struct for field semantics.
 //!
 //! # Class Levels
@@ -39,7 +39,7 @@
 //! 5. **Bulk** — High-volume best-effort with fetch fallback
 //!    (`TransactionGossip`).
 
-use sbor::prelude::{BasicDecode, BasicEncode, BasicSbor};
+use hyperscale_hbor::{Hbor, HborDecode, HborEncode};
 
 use crate::ShardId;
 
@@ -60,7 +60,7 @@ pub use signed::{Signed, SignedContext, SignedVerifyError};
 /// - Processing order in the network adaptor event loop
 /// - Network queue ordering for broadcasts
 /// - Backpressure behavior under load
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 #[repr(u8)]
 pub enum MessageClass {
     /// shard round-blocking; loss only recovered by view-change timeout.
@@ -156,7 +156,7 @@ impl MessageClass {
 ///
 /// All messages sent over the network must implement this trait.
 /// Each message type declares its class for network `QoS`.
-pub trait NetworkMessage: Send + Sync + Sized + BasicEncode + BasicDecode {
+pub trait NetworkMessage: Send + Sync + Sized + HborEncode + HborDecode {
     /// Unique message type identifier for routing.
     fn message_type_id() -> &'static str;
 

@@ -48,7 +48,7 @@ pub const fn rank_shift_for_view(view: SpcView, n: usize) -> usize {
 
 /// Canonical bytes for an [`SpcProposalObject`] — the preimage of
 /// [`hash_proposal_object`]. Layout: `domain || view (4 LE) || cert
-/// (SBOR)`. Not signed; consumed only by the proposal-hash → input-
+/// (HBOR)`. Not signed; consumed only by the proposal-hash → input-
 /// vector pipeline.
 fn proposal_object_message(po: &SpcProposalObject) -> Vec<u8> {
     const DOMAIN: &[u8] = b"hyperscale-spc-proposal-object-v1";

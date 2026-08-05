@@ -6,12 +6,13 @@
 //! which applies partition/latency/loss, LZ4-decompresses the payload once,
 //! and queues deliveries in an internal latency heap.
 //!
-//! Messages are wire-encoded (SBOR + LZ4) in the outbox, matching the production
+//! Messages are wire-encoded (HBOR + LZ4) in the outbox, matching the production
 //! encoding path. [`SimulatedNetwork::flush_gossip`](crate::SimulatedNetwork::flush_gossip)
 //! delivers due messages via each target's registered per-type gossip handler.
 
 use std::sync::{Arc, Mutex};
 
+use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use hyperscale_network::{
     GossipHandler, HandlerRegistry, Network, NotificationHandler, RequestError, RequestHandler,
     ResponseVerdict, compression,
@@ -19,7 +20,6 @@ use hyperscale_network::{
 use hyperscale_types::{
     GossipMessage, MessageClass, NetworkMessage, Request, RoutingCommittees, ShardId, ValidatorId,
 };
-use sbor::{basic_decode, basic_encode};
 
 /// Target for an outbound message.
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ pub struct OutboxEntry {
     /// the wire: the harness sees only `message_type` once the message is
     /// encoded, so anything downstream that needs the class needs it here.
     pub class: MessageClass,
-    /// Wire-encoded message bytes (SBOR + LZ4).
+    /// Wire-encoded message bytes (HBOR + LZ4).
     pub data: Vec<u8>,
 }
 
@@ -55,16 +55,16 @@ pub struct PendingNotification {
     /// The sending type's [`NetworkMessage::class`]. See
     /// [`OutboxEntry::class`].
     pub class: MessageClass,
-    /// Wire-encoded message bytes (SBOR + LZ4).
+    /// Wire-encoded message bytes (HBOR + LZ4).
     pub data: Vec<u8>,
 }
 
 /// A buffered request from `IoLoop`, awaiting harness fulfillment.
 ///
 /// The simulation harness drains these after each step, looks up the
-/// per-type request handler on the target peer, passes the SBOR-encoded
+/// per-type request handler on the target peer, passes the encoded
 /// request bytes directly (no framing needed), and calls `on_response`
-/// with the raw SBOR response bytes.
+/// with the raw response wire bytes.
 pub struct PendingRequest {
     /// Shard whose committee should serve this request. The harness
     /// resolves it to a peer list from its topology view.
@@ -79,9 +79,9 @@ pub struct PendingRequest {
     /// Class of the response leg, from the response type. The two legs of a
     /// round trip are separate messages and need not share a class.
     pub response_class: MessageClass,
-    /// SBOR-encoded request bytes.
+    /// encoded request bytes.
     pub request_bytes: Vec<u8>,
-    /// Callback that receives SBOR-encoded response bytes (or error). Returns
+    /// Callback that receives encoded response bytes (or error). Returns
     /// a [`ResponseVerdict`] for parity with the production `Network::request`
     /// signature; the simulation discards the verdict (deterministic harness
     /// owns peer behaviour directly).
@@ -198,7 +198,7 @@ impl Network for SimNetworkAdapter {
         // fan-out from `hosted_shards`.
         let _ = self.registry.local_dispatch_gossip(message, Some(shard));
         let data = compression::compress(
-            &basic_encode(message).expect("SimNetworkAdapter: failed to encode message"),
+            &hbor_to_vec(message).expect("SimNetworkAdapter: failed to encode message"),
         );
         self.outbox.lock().unwrap().push(OutboxEntry {
             target: BroadcastTarget::Shard(shard),
@@ -211,7 +211,7 @@ impl Network for SimNetworkAdapter {
     fn broadcast_global<M: GossipMessage + 'static>(&self, message: &M) {
         let _ = self.registry.local_dispatch_gossip(message, None);
         let data = compression::compress(
-            &basic_encode(message).expect("SimNetworkAdapter: failed to encode message"),
+            &hbor_to_vec(message).expect("SimNetworkAdapter: failed to encode message"),
         );
         self.outbox.lock().unwrap().push(OutboxEntry {
             target: BroadcastTarget::Global,
@@ -222,7 +222,7 @@ impl Network for SimNetworkAdapter {
     }
 
     fn register_gossip_handler<M: GossipMessage + 'static>(&self, handler: impl GossipHandler<M>) {
-        // Registry owns SBOR decode + per-vnode fan-out. Topic scope
+        // Registry owns wire decode + per-vnode fan-out. Topic scope
         // is irrelevant in simulation (delivery controlled by harness).
         self.registry.register_gossip(handler);
     }
@@ -241,7 +241,7 @@ impl Network for SimNetworkAdapter {
         // decompresses before queueing for delivery. In production (Libp2pNetwork),
         // compression happens inside the stream framing layer (write_typed_frame) instead.
         let data = compression::compress(
-            &basic_encode(message).expect("SimNetworkAdapter: failed to encode notification"),
+            &hbor_to_vec(message).expect("SimNetworkAdapter: failed to encode notification"),
         );
         self.pending_notifications
             .lock()
@@ -279,7 +279,7 @@ impl Network for SimNetworkAdapter {
     ) where
         R::Response: Send + 'static,
     {
-        // Registry owns SBOR decode/encode — just forward.
+        // Registry owns wire decode/encode — just forward.
         self.registry.register_request(shard, handler);
     }
 
@@ -292,13 +292,13 @@ impl Network for SimNetworkAdapter {
         on_response: Box<dyn FnOnce(Result<R::Response, RequestError>) -> ResponseVerdict + Send>,
     ) {
         let request_bytes =
-            basic_encode(&request).expect("SimNetworkAdapter: failed to encode request");
+            hbor_to_vec(&request).expect("SimNetworkAdapter: failed to encode request");
 
         // Wrap the typed callback: decode raw response bytes → R::Response
         let typed_callback: Box<
             dyn FnOnce(Result<Vec<u8>, RequestError>) -> ResponseVerdict + Send,
         > = Box::new(move |result| match result {
-            Ok(bytes) => match basic_decode::<R::Response>(&bytes) {
+            Ok(bytes) => match hbor_from_slice::<R::Response>(&bytes) {
                 Ok(response) => on_response(Ok(response)),
                 Err(e) => on_response(Err(RequestError::PeerError(format!("decode error: {e:?}")))),
             },
@@ -437,7 +437,7 @@ mod tests {
         assert!(!requests[0].request_bytes.is_empty());
 
         // Verify the request bytes decode correctly
-        let decoded: GetBlockRequest = basic_decode(&requests[0].request_bytes).unwrap();
+        let decoded: GetBlockRequest = hbor_from_slice(&requests[0].request_bytes).unwrap();
         assert_eq!(decoded.height, BlockHeight::new(42));
     }
 
@@ -465,9 +465,9 @@ mod tests {
         let requests = adapter.drain_pending_requests();
         let on_response = requests.into_iter().next().unwrap().on_response;
 
-        // Simulate a successful response with SBOR-encoded bytes
+        // Simulate a successful response with encoded bytes
         let response = GetBlockResponse::not_found();
-        let response_bytes = basic_encode(&response).unwrap();
+        let response_bytes = hbor_to_vec(&response).unwrap();
         on_response(Ok(response_bytes));
 
         let captured = result.lock().unwrap().take().unwrap();

@@ -398,8 +398,8 @@ impl Libp2pAdapter {
     /// provided [`MessageClass`]. Consensus messages (shard round-blocking) are
     /// processed before Recovery messages (sync) and Bulk (tx gossip).
     ///
-    /// Callers are responsible for SBOR-encoding and compressing the message
-    /// before calling this method (use `sbor::basic_encode` + `compression::compress`).
+    /// Callers are responsible for encoding and compressing the message
+    /// before calling this method (use `hyperscale_hbor::to_vec` + `compression::compress`).
     ///
     /// # Errors
     ///

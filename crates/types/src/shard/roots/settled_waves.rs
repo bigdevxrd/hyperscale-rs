@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use sbor::prelude::*;
+use hyperscale_hbor::to_vec as hbor_to_vec;
 
 use crate::{
     FinalizedWave, Hash, SettledWavesRoot, ShardId, Verifiable, WaveId, compute_merkle_root,
@@ -47,7 +47,7 @@ const SETTLED_WAVE_LEAF_TAG: &[u8] = b"hyperscale.settled_wave_leaf.v1";
 /// The merkle leaf for one settled wave-id.
 fn settled_wave_leaf(wave_id: &WaveId) -> Hash {
     let mut preimage = SETTLED_WAVE_LEAF_TAG.to_vec();
-    preimage.extend_from_slice(&basic_encode(wave_id).expect("WaveId SBOR encoding never fails"));
+    preimage.extend_from_slice(&hbor_to_vec(wave_id).expect("WaveId HBOR encoding never fails"));
     Hash::from_bytes(&preimage)
 }
 

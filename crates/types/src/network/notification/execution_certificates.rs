@@ -1,6 +1,6 @@
 //! `ExecutionCertificatesNotification` message.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     ConsensusSignature, ExecutionCertificate, MessageClass, NetworkDefinition, NetworkMessage,
@@ -12,7 +12,7 @@ use crate::{
 /// Each certificate covers all transactions in a deterministic wave
 /// partition of a block. Contains per-tx outcomes so remote shards can
 /// extract individual transaction results for cross-shard finalization.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ExecutionCertificatesNotification {
     /// The execution certificates being sent.
     pub certificates: Vec<ExecutionCertificate>,

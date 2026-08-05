@@ -4,7 +4,7 @@ use std::error::Error as StdError;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::BlockHeight;
@@ -13,7 +13,7 @@ use crate::BlockHeight;
 ///
 /// Decision priority: `Aborted > Reject > Accept`. If any shard reports
 /// `Aborted`, the TC decision is `Aborted` regardless of other shards' results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Hbor)]
 pub enum TransactionDecision {
     /// All shards successfully executed the transaction.
     Accept,
@@ -36,7 +36,7 @@ pub enum TransactionDecision {
 /// when the block containing the tx commits, and `Committed → Completed`
 /// when a block whose `block.certificates` covers the tx commits (the wave
 /// certificate carries the per-tx decision).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Hbor)]
 pub enum TransactionStatus {
     /// Transaction submitted, waiting to be included in a block.
     Pending,

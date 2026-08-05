@@ -5,7 +5,7 @@
 //! matters, latency doesn't. Any peer that committed the epoch can
 //! serve it from beacon storage.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::beacon::GetBeaconBlockResponse;
 use crate::{Epoch, MessageClass, NetworkMessage, Request};
@@ -15,7 +15,7 @@ use crate::{Epoch, MessageClass, NetworkMessage, Request};
 /// Served from the responder's beacon storage by epoch — an empty
 /// response means "this peer doesn't have it; try another." The
 /// requester verifies the block's cert before applying.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetBeaconBlockRequest {
     /// Epoch whose committed beacon block is being fetched.
     pub epoch: Epoch,
@@ -49,15 +49,15 @@ impl Request for GetBeaconBlockRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let req = GetBeaconBlockRequest::new(Epoch::new(42));
-        let bytes = basic_encode(&req).unwrap();
-        let decoded: GetBeaconBlockRequest = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&req).unwrap();
+        let decoded: GetBeaconBlockRequest = hbor_from_slice(&bytes).unwrap();
         assert_eq!(req, decoded);
     }
 

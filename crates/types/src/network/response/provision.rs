@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{MessageClass, NetworkMessage, Provisions};
 
@@ -12,7 +12,7 @@ use crate::{MessageClass, NetworkMessage, Provisions};
 /// have broadcast for the requested (block, `target_shard`) pair. The target
 /// shard feeds it into the normal verification pipeline (QC + merkle proof
 /// checks).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetProvisionResponse {
     /// The provisions bundle for the requested block and target shard.
     ///
@@ -39,16 +39,16 @@ impl NetworkMessage for GetProvisionResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn test_sbor_roundtrip_unavailable() {
+    fn test_hbor_roundtrip_unavailable() {
         let response = GetProvisionResponse { provisions: None };
 
-        let encoded = basic_encode(&response).unwrap();
-        let decoded: GetProvisionResponse = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&response).unwrap();
+        let decoded: GetProvisionResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);
     }
 }

@@ -15,7 +15,7 @@ use super::jmt_stored::{StaleTreePart, StoredNodeKey, VersionedStoredNode};
 use super::substate_key::SubstateKeyCodec;
 use super::versioned_key::VersionedSubstateKeyCodec;
 use crate::typed_cf::{
-    BeU64Codec, ChainOriginCodec, DbCodec, DbEncode, HashCodec, JmtKeyCodec, RawCodec, SborCodec,
+    BeU64Codec, ChainOriginCodec, DbCodec, DbEncode, HashCodec, HborCodec, JmtKeyCodec, RawCodec,
     TypedCf,
 };
 
@@ -54,7 +54,7 @@ pub const JMT_NODES_CF: &str = "jmt_nodes";
 
 /// Column family for stale JMT nodes pending garbage collection.
 /// Key: `version_BE_8B` (the version at which nodes became stale).
-/// Value: SBOR-encoded `Vec<StaleTreePart>`.
+/// Value: HBOR-encoded `Vec<StaleTreePart>`.
 /// GC deletes entries older than `current_version - jmt_history_length`.
 pub const STALE_JMT_NODES_CF: &str = "stale_jmt_nodes";
 
@@ -64,7 +64,7 @@ pub const STALE_JMT_NODES_CF: &str = "stale_jmt_nodes";
 ///
 /// Key: `version_BE_8B` — the `write_version` at which these history entries
 /// were created (one entry per block commit).
-/// Value: SBOR-encoded `Vec<Vec<u8>>` — the list of raw `state_history` keys
+/// Value: HBOR-encoded `Vec<Vec<u8>>` — the list of raw `state_history` keys
 /// (i.e. `storage_key_bytes ++ BE8(version)`) written at that version.
 ///
 /// Written alongside every `state_history` entry. GC iterates this CF in
@@ -91,13 +91,13 @@ pub const EXECUTION_CERTS_CF: &str = "execution_certs";
 /// monotonic leaf order so the fetch responder can range-scan to
 /// reconstruct an accumulator at any committed block. Storage is
 /// scoped per-shard, so the shard id is implicit in the key.
-/// Value: SBOR-encoded [`ShardWitnessPayload`]. Append-only; pruning
+/// Value: HBOR-encoded [`ShardWitnessPayload`]. Append-only; pruning
 /// follows the retention horizon configured at the runtime layer.
 pub const BEACON_WITNESSES_CF: &str = "beacon_witnesses";
 
 /// Column family for the committed substate byte total per version.
 ///
-/// Key: `version_BE_8B`; value: SBOR-encoded `u64` — the sum of every JMT
+/// Key: `version_BE_8B`; value: HBOR-encoded `u64` — the sum of every JMT
 /// leaf's value byte length after the commit at that version. Written in
 /// the same batch as the commit (crash-consistent with the tree), one
 /// entry per committed version. Consensus-critical: shard-witness
@@ -238,7 +238,7 @@ impl TypedCf for BlocksCf {
     type Key = u64; // block height
     type Value = BlockMetadata;
     type KeyCodec = BeU64Codec;
-    type ValueCodec = SborCodec<BlockMetadata>;
+    type ValueCodec = HborCodec<BlockMetadata>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.blocks
@@ -251,7 +251,7 @@ impl TypedCf for TransactionsCf {
     type Key = Hash;
     type Value = Transaction;
     type KeyCodec = HashCodec;
-    type ValueCodec = SborCodec<Transaction>;
+    type ValueCodec = HborCodec<Transaction>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.transactions
@@ -263,8 +263,8 @@ impl TypedCf for CertificatesCf {
     const NAME: &'static str = CERTIFICATES_CF;
     type Key = WaveId;
     type Value = WaveCertificate;
-    type KeyCodec = SborCodec<WaveId>;
-    type ValueCodec = SborCodec<WaveCertificate>;
+    type KeyCodec = HborCodec<WaveId>;
+    type ValueCodec = HborCodec<WaveCertificate>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.certificates
@@ -279,7 +279,7 @@ impl TypedCf for JmtNodesCf {
     type Key = StoredNodeKey;
     type Value = VersionedStoredNode;
     type KeyCodec = JmtKeyCodec;
-    type ValueCodec = SborCodec<VersionedStoredNode>;
+    type ValueCodec = HborCodec<VersionedStoredNode>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.jmt_nodes
@@ -292,7 +292,7 @@ impl TypedCf for StaleJmtNodesCf {
     type Key = u64; // version at which nodes became stale
     type Value = Vec<StaleTreePart>;
     type KeyCodec = BeU64Codec;
-    type ValueCodec = SborCodec<Vec<StaleTreePart>>;
+    type ValueCodec = HborCodec<Vec<StaleTreePart>>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.stale_jmt_nodes
@@ -306,7 +306,7 @@ impl TypedCf for SubstateBytesCf {
     type Key = u64; // version
     type Value = u64; // byte total after this version's commit
     type KeyCodec = BeU64Codec;
-    type ValueCodec = SborCodec<u64>;
+    type ValueCodec = HborCodec<u64>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.substate_bytes
@@ -390,7 +390,7 @@ impl TypedCf for StaleStateHistoryCf {
     type Key = u64; // write_version
     type Value = Vec<Vec<u8>>; // raw `state_history` keys (storage_key ++ BE8(version))
     type KeyCodec = BeU64Codec;
-    type ValueCodec = SborCodec<Vec<Vec<u8>>>;
+    type ValueCodec = HborCodec<Vec<Vec<u8>>>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.stale_state_history
@@ -450,7 +450,7 @@ impl TypedCf for StateHistoryCf {
     type Key = ((DbPartitionKey, DbSortKey), u64); // ((partition_key, sort_key), write_version)
     type Value = Option<Vec<u8>>;
     type KeyCodec = VersionedSubstateKeyCodec;
-    type ValueCodec = SborCodec<Option<Vec<u8>>>;
+    type ValueCodec = HborCodec<Option<Vec<u8>>>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.state_history
@@ -465,7 +465,7 @@ impl TypedCf for ConsensusReceiptsCf {
     type Key = Hash;
     type Value = ConsensusReceipt;
     type KeyCodec = HashCodec;
-    type ValueCodec = SborCodec<ConsensusReceipt>;
+    type ValueCodec = HborCodec<ConsensusReceipt>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.consensus_receipts
@@ -478,7 +478,7 @@ impl TypedCf for ExecutionMetadataCf {
     type Key = Hash;
     type Value = ExecutionMetadata;
     type KeyCodec = HashCodec;
-    type ValueCodec = SborCodec<ExecutionMetadata>;
+    type ValueCodec = HborCodec<ExecutionMetadata>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.execution_metadata
@@ -492,8 +492,8 @@ impl TypedCf for ExecutionCertsCf {
     const NAME: &'static str = EXECUTION_CERTS_CF;
     type Key = WaveId;
     type Value = ExecutionCertificate;
-    type KeyCodec = SborCodec<WaveId>;
-    type ValueCodec = SborCodec<ExecutionCertificate>;
+    type KeyCodec = HborCodec<WaveId>;
+    type ValueCodec = HborCodec<ExecutionCertificate>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.execution_certs
@@ -528,7 +528,7 @@ impl TypedCf for BeaconWitnessesCf {
     type Key = u64;
     type Value = ShardWitnessPayload;
     type KeyCodec = BeaconWitnessKeyCodec;
-    type ValueCodec = SborCodec<ShardWitnessPayload>;
+    type ValueCodec = HborCodec<ShardWitnessPayload>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.beacon_witnesses

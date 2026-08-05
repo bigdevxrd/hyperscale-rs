@@ -13,26 +13,24 @@
 
 use std::sync::LazyLock;
 
-use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
-use sbor::prelude::basic_encode;
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
+use hyperscale_hbor::error::{DecodeError as HborDecodeError, EncodeError as HborEncodeError};
+use hyperscale_hbor::{
+    Decoder as HborDecoder, Encoder as HborEncoder, HborDecode, HborEncode, HborWidth,
+    bounded as hbor_bounded, to_vec as hbor_to_vec,
 };
 
 use crate::receipt::event::EventExt;
-use crate::sbor_codec::{decode_bounded_bytes, decode_bounded_vec};
 use crate::state_key::{VM_PARTITION, vm_db_node_key_owner};
 use crate::substate::{DatabaseUpdate, PartitionDatabaseUpdates};
 use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
     BeaconWitnessEvent, BeaconWitnessRoot, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
-    GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EVENT_PAYLOAD_BYTES,
-    MAX_EVENTS_PER_TX, OwnershipRoot, WritesRoot, compute_merkle_root,
+    GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EVENTS_PER_TX, OwnershipRoot,
+    WritesRoot, compute_merkle_root,
 };
 
-// Variant tag bytes for SBOR encoding. Explicit rather than relying on
-// derive so future additions don't renumber existing variants silently.
+// Wire variant tag bytes. Explicit rather than relying on declaration
+// order so future additions don't renumber existing variants silently.
 const RECEIPT_VARIANT_SUCCEEDED: u8 = 0;
 const RECEIPT_VARIANT_FAILED: u8 = 1;
 
@@ -155,12 +153,12 @@ pub fn absorb_committed_cells<'a>(receipts: impl IntoIterator<Item = &'a Consens
     }
 }
 
-impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusReceipt {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Enum)
-    }
+impl HborWidth for ConsensusReceipt {
+    const MIN_ENCODED_LEN: usize = 1;
+}
 
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
+impl HborEncode for ConsensusReceipt {
+    fn encode(&self, encoder: &mut HborEncoder<'_>) -> Result<(), HborEncodeError> {
         match self {
             Self::Succeeded {
                 receipt_hash,
@@ -168,63 +166,46 @@ impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusRe
                 beacon_witness_events,
                 events,
             } => {
-                encoder.write_discriminator(RECEIPT_VARIANT_SUCCEEDED)?;
-                encoder.write_size(4)?;
-                encoder.encode(receipt_hash)?;
-                encoder.encode(database_updates)?;
-                encoder.encode(beacon_witness_events)?;
-                // The events are shared vocabulary and HBOR-native; they
-                // cross this SBOR wrapper as one canonical byte field, the
-                // same seam the envelope rides inside a `Transaction`.
-                let events_hbor =
-                    hbor_to_vec(events).map_err(|_| EncodeError::MaxDepthExceeded(0))?;
-                encoder.encode(&events_hbor)?;
+                encoder.write_u8(RECEIPT_VARIANT_SUCCEEDED);
+                encoder.nested(receipt_hash)?;
+                encoder.nested(database_updates)?;
+                hbor_bounded::check_encoded_len(
+                    "beacon_witness_events",
+                    beacon_witness_events.len(),
+                    MAX_BEACON_WITNESS_EVENTS_PER_TX,
+                )?;
+                encoder.nested(beacon_witness_events)?;
+                hbor_bounded::check_encoded_len("events", events.len(), MAX_EVENTS_PER_TX)?;
+                encoder.nested(events)
             }
             Self::Failed => {
-                encoder.write_discriminator(RECEIPT_VARIANT_FAILED)?;
-                encoder.write_size(0)?;
+                encoder.write_u8(RECEIPT_VARIANT_FAILED);
+                Ok(())
             }
         }
-        Ok(())
     }
 }
 
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusReceipt {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Enum)?;
-        let discriminator = decoder.read_discriminator()?;
-        let length = decoder.read_size()?;
-        match discriminator {
+impl HborDecode for ConsensusReceipt {
+    fn decode(decoder: &mut HborDecoder<'_>) -> Result<Self, HborDecodeError> {
+        match decoder.read_u8()? {
             RECEIPT_VARIANT_SUCCEEDED => {
-                if length != 4 {
-                    return Err(DecodeError::UnexpectedSize {
-                        expected: 4,
-                        actual: length,
-                    });
-                }
-                let receipt_hash: GlobalReceiptHash = decoder.decode()?;
-                let database_updates: DatabaseUpdates = decoder.decode()?;
+                let receipt_hash: GlobalReceiptHash = decoder.nested()?;
+                let database_updates: DatabaseUpdates = decoder.nested()?;
                 // Receipt updates are Delta-only (see `has_partition_reset`);
                 // a Reset here is a corrupt peer or a forged receipt.
                 if has_partition_reset(&database_updates) {
-                    return Err(DecodeError::InvalidCustomValue);
+                    return Err(HborDecodeError::FailedValidation(
+                        "receipt updates must be delta-only",
+                    ));
                 }
-                let beacon_witness_events = decode_bounded_vec::<_, BeaconWitnessEvent>(
-                    decoder,
-                    MAX_BEACON_WITNESS_EVENTS_PER_TX,
-                )?;
-                let events_hbor = decode_bounded_bytes(
-                    decoder,
-                    (MAX_EVENT_PAYLOAD_BYTES + 64) * MAX_EVENTS_PER_TX,
-                )?;
-                let events: Vec<Event> =
-                    hbor_from_slice(&events_hbor).map_err(|_| DecodeError::InvalidCustomValue)?;
-                if events.len() > MAX_EVENTS_PER_TX {
-                    return Err(DecodeError::InvalidCustomValue);
-                }
+                let beacon_witness_events: Vec<BeaconWitnessEvent> =
+                    decoder.descend(|decoder| {
+                        hbor_bounded::decode_bounded_vec(decoder, MAX_BEACON_WITNESS_EVENTS_PER_TX)
+                    })?;
+                let events: Vec<Event> = decoder.descend(|decoder| {
+                    hbor_bounded::decode_bounded_vec(decoder, MAX_EVENTS_PER_TX)
+                })?;
                 Ok(Self::Succeeded {
                     receipt_hash,
                     database_updates,
@@ -232,31 +213,9 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
                     events,
                 })
             }
-            RECEIPT_VARIANT_FAILED => {
-                if length != 0 {
-                    return Err(DecodeError::UnexpectedSize {
-                        expected: 0,
-                        actual: length,
-                    });
-                }
-                Ok(Self::Failed)
-            }
-            other => Err(DecodeError::UnknownDiscriminator(other)),
+            RECEIPT_VARIANT_FAILED => Ok(Self::Failed),
+            other => Err(HborDecodeError::InvalidDiscriminant(other)),
         }
-    }
-}
-
-impl Categorize<NoCustomValueKind> for ConsensusReceipt {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Enum
-    }
-}
-
-impl Describe<NoCustomTypeKind> for ConsensusReceipt {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("ConsensusReceipt", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
     }
 }
 
@@ -298,8 +257,8 @@ impl ConsensusReceipt {
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding of `database_updates` fails — it is a
-    /// closed SBOR type and encoding is infallible in practice.
+    /// Panics if HBOR encoding of `database_updates` fails — it is a
+    /// closed wire type and encoding is infallible in practice.
     #[must_use]
     pub fn local_receipt_hash(&self) -> Hash {
         let (outcome_byte, event_root, database_updates) = match self {
@@ -317,7 +276,7 @@ impl ConsensusReceipt {
             }
             Self::Failed => ([0u8], Hash::ZERO, DatabaseUpdates::default()),
         };
-        let updates_bytes = basic_encode(&database_updates).expect("encode should not fail");
+        let updates_bytes = hbor_to_vec(&database_updates).expect("encode should not fail");
         let updates_hash = Hash::from_bytes(&updates_bytes);
         Hash::from_parts(&[
             &outcome_byte,
@@ -329,9 +288,8 @@ impl ConsensusReceipt {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint};
     use hyperscale_vm_types::Address;
-    use sbor::prelude::basic_decode;
-    use sbor::{BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, VecEncoder};
 
     use super::*;
     use crate::state_key::vm_db_node_key;
@@ -350,18 +308,18 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip_succeeded() {
+    fn hbor_roundtrip_succeeded() {
         let receipt = sample_succeeded();
-        let bytes = basic_encode(&receipt).unwrap();
-        let decoded: ConsensusReceipt = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&receipt).unwrap();
+        let decoded: ConsensusReceipt = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, receipt);
     }
 
     #[test]
-    fn sbor_roundtrip_failed() {
+    fn hbor_roundtrip_failed() {
         let receipt = ConsensusReceipt::Failed;
-        let bytes = basic_encode(&receipt).unwrap();
-        let decoded: ConsensusReceipt = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&receipt).unwrap();
+        let decoded: ConsensusReceipt = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, receipt);
     }
 
@@ -370,28 +328,22 @@ mod tests {
     /// iterating.
     #[test]
     fn decode_rejects_oversized_beacon_witness_events() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Enum).unwrap();
-        enc.write_discriminator(RECEIPT_VARIANT_SUCCEEDED).unwrap();
-        enc.write_size(4).unwrap();
-        enc.encode(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")))
-            .unwrap();
-        enc.encode(&DatabaseUpdates::default()).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(BeaconWitnessEvent::value_kind())
-            .unwrap();
-        enc.write_size(MAX_BEACON_WITNESS_EVENTS_PER_TX + 1)
-            .unwrap();
-        let err = basic_decode::<ConsensusReceipt>(&buf).unwrap_err();
+        let mut buf = vec![RECEIPT_VARIANT_SUCCEEDED];
+        buf.extend_from_slice(
+            &hbor_to_vec(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r"))).unwrap(),
+        );
+        buf.extend_from_slice(&hbor_to_vec(&DatabaseUpdates::default()).unwrap());
+        varint::write(&mut buf, MAX_BEACON_WITNESS_EVENTS_PER_TX + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_BEACON_WITNESS_EVENTS_PER_TX + 1) * 64,
+        ));
+        let err = hbor_from_slice::<ConsensusReceipt>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_BEACON_WITNESS_EVENTS_PER_TX,
-                actual,
-            } if actual == MAX_BEACON_WITNESS_EVENTS_PER_TX + 1
+            HborDecodeError::BoundExceeded { max, actual }
+                if max == MAX_BEACON_WITNESS_EVENTS_PER_TX
+                    && actual == MAX_BEACON_WITNESS_EVENTS_PER_TX + 1
         ));
     }
 
@@ -424,21 +376,15 @@ mod tests {
             beacon_witness_events: Vec::new(),
             events: Vec::new(),
         };
-        let bytes = basic_encode(&receipt).unwrap();
-        let err = basic_decode::<ConsensusReceipt>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let bytes = hbor_to_vec(&receipt).unwrap();
+        let err = hbor_from_slice::<ConsensusReceipt>(&bytes).unwrap_err();
+        assert!(matches!(err, HborDecodeError::FailedValidation(_)));
     }
 
     #[test]
     fn decode_rejects_unknown_discriminator() {
-        let mut buf = Vec::with_capacity(8);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Enum).unwrap();
-        enc.write_discriminator(99).unwrap();
-        enc.write_size(0).unwrap();
-        let err = basic_decode::<ConsensusReceipt>(&buf).unwrap_err();
-        assert!(matches!(err, DecodeError::UnknownDiscriminator(99)));
+        let buf = [99u8];
+        let err = hbor_from_slice::<ConsensusReceipt>(&buf).unwrap_err();
+        assert!(matches!(err, HborDecodeError::InvalidDiscriminant(99)));
     }
 }

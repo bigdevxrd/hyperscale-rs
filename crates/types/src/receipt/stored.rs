@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{ConsensusReceipt, ExecutionMetadata, TxHash};
 
@@ -12,7 +12,7 @@ use crate::{ConsensusReceipt, ExecutionMetadata, TxHash};
 /// `metadata` is `None` when this receipt was received from a peer (sync
 /// or catch-up) — peers don't ship their local logs/fees/errors. When
 /// the local node executed the transaction, `metadata` is `Some`.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StoredReceipt {
     /// Primary key in the per-tx receipt store and the join key against
     /// `WaveCertificate` outcomes during validation.

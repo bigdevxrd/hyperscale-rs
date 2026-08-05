@@ -1,13 +1,9 @@
 //! Positional `(SignerBitfield, parallel-item)` bundle.
 
-use sbor::prelude::*;
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
-};
+use hyperscale_hbor::Hbor;
 
+use crate::SignerBitfield;
 use crate::primitives::signer_bitfield::MAX_SIGNERS;
-use crate::{BoundedVec, SignerBitfield};
 
 /// A signer bitfield paired with one item per set bit, in set-bit order.
 ///
@@ -23,10 +19,23 @@ use crate::{BoundedVec, SignerBitfield};
 /// - `items.len() == signers.count_ones()`. Enforced at decode time.
 /// - Pairing is positional: the k-th item belongs to the k-th set bit
 ///   in `signers.set_indices()` order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(validate = check_positional)]
 pub struct PositionalBundle<T> {
     signers: SignerBitfield,
-    items: BoundedVec<T, MAX_SIGNERS>,
+    #[hbor(max = MAX_SIGNERS)]
+    items: Vec<T>,
+}
+
+/// The cross-field invariant, run at the wire boundary: without it a peer
+/// can supply mismatched lengths and [`PositionalBundle::iter`] produces a
+/// silently truncated stream.
+fn check_positional<T>(bundle: &PositionalBundle<T>) -> Result<(), &'static str> {
+    if bundle.items.len() == bundle.signers.count_ones() {
+        Ok(())
+    } else {
+        Err("items must pair one-to-one with set signer bits")
+    }
 }
 
 impl<T> PositionalBundle<T> {
@@ -42,10 +51,11 @@ impl<T> PositionalBundle<T> {
             signers.count_ones(),
             "PositionalBundle: items length must match signer count",
         );
-        Self {
-            signers,
-            items: items.into(),
-        }
+        assert!(
+            items.len() <= MAX_SIGNERS,
+            "PositionalBundle: items past the signer cap",
+        );
+        Self { signers, items }
     }
 
     /// Empty bundle (no signers, no items).
@@ -53,7 +63,7 @@ impl<T> PositionalBundle<T> {
     pub const fn empty() -> Self {
         Self {
             signers: SignerBitfield::empty(),
-            items: BoundedVec::new(),
+            items: Vec::new(),
         }
     }
 
@@ -87,69 +97,9 @@ impl<T> PositionalBundle<T> {
     }
 }
 
-// Manual SBOR impl — the cross-field invariant `items.len() ==
-// signers.count_ones()` doesn't fit a derive. Without the check a peer
-// can supply mismatched lengths and downstream `iter()` produces a
-// silently truncated stream.
-
-impl<T, E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for PositionalBundle<T>
-where
-    T: Encode<NoCustomValueKind, E> + Categorize<NoCustomValueKind>,
-{
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
-
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_size(2)?;
-        encoder.encode(&self.signers)?;
-        encoder.encode(&self.items)?;
-        Ok(())
-    }
-}
-
-impl<T, D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for PositionalBundle<T>
-where
-    T: Decode<NoCustomValueKind, D> + Categorize<NoCustomValueKind>,
-{
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 2 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: length,
-            });
-        }
-        let signers: SignerBitfield = decoder.decode()?;
-        let items: BoundedVec<T, MAX_SIGNERS> = decoder.decode()?;
-        if items.len() != signers.count_ones() {
-            return Err(DecodeError::InvalidCustomValue);
-        }
-        Ok(Self { signers, items })
-    }
-}
-
-impl<T> Categorize<NoCustomValueKind> for PositionalBundle<T> {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl<T> Describe<NoCustomTypeKind> for PositionalBundle<T> {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("PositionalBundle", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
@@ -184,11 +134,11 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let bf = bitfield(100, &[3, 50, 99]);
         let bundle = PositionalBundle::new(bf, vec![10u32, 20, 30]);
-        let bytes = basic_encode(&bundle).unwrap();
-        let decoded: PositionalBundle<u32> = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&bundle).unwrap();
+        let decoded: PositionalBundle<u32> = hbor_from_slice(&bytes).unwrap();
         assert_eq!(bundle, decoded);
         let pairs: Vec<_> = decoded.iter().collect();
         assert_eq!(pairs, vec![(3, &10), (50, &20), (99, &30)]);
@@ -198,28 +148,28 @@ mod tests {
     fn decode_rejects_length_mismatch() {
         // Forge a tuple with bitfield count_ones=3 but items.len()=2.
         let bf = bitfield(10, &[0, 1, 2]);
-        let items: BoundedVec<u32, MAX_SIGNERS> = vec![1u32, 2].into();
+        let items = vec![1u32, 2];
         let attacker = ManualBundle { signers: bf, items };
-        let bytes = basic_encode(&attacker).unwrap();
-        let err = basic_decode::<PositionalBundle<u32>>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let bytes = hbor_to_vec(&attacker).unwrap();
+        let err = hbor_from_slice::<PositionalBundle<u32>>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     #[test]
     fn decode_accepts_canonical_match() {
         let bf = bitfield(10, &[0, 1, 2]);
-        let items: BoundedVec<u32, MAX_SIGNERS> = vec![1u32, 2, 3].into();
+        let items = vec![1u32, 2, 3];
         let canonical = ManualBundle { signers: bf, items };
-        let bytes = basic_encode(&canonical).unwrap();
-        let decoded: PositionalBundle<u32> = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&canonical).unwrap();
+        let decoded: PositionalBundle<u32> = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded.len(), 3);
     }
 
     /// Mirror of `PositionalBundle`'s wire layout for forging test
     /// payloads.
-    #[derive(BasicSbor)]
+    #[derive(Hbor)]
     struct ManualBundle {
         signers: SignerBitfield,
-        items: BoundedVec<u32, MAX_SIGNERS>,
+        items: Vec<u32>,
     }
 }

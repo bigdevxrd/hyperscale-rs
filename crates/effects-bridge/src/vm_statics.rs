@@ -1,7 +1,7 @@
 //! The envelope's static derivation: the tree wire codec and the
 //! [`VmStatics`] implementation admission verifies through.
 //!
-//! The envelope tree travels as canonical basic-SBOR of the mirror types
+//! The envelope tree travels as canonical HBOR of the mirror types
 //! below — the vocabulary crate deliberately has no wire encoding, so
 //! this module owns it. Derivation is `decode → admit → route` over the
 //! process's genesis-static metadata, rooted at the envelope's signing

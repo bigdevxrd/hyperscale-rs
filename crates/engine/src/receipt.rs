@@ -151,7 +151,7 @@ pub fn project_to_shard(
                 "partition Reset survived shard filtering for tx {tx_hash:?} — receipt updates must be Delta-only",
             );
             // Canonicalise key order so `ConsensusReceipt::local_receipt_hash`
-            // (which SBOR-encodes the IndexMap directly) is order-stable
+            // (which encodes the IndexMap directly) is order-stable
             // across validators regardless of `raw_updates` insertion order.
             sort_database_updates(&mut database_updates);
             // A fact's emitter is a substate prefix, so the shard that

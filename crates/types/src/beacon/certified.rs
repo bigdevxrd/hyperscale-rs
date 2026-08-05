@@ -15,14 +15,13 @@
 //! - [`BeaconCert::Skip`] ⇔ `block.epoch > GENESIS` ∧ no proposals.
 //!
 //! Enforced at [`new_checked`](CertifiedBeaconBlock::new_checked) and
-//! at SBOR-decode (manual `Decode` impl below). Wire bytes carrying a
+//! at decode (manual `Decode` impl below). Wire bytes carrying a
 //! mismatched pairing reject with `DecodeError::InvalidCustomValue`.
 
 use hyperscale_crypto::Verifier;
-use sbor::prelude::*;
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
+use hyperscale_hbor::error::{DecodeError as HborDecodeError, EncodeError as HborEncodeError};
+use hyperscale_hbor::{
+    Decoder as HborDecoder, Encoder as HborEncoder, HborDecode, HborEncode, HborWidth,
 };
 use thiserror::Error;
 
@@ -462,56 +461,35 @@ impl Verified<CertifiedBeaconBlock> {
     }
 }
 
-impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for CertifiedBeaconBlock {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
+impl HborWidth for CertifiedBeaconBlock {
+    const MIN_ENCODED_LEN: usize = 2;
+}
 
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_size(2)?;
-        encoder.encode(&self.block)?;
-        encoder.encode(&self.cert)?;
-        Ok(())
+impl HborEncode for CertifiedBeaconBlock {
+    fn encode(&self, encoder: &mut HborEncoder<'_>) -> Result<(), HborEncodeError> {
+        encoder.nested(&self.block)?;
+        encoder.nested(&self.cert)
     }
 }
 
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for CertifiedBeaconBlock {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 2 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 2,
-                actual: length,
-            });
-        }
-        let block: BeaconBlock = decoder.decode()?;
-        let cert: BeaconCert = decoder.decode()?;
-        Self::new_checked(block, cert).map_err(|_| DecodeError::InvalidCustomValue)
-    }
-}
-
-impl Categorize<NoCustomValueKind> for CertifiedBeaconBlock {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl Describe<NoCustomTypeKind> for CertifiedBeaconBlock {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("CertifiedBeaconBlock", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
+impl HborDecode for CertifiedBeaconBlock {
+    fn decode(decoder: &mut HborDecoder<'_>) -> Result<Self, HborDecodeError> {
+        let block: BeaconBlock = decoder.nested()?;
+        let cert: BeaconCert = decoder.nested()?;
+        Self::new_checked(block, cert)
+            .map_err(|_| HborDecodeError::FailedValidation("cert does not certify this block"))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use hyperscale_crypto::Signer;
     use hyperscale_crypto_bls::BlsSigner;
+    use hyperscale_hbor::{
+        DecodeError, Hbor, from_slice as hbor_from_slice, to_vec as hbor_to_vec,
+    };
 
     use super::*;
     use crate::{
@@ -627,8 +605,8 @@ mod tests {
     fn genesis_pair_round_trip() {
         let g =
             CertifiedBeaconBlock::genesis(GenesisConfigHash::from_raw(Hash::from_bytes(b"cfg")));
-        let bytes = basic_encode(&g).unwrap();
-        let decoded: CertifiedBeaconBlock = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&g).unwrap();
+        let decoded: CertifiedBeaconBlock = hbor_from_slice(&bytes).unwrap();
         assert_eq!(g, decoded);
         assert!(decoded.is_genesis());
     }
@@ -642,8 +620,8 @@ mod tests {
         );
         let cert = normal_cert_for(&block);
         let pair = CertifiedBeaconBlock::new_checked(block, cert).unwrap();
-        let bytes = basic_encode(&pair).unwrap();
-        let decoded: CertifiedBeaconBlock = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&pair).unwrap();
+        let decoded: CertifiedBeaconBlock = hbor_from_slice(&bytes).unwrap();
         assert_eq!(pair, decoded);
     }
 
@@ -655,8 +633,8 @@ mod tests {
         );
         let cert = BeaconCert::Skip(ratify_cert_for(&block));
         let pair = CertifiedBeaconBlock::new_checked(block, cert).unwrap();
-        let bytes = basic_encode(&pair).unwrap();
-        let decoded: CertifiedBeaconBlock = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&pair).unwrap();
+        let decoded: CertifiedBeaconBlock = hbor_from_slice(&bytes).unwrap();
         assert_eq!(pair, decoded);
     }
 
@@ -832,7 +810,7 @@ mod tests {
     }
 
     /// Forge a wire-byte stream carrying a `Skip` cert paired with a
-    /// non-empty proposal list. SBOR decode must reject via the
+    /// non-empty proposal list. Decode must reject via the
     /// pairing-invariant check, same way the shard
     /// `CertifiedBlock` decoder rejects `qc.block_hash` mismatches.
     #[test]
@@ -843,9 +821,9 @@ mod tests {
             vec![(ValidatorId::new(0), proposal(0))],
         );
         let cert = BeaconCert::Skip(ratify_cert_for(&block));
-        let bytes = basic_encode(&CertifiedBeaconBlockWire { block, cert }).unwrap();
-        let err = basic_decode::<CertifiedBeaconBlock>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let bytes = hbor_to_vec(&CertifiedBeaconBlockWire { block, cert }).unwrap();
+        let err = hbor_from_slice::<CertifiedBeaconBlock>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     #[test]
@@ -855,30 +833,29 @@ mod tests {
             BeaconBlockHash::from_raw(Hash::from_bytes(b"prev")),
             Vec::new(),
         );
-        let bytes = basic_encode(&CertifiedBeaconBlockWire {
+        let bytes = hbor_to_vec(&CertifiedBeaconBlockWire {
             block,
             cert: BeaconCert::Genesis(GenesisConfigHash::ZERO),
         })
         .unwrap();
-        let err = basic_decode::<CertifiedBeaconBlock>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let err = hbor_from_slice::<CertifiedBeaconBlock>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     #[test]
     fn decode_rejects_normal_cert_at_genesis() {
         let block = BeaconBlock::genesis();
         let cert = normal_cert_for(&block);
-        let bytes = basic_encode(&CertifiedBeaconBlockWire { block, cert }).unwrap();
-        let err = basic_decode::<CertifiedBeaconBlock>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let bytes = hbor_to_vec(&CertifiedBeaconBlockWire { block, cert }).unwrap();
+        let err = hbor_from_slice::<CertifiedBeaconBlock>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     /// Wire-shape twin of `CertifiedBeaconBlock` that skips the pairing
     /// invariant during encode, so tests can construct adversarial byte
     /// streams. Mirrors the shard
     /// `CertifiedBlockWire`.
-    #[derive(sbor::BasicSbor)]
-    #[sbor(transparent_name)]
+    #[derive(Hbor)]
     struct CertifiedBeaconBlockWire {
         block: BeaconBlock,
         cert: BeaconCert,

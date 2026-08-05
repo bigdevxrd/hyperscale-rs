@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
+use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use hyperscale_metrics::record_request_retry;
 use hyperscale_network::compression::compress;
 use hyperscale_network::fault::Tier;
@@ -22,7 +23,6 @@ use hyperscale_types::{
     TopologySnapshot, ValidatorId,
 };
 use libp2p::PeerId;
-use sbor::{basic_decode, basic_encode};
 use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::{info, warn};
@@ -55,15 +55,15 @@ use crate::request_manager::peer_health::FailureKind;
 /// Production network adapter implementing the Network trait.
 ///
 /// Wraps `Arc<Libp2pAdapter>` and a `RequestManager`. The broadcast path
-/// clones the message and offloads SBOR encode, LZ4 compress, and the
+/// clones the message and offloads the wire encode, LZ4 compress, and the
 /// adapter publish call to the tokio blocking pool via
 /// [`Self::spawn_publish`]; the shard pinned thread returns from
 /// `broadcast_*` after only the local-dispatch tee and a cheap clone.
 /// The adapter's `publish` itself is a crossbeam send so the blocking
 /// task never waits on libp2p.
 ///
-/// The generic `request<R>()` method SBOR-encodes the request, dispatches
-/// to the `RequestManager`, and SBOR-decodes the response.
+/// The generic `request<R>()` method encodes the request, dispatches
+/// to the `RequestManager`, and decodes the response.
 pub struct Libp2pNetwork {
     adapter: Arc<Libp2pAdapter>,
     request_manager: Arc<RequestManager>,
@@ -170,7 +170,7 @@ impl Libp2pNetwork {
     /// Encode + compress `message` and hand the resulting bytes to the
     /// adapter's publish channel on the tokio blocking pool.
     ///
-    /// SBOR encode for a max-size tx-gossip batch is tens of µs and LZ4
+    /// The wire encode for a max-size tx-gossip batch is tens of µs and LZ4
     /// compress at ~500 MB/s is another tens of µs — small individually
     /// but enough to be worth keeping off the shard pinned thread, where
     /// every µs spent here is a µs not spent making consensus progress.
@@ -182,7 +182,7 @@ impl Libp2pNetwork {
         let latency = self.simulated_outbound_latency;
         let handle = self.tokio_handle.clone();
         self.tokio_handle.spawn_blocking(move || {
-            let data = compress(&basic_encode(&message).expect("SBOR encode failed"));
+            let data = compress(&hbor_to_vec(&message).expect("wire encode failed"));
             let publish = move || {
                 if let Err(e) = adapter.publish(&topic, data, M::class()) {
                     warn!(topic = %topic, error = ?e, "Libp2pNetwork: publish failed");
@@ -261,7 +261,7 @@ impl Network for Libp2pNetwork {
         // channel; the encode/decode is skipped on the local path.
         let _ = self.registry.local_dispatch_gossip(message, Some(shard));
 
-        // Hand the SBOR encode + LZ4 compress off the caller's thread.
+        // Hand the wire encode + LZ4 compress off the caller's thread.
         // The hottest caller is `flush_tx_gossip_batch` on the shard
         // pinned thread; a max-size batch is hundreds of µs of CPU we
         // shouldn't be charging to consensus progress.
@@ -283,7 +283,7 @@ impl Network for Libp2pNetwork {
     }
 
     fn register_gossip_handler<M: GossipMessage + 'static>(&self, handler: impl GossipHandler<M>) {
-        // Registry owns SBOR decode + per-vnode fan-out — just forward.
+        // Registry owns wire decode + per-vnode fan-out — just forward.
         self.registry.register_gossip(handler);
 
         // Auto-subscribe to the corresponding gossipsub topic(s). Shard-
@@ -322,7 +322,7 @@ impl Network for Libp2pNetwork {
         &self,
         handler: impl Fn(M) + Send + Sync + 'static,
     ) {
-        // Registry owns SBOR decode — just forward. The Global-topic
+        // Registry owns wire decode — just forward. The Global-topic
         // subscription is brought up by the matching `register_gossip_handler`
         // (every host-level type is also a `TopicScope::Global` gossip type),
         // so the inbound dispatch in `gossipsub.rs` invokes this for a
@@ -403,8 +403,8 @@ impl Network for Libp2pNetwork {
         if unique_peers.is_empty() {
             return;
         }
-        let sbor = basic_encode(message).expect("SBOR encode failed");
-        let compressed = compress(&sbor);
+        let encoded = hbor_to_vec(message).expect("wire encode failed");
+        let compressed = compress(&encoded);
         let type_id = M::message_type_id();
         for peer_id in unique_peers {
             // Fault gate: drop this unicast leg on a partition against the peer
@@ -434,7 +434,7 @@ impl Network for Libp2pNetwork {
     ) where
         R::Response: Send + 'static,
     {
-        // Registry owns SBOR decode/encode — just forward.
+        // Registry owns wire decode/encode — just forward.
         self.registry.register_request(shard, handler);
     }
 
@@ -543,7 +543,7 @@ impl Network for Libp2pNetwork {
             let preferred_libp2p = preferred_peer.and_then(|v| adapter.peer_for_validator(v));
             let class = class_override.unwrap_or_else(R::class);
 
-            let request_bytes = match basic_encode(&request) {
+            let request_bytes = match hbor_to_vec(&request) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     warn!(error = ?e, "Libp2pNetwork: failed to encode request");
@@ -568,7 +568,7 @@ impl Network for Libp2pNetwork {
                 .await
             {
                 Ok((peer, bytes)) => {
-                    let verdict = match basic_decode::<R::Response>(&bytes) {
+                    let verdict = match hbor_from_slice::<R::Response>(&bytes) {
                         Ok(response) => on_response(Ok(response)),
                         Err(e) => {
                             warn!(error = ?e, "Failed to decode response");

@@ -10,7 +10,7 @@
 //! a committed trigger carries the committee's quorum behind the load
 //! fact. The beacon folds the witness and schedules the reshape.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{ShardId, ShardWitnessPayload};
 
@@ -22,7 +22,7 @@ use crate::{ShardId, ShardWitnessPayload};
 /// threshold, a fresh child (≈ half the split threshold) is far from
 /// merge-eligible and a fresh merge (≤ a quarter of it) is far from
 /// split-eligible, so reshapes cannot oscillate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub struct ReshapeThresholds {
     /// Committed substate byte total at or above which a shard asserts a
     /// split. `u64::MAX` disables reshaping entirely.
@@ -59,7 +59,7 @@ impl Default for ReshapeThresholds {
 /// Only the kind rides the wire — the subject is always the asserting
 /// shard itself, so the full payload reconstructs from the shard id and
 /// cannot be pointed at another shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub enum ReshapeTrigger {
     /// The shard's committed substate byte total reached the split threshold.
     Split,
@@ -88,6 +88,8 @@ impl ReshapeTrigger {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     #[test]
@@ -125,10 +127,10 @@ mod tests {
     }
 
     #[test]
-    fn reshape_trigger_sbor_round_trip() {
+    fn reshape_trigger_hbor_round_trip() {
         for t in [ReshapeTrigger::Split, ReshapeTrigger::Merge] {
-            let bytes = basic_encode(&t).unwrap();
-            assert_eq!(basic_decode::<ReshapeTrigger>(&bytes).unwrap(), t);
+            let bytes = hbor_to_vec(&t).unwrap();
+            assert_eq!(hbor_from_slice::<ReshapeTrigger>(&bytes).unwrap(), t);
         }
     }
 }

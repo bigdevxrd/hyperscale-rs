@@ -94,7 +94,7 @@ where
         };
 
         // Dispatch structural validation to ConsensusCrypto. The
-        // `local_receipt_root` Merkle is the heavy step (SBOR-encode of
+        // `local_receipt_root` Merkle is the heavy step (wire encode of
         // every receipt's `database_updates`); off-loading keeps the
         // pinned thread responsive during catch-up.
         let event_tx = self.event_sender().clone();

@@ -4,7 +4,7 @@
 //! tip with one round-trip per batch instead of one per missing height.
 //! Any validator in the source shard can serve this from local storage.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetRemoteHeadersResponse;
 use crate::{BlockHeight, HeaderFetchCount, MessageClass, NetworkMessage, Request, ShardId};
@@ -20,7 +20,7 @@ pub const MAX_REMOTE_HEADERS_PER_REQUEST: HeaderFetchCount = HeaderFetchCount::n
 /// starting at `from_height`, capped by [`MAX_REMOTE_HEADERS_PER_REQUEST`]
 /// and the responder's local tip. Headers absent from the responder's
 /// storage cause the response to short-cap rather than fail.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetRemoteHeadersRequest {
     /// Source shard producing the headers.
     pub source_shard: ShardId,
@@ -50,20 +50,20 @@ impl Request for GetRemoteHeadersRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let request = GetRemoteHeadersRequest {
             source_shard: ShardId::ROOT,
             from_height: BlockHeight::new(42),
             count: HeaderFetchCount::new(16),
         };
 
-        let encoded = basic_encode(&request).unwrap();
-        let decoded: GetRemoteHeadersRequest = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&request).unwrap();
+        let decoded: GetRemoteHeadersRequest = hbor_from_slice(&encoded).unwrap();
         assert_eq!(request, decoded);
     }
 }

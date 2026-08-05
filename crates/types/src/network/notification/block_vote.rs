@@ -1,6 +1,6 @@
 //! `BlockVote` notification message.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{BlockVote, MessageClass, NetworkMessage, Verifiable};
 
@@ -8,7 +8,7 @@ use crate::{BlockVote, MessageClass, NetworkMessage, Verifiable};
 ///
 /// Sent via unicast notification to committee members. The inner `BlockVote`
 /// contains the voter identity and signature, making it self-authenticating.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BlockVoteNotification {
     /// The block vote — wire bytes always land in [`Verifiable::Unverified`];
     /// local-dispatched sends from a colocated voter preserve

@@ -14,8 +14,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::OnceLock;
 
 use blake3::Hasher;
-use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
-use sbor::prelude::*;
+use hyperscale_hbor::{Hbor, from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use thiserror::Error;
 
 use crate::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
@@ -27,39 +26,39 @@ use crate::{
 
 /// A signed transaction as the network carries it.
 ///
-/// `serialized_bytes` is the canonical wire form — the basic-SBOR
+/// `serialized_bytes` is the canonical wire form — the HBOR
 /// encoding of the envelope. The hash covers those exact bytes, so a peer
 /// cannot ship one encoding and have us key it by another. Every other
 /// field is a lazily-populated cache, skipped on the wire and rebuilt at
 /// each end.
-#[derive(BasicSbor)]
+#[derive(Hbor)]
 pub struct Transaction {
-    /// SBOR-encoded [`TransactionEnvelope`] bytes — the canonical wire form.
+    /// HBOR-encoded [`TransactionEnvelope`] bytes — the canonical wire form.
     serialized_bytes: BoundedBytes<MAX_TX_BYTES_LEN>,
 
     /// Decoded envelope, populated by `body()` on first access from
     /// `serialized_bytes`. Constructors pre-populate. Not on the wire.
-    #[sbor(skip)]
+    #[hbor(skip)]
     body: OnceLock<TransactionEnvelope>,
 
     /// Derived routing identity and subintent claims, populated at
     /// verification (or lazily for committed transactions). Not on the
     /// wire — derivation is local by construction.
-    #[sbor(skip)]
+    #[hbor(skip)]
     derived: OnceLock<Derived>,
 
     /// Content hash, populated on first call to `hash()` via
     /// `blake3(&serialized_bytes)`. `::new` pre-populates. Not on the
     /// wire — recomputed at each end so a peer can't ship `(hash=X,
     /// tx_bytes=Y)` and have us key the bogus body by X.
-    #[sbor(skip)]
+    #[hbor(skip)]
     hash: OnceLock<Hash>,
 
-    /// Pre-encoded SBOR bytes of the full `Transaction`,
-    /// populated lazily by `cached_sbor_bytes()`. Lets the commit thread
+    /// Pre-encoded wire bytes of the full `Transaction`,
+    /// populated lazily by `cached_wire_bytes()`. Lets the commit thread
     /// hand bytes to `cf_put_raw` without re-encoding.
-    #[sbor(skip)]
-    cached_sbor: OnceLock<Vec<u8>>,
+    #[hbor(skip)]
+    cached_bytes: OnceLock<Vec<u8>>,
 }
 
 // Manual PartialEq/Eq - compare by hash for efficiency
@@ -90,21 +89,21 @@ impl Clone for Transaction {
         if let Some(h) = self.hash.get() {
             let _ = hash.set(*h);
         }
-        let cached_sbor = OnceLock::new();
-        if let Some(b) = self.cached_sbor.get() {
-            let _ = cached_sbor.set(b.clone());
+        let cached_bytes = OnceLock::new();
+        if let Some(b) = self.cached_bytes.get() {
+            let _ = cached_bytes.set(b.clone());
         }
         Self {
             serialized_bytes: self.serialized_bytes.clone(),
             body,
             derived,
             hash,
-            cached_sbor,
+            cached_bytes,
         }
     }
 }
 
-// Manual Debug — skip the cached_sbor field.
+// Manual Debug — skip the cached_bytes field.
 impl Debug for Transaction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Transaction")
@@ -149,8 +148,8 @@ impl Transaction {
     ///
     /// # Panics
     ///
-    /// Panics if the `TransactionEnvelope` cannot be SBOR-encoded; it is a
-    /// closed basic-SBOR type, so encoding is infallible in practice.
+    /// Panics if the `TransactionEnvelope` cannot be HBOR-encoded; it is a
+    /// closed wire type, so encoding is infallible in practice.
     #[must_use]
     pub fn new(vm: TransactionEnvelope) -> Self {
         let payload = hbor_to_vec(&vm).expect("an envelope within its caps encodes");
@@ -168,7 +167,7 @@ impl Transaction {
             body: body_lock,
             derived: OnceLock::new(),
             hash: hash_lock,
-            cached_sbor: OnceLock::new(),
+            cached_bytes: OnceLock::new(),
         }
     }
 
@@ -274,16 +273,16 @@ impl Transaction {
         self.serialized_bytes.0.clone()
     }
 
-    /// Pre-serialized SBOR bytes of the full `Transaction`.
+    /// Pre-serialized wire bytes of the full `Transaction`.
     /// Computed on first call and cached.
     ///
     /// # Panics
     ///
-    /// Panics if SBOR encoding fails — that's a programmer error since
-    /// every field is `BasicSbor` and the type itself is closed.
-    pub fn cached_sbor_bytes(&self) -> &[u8] {
-        self.cached_sbor
-            .get_or_init(|| basic_encode(self).expect("Transaction SBOR encode is infallible"))
+    /// Panics if HBOR encoding fails — that's a programmer error since
+    /// every field is `Hbor` and the type itself is closed.
+    pub fn cached_wire_bytes(&self) -> &[u8] {
+        self.cached_bytes
+            .get_or_init(|| hbor_to_vec(self).expect("Transaction HBOR encode is infallible"))
     }
 
     /// Check if this transaction is cross-shard under a uniform `num_shards`-way
@@ -397,11 +396,10 @@ impl Verified<Transaction> {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_vm_types::Address;
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
+    use hyperscale_vm_types::Address;
 
     use super::*;
     use crate::test_utils::test_validity_range;
@@ -464,8 +462,8 @@ mod tests {
     #[test]
     fn roundtrip_preserves_hash_and_body() {
         let tx = fixture(b"graph bytes");
-        let bytes = basic_encode(&tx).unwrap();
-        let decoded: Transaction = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&tx).unwrap();
+        let decoded: Transaction = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded.hash(), tx.hash());
         assert_eq!(decoded.try_body().unwrap(), tx.body());
     }
@@ -519,7 +517,7 @@ mod tests {
             body: OnceLock::new(),
             derived: OnceLock::new(),
             hash: OnceLock::new(),
-            cached_sbor: OnceLock::new(),
+            cached_bytes: OnceLock::new(),
         };
         assert_eq!(
             garbage.verify(()).unwrap_err(),
@@ -576,8 +574,8 @@ mod tests {
         // The hash isn't on the wire; decode pulls only `serialized_bytes`
         // and the lazy `hash()` call computes blake3 over those bytes.
         let tx = fixture(b"graph bytes");
-        let bytes = basic_encode(&tx).unwrap();
-        let decoded: Transaction = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&tx).unwrap();
+        let decoded: Transaction = hbor_from_slice(&bytes).unwrap();
         let mut hasher = Hasher::new();
         hasher.update(decoded.serialized_bytes());
         let expected = TxHash::from_raw(Hash::from_hash_bytes(hasher.finalize().as_bytes()));
@@ -587,24 +585,16 @@ mod tests {
     #[test]
     fn decode_rejects_oversized_tx_bytes() {
         // Hand-roll a payload whose `serialized_bytes` length prefix
-        // exceeds MAX_TX_BYTES_LEN. The `BoundedBytes` decoder must
-        // error before allocating the full Vec.
-        let mut buf = Vec::with_capacity(32);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(1).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::U8).unwrap();
-            enc.write_size(MAX_TX_BYTES_LEN + 1).unwrap();
-        }
-        let err = basic_decode::<Transaction>(&buf).unwrap_err();
+        // exceeds MAX_TX_BYTES_LEN. The bound check must fire before
+        // allocating the full Vec.
+        let mut buf = Vec::new();
+        varint::write(&mut buf, MAX_TX_BYTES_LEN + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, MAX_TX_BYTES_LEN + 1));
+        let err = hbor_from_slice::<Transaction>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_TX_BYTES_LEN && actual == MAX_TX_BYTES_LEN + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TX_BYTES_LEN && actual == MAX_TX_BYTES_LEN + 1
         ));
     }
 
@@ -614,22 +604,11 @@ mod tests {
         // read/write sets and a mirrored validity range) to confirm a
         // peer can't keep shipping fields the derivation now owns.
         let tx = fixture(b"graph bytes");
-        let mut buf = Vec::with_capacity(256);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(4).unwrap();
-            enc.encode(&tx.serialized_bytes().to_vec()).unwrap();
-        }
-        let err = basic_decode::<Transaction>(&buf).unwrap_err();
-        assert!(matches!(
-            err,
-            DecodeError::UnexpectedSize {
-                expected: 1,
-                actual: 4
-            }
-        ));
+        let mut buf = hbor_to_vec(&tx).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());
+        buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());
+        buf.extend_from_slice(&hbor_to_vec(&0u64).unwrap());
+        let err = hbor_from_slice::<Transaction>(&buf).unwrap_err();
+        assert!(matches!(err, DecodeError::TrailingBytes { .. }));
     }
 }

@@ -5,7 +5,7 @@
 //! ([`impl Verified<CertifiedBlockHeader>::from_qc_attestation`] — the
 //! light-client trust path for remote-shard headers).
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -35,7 +35,7 @@ pub enum CertifiedHeaderVerifyError {
 /// a remote shard can verify the QC against the source shard's validator public keys
 /// (from topology), confirm the `block_hash` matches `hash(header)`, and then trust
 /// the `state_root` in the header for merkle inclusion proof verification.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct CertifiedBlockHeader {
     header: BlockHeader,
     qc: Verifiable<QuorumCertificate>,

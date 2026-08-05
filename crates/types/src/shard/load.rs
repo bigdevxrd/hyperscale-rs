@@ -1,6 +1,6 @@
 //! The shard's attested load, as a block header states it.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// What a block attests about its shard's load: the compute the chain has
 /// consumed and the state it holds.
@@ -22,7 +22,7 @@ use sbor::prelude::*;
 /// - [`substate_bytes`](Self::substate_bytes) is a **level**, the byte
 ///   total behind the block's parent state. A consumer records it as-is,
 ///   and a missed crossing simply leaves the value unrefreshed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct ShardLoad {
     /// Work this chain has attested over its whole history, through the
     /// certificates the block itself carries.
@@ -86,6 +86,8 @@ impl ShardLoad {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
+
     use super::*;
 
     #[test]
@@ -126,14 +128,14 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip_covers_both_byte_total_arms() {
+    fn hbor_round_trip_covers_both_byte_total_arms() {
         for load in [
             ShardLoad::ZERO,
             ShardLoad::ZERO.advance(1, Some(0)),
             ShardLoad::ZERO.advance(u64::MAX, Some(u64::MAX)),
         ] {
-            let bytes = basic_encode(&load).unwrap();
-            assert_eq!(basic_decode::<ShardLoad>(&bytes).unwrap(), load);
+            let bytes = hbor_to_vec(&load).unwrap();
+            assert_eq!(hbor_from_slice::<ShardLoad>(&bytes).unwrap(), load);
         }
     }
 }

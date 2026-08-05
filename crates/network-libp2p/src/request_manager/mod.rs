@@ -23,7 +23,7 @@
 //! let manager = RequestManager::new(adapter.clone(), RequestManagerConfig::default());
 //!
 //! // Send a request with automatic retry
-//! match manager.request(&peers, None, "block.request".into(), "block.request", sbor_bytes, MessageClass::Recovery).await {
+//! match manager.request(&peers, None, "block.request".into(), "block.request", wire_bytes, MessageClass::Recovery).await {
 //!     Ok((peer, response)) => { /* success */ }
 //!     Err(RequestError::Exhausted { attempts }) => { /* all retries failed */ }
 //!     Err(RequestError::NoPeers) => { /* no peers available */ }
@@ -294,7 +294,7 @@ impl RequestManager {
     /// * `preferred_peer` - If provided and in the list, try this peer first
     /// * `request_desc` - Description for logging (e.g., "block.request")
     /// * `type_id` - Message type identifier for the typed frame header
-    /// * `sbor_data` - SBOR-encoded request payload (compressed by transport)
+    /// * `payload_data` - HBOR-encoded request payload (compressed by transport)
     /// * `class` - Message class (drives timeout and retry aggressiveness)
     ///
     /// # Returns
@@ -313,7 +313,7 @@ impl RequestManager {
         shard: ShardId,
         request_desc: String,
         type_id: &'static str,
-        sbor_data: Vec<u8>,
+        payload_data: Vec<u8>,
         class: MessageClass,
     ) -> Result<(PeerId, Bytes), RequestError> {
         self.acquire_slot(class).await?;
@@ -325,7 +325,7 @@ impl RequestManager {
                 shard,
                 &request_desc,
                 type_id,
-                &sbor_data,
+                &payload_data,
                 class,
             )
             .await;

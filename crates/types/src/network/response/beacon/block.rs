@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{CertifiedBeaconBlock, MessageClass, NetworkMessage, Verifiable};
 
@@ -14,7 +14,7 @@ use crate::{CertifiedBeaconBlock, MessageClass, NetworkMessage, Verifiable};
 /// try another." Wire decode lands the wrapper as
 /// [`Verifiable::Unverified`]; the requester verifies the cert before
 /// applying.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetBeaconBlockResponse {
     /// The committed block, if the responder had it.
     pub block: Option<Arc<Verifiable<CertifiedBeaconBlock>>>,
@@ -52,7 +52,7 @@ impl NetworkMessage for GetBeaconBlockResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::{
@@ -80,18 +80,18 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip_found() {
+    fn hbor_round_trip_found() {
         let resp = GetBeaconBlockResponse::found(sample_block());
-        let bytes = basic_encode(&resp).unwrap();
-        let decoded: GetBeaconBlockResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&resp).unwrap();
+        let decoded: GetBeaconBlockResponse = hbor_from_slice(&bytes).unwrap();
         assert_eq!(resp, decoded);
     }
 
     #[test]
-    fn sbor_round_trip_not_found() {
+    fn hbor_round_trip_not_found() {
         let resp = GetBeaconBlockResponse::not_found();
-        let bytes = basic_encode(&resp).unwrap();
-        let decoded: GetBeaconBlockResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&resp).unwrap();
+        let decoded: GetBeaconBlockResponse = hbor_from_slice(&bytes).unwrap();
         assert_eq!(resp, decoded);
     }
 

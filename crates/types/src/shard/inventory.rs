@@ -21,7 +21,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{
     Block, BlockHash, BlockHeader, BloomFilter, BloomKey, BoundedVec, CertifiedBlock,
@@ -38,7 +38,7 @@ use crate::{
 ///
 /// Phantom typing on [`BloomFilter`] keeps tx/cert/provision filters from
 /// being swapped by accident; wire bytes are identical regardless of `T`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hbor)]
 pub struct Inventory {
     /// Transactions the requester can resolve from mempool or
     /// recently-evicted cache. Responder may omit the corresponding
@@ -84,7 +84,7 @@ impl Inventory {
 /// Per-collection caps mirror [`Block`]'s caps one-to-one — the elided
 /// form is a structural transformation of `Block` and inherits its
 /// natural ceilings.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ElidedCertifiedBlock {
     header: Verifiable<BlockHeader>,
     qc: Verifiable<QuorumCertificate>,
@@ -107,7 +107,7 @@ pub struct ElidedCertifiedBlock {
 /// the block back to `Live`. Carrying hashes (rather than `None`) lets the
 /// receiver in turn serve the same block as `Live` to downstream peers
 /// without losing the hash list across each sync hop.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub enum ElidedProvisions {
     /// Block was `Live` at serve time.
     Live(
@@ -433,6 +433,10 @@ where
 mod tests {
     use std::collections::BTreeMap;
 
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
+    };
+
     use super::*;
     use crate::test_utils::test_transaction;
     use crate::{
@@ -617,115 +621,80 @@ mod tests {
         assert_eq!(recovered.block(), &block);
     }
 
-    /// Hand-roll an `ElidedCertifiedBlock` whose `transactions` length
-    /// prefix exceeds the cap. The `BoundedVec` decoder fires before any
-    /// per-element work happens.
+    /// Forge an `ElidedCertifiedBlock` whose `transactions` length claims
+    /// one past the cap, padded to input-satisfiability — the protocol cap
+    /// fires before any per-element work happens.
     #[test]
     fn decode_rejects_oversized_transactions_count() {
-        use sbor::{
-            BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-            NoCustomValueKind, ValueKind, VecEncoder, basic_decode,
-        };
-
         let block = create_test_block();
         let qc = create_test_qc(&block);
         let header = block.header().clone();
 
-        let mut buf = Vec::with_capacity(512);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(6).unwrap();
-            enc.encode(&header).unwrap();
-            enc.encode(&qc).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(MAX_TXS_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<ElidedCertifiedBlock>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&header).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&qc).unwrap());
+        varint::write(&mut buf, MAX_TXS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, (MAX_TXS_PER_BLOCK + 1) * 64));
+        let err = hbor_from_slice::<ElidedCertifiedBlock>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_TXS_PER_BLOCK && actual == MAX_TXS_PER_BLOCK + 1
         ));
     }
 
     #[test]
     fn decode_rejects_oversized_certificates_count() {
-        use sbor::{
-            BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-            NoCustomValueKind, ValueKind, VecEncoder, basic_decode,
-        };
-
         let block = create_test_block();
         let qc = create_test_qc(&block);
         let header = block.header().clone();
 
-        let mut buf = Vec::with_capacity(512);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(6).unwrap();
-            enc.encode(&header).unwrap();
-            enc.encode(&qc).unwrap();
-            // Empty transactions.
-            enc.encode(&Vec::<(TxHash, Option<Arc<Transaction>>)>::new())
-                .unwrap();
-            // Oversized certificates.
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(MAX_FINALIZED_TX_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<ElidedCertifiedBlock>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&header).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&qc).unwrap());
+        // Empty transactions.
+        buf.extend_from_slice(
+            &hbor_to_vec(&Vec::<(TxHash, Option<Arc<Transaction>>)>::new()).unwrap(),
+        );
+        // Oversized certificates claim.
+        varint::write(&mut buf, MAX_FINALIZED_TX_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_FINALIZED_TX_PER_BLOCK + 1) * 64,
+        ));
+        let err = hbor_from_slice::<ElidedCertifiedBlock>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_FINALIZED_TX_PER_BLOCK
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_FINALIZED_TX_PER_BLOCK
                     && actual == MAX_FINALIZED_TX_PER_BLOCK + 1
         ));
     }
 
     #[test]
     fn decode_rejects_oversized_provisions_count() {
-        use sbor::{
-            BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-            NoCustomValueKind, ValueKind, VecEncoder, basic_decode,
-        };
-
         let block = create_test_block();
         let qc = create_test_qc(&block);
         let header = block.header().clone();
 
-        let mut buf = Vec::with_capacity(512);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(6).unwrap();
-            enc.encode(&header).unwrap();
-            enc.encode(&qc).unwrap();
-            enc.encode(&Vec::<(TxHash, Option<Arc<Transaction>>)>::new())
-                .unwrap();
-            enc.encode(&Vec::<(WaveId, Option<Arc<FinalizedWave>>)>::new())
-                .unwrap();
-            // ElidedProvisions::Live(oversized) — discriminator 0, one field.
-            enc.write_value_kind(ValueKind::Enum).unwrap();
-            enc.write_discriminator(0).unwrap();
-            enc.write_size(1).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(MAX_PROVISIONS_PER_BLOCK + 1).unwrap();
-        }
-        let err = basic_decode::<ElidedCertifiedBlock>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&header).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&qc).unwrap());
+        buf.extend_from_slice(
+            &hbor_to_vec(&Vec::<(TxHash, Option<Arc<Transaction>>)>::new()).unwrap(),
+        );
+        buf.extend_from_slice(
+            &hbor_to_vec(&Vec::<(WaveId, Option<Arc<FinalizedWave>>)>::new()).unwrap(),
+        );
+        // ElidedProvisions::Live(oversized) — discriminant 0, then the claim.
+        buf.push(0);
+        varint::write(&mut buf, MAX_PROVISIONS_PER_BLOCK + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_PROVISIONS_PER_BLOCK + 1) * 64,
+        ));
+        let err = hbor_from_slice::<ElidedCertifiedBlock>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_PROVISIONS_PER_BLOCK
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_PROVISIONS_PER_BLOCK
                     && actual == MAX_PROVISIONS_PER_BLOCK + 1
         ));
     }

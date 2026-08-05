@@ -1,6 +1,6 @@
 //! Provision fetch request for fallback recovery.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetProvisionResponse;
 use crate::{BlockHeight, MessageClass, NetworkMessage, Request, ShardId};
@@ -11,7 +11,7 @@ use crate::{BlockHeight, MessageClass, NetworkMessage, Request, ShardId};
 /// the target shard but no provisions arrived within the timeout window.
 /// This is the fallback recovery mechanism for byzantine proposers that
 /// silently drop provisions.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetProvisionsRequest {
     /// Height of the source block whose provisions are needed.
     pub block_height: BlockHeight,
@@ -40,19 +40,19 @@ impl Request for GetProvisionsRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let request = GetProvisionsRequest {
             block_height: BlockHeight::new(42),
             target_shard: ShardId::ROOT,
         };
 
-        let encoded = basic_encode(&request).unwrap();
-        let decoded: GetProvisionsRequest = basic_decode(&encoded).unwrap();
+        let encoded = hbor_to_vec(&request).unwrap();
+        let decoded: GetProvisionsRequest = hbor_from_slice(&encoded).unwrap();
         assert_eq!(request, decoded);
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! A [`Verifiable<T>`] holds either the raw wire form `T` or a [`Verified<T>`]
 //! value carrying the type-level claim that `T`'s verification predicate has
-//! been checked. Its SBOR encoding is byte-identical to `T`; decoding always
+//! been checked. Its encoding is byte-identical to `T`; decoding always
 //! lands in [`Verifiable::Unverified`]. Verification produces
 //! [`Verifiable::Verified`] in place; the marker rides with the value through
 //! ordinary moves, clones, and local-dispatch handoffs.
@@ -15,7 +15,7 @@
 //!
 //! `Verifiable<T>` values compare and hash by their raw `T` content,
 //! regardless of variant. This is the only equality semantics that
-//! round-trips through SBOR and works in `HashMap<_, Verifiable<T>>`
+//! round-trips through the codec and works in `HashMap<_, Verifiable<T>>`
 //! lookups against newly-decoded wire values. `Verified<T>` compares by
 //! inner `T`.
 //!
@@ -37,9 +37,9 @@
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, ValueKind,
+use hyperscale_hbor::error::{DecodeError as HborDecodeError, EncodeError as HborEncodeError};
+use hyperscale_hbor::{
+    Decoder as HborDecoder, Encoder as HborEncoder, HborDecode, HborEncode, HborWidth,
 };
 
 /// A type whose value can be verified against a `Ctx`.
@@ -311,51 +311,25 @@ impl<T> Deref for Verifiable<T> {
     }
 }
 
-// ── SBOR codec forwarding: encode/decode/describe identically to T ──
+// ── Codec forwarding: the marker is not wire content ──
+//
+// A `Verifiable<T>` encodes exactly as its inner `T`, and decoding always
+// lands in `Unverified` — verified values cannot be produced from wire
+// bytes, only through a `Verify` gate.
 
-impl<T> Categorize<NoCustomValueKind> for Verifiable<T>
-where
-    T: Categorize<NoCustomValueKind>,
-{
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        T::value_kind()
+impl<T: HborWidth> HborWidth for Verifiable<T> {
+    const MIN_ENCODED_LEN: usize = T::MIN_ENCODED_LEN;
+}
+
+impl<T: HborEncode> HborEncode for Verifiable<T> {
+    fn encode(&self, encoder: &mut HborEncoder<'_>) -> Result<(), HborEncodeError> {
+        self.as_unverified().encode(encoder)
     }
 }
 
-impl<T, E> Encode<NoCustomValueKind, E> for Verifiable<T>
-where
-    T: Encode<NoCustomValueKind, E> + Categorize<NoCustomValueKind>,
-    E: Encoder<NoCustomValueKind>,
-{
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        self.as_unverified().encode_value_kind(encoder)
-    }
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        self.as_unverified().encode_body(encoder)
-    }
-}
-
-impl<T, D> Decode<NoCustomValueKind, D> for Verifiable<T>
-where
-    T: Decode<NoCustomValueKind, D> + Categorize<NoCustomValueKind>,
-    D: Decoder<NoCustomValueKind>,
-{
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        let t = T::decode_body_with_value_kind(decoder, value_kind)?;
-        Ok(Self(VerifiableState::Unverified(t)))
-    }
-}
-
-impl<T> Describe<NoCustomTypeKind> for Verifiable<T>
-where
-    T: Describe<NoCustomTypeKind>,
-{
-    const TYPE_ID: RustTypeId = <T as Describe<NoCustomTypeKind>>::TYPE_ID;
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        <T as Describe<NoCustomTypeKind>>::type_data()
+impl<T: HborDecode> HborDecode for Verifiable<T> {
+    fn decode(decoder: &mut HborDecoder<'_>) -> Result<Self, HborDecodeError> {
+        Ok(Self(VerifiableState::Unverified(T::decode(decoder)?)))
     }
 }
 
@@ -363,7 +337,7 @@ where
 mod tests {
     use std::collections::HashMap;
 
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
@@ -388,9 +362,9 @@ mod tests {
         let unverified: V = u.into();
         let verified: V = Verified::new_unchecked(u).into();
 
-        let bare = basic_encode(&u).unwrap();
-        let unv = basic_encode(&unverified).unwrap();
-        let ver = basic_encode(&verified).unwrap();
+        let bare = hbor_to_vec(&u).unwrap();
+        let unv = hbor_to_vec(&unverified).unwrap();
+        let ver = hbor_to_vec(&verified).unwrap();
 
         assert_eq!(bare, unv, "Unverified must encode byte-identically to T");
         assert_eq!(bare, ver, "Verified must encode byte-identically to T");
@@ -399,8 +373,8 @@ mod tests {
     #[test]
     fn verifiable_decodes_as_unverified() {
         let u: u32 = 7;
-        let bytes = basic_encode(&u).unwrap();
-        let decoded: V = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&u).unwrap();
+        let decoded: V = hbor_from_slice(&bytes).unwrap();
         assert!(!decoded.is_verified(), "wire decode must land Unverified");
         assert_eq!(*decoded, u);
     }

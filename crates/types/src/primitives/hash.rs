@@ -5,14 +5,14 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use blake3::{Hasher, hash as blake3_hash};
 use hex::{decode_to_slice as hex_decode_to_slice, encode as hex_encode};
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 /// A 32-byte cryptographic hash using Blake3.
 ///
 /// Provides constant-time comparison and is safe to use as a `HashMap` key.
 /// All hashing operations are deterministic.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor)]
-#[sbor(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor)]
+#[hbor(transparent)]
 pub struct Hash([u8; 32]);
 
 impl Hash {
@@ -151,7 +151,7 @@ impl Display for Hash {
 /// Domain-specific hash kinds that wrap [`struct@Hash`] for compile-time safety.
 ///
 /// Implementors are `#[repr(transparent)]` newtypes over [`struct@Hash`] with identical
-/// SBOR encoding (`#[sbor(transparent)]`), so adopting a newtype for an existing
+/// HBOR encoding (`#[hbor(transparent)]`), so adopting a newtype for an existing
 /// field requires no wire-format or storage migration.
 ///
 /// Construct via [`TypedHash::from_raw`] (or the inherent `from_raw`); unwrap via
@@ -175,8 +175,8 @@ pub trait TypedHash: Copy + Eq + Ord + StdHash + Debug + Display + Into<Hash> {
 /// Declare a `#[repr(transparent)]` newtype around [`Hash`] implementing [`TypedHash`].
 ///
 /// Expands to a tuple struct with:
-/// - `Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BasicSbor` derives
-/// - `#[sbor(transparent)]` for wire-format compatibility with raw `Hash`
+/// - `Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor` derives
+/// - `#[hbor(transparent)]` for wire-format compatibility with raw `Hash`
 /// - Inherent `ZERO` const, `from_raw`, `into_raw`, `as_raw`
 /// - `From<Self> for Hash` (one-way; reverse is explicit via `from_raw`)
 /// - `Debug` prints as `Kind(abcd1234..wxyz5678)`
@@ -193,9 +193,9 @@ macro_rules! hash_newtype {
             ::core::hash::Hash,
             PartialOrd,
             Ord,
-            ::sbor::BasicSbor,
+            ::hyperscale_hbor::Hbor,
         )]
-        #[sbor(transparent)]
+        #[hbor(transparent)]
         $vis struct $name($crate::Hash);
 
         impl $name {

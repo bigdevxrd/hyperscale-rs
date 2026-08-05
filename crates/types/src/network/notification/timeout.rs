@@ -1,6 +1,6 @@
 //! `Timeout` notification message.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{MessageClass, NetworkMessage, Timeout, Verifiable};
 
@@ -10,7 +10,7 @@ use crate::{MessageClass, NetworkMessage, Timeout, Verifiable};
 /// Broadcast to the local-shard committee. The inner [`Timeout`] carries the
 /// voter identity, its signature share, and the signer's `high_qc`, so it is
 /// self-authenticating.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct TimeoutNotification {
     /// The timeout — wire bytes always land in [`Verifiable::Unverified`];
     /// local-dispatched sends from a colocated signer preserve

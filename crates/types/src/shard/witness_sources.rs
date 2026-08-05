@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{BoundedVec, MAX_READY_SIGNALS_PER_BLOCK, ReadySignal, ReshapeTrigger, VrfProof};
 
@@ -30,7 +30,7 @@ pub type SharedWitnessSources = Arc<WitnessSources>;
 /// retained through sealing (unlike provisions) because the
 /// beacon-witness fold consuming them can run well after the block
 /// seals.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct WitnessSources {
     /// Validator-emitted ready signals the proposer drained from its
     /// pool — one readiness leaf each.

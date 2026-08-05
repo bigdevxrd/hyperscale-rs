@@ -1,6 +1,6 @@
 //! Pre-computed-key substate entries shipped between shards as provisions.
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 #[cfg(any(test, feature = "test-utils"))]
 use crate::state_key::vm_flat_key;
@@ -13,13 +13,13 @@ use crate::{BoundedBytes, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_L
 ///
 /// The storage key format is: `db_node_key(50) + partition_num(1) + sort_key(var)`
 /// where `db_node_key` is the `SpreadPrefixKeyMapper` hash (expensive to compute).
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SubstateEntry {
     /// Pre-computed full storage key (ready for direct DB lookup).
     /// Format: `db_node_key` (50 bytes) + partition (1 byte) + `sort_key`
     pub storage_key: BoundedBytes<MAX_STATE_ENTRY_KEY_LEN>,
 
-    /// SBOR-encoded substate value (None if deleted/doesn't exist).
+    /// HBOR-encoded substate value (None if deleted/doesn't exist).
     pub value: Option<BoundedBytes<MAX_STATE_ENTRY_VALUE_LEN>>,
 }
 
@@ -68,9 +68,8 @@ impl SubstateEntry {
 }
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -85,18 +84,18 @@ mod tests {
     }
 
     #[test]
-    fn sbor_roundtrip_some_value() {
+    fn hbor_roundtrip_some_value() {
         let entry = SubstateEntry::test_entry([7u8; 16], b"sort", Some(vec![9u8; 128]));
-        let bytes = basic_encode(&entry).unwrap();
-        let decoded: SubstateEntry = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&entry).unwrap();
+        let decoded: SubstateEntry = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, entry);
     }
 
     #[test]
-    fn sbor_roundtrip_none_value() {
+    fn hbor_roundtrip_none_value() {
         let entry = SubstateEntry::test_entry([7u8; 16], b"sort", None);
-        let bytes = basic_encode(&entry).unwrap();
-        let decoded: SubstateEntry = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&entry).unwrap();
+        let decoded: SubstateEntry = hbor_from_slice(&bytes).unwrap();
         assert_eq!(decoded, entry);
     }
 
@@ -104,49 +103,30 @@ mod tests {
     /// `SubstateEntry::Encode`) and verify decode rejects it before allocation.
     #[test]
     fn decode_rejects_oversized_storage_key() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(2).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ValueKind::U8).unwrap();
-        enc.write_size(MAX_STATE_ENTRY_KEY_LEN + 1).unwrap();
-        let err = basic_decode::<SubstateEntry>(&buf).unwrap_err();
+        let mut buf = Vec::new();
+        varint::write(&mut buf, MAX_STATE_ENTRY_KEY_LEN + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, MAX_STATE_ENTRY_KEY_LEN + 2));
+        let err = hbor_from_slice::<SubstateEntry>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_STATE_ENTRY_KEY_LEN,
-                actual,
-            } if actual == MAX_STATE_ENTRY_KEY_LEN + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_STATE_ENTRY_KEY_LEN && actual == MAX_STATE_ENTRY_KEY_LEN + 1
         ));
     }
 
     /// Same shape as above, but for the `Some(value)` byte-vector field.
     #[test]
     fn decode_rejects_oversized_value() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(2).unwrap();
         // Empty storage_key is fine; the bound check we want fires on `value`.
-        enc.encode(&Vec::<u8>::new()).unwrap();
-        enc.write_value_kind(ValueKind::Enum).unwrap();
-        enc.write_discriminator(1).unwrap();
-        enc.write_size(1).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ValueKind::U8).unwrap();
-        enc.write_size(MAX_STATE_ENTRY_VALUE_LEN + 1).unwrap();
-        let err = basic_decode::<SubstateEntry>(&buf).unwrap_err();
+        let mut buf = hbor_to_vec(&Vec::<u8>::new()).unwrap();
+        buf.push(1); // Some
+        varint::write(&mut buf, MAX_STATE_ENTRY_VALUE_LEN + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, MAX_STATE_ENTRY_VALUE_LEN + 1));
+        let err = hbor_from_slice::<SubstateEntry>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize {
-                expected: MAX_STATE_ENTRY_VALUE_LEN,
-                actual,
-            } if actual == MAX_STATE_ENTRY_VALUE_LEN + 1
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_STATE_ENTRY_VALUE_LEN && actual == MAX_STATE_ENTRY_VALUE_LEN + 1
         ));
     }
 }

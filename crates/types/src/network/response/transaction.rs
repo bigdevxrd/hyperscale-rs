@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 
 use crate::{BoundedVec, MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, Transaction};
 
@@ -10,7 +10,7 @@ use crate::{BoundedVec, MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, Transac
 ///
 /// Contains the requested transactions (those that the responder has).
 /// Missing transactions are simply not included in the response.
-#[derive(Debug, Clone, BasicSbor)]
+#[derive(Debug, Clone, Hbor)]
 pub struct GetTransactionsResponse {
     /// The requested transactions that were found.
     /// Uses Arc to avoid copying transaction data.
@@ -85,7 +85,7 @@ impl NetworkMessage for GetTransactionsResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::prelude::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::test_utils::test_transaction;
@@ -108,14 +108,14 @@ mod tests {
     }
 
     #[test]
-    fn test_sbor_roundtrip() {
+    fn test_hbor_roundtrip() {
         let tx1 = Arc::new(test_transaction(1));
         let tx2 = Arc::new(test_transaction(2));
 
         let response = GetTransactionsResponse::new(vec![tx1, tx2]);
 
-        let encoded = basic_encode(&response).expect("encode");
-        let decoded: GetTransactionsResponse = basic_decode(&encoded).expect("decode");
+        let encoded = hbor_to_vec(&response).expect("encode");
+        let decoded: GetTransactionsResponse = hbor_from_slice(&encoded).expect("decode");
 
         assert_eq!(response, decoded);
     }

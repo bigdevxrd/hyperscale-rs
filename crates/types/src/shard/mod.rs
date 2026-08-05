@@ -58,6 +58,10 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
+    use hyperscale_hbor::{
+        DecodeError, Hbor, from_slice as hbor_from_slice, to_vec as hbor_to_vec,
+    };
+
     use super::*;
     use crate::test_utils::{install_stub_vm_statics, stub_transaction, test_validity_range};
     use crate::{
@@ -234,8 +238,6 @@ mod tests {
 
     #[test]
     fn certified_block_decode_rejects_qc_block_hash_mismatch() {
-        use sbor::{DecodeError, basic_decode, basic_encode};
-
         use crate::{CertifiedBlock, ShardLoad};
 
         // Forge a non-genesis block paired with a genesis QC. Without the
@@ -277,19 +279,18 @@ mod tests {
             );
         }
         let genesis_qc = QuorumCertificate::genesis(ShardId::leaf(1, 0), ChainOrigin::ROOT);
-        let bytes = basic_encode(&CertifiedBlockWire {
+        let bytes = hbor_to_vec(&CertifiedBlockWire {
             block: bad_block,
             qc: genesis_qc,
         })
         .unwrap();
-        let err = basic_decode::<CertifiedBlock>(&bytes).unwrap_err();
-        assert!(matches!(err, DecodeError::InvalidCustomValue));
+        let err = hbor_from_slice::<CertifiedBlock>(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::FailedValidation(_)));
     }
 
     /// Wire-shape twin of `CertifiedBlock` that skips the pairing invariant
     /// during encode, so tests can construct adversarial byte streams.
-    #[derive(sbor::BasicSbor)]
-    #[sbor(transparent_name)]
+    #[derive(Hbor)]
     struct CertifiedBlockWire {
         block: Block,
         qc: QuorumCertificate,

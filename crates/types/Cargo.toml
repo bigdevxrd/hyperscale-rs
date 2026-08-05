@@ -21,7 +21,6 @@ hyperscale-jmt.workspace = true
 # Serialization
 hyperscale-hbor.workspace = true
 hyperscale-vm-types.workspace = true
-sbor.workspace = true
 
 # Error handling
 thiserror.workspace = true

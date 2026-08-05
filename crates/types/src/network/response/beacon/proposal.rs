@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{BeaconProposal, MessageClass, NetworkMessage, Verifiable};
 
@@ -14,7 +14,7 @@ use crate::{BeaconProposal, MessageClass, NetworkMessage, Verifiable};
 /// another." Wire decode lands the wrapper as
 /// [`Verifiable::Unverified`]; locally-dispatched serves preserve the
 /// `Verified` marker.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetBeaconProposalResponse {
     /// The proposal, if the responder had it pooled.
     pub proposal: Option<Arc<Verifiable<BeaconProposal>>>,
@@ -46,7 +46,7 @@ impl NetworkMessage for GetBeaconProposalResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
     use crate::VrfProof;
@@ -58,18 +58,18 @@ mod tests {
     }
 
     #[test]
-    fn sbor_round_trip_some() {
+    fn hbor_round_trip_some() {
         let resp = GetBeaconProposalResponse::new(Some(sample_proposal()));
-        let bytes = basic_encode(&resp).unwrap();
-        let decoded: GetBeaconProposalResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&resp).unwrap();
+        let decoded: GetBeaconProposalResponse = hbor_from_slice(&bytes).unwrap();
         assert_eq!(resp, decoded);
     }
 
     #[test]
-    fn sbor_round_trip_empty() {
+    fn hbor_round_trip_empty() {
         let resp = GetBeaconProposalResponse::empty();
-        let bytes = basic_encode(&resp).unwrap();
-        let decoded: GetBeaconProposalResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&resp).unwrap();
+        let decoded: GetBeaconProposalResponse = hbor_from_slice(&bytes).unwrap();
         assert_eq!(resp, decoded);
     }
 

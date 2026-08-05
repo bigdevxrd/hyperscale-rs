@@ -304,7 +304,7 @@ pub fn make_test_beacon_block(epoch: u64, tag: &[u8]) -> Arc<Verified<CertifiedB
 /// derived from `tag`. All collection fields are empty.
 ///
 /// Sufficient to drive storage round-trip tests — every field is
-/// stable across SBOR encoding and two calls with identical inputs
+/// stable across HBOR encoding and two calls with identical inputs
 /// produce equal states. Not a valid state under beacon-state
 /// verification.
 #[must_use]

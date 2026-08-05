@@ -29,7 +29,7 @@ fn no_witness() -> BeaconWitnessCommit {
 
 /// Build a placeholder EC whose `wave_id` matches the WC the caller is about
 /// to construct, so the WC satisfies the local-EC invariant enforced at
-/// SBOR decode time. The EC carries no signers / outcomes — these tests
+/// HBOR decode time. The EC carries no signers / outcomes — these tests
 /// exercise the storage codec, not consensus.
 fn placeholder_local_ec(shard: ShardId, height: BlockHeight) -> Arc<ExecutionCertificate> {
     Arc::new(ExecutionCertificate::new(
@@ -42,8 +42,8 @@ fn placeholder_local_ec(shard: ShardId, height: BlockHeight) -> Arc<ExecutionCer
     ))
 }
 use hyperscale_storage::tree::hash_storage_key;
+use indexmap::IndexMap;
 use rocksdb::WriteBatch;
-use sbor::prelude::IndexMap;
 use tempfile::TempDir;
 
 use super::column_families::{LeafAssociationsCf, STATE_HISTORY_CF};
@@ -1119,7 +1119,7 @@ fn test_ec_atomic_with_block_commit() {
 //   - test_reset_partition_captures_history_for_all_removed_keys
 //   - test_genesis_skips_history_entries
 //
-// RocksDB encodes the history log differently (SBOR codec, prefix extractor,
+// RocksDB encodes the history log differently (wire codec, prefix extractor,
 // snapshot isolation, column family) so backend parity is not free.
 
 /// Helper: port of `commit_with` from the memory tests. Injects the updates

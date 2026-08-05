@@ -1,6 +1,6 @@
 //! Validator address announcement for by-identity dialing.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{
@@ -32,7 +32,7 @@ pub const MAX_ANNOUNCED_PEER_ID_BYTES: usize = 64;
 /// The peer id and addresses travel as raw bytes: this crate carries no
 /// libp2p types, and the network adapter parses and validates them at
 /// ingest against the `MAX_ANNOUNCED_*` caps.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct ValidatorAddressGossip {
     /// The validator this record names — also its signer: address records
     /// are only ever self-announced.

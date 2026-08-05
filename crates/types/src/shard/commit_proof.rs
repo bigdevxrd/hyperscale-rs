@@ -16,7 +16,7 @@
 //! its genesis from it.
 
 use hyperscale_crypto::Verifier;
-use sbor::prelude::*;
+use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
@@ -63,7 +63,7 @@ pub struct ResolvedCommittee {
 /// down to the proven block: each link is pinned by the hash chain
 /// descending from the QC-committed `certified`, so no signature is
 /// needed below the two-chain — collision resistance carries the rest.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct CommitProof {
     /// Lower block of the committing two-chain — directly committed by
     /// [`Self::child`]. The proven block when [`Self::ancestry`] is empty.

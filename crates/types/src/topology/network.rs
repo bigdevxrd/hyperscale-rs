@@ -9,10 +9,10 @@
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
-use sbor::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 /// The identity of a network.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct NetworkDefinition {
     /// Domain byte mixed into every signed message. Distinct per network,
     /// which is what makes a cross-network replay produce a different

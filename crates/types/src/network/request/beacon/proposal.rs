@@ -6,7 +6,7 @@
 //! assemble the committed block until that proposal arrives. Any
 //! beacon-committee member at `epoch` can serve.
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::network::response::beacon::GetBeaconProposalResponse;
 use crate::{Epoch, MessageClass, NetworkMessage, Request, ValidatorId};
@@ -19,7 +19,7 @@ use crate::{Epoch, MessageClass, NetworkMessage, Request, ValidatorId};
 /// otherwise an empty response. The requester verifies the signer
 /// matches `validator` and the proposal's hash matches the
 /// element in SPC's committed `PcVector` before admitting.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct GetBeaconProposalRequest {
     /// Epoch the proposal targets.
     pub epoch: Epoch,
@@ -55,15 +55,15 @@ impl Request for GetBeaconProposalRequest {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{basic_decode, basic_encode};
+    use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
 
     #[test]
-    fn sbor_round_trip() {
+    fn hbor_round_trip() {
         let req = GetBeaconProposalRequest::new(Epoch::new(42), ValidatorId::new(7));
-        let bytes = basic_encode(&req).unwrap();
-        let decoded: GetBeaconProposalRequest = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&req).unwrap();
+        let decoded: GetBeaconProposalRequest = hbor_from_slice(&bytes).unwrap();
         assert_eq!(req, decoded);
     }
 

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbor::prelude::BasicSbor;
+use hyperscale_hbor::Hbor;
 
 use crate::{BoundedVec, FinalizedWave, MessageClass, NetworkMessage};
 
@@ -18,7 +18,7 @@ const MAX_FINALIZED_WAVES_PER_RESPONSE: usize = 10_000;
 ///
 /// Contains the requested finalized waves that the responder has.
 /// Missing waves are simply not included in the response.
-#[derive(Debug, Clone, BasicSbor)]
+#[derive(Debug, Clone, Hbor)]
 pub struct GetFinalizedWavesResponse {
     /// The requested finalized waves that were found.
     ///
@@ -61,9 +61,8 @@ impl NetworkMessage for GetFinalizedWavesResponse {
 
 #[cfg(test)]
 mod tests {
-    use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder,
-        NoCustomValueKind, ValueKind, VecEncoder, basic_decode,
+    use hyperscale_hbor::{
+        DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
 
     use super::*;
@@ -72,33 +71,26 @@ mod tests {
     fn decode_rejects_oversized_waves_count() {
         // Hand-roll a response whose waves length prefix exceeds the cap.
         // The cap fires before any per-wave decode work is attempted.
-        let mut buf = Vec::with_capacity(32);
-        {
-            let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-            enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-                .unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(1).unwrap();
-            enc.write_value_kind(ValueKind::Array).unwrap();
-            enc.write_value_kind(ValueKind::Tuple).unwrap();
-            enc.write_size(MAX_FINALIZED_WAVES_PER_RESPONSE + 1)
-                .unwrap();
-        }
-        let err = basic_decode::<GetFinalizedWavesResponse>(&buf).unwrap_err();
+        let mut buf = Vec::new();
+        varint::write(&mut buf, MAX_FINALIZED_WAVES_PER_RESPONSE + 1).unwrap();
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_FINALIZED_WAVES_PER_RESPONSE + 1) * 256,
+        ));
+        let err = hbor_from_slice::<GetFinalizedWavesResponse>(&buf).unwrap_err();
         assert!(matches!(
             err,
-            DecodeError::UnexpectedSize { expected, actual }
-                if expected == MAX_FINALIZED_WAVES_PER_RESPONSE
+            DecodeError::BoundExceeded { max, actual }
+                if max == MAX_FINALIZED_WAVES_PER_RESPONSE
                     && actual == MAX_FINALIZED_WAVES_PER_RESPONSE + 1
         ));
     }
 
     #[test]
     fn empty_response_roundtrips() {
-        use sbor::basic_encode;
         let original = GetFinalizedWavesResponse::empty();
-        let bytes = basic_encode(&original).unwrap();
-        let decoded: GetFinalizedWavesResponse = basic_decode(&bytes).unwrap();
+        let bytes = hbor_to_vec(&original).unwrap();
+        let decoded: GetFinalizedWavesResponse = hbor_from_slice(&bytes).unwrap();
         assert!(decoded.waves.is_empty());
     }
 }

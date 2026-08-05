@@ -12,10 +12,10 @@
 //! execution touch order, so the root is taken over a key-sorted clone
 //! and is a pure function of content.
 
+use hyperscale_hbor::to_vec as hbor_to_vec;
 use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates};
 use hyperscale_types::state_key::vm_db_node_key_owner;
 use hyperscale_types::{ShardId, ShardTrie, WritesRoot};
-use sbor::prelude::basic_encode;
 
 /// Filter genesis `DatabaseUpdates` to the entities whose owner prefix
 /// routes to `local_shard`, for building that shard's prefix-rooted JMT.
@@ -70,12 +70,12 @@ pub fn filter_updates_for_shard(
 /// `by_node` order reflects engine touch order rather than a content-derived
 /// order. To make `writes_root` a pure function of the *content* of the
 /// updates (independent of how the maps were populated), we sort all
-/// `IndexMap`s by key before SBOR-encoding.
+/// `IndexMap`s by key before encoding.
 ///
 /// # Panics
 ///
-/// Panics if SBOR encoding of [`DatabaseUpdates`] fails. The Radix SBOR encoder
-/// is infallible for these structures, so this is unreachable in practice.
+/// Panics if encoding of [`DatabaseUpdates`] fails, which is unreachable in
+/// practice for these structures.
 #[must_use]
 pub fn compute_writes_root(updates: &DatabaseUpdates) -> WritesRoot {
     use hyperscale_types::{Hash, WritesRoot};
@@ -86,7 +86,7 @@ pub fn compute_writes_root(updates: &DatabaseUpdates) -> WritesRoot {
 
     let mut canonical = updates.clone();
     sort_database_updates(&mut canonical);
-    let encoded = basic_encode(&canonical).expect("DatabaseUpdates encoding should not fail");
+    let encoded = hbor_to_vec(&canonical).expect("DatabaseUpdates encoding should not fail");
     WritesRoot::from_raw(Hash::from_bytes(&encoded))
 }
 
