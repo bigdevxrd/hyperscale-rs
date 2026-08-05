@@ -39,8 +39,9 @@
 use std::collections::BTreeMap;
 
 use hyperscale_types::{
-    BeaconWitnessEvent, CONSENSUS_PUBLIC_KEY_BYTES, ConsensusPublicKey, ConsensusSignature, Stake,
-    StakePoolId, ValidatorId, VmEvent,
+    BeaconWitnessEvent, CONSENSUS_PUBLIC_KEY_BYTES, ConsensusPublicKey, ConsensusSignature, Epoch,
+    NetworkParams, ParamProposal, ParamVote, ReshapeThresholds, Stake, StakePoolId, ValidatorId,
+    VmEvent,
 };
 use hyperscale_vm_effects::{Address, InstanceRegistry, PackageHash};
 
@@ -54,6 +55,8 @@ const UNSTAKED: u32 = 1;
 const VALIDATOR_REGISTERED: u32 = 2;
 const VALIDATOR_DEACTIVATED: u32 = 3;
 const VALIDATOR_UNJAILED: u32 = 4;
+const PARAM_VOTE_CAST: u32 = 5;
+const PARAM_VOTE_CLEARED: u32 = 6;
 
 /// The stake pools the beacon folds for: the instance address a fact must
 /// come from, and the identifier it is folded under.
@@ -145,6 +148,17 @@ pub fn witness_from_event(
             pool_id,
             id: validator_of(payload)?,
         }),
+        PARAM_VOTE_CAST => Some(BeaconWitnessEvent::ParamVote(ParamVote {
+            pool: pool_id,
+            proposal: Some(proposal_of(payload)?),
+        })),
+        // A pool backing nothing says so with nothing.
+        PARAM_VOTE_CLEARED if payload.is_empty() => {
+            Some(BeaconWitnessEvent::ParamVote(ParamVote {
+                pool: pool_id,
+                proposal: None,
+            }))
+        }
         _ => None,
     }
 }
@@ -163,6 +177,37 @@ fn amount_of(payload: &[u8]) -> Option<u128> {
 fn validator_of(payload: &[u8]) -> Option<ValidatorId> {
     let id: [u8; 8] = payload.try_into().ok()?;
     Some(ValidatorId::new(u64::from_le_bytes(id)))
+}
+
+/// The parameter change a cast backs: the governed values in the order
+/// the package declares them, each a little-endian `u64`.
+///
+/// The package carries the parameters themselves rather than an encoding
+/// of them, so this is a positional read and not a decode — which is what
+/// lets the pool's own guest refuse a malformed vote before it becomes a
+/// transaction nobody can act on. Whether the values are *admissible* is
+/// the fold's to judge, and it does: bounds and a live activation epoch
+/// are checked where the vote is recorded.
+fn proposal_of(payload: &[u8]) -> Option<ParamProposal> {
+    let (split_bytes, rest) = u64_of(payload)?;
+    let (impound_epochs, rest) = u64_of(rest)?;
+    let (activate_at, rest) = u64_of(rest)?;
+    if !rest.is_empty() {
+        return None;
+    }
+    Some(ParamProposal {
+        params: NetworkParams {
+            reshape_thresholds: ReshapeThresholds { split_bytes },
+            impound_epochs,
+        },
+        activate_at: Epoch::new(activate_at),
+    })
+}
+
+/// The leading little-endian `u64` of `payload`, and what follows it.
+fn u64_of(payload: &[u8]) -> Option<(u64, &[u8])> {
+    let (head, rest) = payload.split_at_checked(8)?;
+    Some((u64::from_le_bytes(head.try_into().ok()?), rest))
 }
 
 /// What a registration carries: the validator, the consensus key it
@@ -388,11 +433,123 @@ mod tests {
         }
     }
 
+    /// The governed parameters, in the order the package declares them.
+    const SPLIT_BYTES: u64 = 9_000;
+    const IMPOUND_EPOCHS: u64 = 30;
+    const ACTIVATE_AT: u64 = 12;
+
+    fn cast_payload() -> Vec<u8> {
+        let mut payload = SPLIT_BYTES.to_le_bytes().to_vec();
+        payload.extend_from_slice(&IMPOUND_EPOCHS.to_le_bytes());
+        payload.extend_from_slice(&ACTIVATE_AT.to_le_bytes());
+        payload
+    }
+
+    #[test]
+    fn a_cast_vote_reads_as_the_proposal_it_backs() {
+        let (pools, instances) = world();
+        assert_eq!(
+            witness_from_event(
+                &raw(POOL, PARAM_VOTE_CAST, cast_payload()),
+                &pools,
+                &instances,
+                package(1)
+            ),
+            Some(BeaconWitnessEvent::ParamVote(ParamVote {
+                pool: StakePoolId::new(POOL_ID),
+                proposal: Some(ParamProposal {
+                    params: NetworkParams {
+                        reshape_thresholds: ReshapeThresholds {
+                            split_bytes: SPLIT_BYTES
+                        },
+                        impound_epochs: IMPOUND_EPOCHS,
+                    },
+                    activate_at: Epoch::new(ACTIVATE_AT),
+                }),
+            })),
+        );
+    }
+
+    /// A pool backing nothing says so with nothing: an empty payload is
+    /// the cleared vote, and any other payload on that index is not a
+    /// fact at all.
+    #[test]
+    fn a_cleared_vote_carries_no_proposal_and_no_bytes() {
+        let (pools, instances) = world();
+        assert_eq!(
+            witness_from_event(
+                &raw(POOL, PARAM_VOTE_CLEARED, Vec::new()),
+                &pools,
+                &instances,
+                package(1)
+            ),
+            Some(BeaconWitnessEvent::ParamVote(ParamVote {
+                pool: StakePoolId::new(POOL_ID),
+                proposal: None,
+            })),
+        );
+        assert_eq!(
+            witness_from_event(
+                &raw(POOL, PARAM_VOTE_CLEARED, cast_payload()),
+                &pools,
+                &instances,
+                package(1)
+            ),
+            None,
+        );
+    }
+
+    /// Out-of-bounds values still read as a proposal here. Whether a
+    /// proposal may be recorded is the fold's judgement, made against
+    /// state this side cannot see; reading is not admitting.
+    #[test]
+    fn a_vote_the_fold_will_reject_still_reads_as_a_vote() {
+        let (pools, instances) = world();
+        let mut payload = 0u64.to_le_bytes().to_vec();
+        payload.extend_from_slice(&0u64.to_le_bytes());
+        payload.extend_from_slice(&0u64.to_le_bytes());
+        let Some(BeaconWitnessEvent::ParamVote(vote)) = witness_from_event(
+            &raw(POOL, PARAM_VOTE_CAST, payload),
+            &pools,
+            &instances,
+            package(1),
+        ) else {
+            panic!("a well-formed payload is a fact whatever it proposes");
+        };
+        assert!(
+            vote.proposal
+                .expect("a cast carries a proposal")
+                .params
+                .validate()
+                .is_err(),
+        );
+    }
+
+    #[test]
+    fn a_vote_payload_of_the_wrong_width_is_not_a_fact() {
+        let (pools, instances) = world();
+        let mut long = cast_payload();
+        long.push(0);
+        let mut short = cast_payload();
+        short.pop();
+        for payload in [long, short, Vec::new(), vec![0; 16]] {
+            assert_eq!(
+                witness_from_event(
+                    &raw(POOL, PARAM_VOTE_CAST, payload),
+                    &pools,
+                    &instances,
+                    package(1)
+                ),
+                None,
+            );
+        }
+    }
+
     #[test]
     fn an_event_the_table_does_not_declare_is_not_a_fact() {
         let (pools, instances) = world();
         assert_eq!(
-            witness_from_event(&event(POOL, 5, 500), &pools, &instances, package(1)),
+            witness_from_event(&event(POOL, 7, 500), &pools, &instances, package(1)),
             None,
         );
     }
