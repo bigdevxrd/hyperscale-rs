@@ -14,7 +14,6 @@ hyperscale-spammer.workspace = true
 hyperscale-types.workspace = true
 
 # Radix dependencies for transaction building
-radix-common.workspace = true
 
 # Metrics
 hdrhistogram.workspace = true

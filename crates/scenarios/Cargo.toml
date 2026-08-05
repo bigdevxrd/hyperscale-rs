@@ -13,7 +13,6 @@ hyperscale-vm-stdlib.workspace = true
 hyperscale-mempool.workspace = true
 hyperscale-storage = { workspace = true }
 hyperscale-types = { workspace = true, features = ["test-utils"] }
-radix-common = { workspace = true }
 
 [lints]
 workspace = true

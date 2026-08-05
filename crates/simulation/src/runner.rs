@@ -34,10 +34,10 @@ use hyperscale_storage::{BeaconStorage, RecoveredState};
 use hyperscale_storage_memory::{SimBeaconStorage, SimShardStorage};
 use hyperscale_types::{
     BeaconChainConfig, ConsensusPublicKey, Epoch, GenesisConfigHash, GenesisValidators,
-    LocalTimestamp, ShardId, Signer, StakePoolSeat, TopologySnapshot, TransactionStatus, TxHash,
-    ValidatorId, ValidatorInfo, ValidatorSet, Verifier, shard_prefix_path,
+    LocalTimestamp, NetworkDefinition, ShardId, Signer, StakePoolSeat, TopologySnapshot,
+    TransactionStatus, TxHash, ValidatorId, ValidatorInfo, ValidatorSet, Verifier,
+    shard_prefix_path,
 };
-use radix_common::network::NetworkDefinition;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tracing::{debug, info, trace};

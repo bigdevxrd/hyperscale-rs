@@ -16,10 +16,10 @@
 use std::sync::Arc;
 
 use hyperscale_types::{
-    ConsensusPublicKey, MIN_STAKE_FLOOR, Stake, StakePoolId, Transaction, TransactionDecision,
-    TransactionStatus, ValidatorId, ValidatorStatus, validator_possession_proof_sign,
+    ConsensusPublicKey, MIN_STAKE_FLOOR, NetworkDefinition, Stake, StakePoolId, Transaction,
+    TransactionDecision, TransactionStatus, ValidatorId, ValidatorStatus,
+    validator_possession_proof_sign,
 };
-use radix_common::network::NetworkDefinition;
 
 use crate::support::query::{
     pool_effective_stake, pool_total_stake, validator_pubkey, validator_status,

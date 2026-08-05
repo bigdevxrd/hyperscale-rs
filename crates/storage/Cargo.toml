@@ -16,7 +16,6 @@ blake3.workspace = true
 rayon.workspace = true
 
 # Radix dependencies (for SubstateDatabase, DatabaseUpdates, etc.)
-radix-common.workspace = true
 
 # Key encoding
 indexmap.workspace = true

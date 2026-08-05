@@ -15,6 +15,7 @@
 
 pub mod awaiting;
 pub mod genesis;
+pub mod network;
 pub mod schedule;
 pub mod settled_set;
 pub mod shard_prefix;

@@ -21,10 +21,9 @@ use hyperscale_scenarios::{
     Budget, Cluster, FaultHandle, FaultableCluster, ScenarioConfig, grow_to, vote_reshape_threshold,
 };
 use hyperscale_types::{
-    BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, ShardId, StateRoot,
-    Transaction, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
+    BeaconChainConfig, BeaconState, BlockHeight, NetworkDefinition, ReshapeThresholds, ShardId,
+    StateRoot, Transaction, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
 };
-use radix_common::network::NetworkDefinition;
 use tokio::runtime::{Builder, Runtime};
 use tokio::time::{sleep, timeout};
 use tracing_subscriber::{EnvFilter, fmt};

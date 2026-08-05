@@ -29,7 +29,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use radix_common::network::NetworkDefinition;
 use sbor::prelude::*;
 
 use crate::beacon::constants::{HALT_THRESHOLD_EPOCHS, MIN_STAKE_FLOOR, POOL_BUFFER_TARGET};
@@ -38,9 +37,9 @@ use crate::beacon::params::{NetworkParams, ParamProposal};
 use crate::topology::snapshot::{ReshapeSeat, ShardAnchor, TopologySnapshot};
 use crate::topology::validator::{ValidatorInfo, ValidatorSet};
 use crate::{
-    BeaconWitnessLeafCount, BlockHash, BlockHeight, ConsensusPublicKey, Epoch, RETENTION_HORIZON,
-    Randomness, SettledWavesRoot, ShardId, Stake, StakePoolId, StateRoot, ValidatorId,
-    WeightedTimestamp,
+    BeaconWitnessLeafCount, BlockHash, BlockHeight, ConsensusPublicKey, Epoch, NetworkDefinition,
+    RETENTION_HORIZON, Randomness, SettledWavesRoot, ShardId, Stake, StakePoolId, StateRoot,
+    ValidatorId, WeightedTimestamp,
 };
 
 // ─── pool types ──────────────────────────────────────────────────────────────

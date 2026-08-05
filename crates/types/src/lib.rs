@@ -110,7 +110,6 @@ pub use provisioning::limits::{MAX_MERKLE_PROOF_LEN, MAX_STATE_ENTRIES_PER_TX};
 pub use provisioning::proof::MerkleInclusionProof;
 pub use provisioning::provisions::{Provisions, ProvisionsContext, ProvisionsVerifyError};
 pub use provisioning::substate::SubstateEntry;
-pub use radix_common::network::NetworkDefinition;
 pub use receipt::consensus::{
     ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_cells, has_partition_reset,
 };
@@ -191,6 +190,7 @@ pub use time::timeouts::{
 pub use time::timestamp::{LocalTimestamp, ProposerTimestamp, WeightedTimestamp};
 pub use topology::awaiting::AwaitingTopologyBuffer;
 pub use topology::genesis::GenesisValidators;
+pub use topology::network::{NetworkDefinition, UnknownNetwork};
 pub use topology::schedule::{
     QuiesceCut, RoutingCommittees, ScheduleLookup, SplitAtBoundary, TopologySchedule,
 };

@@ -10,7 +10,6 @@ hyperscale-jmt.workspace = true
 hyperscale-storage.workspace = true
 hyperscale-metrics.workspace = true
 hyperscale-types.workspace = true
-radix-common.workspace = true
 rocksdb.workspace = true
 sbor.workspace = true
 thiserror.workspace = true

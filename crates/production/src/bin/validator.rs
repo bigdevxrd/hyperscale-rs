@@ -75,14 +75,13 @@ use hyperscale_storage_rocksdb::{
     RocksDbShardStorage,
 };
 use hyperscale_types::{
-    BeaconChainConfig, ConsensusPublicKey, GenesisValidators, ShardId, Signer, ValidatorId,
-    ValidatorInfo, ValidatorSet, shard_prefix_path,
+    BeaconChainConfig, ConsensusPublicKey, GenesisValidators, NetworkDefinition, ShardId, Signer,
+    ValidatorId, ValidatorInfo, ValidatorSet, shard_prefix_path,
 };
 use igd_next::aio::tokio::search_gateway;
 use igd_next::{PortMappingProtocol, SearchOptions};
 use libp2p::Multiaddr;
 use libp2p::multiaddr::Protocol;
-use radix_common::network::NetworkDefinition;
 use serde::Deserialize;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as TokioHandle};
 use tokio::signal;
@@ -212,7 +211,7 @@ pub struct NodeConfig {
     pub data_dir: PathBuf,
 }
 
-const fn default_network() -> NetworkDefinition {
+fn default_network() -> NetworkDefinition {
     NetworkDefinition::simulator()
 }
 
@@ -224,7 +223,7 @@ const fn default_network() -> NetworkDefinition {
 mod network_serde {
     use std::str::FromStr;
 
-    use radix_common::network::NetworkDefinition;
+    use hyperscale_types::NetworkDefinition;
     use serde::de::Error;
     use serde::{Deserialize, Deserializer};
 

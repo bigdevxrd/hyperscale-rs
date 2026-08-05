@@ -1,11 +1,6 @@
 //! Fee summary, log levels, and node-local execution metadata.
 
-use radix_common::math::Decimal;
 use sbor::prelude::*;
-use sbor::{
-    Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
-    NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
-};
 
 use crate::{BoundedString, BoundedVec};
 
@@ -20,133 +15,20 @@ pub const MAX_LOG_MESSAGES_PER_TX: usize = 1024;
 /// before any per-byte allocation.
 pub const MAX_DIAGNOSTIC_STRING_LEN: usize = 4 * 1024;
 
-/// `Decimal` is `I192`, a 192-bit signed integer. We encode it on the wire
-/// as exactly this many little-endian bytes — fixed-size, no length
-/// prefix from a peer, no scrypto SBOR round-trip.
-const DECIMAL_BYTE_LEN: usize = Decimal::BITS / 8;
-
 /// Fee metrics from transaction execution.
 ///
-/// Each cost is `Some(Decimal)` for receipts the engine actually produced,
-/// and `None` for synthetic-failure records (`ExecutionMetadata::empty`)
-/// where the executor never reached the VM and has no fees to report.
-/// Wire encoding writes the `Decimal` as its raw little-endian `I192`
-/// bytes, so the on-wire shape matches the type — no scrypto round-trip,
-/// no peer-controllable length prefix.
+/// Costs are denominated in attos (10⁻¹⁸ whole tokens), the same scale
+/// [`Stake`](crate::Stake) uses. Each is `Some` for receipts the engine
+/// actually produced and `None` for synthetic-failure records
+/// ([`ExecutionMetadata::empty`]) where the executor never reached the
+/// guest and has no fees to report.
 #[allow(missing_docs)] // the field names are the documentation
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
 pub struct FeeSummary {
-    pub total_execution_cost: Option<Decimal>,
-    pub total_royalty_cost: Option<Decimal>,
-    pub total_storage_cost: Option<Decimal>,
-    pub total_tipping_cost: Option<Decimal>,
-}
-
-/// Encode `Option<Decimal>` directly: a basic-SBOR `Option` discriminator,
-/// plus (for `Some`) the `Decimal`'s little-endian `I192` bytes wrapped as
-/// a fixed-size SBOR byte array. No length prefix variation, no scrypto
-/// SBOR round-trip — the wire form matches the type.
-fn encode_optional_decimal<E: Encoder<NoCustomValueKind>>(
-    encoder: &mut E,
-    value: Option<&Decimal>,
-) -> Result<(), EncodeError> {
-    encoder.write_value_kind(ValueKind::Enum)?;
-    if let Some(decimal) = value {
-        encoder.write_discriminator(1)?;
-        encoder.write_size(1)?;
-        encoder.write_value_kind(ValueKind::Array)?;
-        encoder.write_value_kind(ValueKind::U8)?;
-        encoder.write_size(DECIMAL_BYTE_LEN)?;
-        encoder.write_slice(&decimal.to_vec())?;
-    } else {
-        encoder.write_discriminator(0)?;
-        encoder.write_size(0)?;
-    }
-    Ok(())
-}
-
-fn decode_optional_decimal<D: Decoder<NoCustomValueKind>>(
-    decoder: &mut D,
-) -> Result<Option<Decimal>, DecodeError> {
-    decoder.read_and_check_value_kind(ValueKind::Enum)?;
-    let discriminator = decoder.read_discriminator()?;
-    match discriminator {
-        0 => {
-            decoder.read_and_check_size(0)?;
-            Ok(None)
-        }
-        1 => {
-            decoder.read_and_check_size(1)?;
-            decoder.read_and_check_value_kind(ValueKind::Array)?;
-            decoder.read_and_check_value_kind(ValueKind::U8)?;
-            let len = decoder.read_size()?;
-            if len != DECIMAL_BYTE_LEN {
-                return Err(DecodeError::UnexpectedSize {
-                    expected: DECIMAL_BYTE_LEN,
-                    actual: len,
-                });
-            }
-            let slice = decoder.read_slice(DECIMAL_BYTE_LEN)?;
-            let decimal = Decimal::try_from(slice).map_err(|_| DecodeError::InvalidCustomValue)?;
-            Ok(Some(decimal))
-        }
-        _ => Err(DecodeError::UnknownDiscriminator(discriminator)),
-    }
-}
-
-impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for FeeSummary {
-    fn encode_value_kind(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_value_kind(ValueKind::Tuple)
-    }
-
-    fn encode_body(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.write_size(4)?;
-        encode_optional_decimal(encoder, self.total_execution_cost.as_ref())?;
-        encode_optional_decimal(encoder, self.total_royalty_cost.as_ref())?;
-        encode_optional_decimal(encoder, self.total_storage_cost.as_ref())?;
-        encode_optional_decimal(encoder, self.total_tipping_cost.as_ref())?;
-        Ok(())
-    }
-}
-
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for FeeSummary {
-    fn decode_body_with_value_kind(
-        decoder: &mut D,
-        value_kind: ValueKind<NoCustomValueKind>,
-    ) -> Result<Self, DecodeError> {
-        decoder.check_preloaded_value_kind(value_kind, ValueKind::Tuple)?;
-        let length = decoder.read_size()?;
-        if length != 4 {
-            return Err(DecodeError::UnexpectedSize {
-                expected: 4,
-                actual: length,
-            });
-        }
-        let total_execution_cost = decode_optional_decimal(decoder)?;
-        let total_royalty_cost = decode_optional_decimal(decoder)?;
-        let total_storage_cost = decode_optional_decimal(decoder)?;
-        let total_tipping_cost = decode_optional_decimal(decoder)?;
-        Ok(Self {
-            total_execution_cost,
-            total_royalty_cost,
-            total_storage_cost,
-            total_tipping_cost,
-        })
-    }
-}
-
-impl Categorize<NoCustomValueKind> for FeeSummary {
-    fn value_kind() -> ValueKind<NoCustomValueKind> {
-        ValueKind::Tuple
-    }
-}
-
-impl Describe<NoCustomTypeKind> for FeeSummary {
-    const TYPE_ID: RustTypeId = RustTypeId::novel_with_code("FeeSummary", &[], &[]);
-
-    fn type_data() -> TypeData<NoCustomTypeKind, RustTypeId> {
-        TypeData::unnamed(TypeKind::Any)
-    }
+    pub total_execution_cost: Option<u128>,
+    pub total_royalty_cost: Option<u128>,
+    pub total_storage_cost: Option<u128>,
+    pub total_tipping_cost: Option<u128>,
 }
 
 /// Log severity level from transaction execution. Variants follow the
@@ -230,20 +112,20 @@ impl ExecutionMetadata {
 #[cfg(test)]
 mod tests {
     use sbor::{
-        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, VecEncoder, basic_decode,
-        basic_encode,
+        BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
+        NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
     };
 
     use super::*;
+    use crate::Stake;
 
     #[test]
     fn fee_summary_roundtrip_some() {
-        use std::str::FromStr;
         let fs = FeeSummary {
-            total_execution_cost: Some(Decimal::from_str("0.000000000000000123").unwrap()),
-            total_royalty_cost: Some(Decimal::from_str("1").unwrap()),
-            total_storage_cost: Some(Decimal::ZERO),
-            total_tipping_cost: Some(Decimal::ZERO),
+            total_execution_cost: Some(123),
+            total_royalty_cost: Some(Stake::ATTOS_PER_WHOLE),
+            total_storage_cost: Some(0),
+            total_tipping_cost: Some(0),
         };
         let bytes = basic_encode(&fs).unwrap();
         let decoded: FeeSummary = basic_decode(&bytes).unwrap();
@@ -393,33 +275,6 @@ mod tests {
                 expected: MAX_DIAGNOSTIC_STRING_LEN,
                 actual,
             } if actual == MAX_DIAGNOSTIC_STRING_LEN + 1
-        ));
-    }
-
-    /// Decimal SBOR is fixed at `DECIMAL_BYTE_LEN` bytes; any other claimed
-    /// length is rejected before allocation.
-    #[test]
-    fn fee_summary_decode_rejects_wrong_length_cost_field() {
-        let mut buf = Vec::with_capacity(64);
-        let mut enc = VecEncoder::<NoCustomValueKind>::new(&mut buf, BASIC_SBOR_V1_MAX_DEPTH);
-        enc.write_payload_prefix(BASIC_SBOR_V1_PAYLOAD_PREFIX)
-            .unwrap();
-        enc.write_value_kind(ValueKind::Tuple).unwrap();
-        enc.write_size(4).unwrap();
-        // First field: an Option::Some<[u8; ?]> with the wrong length.
-        enc.write_value_kind(ValueKind::Enum).unwrap();
-        enc.write_discriminator(1).unwrap();
-        enc.write_size(1).unwrap();
-        enc.write_value_kind(ValueKind::Array).unwrap();
-        enc.write_value_kind(ValueKind::U8).unwrap();
-        enc.write_size(DECIMAL_BYTE_LEN + 1).unwrap();
-        let err = basic_decode::<FeeSummary>(&buf).unwrap_err();
-        assert!(matches!(
-            err,
-            DecodeError::UnexpectedSize {
-                expected: DECIMAL_BYTE_LEN,
-                actual,
-            } if actual == DECIMAL_BYTE_LEN + 1
         ));
     }
 }

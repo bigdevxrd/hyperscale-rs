@@ -15,7 +15,7 @@
 use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates};
 use hyperscale_types::state_key::vm_db_node_key_owner;
 use hyperscale_types::{ShardId, ShardTrie, WritesRoot};
-use radix_common::prelude::basic_encode;
+use sbor::prelude::basic_encode;
 
 /// Filter genesis `DatabaseUpdates` to the entities whose owner prefix
 /// routes to `local_shard`, for building that shard's prefix-rooted JMT.

@@ -22,7 +22,6 @@ use hyperscale_types::{
     TxOutcome, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
     WitnessSources, compute_global_receipt_root, compute_merkle_root,
 };
-use radix_common::math::Decimal;
 
 use crate::tree::Jmt;
 use crate::{
@@ -353,7 +352,7 @@ pub fn make_test_receipt(seed: u8) -> StoredReceipt {
     };
     let metadata = Some(ExecutionMetadata::new(
         FeeSummary {
-            total_execution_cost: Some(Decimal::from(u64::from(seed))),
+            total_execution_cost: Some(u128::from(seed) * Stake::ATTOS_PER_WHOLE),
             total_royalty_cost: None,
             total_storage_cost: None,
             total_tipping_cost: None,

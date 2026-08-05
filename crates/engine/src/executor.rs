@@ -32,8 +32,8 @@ use hyperscale_storage::{
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventRoot, ExecutionMetadata,
-    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, StakePoolSeat, SubstateEntry,
-    Transaction, TxHash, Verified, compute_merkle_root, install_vm_statics,
+    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, Stake, StakePoolSeat,
+    SubstateEntry, Transaction, TxHash, Verified, compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
@@ -44,7 +44,6 @@ use hyperscale_vm_kernel::{
     TxHash as VmTxHash, amount_cell, decode_amount, encode_amount, execute_batch,
 };
 use indexmap::IndexMap;
-use radix_common::math::Decimal;
 
 use crate::backend::EngineBackend;
 use crate::genesis::{World, genesis_world_with_pools};
@@ -408,7 +407,7 @@ pub fn abort_reason(outcome: &Outcome) -> String {
 fn vm_metadata(fuel: u64, error: Option<String>) -> ExecutionMetadata {
     ExecutionMetadata::new(
         FeeSummary {
-            total_execution_cost: Some(Decimal::from(fuel)),
+            total_execution_cost: Some(u128::from(fuel) * Stake::ATTOS_PER_WHOLE),
             total_royalty_cost: None,
             total_storage_cost: None,
             total_tipping_cost: None,
