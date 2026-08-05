@@ -37,8 +37,8 @@ use hyperscale_core::{Action, FetchAbandon, FetchRequest, ProtocolEvent};
 use hyperscale_metrics::{record_expected_tx_dropped, record_transaction_aborted};
 use hyperscale_types::{
     BlockHeight, CertifiedBlock, CompletedRecovery, DeclaredKey, ForkFence, LocalTimestamp,
-    MAX_TX_IN_FLIGHT, MessageClass, QuiesceCut, RETENTION_HORIZON, RoutableTransaction, ShardId,
-    TopologySnapshot, TransactionDecision, TransactionStatus, TxHash, Verified, WAVE_TIMEOUT,
+    MAX_TX_IN_FLIGHT, MessageClass, QuiesceCut, RETENTION_HORIZON, ShardId, TopologySnapshot,
+    Transaction, TransactionDecision, TransactionStatus, TxHash, Verified, WAVE_TIMEOUT,
     WeightedTimestamp,
 };
 use serde::Deserialize;
@@ -203,7 +203,7 @@ pub struct MempoolMemoryStats {
 /// in-mempool reads go through this field directly.
 #[derive(Debug)]
 struct PoolEntry {
-    tx: Arc<Verified<RoutableTransaction>>,
+    tx: Arc<Verified<Transaction>>,
     status: TransactionStatus,
     /// Whether this is a cross-shard transaction (cached at insertion time).
     cross_shard: bool,
@@ -395,7 +395,7 @@ impl MempoolCoordinator {
     fn admit_internal(
         &mut self,
         topology_snapshot: &TopologySnapshot,
-        tx: &Arc<Verified<RoutableTransaction>>,
+        tx: &Arc<Verified<Transaction>>,
         submitted_locally: bool,
         now: LocalTimestamp,
     ) -> Option<bool> {
@@ -470,7 +470,7 @@ impl MempoolCoordinator {
     pub fn on_submit_transaction(
         &mut self,
         topology_snapshot: &TopologySnapshot,
-        tx: Arc<Verified<RoutableTransaction>>,
+        tx: Arc<Verified<Transaction>>,
         now: LocalTimestamp,
     ) -> Vec<Action> {
         let hash = tx.hash();
@@ -512,7 +512,7 @@ impl MempoolCoordinator {
     pub fn on_transaction_gossip(
         &mut self,
         topology_snapshot: &TopologySnapshot,
-        tx: Arc<Verified<RoutableTransaction>>,
+        tx: Arc<Verified<Transaction>>,
         submitted_locally: bool,
         now: LocalTimestamp,
     ) -> Vec<Action> {
@@ -537,7 +537,7 @@ impl MempoolCoordinator {
     pub fn on_fetched_transactions(
         &mut self,
         topology_snapshot: &TopologySnapshot,
-        txs: Vec<Arc<Verified<RoutableTransaction>>>,
+        txs: Vec<Arc<Verified<Transaction>>>,
         now: LocalTimestamp,
     ) -> Vec<Action> {
         let mut admitted = Vec::with_capacity(txs.len());
@@ -779,10 +779,9 @@ impl MempoolCoordinator {
             // Prefer the marker the wrapper already carries; fall back to
             // the BFT-transitive `from_persisted` gate for sync-loaded
             // blocks whose `Verifiable` entries decoded as Unverified.
-            let verified: Arc<Verified<RoutableTransaction>> = match (**tx).clone().into_verified()
-            {
+            let verified: Arc<Verified<Transaction>> = match (**tx).clone().into_verified() {
                 Ok(v) => Arc::new(v),
-                Err(raw) => Arc::new(Verified::<RoutableTransaction>::from_persisted(raw)),
+                Err(raw) => Arc::new(Verified::<Transaction>::from_persisted(raw)),
             };
             self.pool.entry(hash).or_insert_with(|| {
                 tracing::debug!(
@@ -977,7 +976,7 @@ impl MempoolCoordinator {
     /// peer shard's wave finalization, which can stall independently. Locking
     /// them here would permanently defer future local cross-shard txs that
     /// share those remote nodes, cascading the stall.
-    fn add_locked_nodes(&mut self, topology_snapshot: &TopologySnapshot, tx: &RoutableTransaction) {
+    fn add_locked_nodes(&mut self, topology_snapshot: &TopologySnapshot, tx: &Transaction) {
         let local_shard = self.local_shard;
         let local =
             |key: &DeclaredKey| topology_snapshot.shard_for_declared_key(key) == local_shard;
@@ -996,11 +995,7 @@ impl MempoolCoordinator {
     ///
     /// Also promotes any blocked transactions that were waiting on these nodes.
     /// Scoped to local-shard nodes; mirrors [`Self::add_locked_nodes`].
-    fn remove_locked_nodes(
-        &mut self,
-        topology_snapshot: &TopologySnapshot,
-        tx: &RoutableTransaction,
-    ) {
+    fn remove_locked_nodes(&mut self, topology_snapshot: &TopologySnapshot, tx: &Transaction) {
         let local_shard = self.local_shard;
         let local =
             |key: &DeclaredKey| topology_snapshot.shard_for_declared_key(key) == local_shard;
@@ -1023,7 +1018,7 @@ impl MempoolCoordinator {
     fn engagement_park_target(
         &mut self,
         topology_snapshot: &TopologySnapshot,
-        tx: &Arc<Verified<RoutableTransaction>>,
+        tx: &Arc<Verified<Transaction>>,
         cross_shard: bool,
     ) -> Option<ShardId> {
         if !cross_shard {
@@ -1103,7 +1098,7 @@ impl MempoolCoordinator {
     fn add_to_ready_tracking(
         &mut self,
         hash: TxHash,
-        tx: &Arc<Verified<RoutableTransaction>>,
+        tx: &Arc<Verified<Transaction>>,
         added_at: LocalTimestamp,
     ) {
         self.ready
@@ -1126,8 +1121,7 @@ impl MempoolCoordinator {
     fn promote_transactions_for_key(&mut self, key: DeclaredKey) {
         let mut promotable = self.ready.promotable_for_key(key);
         promotable.sort();
-        let mut to_readd: Vec<(TxHash, Arc<Verified<RoutableTransaction>>, LocalTimestamp)> =
-            Vec::new();
+        let mut to_readd: Vec<(TxHash, Arc<Verified<Transaction>>, LocalTimestamp)> = Vec::new();
         for tx_hash in promotable {
             if let Some(entry) = self.pool.get(&tx_hash)
                 && entry.status == TransactionStatus::Pending
@@ -1173,7 +1167,7 @@ impl MempoolCoordinator {
         pending_commit_cert_count: usize,
         now: LocalTimestamp,
         quiesce: Option<QuiesceCut>,
-    ) -> Vec<Arc<Verified<RoutableTransaction>>> {
+    ) -> Vec<Arc<Verified<Transaction>>> {
         // Certificates reduce in-flight (transactions complete), txs increase it
         let effective_in_flight = self
             .in_flight()
@@ -1212,11 +1206,7 @@ impl MempoolCoordinator {
     /// single-shard the narrower one. Classification reads the
     /// admission-time `cross_shard` flag, which already captures whether
     /// the transaction's declared nodes reach a remote shard.
-    fn passes_quiesce(
-        &self,
-        tx: &Arc<Verified<RoutableTransaction>>,
-        quiesce: Option<QuiesceCut>,
-    ) -> bool {
+    fn passes_quiesce(&self, tx: &Arc<Verified<Transaction>>, quiesce: Option<QuiesceCut>) -> bool {
         let Some(cut) = quiesce else {
             return true;
         };
@@ -1332,7 +1322,7 @@ impl MempoolCoordinator {
     /// answer covers both live pool entries and tombstone-window bodies
     /// (terminal-state txs whose body we still hold for slow peers).
     #[must_use]
-    pub fn get_transaction(&self, hash: &TxHash) -> Option<Arc<Verified<RoutableTransaction>>> {
+    pub fn get_transaction(&self, hash: &TxHash) -> Option<Arc<Verified<Transaction>>> {
         self.tx_store.get(hash)
     }
 
@@ -1374,11 +1364,7 @@ impl MempoolCoordinator {
     #[must_use]
     pub fn incomplete_transactions(
         &self,
-    ) -> Vec<(
-        TxHash,
-        TransactionStatus,
-        Arc<Verified<RoutableTransaction>>,
-    )> {
+    ) -> Vec<(TxHash, TransactionStatus, Arc<Verified<Transaction>>)> {
         self.pool
             .iter()
             .filter(|(_, entry)| !matches!(entry.status, TransactionStatus::Completed(_)))
@@ -1455,9 +1441,9 @@ mod tests {
     };
     use hyperscale_types::{RevealChain, Verified, WitnessSources};
 
-    /// Test-only convenience: wrap any `RoutableTransaction` in a
+    /// Test-only convenience: wrap any `Transaction` in a
     /// `Verified` witness via the test-only gate.
-    fn verified(tx: RoutableTransaction) -> Verified<RoutableTransaction> {
+    fn verified(tx: Transaction) -> Verified<Transaction> {
         Verified::new_unchecked_for_test(tx)
     }
     use hyperscale_types::{
@@ -1480,7 +1466,7 @@ mod tests {
     /// decision, with its QC timestamp stamped from the block height.
     fn certified_commit_block(
         height: BlockHeight,
-        tx: RoutableTransaction,
+        tx: Transaction,
         fw: FinalizedWave,
     ) -> CertifiedBlock {
         let block = make_live_block(
@@ -2262,10 +2248,10 @@ mod tests {
     // Backpressure Tests
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// Build a `RoutableTransaction` whose write set is a single
+    /// Build a `Transaction` whose write set is a single
     /// index-derived prefix, so callers can mint up to `MAX_TX_IN_FLIGHT`
     /// distinct, non-conflicting txs by feeding sequential indices.
-    fn unique_test_tx(idx: usize) -> RoutableTransaction {
+    fn unique_test_tx(idx: usize) -> Transaction {
         let seed = idx.to_le_bytes();
         let mut prefix = [0u8; 16];
         prefix[..seed.len()].copy_from_slice(&seed);
@@ -2280,7 +2266,7 @@ mod tests {
         mempool: &mut MempoolCoordinator,
         topology_snapshot: &TopologySnapshot,
     ) {
-        let txs: Vec<Arc<RoutableTransaction>> = (0..MAX_TX_IN_FLIGHT)
+        let txs: Vec<Arc<Transaction>> = (0..MAX_TX_IN_FLIGHT)
             .map(|i| Arc::new(unique_test_tx(i)))
             .collect();
         for tx in &txs {
@@ -2314,7 +2300,7 @@ mod tests {
     }
 
     /// Create a cross-shard transaction (writes prefixes in different shards)
-    fn test_cross_shard_transaction(seed: u8) -> RoutableTransaction {
+    fn test_cross_shard_transaction(seed: u8) -> Transaction {
         use hyperscale_types::ShardTrie;
         use hyperscale_types::test_utils::test_prefix;
 
@@ -2691,7 +2677,7 @@ mod tests {
 
     // ─── validity-window admission + pending sweep ──────────────────────
 
-    fn tx_with_end(seed: u8, end_ms: u64) -> Arc<Verified<RoutableTransaction>> {
+    fn tx_with_end(seed: u8, end_ms: u64) -> Arc<Verified<Transaction>> {
         use hyperscale_types::TimestampRange;
         use hyperscale_types::test_utils::{stub_vm_transaction, test_prefix};
         let range = TimestampRange::new(
@@ -2943,7 +2929,7 @@ mod tests {
 
     /// A signed stub VM transaction whose derived owners are exactly
     /// `owners`, paying from `payer`.
-    fn stub_vm(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verified<RoutableTransaction>> {
+    fn stub_vm(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verified<Transaction>> {
         install_stub_vm_statics();
         Arc::new(verified(stub_vm_transaction(
             payer,

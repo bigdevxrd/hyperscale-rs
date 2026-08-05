@@ -14,8 +14,8 @@ use sbor::prelude::BasicSbor;
 use crate::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, CompletedRecovery, ConsensusPublicKey,
     DeclaredKey, Epoch, NetworkDefinition, NetworkParams, NodeId, ReshapeThresholds, Round,
-    RoutableTransaction, SettledWavesRoot, ShardId, ShardRecovery, ShardTrie, StateRoot,
-    ValidatorId, ValidatorSet, VoteCount, WeightedTimestamp,
+    SettledWavesRoot, ShardId, ShardRecovery, ShardTrie, StateRoot, Transaction, ValidatorId,
+    ValidatorSet, VoteCount, WeightedTimestamp,
 };
 
 /// Per-shard committee membership, split into its two consumer views.
@@ -1008,7 +1008,7 @@ impl TopologySnapshot {
     /// Each shard executes the whole transaction, so every touched shard
     /// needs every input substate it doesn't own locally — reads and
     /// writes participate symmetrically here.
-    pub fn all_shards_for_transaction(&self, tx: &RoutableTransaction) -> Vec<ShardId> {
+    pub fn all_shards_for_transaction(&self, tx: &Transaction) -> Vec<ShardId> {
         tx.routing()
             .all_prefixes()
             .into_iter()
@@ -1019,18 +1019,18 @@ impl TopologySnapshot {
     }
 
     /// Check if a transaction is cross-shard.
-    pub fn is_cross_shard_transaction(&self, tx: &RoutableTransaction) -> bool {
+    pub fn is_cross_shard_transaction(&self, tx: &Transaction) -> bool {
         self.all_shards_for_transaction(tx).len() > 1
     }
 
     /// Check if a transaction is single-shard.
-    pub fn is_single_shard_transaction(&self, tx: &RoutableTransaction) -> bool {
+    pub fn is_single_shard_transaction(&self, tx: &Transaction) -> bool {
         self.all_shards_for_transaction(tx).len() <= 1
     }
 
     /// Check if `shard` is involved in `tx`'s consensus path — i.e. owns at
     /// least one of `tx`'s declared writes.
-    pub fn involves_shard_for_consensus(&self, shard: ShardId, tx: &RoutableTransaction) -> bool {
+    pub fn involves_shard_for_consensus(&self, shard: ShardId, tx: &Transaction) -> bool {
         tx.routing()
             .write_prefixes
             .iter()
@@ -1038,7 +1038,7 @@ impl TopologySnapshot {
     }
 
     /// Check if `shard` is involved in `tx` at all (reads or writes).
-    pub fn involves_shard(&self, shard: ShardId, tx: &RoutableTransaction) -> bool {
+    pub fn involves_shard(&self, shard: ShardId, tx: &Transaction) -> bool {
         tx.routing()
             .all_prefixes()
             .into_iter()

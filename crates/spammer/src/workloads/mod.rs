@@ -5,7 +5,7 @@
 
 mod transfer;
 
-use hyperscale_types::RoutableTransaction;
+use hyperscale_types::Transaction;
 use rand::Rng;
 pub use transfer::{DEFAULT_TRANSFER_AMOUNT, TRANSFER_MAX_FEE, TransferWorkload};
 
@@ -19,11 +19,7 @@ pub trait WorkloadGenerator: Send + Sync {
     /// Generate a single transaction.
     ///
     /// Returns `None` if generation fails (e.g., no suitable accounts available).
-    fn generate_one(
-        &self,
-        accounts: &AccountPool,
-        rng: &mut dyn Rng,
-    ) -> Option<RoutableTransaction>;
+    fn generate_one(&self, accounts: &AccountPool, rng: &mut dyn Rng) -> Option<Transaction>;
 
     /// Generate a batch of transactions.
     fn generate_batch(
@@ -31,7 +27,7 @@ pub trait WorkloadGenerator: Send + Sync {
         accounts: &AccountPool,
         count: usize,
         rng: &mut dyn Rng,
-    ) -> Vec<RoutableTransaction>;
+    ) -> Vec<Transaction>;
 }
 
 /// Error type for workload generation.

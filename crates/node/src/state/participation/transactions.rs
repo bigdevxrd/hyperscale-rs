@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use hyperscale_core::{Action, ProtocolEvent};
-use hyperscale_types::{RoutableTransaction, TopologySchedule, Verified};
+use hyperscale_types::{TopologySchedule, Transaction, Verified};
 
 use super::ShardParticipation;
 
@@ -48,7 +48,7 @@ impl ShardParticipation {
     fn on_transaction_validated(
         &mut self,
         sched: &TopologySchedule,
-        tx: Arc<Verified<RoutableTransaction>>,
+        tx: Arc<Verified<Transaction>>,
         submitted_locally: bool,
     ) -> Vec<Action> {
         if !sched.head().involves_shard(self.local_shard, &tx) {
@@ -72,7 +72,7 @@ impl ShardParticipation {
     fn on_transactions_fetched(
         &mut self,
         sched: &TopologySchedule,
-        txs: Vec<Arc<Verified<RoutableTransaction>>>,
+        txs: Vec<Arc<Verified<Transaction>>>,
     ) -> Vec<Action> {
         if txs.is_empty() {
             return vec![];

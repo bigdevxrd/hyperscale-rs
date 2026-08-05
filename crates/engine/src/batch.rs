@@ -19,7 +19,7 @@ use std::sync::Arc;
 use hyperscale_dispatch::Parallelism;
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
-    BlockHash, RevealChain, RoutableTransaction, ShardId, ShardTrie, SubstateEntry, Verified,
+    BlockHash, RevealChain, ShardId, ShardTrie, SubstateEntry, Transaction, Verified,
     WeightedTimestamp,
 };
 use radix_common::prelude::DbSubstateValue;
@@ -79,7 +79,7 @@ pub struct WaveBatchContext<'a> {
 /// transaction plus what its remote counterparts shipped.
 pub struct CrossShardTxInput<'a> {
     /// The transaction to execute.
-    pub transaction: &'a Arc<Verified<RoutableTransaction>>,
+    pub transaction: &'a Arc<Verified<Transaction>>,
     /// Verified provision entry lists, one per source shard contribution.
     pub provisions: &'a [Arc<Vec<SubstateEntry>>],
     /// The transaction clock: the payer-shard committing block's
@@ -97,7 +97,7 @@ pub struct CrossShardTxInput<'a> {
 /// narrows this to the host's hosted shards and decrements per-shard as
 /// finalised waves arrive.
 pub fn participating_shards<'a>(
-    tx: &'a RoutableTransaction,
+    tx: &'a Transaction,
     shard_trie: &'a ShardTrie,
 ) -> impl Iterator<Item = ShardId> + 'a {
     tx.routing()
@@ -129,7 +129,7 @@ enum Plan {
 pub fn batch_compute_cached(
     par: Parallelism,
     cache: &ProcessExecutionCache,
-    txs: &[Arc<Verified<RoutableTransaction>>],
+    txs: &[Arc<Verified<Transaction>>],
     shard_trie: &ShardTrie,
     compute: impl Fn(usize) -> CachedVmOutput + Send + Sync,
 ) -> Vec<Arc<CachedVmOutput>> {

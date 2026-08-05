@@ -8,15 +8,15 @@ use std::sync::Arc;
 
 use hyperscale_core::Action;
 use hyperscale_types::{
-    FinalizedWave, MAX_TXS_PER_BLOCK, Provisions, RoutableTransaction, TopologySchedule,
-    TopologySnapshot, Verifiable, Verified,
+    FinalizedWave, MAX_TXS_PER_BLOCK, Provisions, TopologySchedule, TopologySnapshot, Transaction,
+    Verifiable, Verified,
 };
 
 use super::ShardParticipation;
 
 /// Inputs gathered for building a block proposal.
 pub(in crate::state) struct ProposalInputs {
-    pub ready_txs: Vec<Arc<Verified<RoutableTransaction>>>,
+    pub ready_txs: Vec<Arc<Verified<Transaction>>>,
     pub finalized_waves: Vec<Arc<Verifiable<FinalizedWave>>>,
     pub provisions: Vec<Arc<Verifiable<Provisions>>>,
 }
@@ -98,7 +98,7 @@ impl ShardParticipation {
     /// bundle rides in `queued`, or an earlier block already absorbed it.
     fn vm_engagement_held(
         &self,
-        tx: &Arc<Verified<RoutableTransaction>>,
+        tx: &Arc<Verified<Transaction>>,
         topology: &TopologySnapshot,
         queued: &[Arc<Verified<Provisions>>],
     ) -> bool {

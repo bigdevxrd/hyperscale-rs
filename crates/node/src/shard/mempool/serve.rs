@@ -5,7 +5,7 @@ use std::sync::Arc;
 use hyperscale_mempool::TxStore;
 use hyperscale_metrics::record_fetch_response_sent;
 use hyperscale_storage::{PendingChain, ShardStorage};
-use hyperscale_types::RoutableTransaction;
+use hyperscale_types::Transaction;
 use hyperscale_types::network::request::GetTransactionsRequest;
 use hyperscale_types::network::response::GetTransactionsResponse;
 use tracing::{debug, trace};
@@ -45,7 +45,7 @@ pub fn serve_transaction_request<S: ShardStorage>(
         &req.tx_hashes
     };
 
-    let mut found: Vec<Arc<RoutableTransaction>> = Vec::with_capacity(hashes.len());
+    let mut found: Vec<Arc<Transaction>> = Vec::with_capacity(hashes.len());
     let mut missing = Vec::new();
     for hash in hashes {
         if let Some(tx) = tx_store.get(hash) {

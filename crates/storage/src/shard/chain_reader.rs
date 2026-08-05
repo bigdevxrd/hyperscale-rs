@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use hyperscale_types::{
     BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock, CertifiedBlockHeader,
-    ConsensusReceipt, ExecutionCertificate, ProvisionHash, QuorumCertificate, RoutableTransaction,
-    ShardWitnessPayload, TxHash, Verified, WaveCertificate, WaveId,
+    ConsensusReceipt, ExecutionCertificate, ProvisionHash, QuorumCertificate, ShardWitnessPayload,
+    Transaction, TxHash, Verified, WaveCertificate, WaveId,
 };
 
 /// A sync-ready block retrieved from storage.
@@ -76,7 +76,7 @@ pub trait ShardChainReader: Send + Sync + 'static {
     /// Get multiple transactions by hash (batch read).
     ///
     /// Returns only transactions that were found (missing hashes are skipped).
-    fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<RoutableTransaction>>;
+    fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<Transaction>>;
 
     /// Get multiple certificates by `WaveId` (batch read).
     ///

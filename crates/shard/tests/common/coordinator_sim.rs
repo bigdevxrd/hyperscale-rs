@@ -43,12 +43,12 @@ use hyperscale_types::{
     LocalReceiptRootVerifyError, LocalTimestamp, NetworkDefinition, ProposerTimestamp,
     ProvisionRootVerifyError, ProvisionTxRootsContext, ProvisionTxRootsMap,
     ProvisionTxRootsVerifyError, Provisions, ProvisionsRoot, ProvisionsRootContext, QcContext,
-    QcVerifyError, QuorumCertificate, ReadySignal, Round, RoutableTransaction, ShardId, ShardLoad,
+    QcVerifyError, QuorumCertificate, ReadySignal, Round, ShardId, ShardLoad,
     ShardVoteEquivocation, ShardWitnessPayload, Signer, StateRoot, StateRootContext,
     StateRootVerifyError, StoredReceipt, Timeout, TimeoutContext, TopologySchedule,
-    TopologySnapshot, TransactionRoot, TransactionRootContext, TxHash, TxRootVerifyError,
-    ValidatorId, Verifiable, Verified, Verify, VoteCount, VrfProof, WeightedTimestamp,
-    local_settled_wave_ids, ready_signal_message, shard_reveal_sign,
+    TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext, TxHash,
+    TxRootVerifyError, ValidatorId, Verifiable, Verified, Verify, VoteCount, VrfProof,
+    WeightedTimestamp, local_settled_wave_ids, ready_signal_message, shard_reveal_sign,
 };
 
 use crate::common::fixtures::build_genesis_block;
@@ -323,7 +323,7 @@ pub struct ShardCoordinatorSim {
     /// pool; `try_propose_for` threads it into the proposer's
     /// `ready_txs`; `on_block_header` reads it through the
     /// `lookup_tx` data-availability closure.
-    tx_pools: Vec<HashMap<TxHash, Arc<Verified<RoutableTransaction>>>>,
+    tx_pools: Vec<HashMap<TxHash, Arc<Verified<Transaction>>>>,
     /// Identity-agnostic topology shared by every replica. A single-committee
     /// schedule — the sim runs within one epoch, so every weighted timestamp
     /// resolves to the same committee.
@@ -624,7 +624,7 @@ impl ShardCoordinatorSim {
     ) {
         let idx = self.idx_of(replica);
         let pool = &self.tx_pools[idx];
-        let lookup_tx = |hash: &TxHash| -> Option<Arc<Verifiable<RoutableTransaction>>> {
+        let lookup_tx = |hash: &TxHash| -> Option<Arc<Verifiable<Transaction>>> {
             pool.get(hash)
                 .map(|tx| Arc::new(Verifiable::from((**tx).clone())))
         };
@@ -731,7 +731,7 @@ impl ShardCoordinatorSim {
     /// Admit `tx` into every replica's local pool. See
     /// [`Self::admit_transaction_on`] for the per-replica variant
     /// used to model partial-availability tests.
-    pub fn admit_transaction(&mut self, tx: &Arc<Verified<RoutableTransaction>>) {
+    pub fn admit_transaction(&mut self, tx: &Arc<Verified<Transaction>>) {
         for idx in 0..self.n() {
             self.admit_transaction_on(idx, Arc::clone(tx));
         }
@@ -741,7 +741,7 @@ impl ShardCoordinatorSim {
     /// `on_transactions_admitted` + the latched proposal retry on
     /// that replica only. Used to model partial-availability
     /// faults where a single replica's DA gate matters.
-    pub fn admit_transaction_on(&mut self, idx: usize, tx: Arc<Verified<RoutableTransaction>>) {
+    pub fn admit_transaction_on(&mut self, idx: usize, tx: Arc<Verified<Transaction>>) {
         let hash = tx.hash();
         let tx_slice = [Arc::clone(&tx)];
         self.tx_pools[idx].insert(hash, tx);
@@ -859,7 +859,7 @@ impl ShardCoordinatorSim {
     /// pool as `ready_txs`. Tx-only equivalent of the production
     /// `gather_proposal_inputs` (no finalized waves, no provisions).
     fn try_propose_for(&mut self, idx: usize) -> Vec<Action> {
-        let ready_txs: Vec<Arc<Verified<RoutableTransaction>>> =
+        let ready_txs: Vec<Arc<Verified<Transaction>>> =
             self.tx_pools[idx].values().cloned().collect();
         self.coordinators[idx].try_propose(&self.topology_schedule, &ready_txs, vec![], vec![])
     }
@@ -1109,7 +1109,7 @@ impl ShardCoordinatorSim {
         // touch only the coordinator, so re-bind locally below.
         if let SimEvent::BlockHeader { header, manifest } = env.event {
             let pool = &self.tx_pools[to_idx];
-            let lookup_tx = |hash: &TxHash| -> Option<Arc<Verifiable<RoutableTransaction>>> {
+            let lookup_tx = |hash: &TxHash| -> Option<Arc<Verifiable<Transaction>>> {
                 pool.get(hash)
                     .map(|tx| Arc::new(Verifiable::from((**tx).clone())))
             };

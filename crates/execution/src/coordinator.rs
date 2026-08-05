@@ -40,10 +40,10 @@ use hyperscale_types::{
     Attempt, AwaitingTopologyBuffer, Block, BlockHash, BlockHeader, BlockHeight, BloomFilter,
     CertifiedBlock, ExecutionCertificate, ExecutionCertificateVerifyError, ExecutionVote,
     FinalizedWave, FinalizedWaveVerifyError, GlobalReceiptRoot, Hash, Provisions,
-    RETENTION_HORIZON, RevealChain, RoutableTransaction, ScheduleLookup, SettledSetVerdict,
-    SettledWaveSet, ShardId, StoredReceipt, TopologySchedule, TopologySnapshot, TxHash, TxOutcome,
-    ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
-    settled_set_verdict, wave_leader, wave_leader_at,
+    RETENTION_HORIZON, RevealChain, ScheduleLookup, SettledSetVerdict, SettledWaveSet, ShardId,
+    StoredReceipt, TopologySchedule, TopologySnapshot, Transaction, TxHash, TxOutcome, ValidatorId,
+    Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, settled_set_verdict,
+    wave_leader, wave_leader_at,
 };
 use tracing::instrument;
 
@@ -454,7 +454,7 @@ impl ExecutionCoordinator {
     fn register_cross_shard_txs(
         &mut self,
         classification: &TopologySnapshot,
-        txs: &[(Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>)],
+        txs: &[(Arc<Verifiable<Transaction>>, BTreeSet<ShardId>)],
     ) -> Vec<EngagementWait> {
         let local_shard = self.local_shard;
         let mut engagement_waits: Vec<EngagementWait> = Vec::new();
@@ -518,7 +518,7 @@ impl ExecutionCoordinator {
         topology_schedule: &TopologySchedule,
         classification: &TopologySnapshot,
         block: CommittingBlock,
-        transactions: &[Arc<Verifiable<RoutableTransaction>>],
+        transactions: &[Arc<Verifiable<Transaction>>],
     ) -> (Vec<Action>, Vec<Verifiable<ExecutionVote>>) {
         let CommittingBlock {
             hash: block_hash,
@@ -1905,7 +1905,7 @@ impl ExecutionCoordinator {
         topology_schedule: &TopologySchedule,
         block_hash: BlockHash,
         header: &BlockHeader,
-        transactions: &[Arc<Verifiable<RoutableTransaction>>],
+        transactions: &[Arc<Verifiable<Transaction>>],
         provisions: &[Arc<Verifiable<Provisions>>],
     ) -> Vec<Action> {
         let height = header.height();
@@ -1980,7 +1980,7 @@ impl ExecutionCoordinator {
         &mut self,
         topology_schedule: &TopologySchedule,
         header: &BlockHeader,
-        transactions: &[Arc<Verifiable<RoutableTransaction>>],
+        transactions: &[Arc<Verifiable<Transaction>>],
     ) -> Vec<Action> {
         if transactions.is_empty() {
             return Vec::new();
@@ -1998,7 +1998,7 @@ impl ExecutionCoordinator {
     fn replay_early_wave_attestations(
         &mut self,
         topology_schedule: &TopologySchedule,
-        transactions: &[Arc<Verifiable<RoutableTransaction>>],
+        transactions: &[Arc<Verifiable<Transaction>>],
     ) -> Vec<Action> {
         let tx_hashes: Vec<TxHash> = transactions.iter().map(|tx| tx.hash()).collect();
         let ecs_to_replay = self.early.drain_ecs_for_txs(&tx_hashes);
@@ -2025,7 +2025,7 @@ impl ExecutionCoordinator {
         &mut self,
         topology_snapshot: &TopologySnapshot,
         block_height: BlockHeight,
-        transactions: &[Arc<Verifiable<RoutableTransaction>>],
+        transactions: &[Arc<Verifiable<Transaction>>],
     ) {
         let waves = assign_waves(
             topology_snapshot,
@@ -2851,7 +2851,7 @@ mod tests {
         height: BlockHeight,
         timestamp_ms: u64,
         proposer: ValidatorId,
-        transactions: Vec<Arc<RoutableTransaction>>,
+        transactions: Vec<Arc<Transaction>>,
     ) -> Block {
         helpers_make_live_block(
             ShardId::ROOT,
@@ -2868,7 +2868,7 @@ mod tests {
         height: BlockHeight,
         timestamp_ms: u64,
         proposer: ValidatorId,
-        transactions: Vec<Arc<RoutableTransaction>>,
+        transactions: Vec<Arc<Transaction>>,
     ) -> Block {
         helpers_make_live_block(shard, height, timestamp_ms, proposer, transactions, vec![])
     }
@@ -4575,7 +4575,7 @@ mod tests {
     /// been added. `WaveState::is_complete` returns true.
     fn make_ready_single_shard_wave(tx_seeds: &[u8]) -> (WaveId, WaveState) {
         let wave_id = WaveId::new(ShardId::ROOT, BlockHeight::new(1), BTreeSet::new());
-        let txs: Vec<(Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>)> = tx_seeds
+        let txs: Vec<(Arc<Verifiable<Transaction>>, BTreeSet<ShardId>)> = tx_seeds
             .iter()
             .map(|s| {
                 let mut participating = BTreeSet::new();

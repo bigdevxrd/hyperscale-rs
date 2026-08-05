@@ -17,7 +17,7 @@ use hyperscale_spammer::{
     AccountPool, AccountPoolError, AccountUsageStats, TransferWorkload, WorkloadGenerator,
 };
 use hyperscale_types::{
-    MIN_BEACON_COMMITTEE_SIZE, RoutableTransaction, ShardId, ShardTrie, TransactionDecision,
+    MIN_BEACON_COMMITTEE_SIZE, ShardId, ShardTrie, Transaction, TransactionDecision,
     TransactionStatus, TxHash, WeightedTimestamp,
 };
 use rand::SeedableRng;
@@ -327,7 +327,7 @@ impl Simulator {
 
     /// Determine the target shard for a transaction: the payer's, which
     /// every envelope names directly.
-    fn get_target_shard(&self, tx: &RoutableTransaction) -> ShardId {
+    fn get_target_shard(&self, tx: &Transaction) -> ShardId {
         ShardTrie::uniform_from_count(u64::from(self.config.num_shards))
             .shard_for_prefix(tx.body().fee_payer)
     }

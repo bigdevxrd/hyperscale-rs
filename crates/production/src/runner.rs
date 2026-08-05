@@ -55,8 +55,8 @@ use hyperscale_storage::{BeaconStorage, ShardChainReader};
 use hyperscale_storage_rocksdb::{RocksDbShardStorage, SharedStorage};
 use hyperscale_types::{
     BeaconChainConfig, BlockHeight, GenesisValidators, InFlightCount, LocalTimestamp,
-    MAX_TX_IN_FLIGHT, NetworkDefinition, RoutableTransaction, ShardId, Signer, StakePoolSeat,
-    ValidatorId, ValidatorStatus, Verifier,
+    MAX_TX_IN_FLIGHT, NetworkDefinition, ShardId, Signer, StakePoolSeat, Transaction, ValidatorId,
+    ValidatorStatus, Verifier,
 };
 use libp2p::identity::Keypair;
 use thiserror::Error;
@@ -813,7 +813,7 @@ impl ProductionRunner {
                 .expect("host must exist for tx_submission_sender")
                 .process(),
         );
-        Arc::new(move |routable: Arc<RoutableTransaction>| process.submit_transaction(&routable))
+        Arc::new(move |routable: Arc<Transaction>| process.submit_transaction(&routable))
     }
 
     /// Take the shutdown handle.

@@ -9,9 +9,8 @@ use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_simulation::{CryptoScheme, SimConfig, SimulationRunner};
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{
-    BeaconChainConfig, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
-    SharedCertificates, TimestampRange, TransactionDecision, TransactionStatus, TxHash,
-    ValidatorId, WeightedTimestamp,
+    BeaconChainConfig, BlockHeight, ReshapeThresholds, ShardId, SharedCertificates, TimestampRange,
+    Transaction, TransactionDecision, TransactionStatus, TxHash, ValidatorId, WeightedTimestamp,
 };
 use radix_common::crypto::Ed25519PrivateKey;
 
@@ -434,7 +433,7 @@ impl Session {
     /// covers the whole signed envelope, so two presses of the button
     /// inside one validity window would otherwise be the same transaction
     /// and the second would dedup away.
-    fn build_transfer(&self, from: u8, to: u8) -> RoutableTransaction {
+    fn build_transfer(&self, from: u8, to: u8) -> Transaction {
         build_transfer_tx(
             &signer_from_seed(from),
             account_from_seed(from),
@@ -460,7 +459,7 @@ impl Session {
         let from = u8::try_from(self.nonce % u32::from(ACCOUNTS)).unwrap_or(0) + 1;
         let topology =
             (0..self.runner.num_hosts()).find_map(|host| self.runner.host_topology(host));
-        let crosses = |tx: &RoutableTransaction| {
+        let crosses = |tx: &Transaction| {
             topology
                 .as_ref()
                 .is_some_and(|t| t.is_cross_shard_transaction(tx))

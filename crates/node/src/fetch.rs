@@ -649,15 +649,15 @@ mod partition_tests {
     use std::sync::Arc;
 
     use hyperscale_types::test_utils::test_transaction;
-    use hyperscale_types::{RoutableTransaction, TxHash};
+    use hyperscale_types::{Transaction, TxHash};
 
     use super::*;
 
-    fn tx_arc(seed: u8) -> Arc<RoutableTransaction> {
+    fn tx_arc(seed: u8) -> Arc<Transaction> {
         Arc::new(test_transaction(seed))
     }
 
-    fn tx_hash(tx: &Arc<RoutableTransaction>) -> TxHash {
+    fn tx_hash(tx: &Arc<Transaction>) -> TxHash {
         tx.hash()
     }
 

@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_types::{
-    BlockHeight, ConsensusPublicKey, ExecutionCertificate, RoutableTransaction, ShardId,
-    TopologySnapshot, ValidatorId, Verifiable, VoteCount, WaveId,
+    BlockHeight, ConsensusPublicKey, ExecutionCertificate, ShardId, TopologySnapshot, Transaction,
+    ValidatorId, Verifiable, VoteCount, WaveId,
 };
 
 /// Per-shard recipient lists for provision broadcasting.
@@ -19,7 +19,7 @@ pub type ShardRecipients = HashMap<ShardId, Vec<ValidatorId>>;
 
 /// A single tx's layout within a wave: the transaction plus the set of shards
 /// that participate in its execution (local + any remote provision sources).
-pub type WaveTxEntry = (Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>);
+pub type WaveTxEntry = (Arc<Verifiable<Transaction>>, BTreeSet<ShardId>);
 
 /// Deterministic grouping of a block's transactions into waves.
 pub type WaveAssignments = BTreeMap<WaveId, Vec<WaveTxEntry>>;
@@ -96,7 +96,7 @@ pub fn assign_waves(
     topology_snapshot: &TopologySnapshot,
     local_shard: ShardId,
     block_height: BlockHeight,
-    transactions: &[Arc<Verifiable<RoutableTransaction>>],
+    transactions: &[Arc<Verifiable<Transaction>>],
 ) -> WaveAssignments {
     let mut waves: WaveAssignments = BTreeMap::new();
 
@@ -133,7 +133,7 @@ pub fn assign_waves(
 /// payer's vote waits for.
 fn provision_request(
     topology_snapshot: &TopologySnapshot,
-    tx: &Arc<Verifiable<RoutableTransaction>>,
+    tx: &Arc<Verifiable<Transaction>>,
     local_shard: ShardId,
 ) -> Option<ProvisionsRequest> {
     let trie = topology_snapshot.shard_trie();
@@ -175,7 +175,7 @@ fn provision_request(
 /// Returns `None` if there are no cross-shard transactions needing provisions.
 pub fn build_provision_requests(
     topology_snapshot: &TopologySnapshot,
-    transactions: &[Arc<Verifiable<RoutableTransaction>>],
+    transactions: &[Arc<Verifiable<Transaction>>],
     me: ValidatorId,
     local_shard: ShardId,
 ) -> Option<(Vec<ProvisionsRequest>, ShardRecipients)> {

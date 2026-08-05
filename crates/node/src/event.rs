@@ -23,9 +23,8 @@ use hyperscale_network::RequestError;
 use hyperscale_types::{
     BeaconWitnessCommit, BlockHash, BlockHeight, BoundedVec, CertifiedBeaconBlock, CertifiedBlock,
     CertifiedBlockHeader, ConsensusPublicKey, ConsensusSignature, ElidedCertifiedBlock, Epoch,
-    HeaderFetchCount, LeafIndex, MAX_FINALIZED_TX_PER_BLOCK, ProvisionHash, RoutableTransaction,
-    ShardForkProof, ShardId, ShardVoteEquivocation, TxHash, ValidatorId, Verifiable, Verified,
-    WaveId,
+    HeaderFetchCount, LeafIndex, MAX_FINALIZED_TX_PER_BLOCK, ProvisionHash, ShardForkProof,
+    ShardId, ShardVoteEquivocation, Transaction, TxHash, ValidatorId, Verifiable, Verified, WaveId,
 };
 
 use crate::shard::commit::QcOnlyDivergence;
@@ -131,7 +130,7 @@ pub enum ShardScopedInput {
     /// `ProtocolEvent::TransactionValidated`.
     TransactionGossipReceived {
         /// The transaction.
-        tx: Arc<RoutableTransaction>,
+        tx: Arc<Transaction>,
     },
 
     /// Raw batch delivered by the transaction fetch protocol's response
@@ -142,7 +141,7 @@ pub enum ShardScopedInput {
     /// `ProtocolEvent::TransactionsReceived`.
     TransactionsFetched {
         /// Transactions returned by the peer.
-        batch: Vec<Arc<RoutableTransaction>>,
+        batch: Vec<Arc<Transaction>>,
     },
 
     /// Locally-submitted tx delivered to a passive co-host: a hosted
@@ -152,7 +151,7 @@ pub enum ShardScopedInput {
     /// `locally_submitted` — that's the source shard's role.
     AdmitTransaction {
         /// The locally-submitted transaction.
-        tx: Arc<RoutableTransaction>,
+        tx: Arc<Transaction>,
     },
 
     /// Locally-submitted tx delivered to the source shard (first hosted
@@ -164,7 +163,7 @@ pub enum ShardScopedInput {
     /// may include destinations this node doesn't host.
     AdmitAndGossipTransaction {
         /// The locally-submitted transaction.
-        tx: Arc<RoutableTransaction>,
+        tx: Arc<Transaction>,
         /// Every shard the tx touches (declared reads ∪ writes). Gossip
         /// goes to each — even non-hosted ones — over the destination
         /// shard's topic.
@@ -177,7 +176,7 @@ pub enum ShardScopedInput {
     /// takes no `locally_submitted` ownership.
     GossipTransaction {
         /// The locally-submitted transaction.
-        tx: Arc<RoutableTransaction>,
+        tx: Arc<Transaction>,
         /// Every shard the tx touches (declared reads ∪ writes). Gossip
         /// goes to each over the destination shard's topic.
         touched_shards: Vec<ShardId>,
@@ -326,7 +325,7 @@ pub enum ShardScopedInput {
     /// before forwarding as `ProtocolEvent::TransactionValidated`.
     TransactionValidated {
         /// Validated transaction ready for the mempool.
-        tx: Arc<Verified<RoutableTransaction>>,
+        tx: Arc<Verified<Transaction>>,
     },
 
     /// Transactions that failed validation — sent back so the `NodeHost` can
@@ -538,7 +537,7 @@ pub enum ProcessScopedInput {
     /// Client submitted a transaction.
     SubmitTransaction {
         /// Transaction submitted by the local client; will be validated then gossiped.
-        tx: Arc<RoutableTransaction>,
+        tx: Arc<Transaction>,
     },
 }
 

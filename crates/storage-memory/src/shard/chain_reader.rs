@@ -7,7 +7,7 @@ use hyperscale_storage::{BlockForSync, ShardChainReader};
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, BlockManifest, CertifiedBlock,
     CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, QuorumCertificate,
-    RoutableTransaction, ShardWitnessPayload, TxHash, Verified, WaveCertificate, WaveId,
+    ShardWitnessPayload, Transaction, TxHash, Verified, WaveCertificate, WaveId,
 };
 
 use super::core::SimShardStorage;
@@ -67,12 +67,12 @@ impl ShardChainReader for SimShardStorage {
             })
     }
 
-    fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<RoutableTransaction>> {
+    fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<Transaction>> {
         let c = read_or_recover(&self.consensus);
         hashes
             .iter()
             .filter_map(|h| c.transactions.get(h).cloned())
-            .map(Verified::<RoutableTransaction>::from_persisted)
+            .map(Verified::<Transaction>::from_persisted)
             .collect()
     }
 

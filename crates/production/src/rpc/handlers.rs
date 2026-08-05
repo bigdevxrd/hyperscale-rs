@@ -34,7 +34,7 @@ use hyperscale_metrics::{
 };
 use hyperscale_metrics_prometheus::encode_metrics;
 use hyperscale_types::{
-    Hash, InFlightCount, RoutableTransaction, TransactionDecision, TransactionStatus, TxHash,
+    Hash, InFlightCount, Transaction, TransactionDecision, TransactionStatus, TxHash,
 };
 use sbor::prelude::basic_decode;
 
@@ -344,7 +344,7 @@ fn check_backpressure(state: &RpcState) -> Option<(StatusCode, Json<SubmitTransa
 /// Hex- and SBOR-decode a submitted transaction, recording metrics on failure.
 fn decode_transaction(
     transaction_hex: &str,
-) -> Result<RoutableTransaction, (StatusCode, Json<SubmitTransactionResponse>)> {
+) -> Result<Transaction, (StatusCode, Json<SubmitTransactionResponse>)> {
     let tx_bytes = hex_decode(transaction_hex).map_err(|e| {
         record_transaction_rejected("invalid_hex");
         (

@@ -5,7 +5,7 @@ mod types;
 use std::time::Duration;
 
 use hex::encode as hex_encode;
-use hyperscale_types::RoutableTransaction;
+use hyperscale_types::Transaction;
 use reqwest::{Client, Error as ReqwestError};
 use sbor::prelude::basic_encode;
 pub use types::*;
@@ -41,10 +41,7 @@ impl RpcClient {
     ///
     /// Returns [`RpcError::EncodingFailed`] if SBOR encoding fails, or
     /// [`RpcError::Http`] for any HTTP-level failure.
-    pub async fn submit_transaction(
-        &self,
-        tx: &RoutableTransaction,
-    ) -> Result<SubmissionResult, RpcError> {
+    pub async fn submit_transaction(&self, tx: &Transaction) -> Result<SubmissionResult, RpcError> {
         let tx_bytes = basic_encode(tx).map_err(|e| RpcError::EncodingFailed(format!("{e:?}")))?;
         let tx_hex = hex_encode(tx_bytes);
 

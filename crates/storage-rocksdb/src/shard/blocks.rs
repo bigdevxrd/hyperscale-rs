@@ -20,7 +20,7 @@ use std::time::Instant;
 use hyperscale_metrics::{record_storage_operation, record_storage_read};
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHeight, BlockMetadata, CertifiedBlock,
-    FinalizedWave, Hash, ProvisionHash, QuorumCertificate, RoutableTransaction, TxHash, Verifiable,
+    FinalizedWave, Hash, ProvisionHash, QuorumCertificate, Transaction, TxHash, Verifiable,
     Verified, WaveCertificate, WaveId,
 };
 use rocksdb::{ColumnFamily, WriteBatch};
@@ -58,12 +58,12 @@ impl RocksDbShardStorage {
     ///
     /// This is idempotent - storing the same transaction twice is safe.
     /// Used by `put_block_denormalized` to store transactions separately from block metadata.
-    pub fn put_transaction(&self, tx: &RoutableTransaction) {
+    pub fn put_transaction(&self, tx: &Transaction) {
         self.cf_put_sync::<TransactionsCf>(tx.hash().as_raw(), tx);
     }
 
     /// Get a transaction by hash.
-    pub fn get_transaction(&self, hash: &TxHash) -> Option<RoutableTransaction> {
+    pub fn get_transaction(&self, hash: &TxHash) -> Option<Transaction> {
         let start = Instant::now();
         let result = self.cf_get::<TransactionsCf>(hash.as_raw());
         record_storage_read(start.elapsed().as_secs_f64());
@@ -74,7 +74,7 @@ impl RocksDbShardStorage {
     ///
     /// Uses `RocksDB`'s `multi_get_cf` for efficient batch retrieval.
     /// Returns only transactions that were found (missing hashes are skipped).
-    pub fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<RoutableTransaction> {
+    pub fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<Transaction> {
         if hashes.is_empty() {
             return vec![];
         }
@@ -275,12 +275,12 @@ impl RocksDbShardStorage {
         // along so sync-serving glue can re-attach bodies from the
         // in-memory cache when a requester is still within the
         // execution window.
-        let transactions: Vec<Arc<Verifiable<RoutableTransaction>>> = transactions
+        let transactions: Vec<Arc<Verifiable<Transaction>>> = transactions
             .into_iter()
             .map(|tx| {
-                Arc::new(Verifiable::from(
-                    Verified::<RoutableTransaction>::from_persisted((*tx).clone()),
-                ))
+                Arc::new(Verifiable::from(Verified::<Transaction>::from_persisted(
+                    (*tx).clone(),
+                )))
             })
             .collect();
         let block = Block::Sealed {
@@ -420,12 +420,12 @@ impl RocksDbShardStorage {
         // can attach bodies from the in-memory cache when the requester
         // needs them.
         let provision_hashes_bounded = manifest.provision_hashes().clone();
-        let transactions: Vec<Arc<Verifiable<RoutableTransaction>>> = transactions
+        let transactions: Vec<Arc<Verifiable<Transaction>>> = transactions
             .into_iter()
             .map(|tx| {
-                Arc::new(Verifiable::from(
-                    Verified::<RoutableTransaction>::from_persisted((*tx).clone()),
-                ))
+                Arc::new(Verifiable::from(Verified::<Transaction>::from_persisted(
+                    (*tx).clone(),
+                )))
             })
             .collect();
         let block = Block::Sealed {
@@ -453,7 +453,7 @@ impl RocksDbShardStorage {
         &self,
         transactions_cf: &ColumnFamily,
         hashes: &[TxHash],
-    ) -> Vec<Arc<RoutableTransaction>> {
+    ) -> Vec<Arc<Transaction>> {
         if hashes.is_empty() {
             return vec![];
         }

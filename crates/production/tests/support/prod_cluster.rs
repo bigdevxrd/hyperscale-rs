@@ -21,8 +21,8 @@ use hyperscale_scenarios::{
     Budget, Cluster, FaultHandle, FaultableCluster, ScenarioConfig, grow_to, vote_reshape_threshold,
 };
 use hyperscale_types::{
-    BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
-    StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
+    BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, ShardId, StateRoot,
+    Transaction, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
 };
 use radix_common::network::NetworkDefinition;
 use tokio::runtime::{Builder, Runtime};
@@ -197,7 +197,7 @@ impl ProdCluster {
     /// directly rather than relying on a gossip hop. The network only governs
     /// address encoding, not shard routing, so any definition resolves the same
     /// shards.
-    fn host_for_tx(&self, tx: &RoutableTransaction) -> Option<usize> {
+    fn host_for_tx(&self, tx: &Transaction) -> Option<usize> {
         let topology_snapshot = self
             .inner
             .beacon_state()?
@@ -220,7 +220,7 @@ impl Drop for ProdCluster {
 }
 
 impl Cluster for ProdCluster {
-    fn submit(&mut self, tx: Arc<RoutableTransaction>) {
+    fn submit(&mut self, tx: Arc<Transaction>) {
         let host = self.host_for_tx(&tx).unwrap_or(0);
         self.inner.submit_transaction(host, tx);
     }

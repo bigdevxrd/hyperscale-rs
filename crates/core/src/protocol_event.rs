@@ -19,11 +19,11 @@ use hyperscale_types::{
     PcVote3VerifyError, ProvisionRootVerifyError, ProvisionTxRootsMap, ProvisionTxRootsVerifyError,
     Provisions, ProvisionsRoot, ProvisionsVerifyError, QcVerifyError, QuorumCertificate,
     RatifyPhase, RatifyRound, RatifyVote, RatifyVoteVerifyError, ReadySignal, Round,
-    RoutableTransaction, ShardForkProof, ShardId, ShardVoteEquivocation, ShardWitnessPayload,
-    SpcEmptyViewMsg, SpcEmptyViewMsgVerifyError, SpcNewCommitMsg, SpcNewCommitMsgVerifyError,
-    SpcProposalObject, SpcProposalObjectVerifyError, SpcView, StateRoot, StateRootVerifyError,
-    StoredReceipt, Timeout, TransactionRoot, TxHash, TxOutcome, TxRootVerifyError, ValidatorId,
-    Verifiable, Verified, WaveId, WeightedTimestamp,
+    ShardForkProof, ShardId, ShardVoteEquivocation, ShardWitnessPayload, SpcEmptyViewMsg,
+    SpcEmptyViewMsgVerifyError, SpcNewCommitMsg, SpcNewCommitMsgVerifyError, SpcProposalObject,
+    SpcProposalObjectVerifyError, SpcView, StateRoot, StateRootVerifyError, StoredReceipt, Timeout,
+    Transaction, TransactionRoot, TxHash, TxOutcome, TxRootVerifyError, ValidatorId, Verifiable,
+    Verified, WaveId, WeightedTimestamp,
 };
 
 /// How a node learned about the certifying QC that commits a given block.
@@ -677,7 +677,7 @@ pub enum ProtocolEvent {
     /// for whatever it admits.
     TransactionValidated {
         /// The validated transaction.
-        tx: Arc<Verified<RoutableTransaction>>,
+        tx: Arc<Verified<Transaction>>,
         /// `true` if this validator submitted the tx (don't gossip back to client).
         submitted_locally: bool,
     },
@@ -691,7 +691,7 @@ pub enum ProtocolEvent {
     /// signature-valid txs reach this event.
     TransactionsReceived {
         /// Transactions returned by the peer.
-        transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+        transactions: Vec<Arc<Verified<Transaction>>>,
     },
 
     /// One or more transactions were just admitted to the canonical mempool.
@@ -709,7 +709,7 @@ pub enum ProtocolEvent {
     /// the canonical-store admission story is uniform across payloads.
     TransactionsAdmitted {
         /// Transactions newly admitted to mempool on this admission call.
-        txs: Vec<Arc<Verified<RoutableTransaction>>>,
+        txs: Vec<Arc<Verified<Transaction>>>,
     },
 
     // ═══════════════════════════════════════════════════════════════════════

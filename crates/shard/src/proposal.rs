@@ -21,8 +21,8 @@ use hyperscale_core::{Action, VmFeeDemand};
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, Epoch, FinalizedWave, Hash, LocalTimestamp,
     ProposerTimestamp, ProvisionHash, Provisions, ReadySignal, ReshapeTrigger, RevealChain, Round,
-    RoutableTransaction, ShardId, TopologySnapshot, TxHash, ValidatorId, Verifiable, Verified,
-    WaveId, WeightedTimestamp,
+    ShardId, TopologySnapshot, Transaction, TxHash, ValidatorId, Verifiable, Verified, WaveId,
+    WeightedTimestamp,
 };
 use tracing::debug;
 
@@ -39,7 +39,7 @@ use crate::verification::VerificationPipeline;
 pub enum ProposalKind {
     /// Normal proposal with a filtered payload and a real-clock timestamp.
     Normal {
-        transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+        transactions: Vec<Arc<Verified<Transaction>>>,
         finalized_waves: Vec<Arc<Verifiable<FinalizedWave>>>,
         provisions: Vec<Arc<Verifiable<Provisions>>>,
         finalized_tx_count: u32,
@@ -160,11 +160,11 @@ impl ProposalTracker {
 ///
 /// Logs the dedup and expiry counts when non-zero.
 pub fn select_transactions(
-    ready_txs: &[Arc<Verified<RoutableTransaction>>],
+    ready_txs: &[Arc<Verified<Transaction>>],
     qc_chain_tx_hashes: &HashSet<TxHash>,
     dedup_index: &CommitDedupIndex,
     validity_anchor: WeightedTimestamp,
-) -> Vec<Arc<Verified<RoutableTransaction>>> {
+) -> Vec<Arc<Verified<Transaction>>> {
     let before = ready_txs.len();
     let mut deduped = 0;
     let mut expired = 0;
@@ -245,10 +245,10 @@ pub fn select_finalized_waves(
 pub fn filter_engaged_vm_transactions(
     topology_snapshot: &TopologySnapshot,
     local_shard: ShardId,
-    transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+    transactions: Vec<Arc<Verified<Transaction>>>,
     provisions: &[Arc<Verifiable<Provisions>>],
     dedup_index: &CommitDedupIndex,
-) -> Vec<Arc<Verified<RoutableTransaction>>> {
+) -> Vec<Arc<Verified<Transaction>>> {
     transactions
         .into_iter()
         .filter(|tx| {
@@ -611,9 +611,9 @@ mod tests {
         WeightedTimestamp::from_millis(ms)
     }
 
-    fn tx_with_range(seed: u8, range: TimestampRange) -> Arc<Verified<RoutableTransaction>> {
+    fn tx_with_range(seed: u8, range: TimestampRange) -> Arc<Verified<Transaction>> {
         install_stub_vm_statics();
-        Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        Arc::new(Verified::<Transaction>::from_persisted(
             stub_vm_transaction(test_prefix(seed), &[test_prefix(seed)], 1_000, range),
         ))
     }

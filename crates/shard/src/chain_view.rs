@@ -228,9 +228,9 @@ mod tests {
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockManifest,
         BoundedVec, CertificateRoot, Hash, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp,
-        ProvisionsRoot, QuorumCertificate, RevealChain, Round, RoutableTransaction, ShardId,
-        ShardLoad, SignerBitfield, TransactionRoot, ValidatorId, Verifiable, WeightedTimestamp,
-        WitnessSources, test_utils,
+        ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, SignerBitfield,
+        Transaction, TransactionRoot, ValidatorId, Verifiable, WeightedTimestamp, WitnessSources,
+        test_utils,
     };
 
     use super::*;
@@ -387,7 +387,7 @@ mod tests {
         // still land in the dedup set even though an unassembled ancestor sits
         // between it and the walk start — otherwise a descendant could
         // re-include a transaction already present above the committed tip.
-        let tx: Arc<Verifiable<RoutableTransaction>> =
+        let tx: Arc<Verifiable<Transaction>> =
             Arc::new(Verifiable::from(test_utils::test_transaction(7)));
         let tx_hash = tx.hash();
         let low = Block::Live {

@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hyperscale_effects_bridge::admit_package;
-use hyperscale_types::{RevealChain, RoutableTransaction, VmEvent, WeightedTimestamp};
+use hyperscale_types::{RevealChain, Transaction, VmEvent, WeightedTimestamp};
 use hyperscale_vm_effects::{EffectTarget, Hash32, SubstateKey};
 use hyperscale_vm_kernel::{
     Base, BatchTx, Locality, ManifestWalk, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
@@ -242,7 +242,7 @@ impl Executor {
     pub fn preview(
         &self,
         snapshot: &DynSnapshot<'_>,
-        tx: &RoutableTransaction,
+        tx: &Transaction,
         inputs: PreviewInputs,
     ) -> PreviewReport {
         let vm = tx.body();

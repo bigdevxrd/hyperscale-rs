@@ -21,9 +21,9 @@ use hyperscale_storage::{
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock,
     CertifiedBlockHeader, ChainOrigin, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
-    MerkleInclusionProof, PreparedCommit, QuorumCertificate, RoutableTransaction,
-    SafeVoteRegisters, ShardWitnessPayload, StateRoot, StoredReceipt, TxHash, ValidatorId,
-    Verifiable, Verified, WaveCertificate, WaveId,
+    MerkleInclusionProof, PreparedCommit, QuorumCertificate, SafeVoteRegisters,
+    ShardWitnessPayload, StateRoot, StoredReceipt, Transaction, TxHash, ValidatorId, Verifiable,
+    Verified, WaveCertificate, WaveId,
 };
 
 use super::core::RocksDbShardStorage;
@@ -282,7 +282,7 @@ impl ShardChainReader for SharedStorage {
         ShardChainReader::get_block_for_sync(&*self.0, height)
     }
 
-    fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<RoutableTransaction>> {
+    fn get_transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<Transaction>> {
         ShardChainReader::get_transactions_batch(&*self.0, hashes)
     }
 

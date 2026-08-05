@@ -24,7 +24,7 @@ use hyperscale_dispatch::{Dispatch, DispatchPool, Parallelism};
 use hyperscale_network::Network;
 use hyperscale_storage::{ShardStorage, SubstateStore};
 use hyperscale_types::network::gossip::TransactionGossip;
-use hyperscale_types::{RoutableTransaction, ShardId, TopologySnapshot, TxHash, Verified, Verify};
+use hyperscale_types::{ShardId, TopologySnapshot, Transaction, TxHash, Verified, Verify};
 
 use super::TransactionBinding;
 use crate::batch_accumulator::BatchAccumulator;
@@ -49,7 +49,7 @@ where
     ///
     /// [`TxStore`]: hyperscale_mempool::TxStore
     /// [`MempoolCoordinator::on_transaction_gossip`]: hyperscale_mempool::MempoolCoordinator
-    pub(crate) fn handle_transaction_validated(&mut self, tx: Arc<Verified<RoutableTransaction>>) {
+    pub(crate) fn handle_transaction_validated(&mut self, tx: Arc<Verified<Transaction>>) {
         let tx_hash = tx.hash();
         self.io.mempool.pending_validation.remove(&tx_hash);
         let submitted_locally = self.io.mempool.locally_submitted.remove(&tx_hash);
@@ -76,7 +76,7 @@ where
     /// `locally_submitted` on a single shard per node keeps the
     /// finalization metric from double-counting txs whose touched set
     /// spans multiple hosted shards.
-    pub(crate) fn handle_admit_transaction(&mut self, tx: Arc<RoutableTransaction>) {
+    pub(crate) fn handle_admit_transaction(&mut self, tx: Arc<Transaction>) {
         let tx_hash = tx.hash();
         if !self.io.mempool.pending_validation.contains(&tx_hash)
             && !self.io.caches.tx_store.contains(&tx_hash)
@@ -95,7 +95,7 @@ where
     /// (hosted or not) gets the tx appended.
     pub(crate) fn handle_admit_and_gossip_transaction(
         &mut self,
-        tx: Arc<RoutableTransaction>,
+        tx: Arc<Transaction>,
         touched_shards: &[ShardId],
     ) {
         for dst in touched_shards {
@@ -118,7 +118,7 @@ where
     /// touched set and won't see it in mempool.
     pub(crate) fn handle_gossip_transaction(
         &mut self,
-        tx: &Arc<RoutableTransaction>,
+        tx: &Arc<Transaction>,
         touched_shards: &[ShardId],
     ) {
         for dst in touched_shards {
@@ -129,10 +129,7 @@ where
     /// Intercept a gossip-received transaction before it reaches the state
     /// machine: queue for batched async validation if we don't already
     /// have it cached and it isn't tombstoned by mempool.
-    pub(crate) fn handle_gossip_received_tx_for_validation(
-        &mut self,
-        tx: Arc<RoutableTransaction>,
-    ) {
+    pub(crate) fn handle_gossip_received_tx_for_validation(&mut self, tx: Arc<Transaction>) {
         let tx_hash = tx.hash();
         // Already-vouched (in TxStore) or terminally-rejected (tombstoned)
         // are skipped. `pending_validation` blocks duplicate enqueues.
@@ -158,10 +155,7 @@ where
     /// `ProtocolEvent::TransactionsReceived`; invalid hashes surface as
     /// `ShardScopedInput::TransactionValidationsFailed`, mirroring the
     /// gossip-path tracking-set cleanup.
-    pub(crate) fn handle_fetched_txs_for_validation(
-        &mut self,
-        batch: Vec<Arc<RoutableTransaction>>,
-    ) {
+    pub(crate) fn handle_fetched_txs_for_validation(&mut self, batch: Vec<Arc<Transaction>>) {
         if batch.is_empty() {
             return;
         }
@@ -169,7 +163,7 @@ where
         // Each shard's fetch responses decode fresh instances;
         // canonicalizing lets co-hosted shards share one validation
         // verdict.
-        let batch: Vec<Arc<RoutableTransaction>> = batch
+        let batch: Vec<Arc<Transaction>> = batch
             .into_iter()
             .map(|tx| self.process.canonical_txs.canonicalize(&tx))
             .collect();
@@ -183,13 +177,12 @@ where
         self.process
             .dispatch
             .spawn(DispatchPool::Throughput, move || {
-                let results: Vec<(TxHash, Option<Verified<RoutableTransaction>>)> =
-                    par.map(batch, |tx| {
-                        let hash = tx.hash();
-                        (hash, tx.verify(()).ok())
-                    });
+                let results: Vec<(TxHash, Option<Verified<Transaction>>)> = par.map(batch, |tx| {
+                    let hash = tx.hash();
+                    (hash, tx.verify(()).ok())
+                });
 
-                let mut valid: Vec<Arc<Verified<RoutableTransaction>>> = Vec::new();
+                let mut valid: Vec<Arc<Verified<Transaction>>> = Vec::new();
                 let mut failed_hashes = Vec::new();
                 for (hash, verified) in results {
                     if let Some(v) = verified {
@@ -226,7 +219,7 @@ where
     /// [`NodeHost::flush_expired_batches`]. The accumulator lives on the
     /// "source" `ShardLoop` (this one) — when the gossip flushes it
     /// publishes to the destination shard's topic.
-    pub(crate) fn enqueue_tx_for_gossip(&mut self, dst: ShardId, tx: Arc<RoutableTransaction>) {
+    pub(crate) fn enqueue_tx_for_gossip(&mut self, dst: ShardId, tx: Arc<Transaction>) {
         let now = self.now;
         let max = self.io.mempool.tx_gossip_max;
         let window = self.io.mempool.tx_gossip_window;
@@ -259,7 +252,7 @@ where
     // ─── Validation batching ────────────────────────────────────────────
 
     /// Queue a transaction for batch validation on this shard.
-    pub(crate) fn queue_validation(&mut self, tx: Arc<RoutableTransaction>) {
+    pub(crate) fn queue_validation(&mut self, tx: Arc<Transaction>) {
         let now = self.now;
         if self.io.mempool.validation_batch.push(tx, now) {
             self.flush_validation_batch();
@@ -302,14 +295,13 @@ where
         self.process
             .dispatch
             .spawn(DispatchPool::Throughput, move || {
-                let results: Vec<(TxHash, Option<Verified<RoutableTransaction>>)> =
-                    par.map(batch, |tx| {
-                        let hash = tx.hash();
-                        let verified = tx.verify(()).ok().filter(|v| {
-                            payer_covers_fee_ceiling(v, &topology, local_shard, storage.as_deref())
-                        });
-                        (hash, verified)
+                let results: Vec<(TxHash, Option<Verified<Transaction>>)> = par.map(batch, |tx| {
+                    let hash = tx.hash();
+                    let verified = tx.verify(()).ok().filter(|v| {
+                        payer_covers_fee_ceiling(v, &topology, local_shard, storage.as_deref())
                     });
+                    (hash, verified)
+                });
 
                 let mut failed_hashes = Vec::new();
                 for (hash, verified) in results {
@@ -352,7 +344,7 @@ where
     /// require a `&mut NodeHost`.
     ///
     /// [`ProcessIo::compute_submit_fanout`]: crate::process::ProcessIo::compute_submit_fanout
-    pub(crate) fn handle_submit_transaction(&mut self, tx: &Arc<RoutableTransaction>) {
+    pub(crate) fn handle_submit_transaction(&mut self, tx: &Arc<Transaction>) {
         // Seed the canonical-instance cache so gossip echoes of this tx
         // arriving on other hosted shards' topics share its validation
         // verdict.
@@ -396,7 +388,7 @@ where
 /// balance is unreadable here — the payer shard's own admission judges
 /// them), an unwired store, or unavailable history.
 fn payer_covers_fee_ceiling<S: SubstateStore>(
-    tx: &Verified<RoutableTransaction>,
+    tx: &Verified<Transaction>,
     topology: &TopologySnapshot,
     local_shard: ShardId,
     storage: Option<&S>,

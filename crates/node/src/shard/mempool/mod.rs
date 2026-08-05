@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub use fetch::{TransactionBinding, TransactionFetch};
-use hyperscale_types::{RoutableTransaction, ShardId, TxHash};
+use hyperscale_types::{ShardId, Transaction, TxHash};
 pub use serve::serve_transaction_request;
 
 use crate::batch_accumulator::BatchAccumulator;
@@ -56,7 +56,7 @@ pub struct MempoolState {
 
     /// Pending transactions awaiting batched signature / format /
     /// declared-shard verification on the `tx_validation` pool.
-    pub validation_batch: BatchAccumulator<Arc<RoutableTransaction>>,
+    pub validation_batch: BatchAccumulator<Arc<Transaction>>,
 
     /// Per-destination-shard outbound `TransactionGossip` accumulators.
     /// This shard acts as the "source" — locally-submitted or validated
@@ -64,7 +64,7 @@ pub struct MempoolState {
     /// fills until its count cap or time window expires, then flushes
     /// as a single batched gossip message published to the destination
     /// shard's topic.
-    pub outbound_gossip_batches: BTreeMap<ShardId, BatchAccumulator<Arc<RoutableTransaction>>>,
+    pub outbound_gossip_batches: BTreeMap<ShardId, BatchAccumulator<Arc<Transaction>>>,
 
     /// Size cap for new tx-gossip accumulators.
     pub tx_gossip_max: usize,

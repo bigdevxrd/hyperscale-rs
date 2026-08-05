@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::join_all;
 use hyperscale_effects_bridge::build_transfer_tx;
-use hyperscale_types::{RoutableTransaction, ShardId};
+use hyperscale_types::{ShardId, Transaction};
 use rand::{Rng, RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tokio::spawn;
@@ -317,7 +317,7 @@ impl Spammer {
     /// Submit a single transaction concurrently (returns a future).
     async fn submit_transaction_concurrent(
         &self,
-        tx: RoutableTransaction,
+        tx: Transaction,
         target_shard: usize,
         should_track: bool,
     ) {
@@ -536,12 +536,7 @@ impl Worker {
         }
     }
 
-    async fn submit_transaction(
-        &self,
-        tx: RoutableTransaction,
-        target_shard: usize,
-        should_track: bool,
-    ) {
+    async fn submit_transaction(&self, tx: Transaction, target_shard: usize, should_track: bool) {
         self.stats.submitted.fetch_add(1, Ordering::SeqCst);
 
         let range = self.routing.range_for_shard(target_shard);
@@ -603,7 +598,7 @@ impl PartitionWorkload {
         target_shard: ShardId,
         count: usize,
         rng: &mut impl Rng,
-    ) -> Vec<RoutableTransaction> {
+    ) -> Vec<Transaction> {
         (0..count)
             .filter_map(|_| self.generate_for_shard(partition, target_shard, rng))
             .collect()
@@ -614,7 +609,7 @@ impl PartitionWorkload {
         partition: &mut AccountPartition,
         target_shard: ShardId,
         rng: &mut impl Rng,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         let is_cross_shard =
             partition.num_shards() >= 2 && rng.random::<f64>() < self.cross_shard_ratio;
 
@@ -630,7 +625,7 @@ impl PartitionWorkload {
         partition: &mut AccountPartition,
         target_shard: ShardId,
         rng: &mut impl Rng,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         let (from, to) = partition.pair_for_shard(target_shard, rng, self.selection_mode)?;
         Some(self.build_transfer(from, to))
     }
@@ -640,7 +635,7 @@ impl PartitionWorkload {
         partition: &mut AccountPartition,
         target_shard: ShardId,
         rng: &mut impl Rng,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         if partition.num_shards() < 2 {
             return None;
         }
@@ -662,7 +657,7 @@ impl PartitionWorkload {
         Some(self.build_transfer(from, to))
     }
 
-    fn build_transfer(&self, from: &FundedAccount, to: &FundedAccount) -> RoutableTransaction {
+    fn build_transfer(&self, from: &FundedAccount, to: &FundedAccount) -> Transaction {
         let nonce = from.next_nonce();
         build_transfer_tx(
             &from.keypair,

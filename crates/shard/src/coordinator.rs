@@ -88,10 +88,10 @@ use hyperscale_types::{
     CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin, FinalizedWave,
     LocalReceiptRoot, LocalReceiptRootVerifyError, MAX_ROUND_GAP, ProvisionRootVerifyError,
     ProvisionTxRootsMap, ProvisionTxRootsVerifyError, Provisions, ProvisionsRoot, QcContext,
-    QcVerifyError, QuorumCertificate, RecoveryCause, RevealChain, Round, RoutableTransaction,
-    SafeVoteRegisters, ShardLoad, StateRoot, StateRootVerifyError, Timeout, TopologySchedule,
-    TopologySnapshot, TransactionRoot, TxHash, TxRootVerifyError, ValidatorId, Verifiable,
-    Verified, Verifier, Verify, VoteCount, derive_leaves, missed_proposals_since_prev_commit,
+    QcVerifyError, QuorumCertificate, RecoveryCause, RevealChain, Round, SafeVoteRegisters,
+    ShardLoad, StateRoot, StateRootVerifyError, Timeout, TopologySchedule, TopologySnapshot,
+    Transaction, TransactionRoot, TxHash, TxRootVerifyError, ValidatorId, Verifiable, Verified,
+    Verifier, Verify, VoteCount, derive_leaves, missed_proposals_since_prev_commit,
     ready_leaf_payload,
 };
 use tracing::field::Empty;
@@ -1445,7 +1445,7 @@ impl ShardCoordinator {
     pub fn try_propose(
         &mut self,
         topology_schedule: &TopologySchedule,
-        ready_txs: &[Arc<Verified<RoutableTransaction>>],
+        ready_txs: &[Arc<Verified<Transaction>>],
         finalized_waves: Vec<Arc<Verifiable<FinalizedWave>>>,
         provisions: Vec<Arc<Verifiable<Provisions>>>,
     ) -> Vec<Action> {
@@ -2054,7 +2054,7 @@ impl ShardCoordinator {
         topology_schedule: &TopologySchedule,
         header: &BlockHeader,
         manifest: BlockManifest,
-        lookup_tx: impl Fn(&TxHash) -> Option<Arc<Verifiable<RoutableTransaction>>>,
+        lookup_tx: impl Fn(&TxHash) -> Option<Arc<Verifiable<Transaction>>>,
         lookup_finalized_wave: impl Fn(&WaveId) -> Option<Arc<Verifiable<FinalizedWave>>>,
         lookup_provision: impl Fn(&ProvisionHash) -> Option<Arc<Verifiable<Provisions>>>,
     ) -> Vec<Action> {
@@ -4146,7 +4146,7 @@ impl ShardCoordinator {
         topology_schedule: &TopologySchedule,
         block_hash: BlockHash,
         qc: &Verified<QuorumCertificate>,
-        ready_txs: &[Arc<Verified<RoutableTransaction>>],
+        ready_txs: &[Arc<Verified<Transaction>>],
         finalized_waves: Vec<Arc<Verifiable<FinalizedWave>>>,
         provisions: Vec<Arc<Verifiable<Provisions>>>,
     ) -> Vec<Action> {
@@ -5635,12 +5635,11 @@ impl ShardCoordinator {
     pub fn on_transactions_admitted(
         &mut self,
         topology_schedule: &TopologySchedule,
-        txs: &[Arc<Verified<RoutableTransaction>>],
+        txs: &[Arc<Verified<Transaction>>],
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         for tx in txs {
-            let wrapped: Arc<Verifiable<RoutableTransaction>> =
-                Arc::new(Verifiable::from((**tx).clone()));
+            let wrapped: Arc<Verifiable<Transaction>> = Arc::new(Verifiable::from((**tx).clone()));
             for block_hash in self.pending_blocks.receive_transaction(&wrapped) {
                 actions.extend(self.dispatch_block_complete(topology_schedule, block_hash));
             }
@@ -6128,9 +6127,9 @@ mod tests {
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BoundedVec, CertificateRoot,
         ConsensusSignature, Epoch, Hash, InFlightCount, LocalReceiptRoot, MAX_TIMESTAMP_DELAY,
         MAX_TIMESTAMP_RUSH, NetworkDefinition, NetworkParams, ProvisionsRoot, RETENTION_HORIZON,
-        RevealChain, RoutableTransaction, ShardId, ShardLoad, Signer, SignerBitfield,
-        TopologySchedule, TopologySnapshot, TransactionRoot, ValidatorId, ValidatorInfo,
-        ValidatorSet, VoteCount, WeightedTimestamp, WitnessSources, test_utils,
+        RevealChain, ShardId, ShardLoad, Signer, SignerBitfield, TopologySchedule,
+        TopologySnapshot, Transaction, TransactionRoot, ValidatorId, ValidatorInfo, ValidatorSet,
+        VoteCount, WeightedTimestamp, WitnessSources, test_utils,
     };
 
     use super::*;
@@ -8990,11 +8989,11 @@ mod tests {
     // Helpers retained for no-duplicate-transactions walk tests below
     // ═══════════════════════════════════════════════════════════════════════════
 
-    fn make_test_tx_with_seed(seed: u8) -> Arc<Verifiable<RoutableTransaction>> {
+    fn make_test_tx_with_seed(seed: u8) -> Arc<Verifiable<Transaction>> {
         Arc::new(Verifiable::from(test_utils::test_transaction(seed)))
     }
 
-    fn sort_txs_by_hash(txs: &mut [Arc<Verifiable<RoutableTransaction>>]) {
+    fn sort_txs_by_hash(txs: &mut [Arc<Verifiable<Transaction>>]) {
         txs.sort_by_key(|tx| tx.hash());
     }
 

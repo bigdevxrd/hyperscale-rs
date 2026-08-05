@@ -17,9 +17,9 @@ use hyperscale_engine::{
 };
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
 use hyperscale_types::{
-    BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain,
-    RoutableTransaction, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, Verified, VmBody,
-    VmTransaction, WeightedTimestamp,
+    BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, ShardId,
+    ShardTrie, Stake, StakePoolId, StakePoolSeat, Transaction, TransactionBody,
+    TransactionEnvelope, Verified, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -145,7 +145,7 @@ fn from_edge(producer: u32, resource: Address) -> GraphArg {
 }
 
 /// `delegator.withdraw(XRD) -> pool.stake -> delegator.deposit(units)`.
-fn signed_stake(pool: [u8; 16], amount: u128) -> RoutableTransaction {
+fn signed_stake(pool: [u8; 16], amount: u128) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
     let from = vm_account_address(&key.public_key().0);
     let graph = ManifestGraph {
@@ -171,9 +171,9 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> RoutableTransaction {
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    RoutableTransaction::new(
-        VmTransaction {
-            body: VmBody::Call(encode_tree(&tree).into()),
+    Transaction::new(
+        TransactionEnvelope {
+            body: TransactionBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
             fee_payer: from,
             max_fee: 1_000,
@@ -188,7 +188,7 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> RoutableTransaction {
     )
 }
 
-fn execute(executor: &Executor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
+fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
     let store = MapDb::genesis(&[(delegator(), 10_000)], &[]);
     let snapshot = DynSnapshot(&store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
@@ -202,7 +202,7 @@ fn execute(executor: &Executor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
         wave_start_ts: WeightedTimestamp::from_millis(1_000),
         wave_start_reveal: RevealChain::ZERO,
     };
-    let verified = Arc::new(Verified::<RoutableTransaction>::from_persisted(tx));
+    let verified = Arc::new(Verified::<Transaction>::from_persisted(tx));
     executor.execute_wave_batch(&ctx, &snapshot, std::slice::from_ref(&verified))
 }
 
@@ -289,9 +289,9 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    let tx = RoutableTransaction::new(
-        VmTransaction {
-            body: VmBody::Call(encode_tree(&tree).into()),
+    let tx = Transaction::new(
+        TransactionEnvelope {
+            body: TransactionBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
             fee_payer: from,
             max_fee: 1_000,
@@ -313,7 +313,7 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
 
 /// `pool.register-validator(id, pubkey, proof)`, signed and paid for by
 /// `seed` whatever the pool's configuration says.
-fn signed_registration(pool: [u8; 16], seed: u8) -> RoutableTransaction {
+fn signed_registration(pool: [u8; 16], seed: u8) -> Transaction {
     let key = key_of(seed);
     let tree = EnvelopeTree {
         root: IntentDecl {
@@ -333,9 +333,9 @@ fn signed_registration(pool: [u8; 16], seed: u8) -> RoutableTransaction {
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    RoutableTransaction::new(
-        VmTransaction {
-            body: VmBody::Call(encode_tree(&tree).into()),
+    Transaction::new(
+        TransactionEnvelope {
+            body: TransactionBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
             fee_payer: account_of(seed),
             max_fee: 1_000,

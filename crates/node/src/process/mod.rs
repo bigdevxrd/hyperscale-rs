@@ -23,8 +23,8 @@ use hyperscale_dispatch::Dispatch;
 use hyperscale_network::Network;
 use hyperscale_storage::{BeaconStorage, ShardStorage};
 use hyperscale_types::{
-    Epoch, RatifyPhase, RatifyRound, RoutableTransaction, RoutingCommittees, ShardId, SpcView,
-    TopologySnapshot, ValidatorId, Verifier,
+    Epoch, RatifyPhase, RatifyRound, RoutingCommittees, ShardId, SpcView, TopologySnapshot,
+    Transaction, ValidatorId, Verifier,
 };
 pub(crate) use network_handlers::register_shard_request_handlers;
 pub use tx_status::TxStatusCache;
@@ -213,7 +213,7 @@ where
     /// lock-free.
     pub(crate) tx_status: Arc<TxStatusCache>,
 
-    /// Canonical `RoutableTransaction` instance per tx hash, so
+    /// Canonical `Transaction` instance per tx hash, so
     /// co-hosted shards validating the same transaction share one
     /// `OnceLock` verdict instead of each running the full
     /// signature/SBOR validation. `Arc` so the gossip handler closure
@@ -419,7 +419,7 @@ where
     /// If no hosted shard is touched, returns
     /// [`SubmitFanout::GossipOnly`] — gossip still goes out via some
     /// hosted shard, but no shard admits or takes ownership.
-    pub(crate) fn compute_submit_fanout(&self, tx: &RoutableTransaction) -> SubmitFanout {
+    pub(crate) fn compute_submit_fanout(&self, tx: &Transaction) -> SubmitFanout {
         let topology_snapshot = self.topology_snapshot.load();
         let touched_shards: Vec<ShardId> = topology_snapshot.all_shards_for_transaction(tx);
 
@@ -458,7 +458,7 @@ where
     /// closure — callers on tokio worker threads can invoke this
     /// concurrently because `compute_submit_fanout` only reads the
     /// lock-free topology snapshot and the immutable sender map.
-    pub fn submit_transaction(&self, tx: &Arc<RoutableTransaction>) -> bool {
+    pub fn submit_transaction(&self, tx: &Arc<Transaction>) -> bool {
         // Seed the canonical-instance cache so gossip echoes of this tx
         // arriving on other hosted shards' topics share its validation
         // verdict.

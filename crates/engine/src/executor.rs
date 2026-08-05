@@ -29,9 +29,8 @@ use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, Su
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata,
-    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, RoutableTransaction,
-    StakePoolSeat, SubstateEntry, TxHash, Verified, VmEvent, compute_merkle_root,
-    install_vm_statics,
+    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, StakePoolSeat, SubstateEntry,
+    Transaction, TxHash, Verified, VmEvent, compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
@@ -212,7 +211,7 @@ impl Executor {
     /// — the same `decode → admit → route` admission ran; refusal here
     /// means the transaction bypassed admission and fails
     /// deterministically.
-    pub(crate) fn prepare(&self, tx: &RoutableTransaction) -> Result<PreparedVmTx, String> {
+    pub(crate) fn prepare(&self, tx: &Transaction) -> Result<PreparedVmTx, String> {
         self.prepare_with_authority(tx, TargetAuthority::Required)
     }
 
@@ -224,7 +223,7 @@ impl Executor {
     /// [`TargetAuthority::Assumed`].
     pub(crate) fn prepare_with_authority(
         &self,
-        tx: &RoutableTransaction,
+        tx: &Transaction,
         authority: TargetAuthority,
     ) -> Result<PreparedVmTx, String> {
         let vm = tx.body();
@@ -812,7 +811,7 @@ impl Executor {
         &self,
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
-        transactions: &[Arc<Verified<RoutableTransaction>>],
+        transactions: &[Arc<Verified<Transaction>>],
         provisions_by_tx: &BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>>,
         env_by_tx: &BTreeMap<VmTxHash, EnvInputs>,
         cross_shard: bool,
@@ -1068,7 +1067,7 @@ impl Executor {
         &self,
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
-        transactions: &[Arc<Verified<RoutableTransaction>>],
+        transactions: &[Arc<Verified<Transaction>>],
     ) -> Vec<ExecutedTx> {
         // A single-shard batch commits in one block, so every member's
         // environment is anchored on the wave-start block.
@@ -1104,7 +1103,7 @@ impl Executor {
         snapshot: &DynSnapshot<'_>,
         requests: &[CrossShardTxInput<'_>],
     ) -> Vec<ExecutedTx> {
-        let transactions: Vec<Arc<Verified<RoutableTransaction>>> =
+        let transactions: Vec<Arc<Verified<Transaction>>> =
             requests.iter().map(|r| Arc::clone(r.transaction)).collect();
         let provisions_by_tx: BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>> = requests
             .iter()

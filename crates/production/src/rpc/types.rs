@@ -96,7 +96,7 @@ pub struct ShardSyncStatus {
 /// Accepts a transaction in hex-encoded SBOR format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitTransactionRequest {
-    /// Hex-encoded SBOR-serialized `RoutableTransaction`.
+    /// Hex-encoded SBOR-serialized `Transaction`.
     pub transaction_hex: String,
 }
 

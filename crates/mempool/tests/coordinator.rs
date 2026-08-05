@@ -13,13 +13,13 @@ use hyperscale_types::test_utils::{
     TestCommittee, certify, make_finalized_wave, make_live_block, test_transaction,
 };
 use hyperscale_types::{
-    BlockHeight, Hash, LocalTimestamp, RoutableTransaction, ShardId, TopologySnapshot,
-    TransactionDecision, TransactionStatus, TxHash, ValidatorId, Verified,
+    BlockHeight, Hash, LocalTimestamp, ShardId, TopologySnapshot, Transaction, TransactionDecision,
+    TransactionStatus, TxHash, ValidatorId, Verified,
 };
 
-/// Test-only convenience: wrap any `RoutableTransaction` in a `Verified`
+/// Test-only convenience: wrap any `Transaction` in a `Verified`
 /// witness via the test-only gate.
-const fn verified(tx: RoutableTransaction) -> Verified<RoutableTransaction> {
+const fn verified(tx: Transaction) -> Verified<Transaction> {
     Verified::new_unchecked_for_test(tx)
 }
 

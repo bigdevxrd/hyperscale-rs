@@ -3,7 +3,7 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use hyperscale_types::{RoutableTransaction, TxHash};
+use hyperscale_types::{Transaction, TxHash};
 use quick_cache::sync::Cache as QuickCache;
 
 /// Capacity of the canonical-instance cache. Sized to bridge the
@@ -11,7 +11,7 @@ use quick_cache::sync::Cache as QuickCache;
 /// out by LRU.
 const CANONICAL_TX_CACHE_SIZE: usize = 10_000;
 
-/// Canonical `RoutableTransaction` instance per tx hash.
+/// Canonical `Transaction` instance per tx hash.
 ///
 /// A cross-shard transaction reaches a multi-shard host once per
 /// hosted shard (per-shard gossip topics, per-shard fetch responses),
@@ -27,7 +27,7 @@ const CANONICAL_TX_CACHE_SIZE: usize = 10_000;
 /// Identity here is the body hash — the same identity every per-shard
 /// dedup (tx store, pending-validation set) already keys by.
 pub struct CanonicalTxs {
-    cache: QuickCache<TxHash, Arc<RoutableTransaction>>,
+    cache: QuickCache<TxHash, Arc<Transaction>>,
 }
 
 impl CanonicalTxs {
@@ -39,7 +39,7 @@ impl CanonicalTxs {
 
     /// Map `tx` onto the process-wide canonical instance for its hash.
     /// The first arrival's instance wins; later arrivals get it back.
-    pub fn canonicalize(&self, tx: &Arc<RoutableTransaction>) -> Arc<RoutableTransaction> {
+    pub fn canonicalize(&self, tx: &Arc<Transaction>) -> Arc<Transaction> {
         let hash = tx.hash();
         self.cache
             .get_or_insert_with(&hash, || Ok::<_, Infallible>(Arc::clone(tx)))

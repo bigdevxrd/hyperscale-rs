@@ -26,8 +26,8 @@ use hyperscale_storage::{
 };
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
-    BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, RoutableTransaction,
-    ShardId, ShardTrie, Verified, VmBody, VmTransaction, WeightedTimestamp,
+    BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, ShardId, ShardTrie,
+    Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -133,7 +133,7 @@ fn deposit(target: [u8; 16], producer: u32) -> GraphNode {
 
 /// `from.withdraw(XRD, amount) -> to.deposit(..)`, signed and paid for by
 /// the thief whatever `from` says.
-fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransaction {
+fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[THIEF; 32]).unwrap();
     let tree = EnvelopeTree {
         root: IntentDecl {
@@ -145,9 +145,9 @@ fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransa
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    RoutableTransaction::new(
-        VmTransaction {
-            body: VmBody::Call(encode_tree(&tree).into()),
+    Transaction::new(
+        TransactionEnvelope {
+            body: TransactionBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
             fee_payer: thief(),
             max_fee: 1_000,
@@ -162,7 +162,7 @@ fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransa
     )
 }
 
-fn execute(executor: &Executor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
+fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
     let store = MapDb::genesis(&world_accounts());
     let snapshot = DynSnapshot(&store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
@@ -176,7 +176,7 @@ fn execute(executor: &Executor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
         wave_start_ts: WeightedTimestamp::from_millis(1_000),
         wave_start_reveal: RevealChain::ZERO,
     };
-    let verified = Arc::new(Verified::<RoutableTransaction>::from_persisted(tx));
+    let verified = Arc::new(Verified::<Transaction>::from_persisted(tx));
     executor.execute_wave_batch(&ctx, &snapshot, std::slice::from_ref(&verified))
 }
 

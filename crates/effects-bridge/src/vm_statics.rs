@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use hyperscale_types::{
-    DeclaredKey, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction,
+    DeclaredKey, Derived, Routing, TransactionEnvelope, VmStatics, VmStaticsError,
 };
 use hyperscale_vm_effects::stdlib::{ENTROPY, VALIDATORS, VAULT};
 use hyperscale_vm_effects::{
@@ -353,7 +353,7 @@ const fn admission_key(target: &EffectTarget) -> DeclaredKey {
 /// The envelope's identity: its signing hash through the workspace's
 /// protocol hash, as the vocabulary's hash type.
 #[must_use]
-pub fn envelope_identity(vm: &VmTransaction) -> ManifestHash {
+pub fn envelope_identity(vm: &TransactionEnvelope) -> ManifestHash {
     ManifestHash(Hash32(*vm.signing_hash().as_bytes()))
 }
 
@@ -437,7 +437,10 @@ impl BridgeStatics {
     /// share a block and settle two burns against one cell, which is the
     /// exposure a call transaction avoids only because its own withdraw
     /// happens to name the same vault.
-    fn derive_publish(vm: &VmTransaction, artifact: &[u8]) -> Result<VmDerived, VmStaticsError> {
+    fn derive_publish(
+        vm: &TransactionEnvelope,
+        artifact: &[u8],
+    ) -> Result<Derived, VmStaticsError> {
         if !vm.subintent_sigs.is_empty() {
             return Err(VmStaticsError("a publish carries no subintents".into()));
         }
@@ -457,8 +460,8 @@ impl BridgeStatics {
         write_keys.sort_unstable();
         write_keys.dedup();
 
-        Ok(VmDerived {
-            routing: VmRouting {
+        Ok(Derived {
+            routing: Routing {
                 read_prefixes: Vec::new(),
                 write_prefixes: vec![publisher],
                 provision_prefixes: Vec::new(),
@@ -560,7 +563,7 @@ impl VmStatics for BridgeStatics {
         self.cache.absorb_cell(owner, local, value);
     }
 
-    fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
+    fn derive(&self, vm: &TransactionEnvelope) -> Result<Derived, VmStaticsError> {
         // The payer is the composer, and this is what makes that true.
         // Every fee rule debits the account this field names — the
         // reservation a payer shard enforces as block validity, the
@@ -649,8 +652,8 @@ impl VmStatics for BridgeStatics {
                 .into_iter()
                 .collect()
         };
-        Ok(VmDerived {
-            routing: VmRouting {
+        Ok(Derived {
+            routing: Routing {
                 read_prefixes: prefixes(&read_keys),
                 write_prefixes: prefixes(&write_keys),
                 provision_prefixes: prefixes(&provision_keys),
@@ -670,7 +673,7 @@ impl VmStatics for BridgeStatics {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::{Ed25519PrivateKey, VmBody, VmSubintentSig};
+    use hyperscale_types::{Ed25519PrivateKey, SubintentSig, TransactionBody};
     use hyperscale_vm_effects::stdlib::{VAULT, account_metadata};
     use hyperscale_vm_effects::{
         Hasher, InstanceMeta, PackageHash, SubintentHash, child_key, nullifier_key,
@@ -805,21 +808,21 @@ mod tests {
         }
     }
 
-    fn envelope(tree: &EnvelopeTree, subintent_keys: &[&Ed25519PrivateKey]) -> VmTransaction {
+    fn envelope(tree: &EnvelopeTree, subintent_keys: &[&Ed25519PrivateKey]) -> TransactionEnvelope {
         let subintent_sigs = tree
             .subintents
             .iter()
             .zip(subintent_keys)
             .map(|(subintent, signer)| {
                 let hash = subintent.decl.hash(&ProtocolHasher);
-                VmSubintentSig {
+                SubintentSig {
                     public_key: signer.public_key().0,
                     signature: signer.sign(hash.0.0).0,
                 }
             })
             .collect();
-        VmTransaction {
-            body: VmBody::Call(encode_tree(tree).into()),
+        TransactionEnvelope {
+            body: TransactionBody::Call(encode_tree(tree).into()),
             subintent_sigs,
             fee_payer: composer_addr().0,
             max_fee: 1_000,

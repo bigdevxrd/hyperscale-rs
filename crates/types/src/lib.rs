@@ -199,14 +199,14 @@ pub use topology::trie::ShardTrie;
 pub use topology::validator::{ValidatorInfo, ValidatorSet};
 pub use transaction::declared_key::DeclaredKey;
 pub use transaction::limits::MAX_TX_BYTES_LEN;
-pub use transaction::routable::{RoutableTransaction, RoutableTransactionVerifyError};
 pub use transaction::status::{
     TransactionDecision, TransactionError, TransactionStatus, TransactionStatusParseError,
 };
 pub use transaction::vm::{
-    MAX_VM_MESSAGE_LEN, VmBody, VmDerived, VmRouting, VmStatics, VmStaticsError, VmSubintentSig,
-    VmTransaction, install_vm_statics, vm_statics_installed,
+    Derived, MAX_VM_MESSAGE_LEN, Routing, SubintentSig, TransactionBody, TransactionEnvelope,
+    VmStatics, VmStaticsError, install_vm_statics, vm_statics_installed,
 };
+pub use transaction::wire::{Transaction, TransactionVerifyError};
 pub use verifiable::{Verifiable, Verified, Verify};
 pub use wave::certificate::{
     MAX_EXECUTION_CERTIFICATES_PER_WAVE, WaveCertificate, wave_receipt_hash,

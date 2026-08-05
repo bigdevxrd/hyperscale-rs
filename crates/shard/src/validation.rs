@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use hyperscale_types::{
     Block, BlockHeader, BlockHeight, LocalTimestamp, MAX_ROUND_GAP, MAX_TIMESTAMP_DELAY,
-    MAX_TIMESTAMP_RUSH, ProvisionHash, QuorumCertificate, RoutableTransaction, ShardId, ShardLoad,
-    TopologySnapshot, TxHash, Verifiable, VoteCount, WaveId, compute_waves,
+    MAX_TIMESTAMP_RUSH, ProvisionHash, QuorumCertificate, ShardId, ShardLoad, TopologySnapshot,
+    Transaction, TxHash, Verifiable, VoteCount, WaveId, compute_waves,
 };
 
 use crate::commit_dedup::CommitDedupIndex;
@@ -545,10 +545,7 @@ fn validate_transactions_verified(block: &Block) -> Result<(), String> {
 
 /// Verify that a list of transactions is sorted by hash in strict ascending
 /// order. `section` is used in the error message for diagnostics.
-fn verify_hash_sorted(
-    txs: &[Arc<Verifiable<RoutableTransaction>>],
-    section: &str,
-) -> Result<(), String> {
+fn verify_hash_sorted(txs: &[Arc<Verifiable<Transaction>>], section: &str) -> Result<(), String> {
     for window in txs.windows(2) {
         if window[0].hash() >= window[1].hash() {
             return Err(format!(
@@ -572,8 +569,8 @@ mod tests {
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
         BoundedVec, CertificateRoot, ChainOrigin, FinalizedWave, Hash, InFlightCount,
         LocalReceiptRoot, MerkleInclusionProof, NetworkDefinition, ProposerTimestamp,
-        ProvisionEntry, Provisions, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        RoutableTransaction, ShardId, ShardLoad, Signer, SignerBitfield, StateRoot, TimestampRange,
+        ProvisionEntry, Provisions, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId,
+        ShardLoad, Signer, SignerBitfield, StateRoot, TimestampRange, Transaction,
         TransactionDecision, TransactionRoot, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
         Verified, WeightedTimestamp, WitnessSources, compute_waves, test_utils,
     };
@@ -1139,7 +1136,7 @@ mod tests {
 
     fn block_with_transactions(
         height: BlockHeight,
-        transactions: Vec<Arc<Verifiable<RoutableTransaction>>>,
+        transactions: Vec<Arc<Verifiable<Transaction>>>,
     ) -> Block {
         Block::Live {
             header: header_at_height(height, 100_000),
@@ -1176,11 +1173,11 @@ mod tests {
         assert!(validate_block_work(&honest, None).is_ok());
     }
 
-    fn tx(seed: u8) -> Arc<Verifiable<RoutableTransaction>> {
+    fn tx(seed: u8) -> Arc<Verifiable<Transaction>> {
         Arc::new(Verifiable::from(test_utils::test_transaction(seed)))
     }
 
-    fn sorted_txs(seeds: &[u8]) -> Vec<Arc<Verifiable<RoutableTransaction>>> {
+    fn sorted_txs(seeds: &[u8]) -> Vec<Arc<Verifiable<Transaction>>> {
         let mut txs: Vec<_> = seeds.iter().map(|&s| tx(s)).collect();
         txs.sort_by_key(|t| t.hash());
         txs
@@ -1460,13 +1457,13 @@ mod tests {
     // validate_transactions_verified / validate_block_for_vote verified-arm
     // ═══════════════════════════════════════════════════════════════════════
 
-    fn verified_tx(seed: u8) -> Arc<Verifiable<RoutableTransaction>> {
+    fn verified_tx(seed: u8) -> Arc<Verifiable<Transaction>> {
         Arc::new(Verifiable::from(test_utils::verified_test_transaction(
             seed,
         )))
     }
 
-    fn sorted_verified_txs(seeds: &[u8]) -> Vec<Arc<Verifiable<RoutableTransaction>>> {
+    fn sorted_verified_txs(seeds: &[u8]) -> Vec<Arc<Verifiable<Transaction>>> {
         let mut txs: Vec<_> = seeds.iter().map(|&s| verified_tx(s)).collect();
         txs.sort_by_key(|t| t.hash());
         txs
@@ -1564,7 +1561,7 @@ mod tests {
 
     /// A signed stub VM transaction whose derived owners are exactly
     /// `owners`, paying from `payer`, wrapped verified for block content.
-    fn stub_vm_tx(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verifiable<RoutableTransaction>> {
+    fn stub_vm_tx(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verifiable<Transaction>> {
         test_utils::install_stub_vm_statics();
         let validity = TimestampRange::new(
             WeightedTimestamp::ZERO,
@@ -1576,7 +1573,7 @@ mod tests {
     }
 
     fn block_with_vm_tx(
-        tx: &Arc<Verifiable<RoutableTransaction>>,
+        tx: &Arc<Verifiable<Transaction>>,
         provisions: Vec<Arc<Verifiable<Provisions>>>,
     ) -> Block {
         Block::Live {

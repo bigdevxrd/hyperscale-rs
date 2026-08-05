@@ -21,12 +21,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperscale_types::{DeclaredKey, LocalTimestamp, RoutableTransaction, TxHash, Verified};
+use hyperscale_types::{DeclaredKey, LocalTimestamp, Transaction, TxHash, Verified};
 
 use crate::lock_tracker::{BlockScope, LockTracker};
 
 struct ReadyEntry {
-    tx: Arc<Verified<RoutableTransaction>>,
+    tx: Arc<Verified<Transaction>>,
     added_at: LocalTimestamp,
 }
 
@@ -106,7 +106,7 @@ impl ReadySet {
         self.stats
     }
 
-    fn declares_write(tx: &RoutableTransaction, key: &DeclaredKey) -> bool {
+    fn declares_write(tx: &Transaction, key: &DeclaredKey) -> bool {
         tx.admission_write_keys().iter().any(|write| write == key)
     }
 
@@ -150,7 +150,7 @@ impl ReadySet {
     pub fn add(
         &mut self,
         hash: TxHash,
-        tx: Arc<Verified<RoutableTransaction>>,
+        tx: Arc<Verified<Transaction>>,
         added_at: LocalTimestamp,
         now: LocalTimestamp,
         locks: &LockTracker,
@@ -317,7 +317,7 @@ impl ReadySet {
         &self,
         min_dwell: Duration,
         now: LocalTimestamp,
-    ) -> impl Iterator<Item = Arc<Verified<RoutableTransaction>>> + '_ {
+    ) -> impl Iterator<Item = Arc<Verified<Transaction>>> + '_ {
         self.ready
             .values()
             .filter(move |entry| now.saturating_sub(entry.added_at) >= min_dwell)
@@ -351,18 +351,14 @@ mod tests {
 
     use super::*;
 
-    fn tx_with(seed: u8, nodes: &[u8]) -> (TxHash, Arc<Verified<RoutableTransaction>>) {
+    fn tx_with(seed: u8, nodes: &[u8]) -> (TxHash, Arc<Verified<Transaction>>) {
         let prefixes: Vec<_> = nodes.iter().map(|n| test_prefix(*n)).collect();
         let tx = test_transaction_with_prefixes(&[seed], &prefixes, &prefixes);
         let hash = tx.hash();
         (hash, Arc::new(Verified::new_unchecked_for_test(tx)))
     }
 
-    fn tx_rw(
-        seed: u8,
-        reads: &[u8],
-        writes: &[u8],
-    ) -> (TxHash, Arc<Verified<RoutableTransaction>>) {
+    fn tx_rw(seed: u8, reads: &[u8], writes: &[u8]) -> (TxHash, Arc<Verified<Transaction>>) {
         let tx = test_transaction_with_prefixes(
             &[seed],
             &reads.iter().map(|n| test_prefix(*n)).collect::<Vec<_>>(),
@@ -756,7 +752,7 @@ mod tests {
         op: &Op,
         rs: &mut ReadySet,
         locks: &mut LockTracker,
-        fixture: &[(TxHash, Arc<Verified<RoutableTransaction>>)],
+        fixture: &[(TxHash, Arc<Verified<Transaction>>)],
     ) {
         let pool_len = fixture.len();
         match op {
@@ -795,7 +791,7 @@ mod tests {
     fn cascade_promote(
         rs: &mut ReadySet,
         locks: &LockTracker,
-        fixture: &[(TxHash, Arc<Verified<RoutableTransaction>>)],
+        fixture: &[(TxHash, Arc<Verified<Transaction>>)],
         key: DeclaredKey,
     ) {
         let mut promotable = rs.promotable_for_key(key);
@@ -822,7 +818,7 @@ mod tests {
         ) {
             // Fixture: 8 txs over 4 declared-node seeds, heavy overlap so the
             // deferred path gets real exercise.
-            let fixture: Vec<(TxHash, Arc<Verified<RoutableTransaction>>)> = (0..8)
+            let fixture: Vec<(TxHash, Arc<Verified<Transaction>>)> = (0..8)
                 .map(|seed| tx_with(seed, &[0, 1, 2, 3][..=((seed as usize) % 4)]))
                 .collect();
 

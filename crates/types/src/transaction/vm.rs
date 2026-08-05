@@ -1,4 +1,4 @@
-//! [`VmTransaction`] — the VM engine's signed transaction envelope.
+//! [`TransactionEnvelope`] — the signed envelope a [`Transaction`](crate::Transaction) carries.
 //!
 //! The envelope carries the bound tree — the composer's root graph plus
 //! every signed subintent — as canonical bytes, beside the signing-time
@@ -29,7 +29,7 @@ pub const MAX_VM_MESSAGE_LEN: usize = 1024;
 /// One bound subintent's signature: the signer's key and their ed25519
 /// signature over the subintent's declaration hash, in tree order.
 #[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub struct VmSubintentSig {
+pub struct SubintentSig {
     /// The subintent signer's ed25519 public key; its derived account
     /// address must match the signer the tree binds.
     pub public_key: [u8; 32],
@@ -46,7 +46,7 @@ pub struct VmSubintentSig {
 /// rather than a body of its own: fee assurance, engagement, and wave
 /// settlement are the same machinery either way.
 #[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub enum VmBody {
+pub enum TransactionBody {
     /// The bound envelope tree, canonically encoded; the effects bridge
     /// owns the encoding.
     Call(BoundedBytes<MAX_TX_BYTES_LEN>),
@@ -60,11 +60,11 @@ pub enum VmBody {
 /// A VM transaction: what it asks for and the signing-time choices,
 /// under the composer's signature.
 #[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub struct VmTransaction {
+pub struct TransactionEnvelope {
     /// The call graph or the package.
-    pub body: VmBody,
+    pub body: TransactionBody,
     /// One signature per bound subintent, in tree order.
-    pub subintent_sigs: Vec<VmSubintentSig>,
+    pub subintent_sigs: Vec<SubintentSig>,
     /// The fee-paying account — the composer's.
     pub fee_payer: [u8; 16],
     /// The signed fee ceiling, in fee units.
@@ -80,7 +80,7 @@ pub struct VmTransaction {
     pub message: BoundedBytes<MAX_VM_MESSAGE_LEN>,
     /// The composer's ed25519 public key.
     pub signer: [u8; 32],
-    /// The composer's signature over [`VmTransaction::signing_hash`].
+    /// The composer's signature over [`TransactionEnvelope::signing_hash`].
     pub signature: [u8; 64],
 }
 
@@ -91,13 +91,13 @@ pub struct VmTransaction {
 /// success may burn.
 const ABORT_FLOOR_DIVISOR: u128 = 10;
 
-impl VmTransaction {
+impl TransactionEnvelope {
     /// The bound envelope tree, for a call.
     #[must_use]
     pub fn call_tree(&self) -> Option<&[u8]> {
         match &self.body {
-            VmBody::Call(tree) => Some(tree),
-            VmBody::Publish(_) => None,
+            TransactionBody::Call(tree) => Some(tree),
+            TransactionBody::Publish(_) => None,
         }
     }
 
@@ -105,8 +105,8 @@ impl VmTransaction {
     #[must_use]
     pub fn artifact(&self) -> Option<&[u8]> {
         match &self.body {
-            VmBody::Publish(artifact) => Some(artifact),
-            VmBody::Call(_) => None,
+            TransactionBody::Publish(artifact) => Some(artifact),
+            TransactionBody::Call(_) => None,
         }
     }
 
@@ -134,11 +134,11 @@ impl VmTransaction {
         // The discriminant is signed content: the same bytes read as a
         // call graph and as an artifact are different transactions.
         match &self.body {
-            VmBody::Call(tree) => {
+            TransactionBody::Call(tree) => {
                 hasher.update(&[0u8]);
                 frame(&mut hasher, tree);
             }
-            VmBody::Publish(artifact) => {
+            TransactionBody::Publish(artifact) => {
                 hasher.update(&[1u8]);
                 frame(&mut hasher, artifact);
             }
@@ -199,7 +199,7 @@ impl VmTransaction {
 /// Snapshot reads appear nowhere here: they are lock-free and
 /// client-proven, so a snapshot-only shard is not a participant at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmRouting {
+pub struct Routing {
     /// Conflict keys for fresh reads — the shared admission class.
     pub read_keys: Vec<DeclaredKey>,
     /// Conflict keys for every mutation (writes, deltas, reserves).
@@ -217,7 +217,7 @@ pub struct VmRouting {
     pub provision_prefixes: Vec<[u8; 16]>,
 }
 
-impl VmRouting {
+impl Routing {
     /// Every owner prefix the transaction touches, ascending, deduplicated.
     #[must_use]
     pub fn all_prefixes(&self) -> Vec<[u8; 16]> {
@@ -240,9 +240,9 @@ impl VmRouting {
 /// that every bound signer address is the one the matching public key
 /// derives.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmDerived {
+pub struct Derived {
     /// The routing identity.
-    pub routing: VmRouting,
+    pub routing: Routing,
     /// One declaration hash per bound subintent, in tree order.
     pub subintent_hashes: Vec<[u8; 32]>,
     /// The local half of the fee payer's native-resource vault cell —
@@ -272,7 +272,7 @@ pub trait VmStatics: Send + Sync {
     /// [`VmStaticsError`] on an undecodable or inadmissible envelope,
     /// a subintent signature list that does not match the tree, or a
     /// bound signer address the matching public key does not derive.
-    fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError>;
+    fn derive(&self, vm: &TransactionEnvelope) -> Result<Derived, VmStaticsError>;
 
     /// Offer one committed VM cell to the published-package cache.
     ///

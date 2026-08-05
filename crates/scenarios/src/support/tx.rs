@@ -1,6 +1,6 @@
 //! Portable transaction builders.
 //!
-//! These construct a [`RoutableTransaction`] from explicit inputs and so are
+//! These construct a [`Transaction`] from explicit inputs and so are
 //! harness-agnostic; account discovery and the submit routing live in the
 //! adaptors. A scenario submits the result via [`Cluster::submit`].
 //!
@@ -13,8 +13,8 @@ use hyperscale_engine::genesis::stake_unit;
 use hyperscale_engine::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR,
-    NetworkParams, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
-    TimestampRange, ValidatorId, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
+    NetworkParams, ShardId, ShardTrie, StakePoolId, StakePoolSeat, SubintentSig, TimestampRange,
+    Transaction, TransactionBody, TransactionEnvelope, ValidatorId, WeightedTimestamp,
     ed25519_keypair_from_seed,
 };
 use hyperscale_vm_effects::{
@@ -498,7 +498,7 @@ pub fn build_vm_fan_out_tx(
     recipients: &[[u8; 16]],
     amount: u128,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     let mut nodes = Vec::with_capacity(recipients.len() * 2);
     for (index, to) in recipients.iter().enumerate() {
         let producer = u32::try_from(nodes.len()).expect("fan-out node count fits");
@@ -522,7 +522,7 @@ pub fn build_vm_fan_out_tx(
             }],
         });
     }
-    RoutableTransaction::new(vm_envelope(ManifestGraph { nodes }, payer, validity))
+    Transaction::new(vm_envelope(ManifestGraph { nodes }, payer, validity))
 }
 
 /// The accounts the participant sweep fans out across: one payer on the
@@ -590,7 +590,7 @@ pub fn vm_livelock_genesis_accounts() -> Vec<([u8; 16], u128)> {
 /// drop, or to have one settlement to watch — none of which depends on
 /// the payment itself.
 #[must_use]
-pub fn build_probe_transfer_tx(validity: TimestampRange) -> RoutableTransaction {
+pub fn build_probe_transfer_tx(validity: TimestampRange) -> Transaction {
     let (payer, from) = vm_sender(0);
     build_vm_transfer_tx(&payer, from, vm_recipient(0), PROBE_PAYMENT, validity)
 }
@@ -858,7 +858,7 @@ pub fn build_vm_stamp_tx(
     left: [u8; 16],
     right_key: &Ed25519PrivateKey,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     let stamp = |owner: [u8; 16]| IntentDecl {
         graph: ManifestGraph {
             nodes: vec![GraphNode {
@@ -880,9 +880,9 @@ pub fn build_vm_stamp_tx(
         }],
     };
     let signed = right_key.sign(right.hash(&ProtocolHasher).0.0);
-    let vm = VmTransaction {
-        body: VmBody::Call(encode_tree(&tree).into()),
-        subintent_sigs: vec![VmSubintentSig {
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree).into()),
+        subintent_sigs: vec![SubintentSig {
             public_key: right_key.public_key().0,
             signature: signed.0,
         }],
@@ -896,7 +896,7 @@ pub fn build_vm_stamp_tx(
         signature: [0; 64],
     }
     .sign(payer);
-    RoutableTransaction::new(vm)
+    Transaction::new(vm)
 }
 
 /// Build a VM transfer: the account guest's withdraw+deposit graph over
@@ -913,7 +913,7 @@ pub fn build_vm_transfer_tx(
     to: [u8; 16],
     amount: u128,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     let graph = ManifestGraph {
         nodes: vec![
             GraphNode {
@@ -937,7 +937,7 @@ pub fn build_vm_transfer_tx(
             },
         ],
     };
-    RoutableTransaction::new(vm_envelope(graph, payer, validity))
+    Transaction::new(vm_envelope(graph, payer, validity))
 }
 
 /// Every VM account address any scenario in this crate transacts with.
@@ -1039,10 +1039,10 @@ pub fn build_vm_publish_tx(
     payer: &Ed25519PrivateKey,
     artifact: Vec<u8>,
     validity: TimestampRange,
-) -> RoutableTransaction {
-    RoutableTransaction::new(
-        VmTransaction {
-            body: VmBody::Publish(artifact.into()),
+) -> Transaction {
+    Transaction::new(
+        TransactionEnvelope {
+            body: TransactionBody::Publish(artifact.into()),
             subintent_sigs: Vec::new(),
             fee_payer: vm_account_address(&payer.public_key().0),
             max_fee: VM_PUBLISH_MAX_FEE,
@@ -1158,7 +1158,7 @@ pub fn build_vm_deactivate_tx(
     pool: [u8; 16],
     validator: ValidatorId,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     build_vm_operator_tx(
         operator,
         pool,
@@ -1182,7 +1182,7 @@ pub fn build_vm_register_tx(
     pubkey: &ConsensusPublicKey,
     possession_proof: &ConsensusSignature,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     build_vm_operator_tx(
         operator,
         pool,
@@ -1205,7 +1205,7 @@ pub fn build_vm_operator_tx(
     method: &str,
     args: Vec<GraphArg>,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     let graph = ManifestGraph {
         nodes: vec![GraphNode {
             target: Address(pool),
@@ -1213,7 +1213,7 @@ pub fn build_vm_operator_tx(
             args,
         }],
     };
-    RoutableTransaction::new(vm_envelope(graph, operator, validity))
+    Transaction::new(vm_envelope(graph, operator, validity))
 }
 
 /// Return `amount` worth of stake units to `pool`, moving that much of
@@ -1229,7 +1229,7 @@ pub fn build_vm_unstake_tx(
     pool: [u8; 16],
     amount: u128,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     let graph = ManifestGraph {
         nodes: vec![
             GraphNode {
@@ -1253,7 +1253,7 @@ pub fn build_vm_unstake_tx(
             },
         ],
     };
-    RoutableTransaction::new(vm_envelope(graph, delegator, validity))
+    Transaction::new(vm_envelope(graph, delegator, validity))
 }
 
 /// The principal the staking scenario's pool admits on its operator
@@ -1278,7 +1278,7 @@ pub fn build_vm_stake_tx(
     pool: [u8; 16],
     amount: u128,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     let graph = ManifestGraph {
         nodes: vec![
             GraphNode {
@@ -1313,7 +1313,7 @@ pub fn build_vm_stake_tx(
             },
         ],
     };
-    RoutableTransaction::new(vm_envelope(graph, delegator, validity))
+    Transaction::new(vm_envelope(graph, delegator, validity))
 }
 
 /// The one-time payment request `signer` puts their name to: whoever
@@ -1360,7 +1360,7 @@ pub fn build_vm_composed_tx(
     request: &IntentDecl,
     amount: u128,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     let tree = EnvelopeTree {
         root: IntentDecl {
             graph: ManifestGraph {
@@ -1392,9 +1392,9 @@ pub fn build_vm_composed_tx(
     // envelope enters — the composer binds it afterwards and signs the
     // whole, subintent signatures included.
     let signed = signer_key.sign(request.hash(&ProtocolHasher).0.0);
-    let vm = VmTransaction {
-        body: VmBody::Call(encode_tree(&tree).into()),
-        subintent_sigs: vec![VmSubintentSig {
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree).into()),
+        subintent_sigs: vec![SubintentSig {
             public_key: signer_key.public_key().0,
             signature: signed.0,
         }],
@@ -1408,7 +1408,7 @@ pub fn build_vm_composed_tx(
         signature: [0; 64],
     }
     .sign(composer);
-    RoutableTransaction::new(vm)
+    Transaction::new(vm)
 }
 
 /// The fee ceiling every built call envelope signs.
@@ -1425,7 +1425,7 @@ fn vm_envelope(
     graph: ManifestGraph,
     payer: &Ed25519PrivateKey,
     validity: TimestampRange,
-) -> VmTransaction {
+) -> TransactionEnvelope {
     let tree = EnvelopeTree {
         root: IntentDecl {
             graph,
@@ -1434,8 +1434,8 @@ fn vm_envelope(
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    VmTransaction {
-        body: VmBody::Call(encode_tree(&tree).into()),
+    TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&payer.public_key().0),
         max_fee: VM_MAX_FEE,
@@ -1466,7 +1466,7 @@ pub fn build_reshape_threshold_vote_tx(
     split_bytes: u64,
     activate_at: Epoch,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     build_vm_operator_tx(
         operator,
         VM_GENESIS_POOL,

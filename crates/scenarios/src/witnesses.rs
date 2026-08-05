@@ -16,9 +16,8 @@
 use std::sync::Arc;
 
 use hyperscale_types::{
-    ConsensusPublicKey, MIN_STAKE_FLOOR, RoutableTransaction, Stake, StakePoolId,
-    TransactionDecision, TransactionStatus, ValidatorId, ValidatorStatus,
-    validator_possession_proof_sign,
+    ConsensusPublicKey, MIN_STAKE_FLOOR, Stake, StakePoolId, Transaction, TransactionDecision,
+    TransactionStatus, ValidatorId, ValidatorStatus, validator_possession_proof_sign,
 };
 use radix_common::network::NetworkDefinition;
 
@@ -305,7 +304,7 @@ pub fn stake_withdraw_drops_effective_stake(c: &mut impl Cluster) {
 /// A witness only exists if its transaction settled, so a scenario that
 /// waited on the fold alone would report "the beacon never folded it"
 /// for a transaction that never ran.
-fn submit_committed<C: Cluster>(c: &mut C, tx: RoutableTransaction) {
+fn submit_committed<C: Cluster>(c: &mut C, tx: Transaction) {
     let hash = tx.hash();
     c.submit(Arc::new(tx));
     let status = await_tx_terminal(c, hash, epochs(8));

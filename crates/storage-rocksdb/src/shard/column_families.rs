@@ -5,8 +5,8 @@
 
 use hyperscale_types::{
     BlockMetadata, ChainOrigin, ConsensusReceipt, ExecutionCertificate, ExecutionMetadata, Hash,
-    Round, RoutableTransaction, SafeVoteRegisters, ShardWitnessPayload, ValidatorId,
-    WaveCertificate, WaveId,
+    Round, SafeVoteRegisters, ShardWitnessPayload, Transaction, ValidatorId, WaveCertificate,
+    WaveId,
 };
 use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey};
 use rocksdb::{ColumnFamily, DB};
@@ -249,9 +249,9 @@ pub struct TransactionsCf;
 impl TypedCf for TransactionsCf {
     const NAME: &'static str = TRANSACTIONS_CF;
     type Key = Hash;
-    type Value = RoutableTransaction;
+    type Value = Transaction;
     type KeyCodec = HashCodec;
-    type ValueCodec = SborCodec<RoutableTransaction>;
+    type ValueCodec = SborCodec<Transaction>;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.transactions

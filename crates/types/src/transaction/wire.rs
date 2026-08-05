@@ -1,12 +1,13 @@
-//! `RoutableTransaction` — the wire form of a signed manifest envelope.
+//! [`Transaction`] — the carried form of a signed envelope.
 //!
-//! [`RoutableTransaction`] is the raw wire form. Its verified form is
-//! `Verified<RoutableTransaction>`; predicate at
+//! [`Transaction`] is the raw wire form. Its verified form is
+//! `Verified<Transaction>`; predicate at
 //! [`impl Verify<()>`](Verify::verify) below.
 //!
-//! Nothing routing-related travels: the admission conflict keys, the
-//! owner prefixes that place the transaction on shards, and the validity
-//! window are all derived locally from the signed envelope, and the
+//! The admission conflict keys, the owner prefixes that place the
+//! transaction on shards, and the validity window are all derived
+//! locally from the signed envelope rather than carried beside it — a
+//! sender cannot claim a placement its content does not earn. The
 //! derivations are cached on the value.
 
 use std::fmt::{self, Debug, Formatter};
@@ -19,8 +20,8 @@ use thiserror::Error;
 
 use crate::transaction::vm::vm_statics;
 use crate::{
-    BoundedBytes, DeclaredKey, Hash, MAX_TX_BYTES_LEN, ShardTrie, TimestampRange, TxHash, Verified,
-    Verify, VmDerived, VmRouting, VmStaticsError, VmTransaction,
+    BoundedBytes, DeclaredKey, Derived, Hash, MAX_TX_BYTES_LEN, Routing, ShardTrie, TimestampRange,
+    TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
 };
 
 /// A signed transaction as the network carries it.
@@ -31,20 +32,20 @@ use crate::{
 /// field is a lazily-populated cache, skipped on the wire and rebuilt at
 /// each end.
 #[derive(BasicSbor)]
-pub struct RoutableTransaction {
-    /// SBOR-encoded [`VmTransaction`] bytes — the canonical wire form.
+pub struct Transaction {
+    /// SBOR-encoded [`TransactionEnvelope`] bytes — the canonical wire form.
     serialized_bytes: BoundedBytes<MAX_TX_BYTES_LEN>,
 
     /// Decoded envelope, populated by `body()` on first access from
     /// `serialized_bytes`. Constructors pre-populate. Not on the wire.
     #[sbor(skip)]
-    body: OnceLock<VmTransaction>,
+    body: OnceLock<TransactionEnvelope>,
 
     /// Derived routing identity and subintent claims, populated at
     /// verification (or lazily for committed transactions). Not on the
     /// wire — derivation is local by construction.
     #[sbor(skip)]
-    derived: OnceLock<VmDerived>,
+    derived: OnceLock<Derived>,
 
     /// Content hash, populated on first call to `hash()` via
     /// `blake3(&serialized_bytes)`. `::new` pre-populates. Not on the
@@ -53,7 +54,7 @@ pub struct RoutableTransaction {
     #[sbor(skip)]
     hash: OnceLock<Hash>,
 
-    /// Pre-encoded SBOR bytes of the full `RoutableTransaction`,
+    /// Pre-encoded SBOR bytes of the full `Transaction`,
     /// populated lazily by `cached_sbor_bytes()`. Lets the commit thread
     /// hand bytes to `cf_put_raw` without re-encoding.
     #[sbor(skip)]
@@ -61,20 +62,20 @@ pub struct RoutableTransaction {
 }
 
 // Manual PartialEq/Eq - compare by hash for efficiency
-impl PartialEq for RoutableTransaction {
+impl PartialEq for Transaction {
     fn eq(&self, other: &Self) -> bool {
         self.hash() == other.hash()
     }
 }
 
-impl Eq for RoutableTransaction {}
+impl Eq for Transaction {}
 
 // Manual Clone - OnceLock doesn't implement Clone. Every populated cache
 // is copied so the clone doesn't pay first-access cost twice; in
 // particular the derivation rides across clones, so the work a fresh tx
 // incurs at admission is amortized over every later raw clone (wave-state
 // extract, mempool block-commit lift, proposal build).
-impl Clone for RoutableTransaction {
+impl Clone for Transaction {
     fn clone(&self) -> Self {
         let body = OnceLock::new();
         if let Some(t) = self.body.get() {
@@ -103,15 +104,15 @@ impl Clone for RoutableTransaction {
 }
 
 // Manual Debug — skip the cached_sbor field.
-impl Debug for RoutableTransaction {
+impl Debug for Transaction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RoutableTransaction")
+        f.debug_struct("Transaction")
             .field("hash", &self.hash())
             .finish_non_exhaustive()
     }
 }
 
-impl RoutableTransaction {
+impl Transaction {
     /// The admission conflict keys for this transaction's reads — the
     /// routed effect sets' shared-mode keys. Nothing key-granular is
     /// carried on the wire.
@@ -143,15 +144,15 @@ impl RoutableTransaction {
         self.body().validity_window()
     }
 
-    /// Create a routable transaction from a signed envelope.
+    /// Create a transaction from a signed envelope.
     ///
     /// # Panics
     ///
-    /// Panics if the `VmTransaction` cannot be SBOR-encoded; it is a
+    /// Panics if the `TransactionEnvelope` cannot be SBOR-encoded; it is a
     /// closed basic-SBOR type, so encoding is infallible in practice.
     #[must_use]
-    pub fn new(vm: VmTransaction) -> Self {
-        let payload = basic_encode(&vm).expect("VmTransaction SBOR encode is infallible");
+    pub fn new(vm: TransactionEnvelope) -> Self {
+        let payload = basic_encode(&vm).expect("TransactionEnvelope SBOR encode is infallible");
         let mut hasher = Hasher::new();
         hasher.update(&payload);
         let hash = Hash::from_hash_bytes(hasher.finalize().as_bytes());
@@ -187,14 +188,14 @@ impl RoutableTransaction {
     ///
     /// # Errors
     ///
-    /// [`RoutableTransactionVerifyError::UndecodableBody`] when the bytes
+    /// [`TransactionVerifyError::UndecodableBody`] when the bytes
     /// do not decode as an envelope.
-    pub fn try_body(&self) -> Result<&VmTransaction, RoutableTransactionVerifyError> {
+    pub fn try_body(&self) -> Result<&TransactionEnvelope, TransactionVerifyError> {
         if let Some(body) = self.body.get() {
             return Ok(body);
         }
-        let decoded = basic_decode::<VmTransaction>(&self.serialized_bytes)
-            .map_err(|_| RoutableTransactionVerifyError::UndecodableBody)?;
+        let decoded = basic_decode::<TransactionEnvelope>(&self.serialized_bytes)
+            .map_err(|_| TransactionVerifyError::UndecodableBody)?;
         Ok(self.body.get_or_init(|| decoded))
     }
 
@@ -206,9 +207,9 @@ impl RoutableTransaction {
     /// Panics if `serialized_bytes` does not decode. Wire-decoded
     /// transactions are verified (which decodes fallibly) before this is
     /// invoked.
-    pub fn body(&self) -> &VmTransaction {
+    pub fn body(&self) -> &TransactionEnvelope {
         self.try_body()
-            .expect("RoutableTransaction.serialized_bytes failed body decode")
+            .expect("Transaction.serialized_bytes failed body decode")
     }
 
     /// The derived routing identity.
@@ -222,7 +223,7 @@ impl RoutableTransaction {
     /// verified or committed transactions, whose envelopes already
     /// derived cleanly at admission — or if no statics are installed.
     #[must_use]
-    pub fn routing(&self) -> &VmRouting {
+    pub fn routing(&self) -> &Routing {
         &self.derived().routing
     }
 
@@ -239,7 +240,7 @@ impl RoutableTransaction {
     }
 
     /// The cached derivation, or a panic naming the refusal.
-    fn derived(&self) -> &VmDerived {
+    fn derived(&self) -> &Derived {
         self.try_derived()
             .unwrap_or_else(|error| panic!("derivation failed on an admitted transaction: {error}"))
     }
@@ -250,7 +251,7 @@ impl RoutableTransaction {
     /// # Errors
     ///
     /// [`VmStaticsError`] from the installed derivation.
-    pub fn try_derived(&self) -> Result<&VmDerived, VmStaticsError> {
+    pub fn try_derived(&self) -> Result<&Derived, VmStaticsError> {
         if let Some(derived) = self.derived.get() {
             return Ok(derived);
         }
@@ -272,7 +273,7 @@ impl RoutableTransaction {
         self.serialized_bytes.0.clone()
     }
 
-    /// Pre-serialized SBOR bytes of the full `RoutableTransaction`.
+    /// Pre-serialized SBOR bytes of the full `Transaction`.
     /// Computed on first call and cached.
     ///
     /// # Panics
@@ -280,9 +281,8 @@ impl RoutableTransaction {
     /// Panics if SBOR encoding fails — that's a programmer error since
     /// every field is `BasicSbor` and the type itself is closed.
     pub fn cached_sbor_bytes(&self) -> &[u8] {
-        self.cached_sbor.get_or_init(|| {
-            basic_encode(self).expect("RoutableTransaction SBOR encode is infallible")
-        })
+        self.cached_sbor
+            .get_or_init(|| basic_encode(self).expect("Transaction SBOR encode is infallible"))
     }
 
     /// Check if this transaction is cross-shard under a uniform `num_shards`-way
@@ -305,9 +305,9 @@ impl RoutableTransaction {
     }
 }
 
-/// Failure modes of [`RoutableTransaction`] verification.
+/// Failure modes of [`Transaction`] verification.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
-pub enum RoutableTransactionVerifyError {
+pub enum TransactionVerifyError {
     /// The body bytes do not decode as an envelope.
     #[error("transaction body bytes are undecodable")]
     UndecodableBody,
@@ -331,20 +331,20 @@ pub enum RoutableTransactionVerifyError {
 ///
 /// Construction goes through one of two gates:
 ///
-/// - [`<RoutableTransaction as Verify>::verify`](Verify::verify) — runs
+/// - [`<Transaction as Verify>::verify`](Verify::verify) — runs
 ///   the predicate.
-/// - [`Verified::<RoutableTransaction>::new_unchecked`] — re-wraps a
+/// - [`Verified::<Transaction>::new_unchecked`] — re-wraps a
 ///   transaction whose predicate already held via an out-of-band trust
 ///   source (storage-recovery, where the value was validated before
 ///   persistence; equivalent-attestation paths). Every call site
 ///   carries a `// SAFETY:` comment naming the trust source.
-impl Verify<()> for RoutableTransaction {
-    type Error = RoutableTransactionVerifyError;
+impl Verify<()> for Transaction {
+    type Error = TransactionVerifyError;
 
     fn verify(&self, (): ()) -> Result<Verified<Self>, Self::Error> {
         let vm = self.try_body()?;
         if !vm.signature_is_valid() {
-            return Err(RoutableTransactionVerifyError::InvalidSignature);
+            return Err(TransactionVerifyError::InvalidSignature);
         }
         // Derivation checks the tree, the signature arity, and the
         // signer-address binding; the signatures themselves verify here,
@@ -362,7 +362,7 @@ impl Verify<()> for RoutableTransaction {
                 &Ed25519Signature(sig.signature),
             );
             if !valid {
-                return Err(RoutableTransactionVerifyError::InvalidSubintentSignature(
+                return Err(TransactionVerifyError::InvalidSubintentSignature(
                     u32::try_from(index).unwrap_or(u32::MAX),
                 ));
             }
@@ -371,8 +371,8 @@ impl Verify<()> for RoutableTransaction {
     }
 }
 
-impl Verified<RoutableTransaction> {
-    /// Re-wrap a `RoutableTransaction` whose trust derives from inclusion
+impl Verified<Transaction> {
+    /// Re-wrap a `Transaction` whose trust derives from inclusion
     /// in a committed block.
     ///
     /// Trust chain (BFT-transitive):
@@ -386,10 +386,10 @@ impl Verified<RoutableTransaction> {
     ///
     /// Callers: mempool reload from a committed block, storage
     /// rehydration into block containers, and any other path that
-    /// surfaces a raw `RoutableTransaction` whose container is itself
+    /// surfaces a raw `Transaction` whose container is itself
     /// the trust anchor.
     #[must_use]
-    pub const fn from_persisted(tx: RoutableTransaction) -> Self {
+    pub const fn from_persisted(tx: Transaction) -> Self {
         Self::new_unchecked(tx)
     }
 }
@@ -403,7 +403,7 @@ mod tests {
 
     use super::*;
     use crate::test_utils::test_validity_range;
-    use crate::{Ed25519PrivateKey, VmBody, VmStatics, VmSubintentSig, install_vm_statics};
+    use crate::{Ed25519PrivateKey, SubintentSig, TransactionBody, VmStatics, install_vm_statics};
 
     struct StubStatics;
 
@@ -412,7 +412,7 @@ mod tests {
     const STUB_SUBINTENT_HASH: [u8; 32] = [0x5A; 32];
 
     impl VmStatics for StubStatics {
-        fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
+        fn derive(&self, vm: &TransactionEnvelope) -> Result<Derived, VmStaticsError> {
             if vm.call_tree().unwrap_or_default() == b"inadmissible" {
                 return Err(VmStaticsError("stub refusal".into()));
             }
@@ -421,9 +421,9 @@ mod tests {
             } else {
                 Vec::new()
             };
-            Ok(VmDerived {
+            Ok(Derived {
                 fee_vault_local: [0xEE; 16],
-                routing: VmRouting {
+                routing: Routing {
                     read_keys: vec![DeclaredKey::prefix([0x11; 16])],
                     write_keys: vec![DeclaredKey::substate([0x22; 16], [0x01; 16])],
                     read_prefixes: vec![[0x11; 16]],
@@ -436,11 +436,11 @@ mod tests {
         }
     }
 
-    fn test_envelope(tree: &[u8]) -> VmTransaction {
+    fn test_envelope(tree: &[u8]) -> TransactionEnvelope {
         let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
         let range = test_validity_range();
-        VmTransaction {
-            body: VmBody::Call(tree.to_vec().into()),
+        TransactionEnvelope {
+            body: TransactionBody::Call(tree.to_vec().into()),
             subintent_sigs: Vec::new(),
             fee_payer: [0xAA; 16],
             max_fee: 1_000,
@@ -454,16 +454,16 @@ mod tests {
         .sign(&key)
     }
 
-    fn fixture(tree: &[u8]) -> RoutableTransaction {
+    fn fixture(tree: &[u8]) -> Transaction {
         install_vm_statics(Box::new(StubStatics));
-        RoutableTransaction::new(test_envelope(tree))
+        Transaction::new(test_envelope(tree))
     }
 
     #[test]
     fn roundtrip_preserves_hash_and_body() {
         let tx = fixture(b"graph bytes");
         let bytes = basic_encode(&tx).unwrap();
-        let decoded: RoutableTransaction = basic_decode(&bytes).unwrap();
+        let decoded: Transaction = basic_decode(&bytes).unwrap();
         assert_eq!(decoded.hash(), tx.hash());
         assert_eq!(decoded.try_body().unwrap(), tx.body());
     }
@@ -496,23 +496,23 @@ mod tests {
         // A tampered signature refuses.
         let mut vm = good.body().clone();
         vm.signature[0] ^= 1;
-        let bad_signature = RoutableTransaction::new(vm);
+        let bad_signature = Transaction::new(vm);
         assert_eq!(
             bad_signature.verify(()).unwrap_err(),
-            RoutableTransactionVerifyError::InvalidSignature
+            TransactionVerifyError::InvalidSignature
         );
 
         // A refused tree surfaces the derivation error.
         let inadmissible = fixture(b"inadmissible");
         assert!(matches!(
             inadmissible.verify(()).unwrap_err(),
-            RoutableTransactionVerifyError::Derivation(_)
+            TransactionVerifyError::Derivation(_)
         ));
 
         // Garbage in the body field is an undecodable body, not a panic.
         let mut bytes = fixture(b"graph bytes").serialized_bytes().to_vec();
         bytes.truncate(3);
-        let garbage = RoutableTransaction {
+        let garbage = Transaction {
             serialized_bytes: bytes.into(),
             body: OnceLock::new(),
             derived: OnceLock::new(),
@@ -521,7 +521,7 @@ mod tests {
         };
         assert_eq!(
             garbage.verify(()).unwrap_err(),
-            RoutableTransactionVerifyError::UndecodableBody
+            TransactionVerifyError::UndecodableBody
         );
     }
 
@@ -533,23 +533,19 @@ mod tests {
         let subintent_key = Ed25519PrivateKey::from_bytes(&[9u8; 32]).unwrap();
         let composer_key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
         let mut envelope = test_envelope(b"with-subintent");
-        envelope.subintent_sigs = vec![VmSubintentSig {
+        envelope.subintent_sigs = vec![SubintentSig {
             public_key: subintent_key.public_key().0,
             signature: subintent_key.sign(STUB_SUBINTENT_HASH).0,
         }];
         let composed = envelope.sign(&composer_key);
-        assert!(
-            RoutableTransaction::new(composed.clone())
-                .verify(())
-                .is_ok()
-        );
+        assert!(Transaction::new(composed.clone()).verify(()).is_ok());
 
         let mut forged = composed;
         forged.subintent_sigs[0].signature[0] ^= 1;
         let forged = forged.sign(&composer_key);
         assert_eq!(
-            RoutableTransaction::new(forged).verify(()).unwrap_err(),
-            RoutableTransactionVerifyError::InvalidSubintentSignature(0)
+            Transaction::new(forged).verify(()).unwrap_err(),
+            TransactionVerifyError::InvalidSubintentSignature(0)
         );
     }
 
@@ -564,12 +560,12 @@ mod tests {
         shifted.validity_start_ms += 1;
         let shifted = shifted.sign(&key);
         assert_ne!(
-            RoutableTransaction::new(base.clone()).hash(),
-            RoutableTransaction::new(shifted).hash()
+            Transaction::new(base.clone()).hash(),
+            Transaction::new(shifted).hash()
         );
         assert_eq!(
-            RoutableTransaction::new(base.clone()).hash(),
-            RoutableTransaction::new(base).hash()
+            Transaction::new(base.clone()).hash(),
+            Transaction::new(base).hash()
         );
     }
 
@@ -579,7 +575,7 @@ mod tests {
         // and the lazy `hash()` call computes blake3 over those bytes.
         let tx = fixture(b"graph bytes");
         let bytes = basic_encode(&tx).unwrap();
-        let decoded: RoutableTransaction = basic_decode(&bytes).unwrap();
+        let decoded: Transaction = basic_decode(&bytes).unwrap();
         let mut hasher = Hasher::new();
         hasher.update(decoded.serialized_bytes());
         let expected = TxHash::from_raw(Hash::from_hash_bytes(hasher.finalize().as_bytes()));
@@ -602,7 +598,7 @@ mod tests {
             enc.write_value_kind(ValueKind::U8).unwrap();
             enc.write_size(MAX_TX_BYTES_LEN + 1).unwrap();
         }
-        let err = basic_decode::<RoutableTransaction>(&buf).unwrap_err();
+        let err = basic_decode::<Transaction>(&buf).unwrap_err();
         assert!(matches!(
             err,
             DecodeError::UnexpectedSize { expected, actual }
@@ -625,7 +621,7 @@ mod tests {
             enc.write_size(4).unwrap();
             enc.encode(&tx.serialized_bytes().to_vec()).unwrap();
         }
-        let err = basic_decode::<RoutableTransaction>(&buf).unwrap_err();
+        let err = basic_decode::<Transaction>(&buf).unwrap_err();
         assert!(matches!(
             err,
             DecodeError::UnexpectedSize {

@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 
 use hyperscale_simulation::SimulationRunner;
 use hyperscale_types::{
-    DeclaredKey, RoutableTransaction, ShardId, ShardTrie, TransactionStatus, TxHash, Verified,
+    DeclaredKey, ShardId, ShardTrie, Transaction, TransactionStatus, TxHash, Verified,
 };
 
 /// Information about a stuck transaction.
@@ -41,7 +41,7 @@ pub struct StuckTransaction {
     /// Current status
     pub status: TransactionStatus,
     /// The transaction itself
-    pub transaction: std::sync::Arc<Verified<RoutableTransaction>>,
+    pub transaction: std::sync::Arc<Verified<Transaction>>,
     /// Shard this transaction was found on
     pub shard: ShardId,
     /// All shards this transaction writes to

@@ -13,13 +13,13 @@ use radix_engine_interface::types::{Emitter, EventTypeIdentifier};
 use crate::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
-    CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, ExecutionCertificate,
-    ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
-    LocalReceiptRoot, NetworkDefinition, NodeId, ProposerTimestamp, ProvisionsRoot,
-    QuorumCertificate, RevealChain, Round, RoutableTransaction, ShardForkProof, ShardId, ShardLoad,
-    SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, TransactionDecision,
-    TransactionRoot, TxHash, TxOutcome, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
-    Verified, VmBody, VmDerived, VmRouting, VmStatics, VmStaticsError, VmTransaction,
+    CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived,
+    ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot,
+    Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, NodeId, ProposerTimestamp,
+    ProvisionsRoot, QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId,
+    ShardLoad, SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, Transaction,
+    TransactionBody, TransactionDecision, TransactionEnvelope, TransactionRoot, TxHash, TxOutcome,
+    ValidatorId, ValidatorInfo, ValidatorSet, Verifiable, Verified, VmStatics, VmStaticsError,
     WaveCertificate, WaveId, WeightedTimestamp, WitnessSources, block_vote_message,
     install_vm_statics, vm_statics_installed,
 };
@@ -57,7 +57,7 @@ pub fn test_transaction_with_prefixes(
     seed_bytes: &[u8],
     read_prefixes: &[[u8; 16]],
     write_prefixes: &[[u8; 16]],
-) -> RoutableTransaction {
+) -> Transaction {
     let mut payer = [0u8; 16];
     for (slot, &byte) in payer.iter_mut().zip(seed_bytes) {
         *slot = byte;
@@ -93,7 +93,7 @@ pub const fn test_prefix(seed: u8) -> [u8; 16] {
 
 /// Create a simple test transaction.
 #[must_use]
-pub fn test_transaction(seed: u8) -> RoutableTransaction {
+pub fn test_transaction(seed: u8) -> Transaction {
     test_transaction_with_prefixes(
         &[seed, seed.wrapping_add(1), seed.wrapping_add(2)],
         &[test_prefix(seed)],
@@ -106,9 +106,9 @@ pub fn test_transaction(seed: u8) -> RoutableTransaction {
 ///
 /// Use at any test call site that needs a pre-validated transaction
 /// (mempool admission API, event payloads carrying
-/// `Arc<Verified<RoutableTransaction>>`).
+/// `Arc<Verified<Transaction>>`).
 #[must_use]
-pub fn verified_test_transaction(seed: u8) -> Verified<RoutableTransaction> {
+pub fn verified_test_transaction(seed: u8) -> Verified<Transaction> {
     Verified::new_unchecked_for_test(test_transaction(seed))
 }
 
@@ -283,10 +283,10 @@ impl TestCommittee {
 ///
 /// Transactions are wrapped as `Verifiable::Unverified` — adequate for the
 /// `on_block_committed` path (`WaveState` lifts via
-/// [`Verified::<RoutableTransaction>::from_persisted`]) and for storage
+/// [`Verified::<Transaction>::from_persisted`]) and for storage
 /// fixtures. The pre-vote path (`validate_block_for_vote`) refuses to vote
 /// on blocks with any un-`Verified` entry; tests targeting that path must
-/// construct `Block` directly with `Vec<Arc<Verifiable<RoutableTransaction>>>`
+/// construct `Block` directly with `Vec<Arc<Verifiable<Transaction>>>`
 /// holding `Verified` entries.
 #[must_use]
 pub fn make_live_block(
@@ -294,7 +294,7 @@ pub fn make_live_block(
     height: BlockHeight,
     timestamp_ms: u64,
     proposer: ValidatorId,
-    transactions: Vec<Arc<RoutableTransaction>>,
+    transactions: Vec<Arc<Transaction>>,
     certificates: Vec<Arc<Verifiable<FinalizedWave>>>,
 ) -> Block {
     let header = BlockHeader::new(
@@ -322,7 +322,7 @@ pub fn make_live_block(
         None,
         ShardLoad::ZERO,
     );
-    let transactions: Vec<Arc<Verifiable<RoutableTransaction>>> = transactions
+    let transactions: Vec<Arc<Verifiable<Transaction>>> = transactions
         .into_iter()
         .map(|tx| Arc::new(Verifiable::from((*tx).clone())))
         .collect();
@@ -894,7 +894,7 @@ pub fn make_finalized_wave(
 struct StubVmStatics;
 
 impl VmStatics for StubVmStatics {
-    fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
+    fn derive(&self, vm: &TransactionEnvelope) -> Result<Derived, VmStaticsError> {
         let tree = vm.call_tree().unwrap_or_default();
         let Some((&read_count, prefixes)) = tree.split_first() else {
             return Err(VmStaticsError("stub tree is empty".into()));
@@ -920,8 +920,8 @@ impl VmStatics for StubVmStatics {
         let (reads, writes) = prefixes.split_at(usize::from(read_count) * 16);
         let read_prefixes = canonical(reads);
         let write_prefixes = canonical(writes);
-        Ok(VmDerived {
-            routing: VmRouting {
+        Ok(Derived {
+            routing: Routing {
                 read_keys: read_prefixes
                     .iter()
                     .copied()
@@ -964,7 +964,7 @@ pub fn stub_vm_transaction(
     owner_prefixes: &[[u8; 16]],
     max_fee: u128,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     stub_vm_transaction_with_reads(fee_payer, &[], owner_prefixes, max_fee, validity)
 }
 
@@ -985,14 +985,14 @@ pub fn stub_vm_transaction_with_reads(
     write_prefixes: &[[u8; 16]],
     max_fee: u128,
     validity: TimestampRange,
-) -> RoutableTransaction {
+) -> Transaction {
     install_stub_vm_statics();
     let key = Ed25519PrivateKey::from_bytes(&[0x5A; 32]).expect("fixture key");
     let mut tree = vec![u8::try_from(read_prefixes.len()).expect("stub read set fits a byte")];
     tree.extend_from_slice(&read_prefixes.concat());
     tree.extend_from_slice(&write_prefixes.concat());
-    let vm = VmTransaction {
-        body: VmBody::Call(tree.into()),
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Call(tree.into()),
         subintent_sigs: Vec::new(),
         fee_payer,
         max_fee,
@@ -1004,7 +1004,7 @@ pub fn stub_vm_transaction_with_reads(
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new(vm)
+    Transaction::new(vm)
 }
 
 #[cfg(test)]

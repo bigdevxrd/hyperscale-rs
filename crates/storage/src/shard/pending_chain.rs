@@ -12,9 +12,9 @@ use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeRea
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
     CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
-    MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON,
-    RoutableTransaction, SettledWavesRoot, ShardId, ShardWitnessPayload, StateRoot, TxHash,
-    Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
+    MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON, SettledWavesRoot,
+    ShardId, ShardWitnessPayload, StateRoot, Transaction, TxHash, Verifiable, Verified,
+    WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
     settled_waves_root_from_ids,
 };
 use radix_common::prelude::DatabaseUpdate;
@@ -271,7 +271,7 @@ where
     pub fn transactions_for_block(
         &self,
         height: BlockHeight,
-    ) -> Option<Vec<Arc<Verifiable<RoutableTransaction>>>> {
+    ) -> Option<Vec<Arc<Verifiable<Transaction>>>> {
         if let Some(certified) = self.pending_certified_at(height) {
             return Some(certified.block().transactions().iter().cloned().collect());
         }
@@ -502,7 +502,7 @@ where
     /// persistence lag by orders of magnitude), so this method is a
     /// thin pass-through to base storage; keeping it on `PendingChain`
     /// preserves the "no raw `&S` in serve handlers" invariant.
-    pub fn transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<RoutableTransaction>> {
+    pub fn transactions_batch(&self, hashes: &[TxHash]) -> Vec<Verified<Transaction>> {
         self.base.get_transactions_batch(hashes)
     }
 
@@ -1102,7 +1102,7 @@ mod tests {
     use hyperscale_types::{
         AggregateSignature, Block, BoundedVec, CertifiedBlock, CertifiedBlockHeader,
         ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
-        GlobalReceiptRoot, Hash, Round, RoutableTransaction, SignerBitfield, TxHash, TxOutcome,
+        GlobalReceiptRoot, Hash, Round, SignerBitfield, Transaction, TxHash, TxOutcome,
         WaveCertificate, WaveId, WitnessSources,
     };
     use indexmap::IndexMap;
@@ -1260,7 +1260,7 @@ mod tests {
         fn get_block_for_sync(&self, height: BlockHeight) -> Option<BlockForSync> {
             self.sync_blocks.get(&height).cloned()
         }
-        fn get_transactions_batch(&self, _hashes: &[TxHash]) -> Vec<Verified<RoutableTransaction>> {
+        fn get_transactions_batch(&self, _hashes: &[TxHash]) -> Vec<Verified<Transaction>> {
             Vec::new()
         }
         fn get_certificates_batch(&self, _ids: &[WaveId]) -> Vec<WaveCertificate> {

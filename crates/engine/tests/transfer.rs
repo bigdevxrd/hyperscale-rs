@@ -20,8 +20,8 @@ use hyperscale_storage::{
 };
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
-    BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, RoutableTransaction,
-    ShardId, ShardTrie, Verified, VmBody, VmTransaction, WeightedTimestamp,
+    BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, ShardId, ShardTrie,
+    Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
     absorb_committed_vm_cells,
 };
 use hyperscale_vm_effects::{
@@ -159,7 +159,7 @@ fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGraph {
     }
 }
 
-fn signed_transfer(seed: u8, from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransaction {
+fn signed_transfer(seed: u8, from: [u8; 16], to: [u8; 16], amount: u128) -> Transaction {
     signed_transfer_with_fee(seed, from, to, amount, TRANSFER_FEE)
 }
 
@@ -171,7 +171,7 @@ fn signed_transfer_under_bound(
     amount: u128,
     min: u128,
     max_fee: u128,
-) -> RoutableTransaction {
+) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
     let mut graph = transfer_graph(from, to, amount);
     let GraphArg::Edge { constraints, .. } = &mut graph.nodes[1].args[0] else {
@@ -186,8 +186,8 @@ fn signed_transfer_under_bound(
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    let vm = VmTransaction {
-        body: VmBody::Call(encode_tree(&tree).into()),
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&key.public_key().0),
         max_fee,
@@ -199,7 +199,7 @@ fn signed_transfer_under_bound(
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new(vm)
+    Transaction::new(vm)
 }
 
 fn signed_transfer_with_fee(
@@ -208,7 +208,7 @@ fn signed_transfer_with_fee(
     to: [u8; 16],
     amount: u128,
     max_fee: u128,
-) -> RoutableTransaction {
+) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
     let tree = EnvelopeTree {
         root: IntentDecl {
@@ -218,8 +218,8 @@ fn signed_transfer_with_fee(
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    let vm = VmTransaction {
-        body: VmBody::Call(encode_tree(&tree).into()),
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&key.public_key().0),
         max_fee,
@@ -231,7 +231,7 @@ fn signed_transfer_with_fee(
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new(vm)
+    Transaction::new(vm)
 }
 
 /// The account address the fee-paying tests derive from their signing key.
@@ -261,16 +261,13 @@ fn world_accounts() -> Vec<([u8; 16], u128)> {
     ]
 }
 
-fn execute(
-    executor: &Executor,
-    transactions: &[Arc<Verified<RoutableTransaction>>],
-) -> Vec<ExecutedTx> {
+fn execute(executor: &Executor, transactions: &[Arc<Verified<Transaction>>]) -> Vec<ExecutedTx> {
     execute_on(&[(alice(), 1_000), (bob(), 50)], executor, transactions)
 }
 
 /// A signed single-node stamp: the account records the transaction's
 /// randomness draw in its entropy leaf.
-fn signed_stamp(seed: u8, owner: [u8; 16]) -> RoutableTransaction {
+fn signed_stamp(seed: u8, owner: [u8; 16]) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
     let tree = EnvelopeTree {
         root: IntentDecl {
@@ -286,8 +283,8 @@ fn signed_stamp(seed: u8, owner: [u8; 16]) -> RoutableTransaction {
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    let vm = VmTransaction {
-        body: VmBody::Call(encode_tree(&tree).into()),
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&key.public_key().0),
         max_fee: 1_000_000,
@@ -299,14 +296,14 @@ fn signed_stamp(seed: u8, owner: [u8; 16]) -> RoutableTransaction {
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new(vm)
+    Transaction::new(vm)
 }
 
 /// Execute `transactions` as a single-shard batch anchored on `reveal`.
 fn execute_anchored(
     executor: &Executor,
     reveal: RevealChain,
-    transactions: &[Arc<Verified<RoutableTransaction>>],
+    transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (bob(), 50)]);
     let snapshot = DynSnapshot(&snapshot_store);
@@ -347,9 +344,10 @@ fn entropy_cell(executed: &ExecutedTx, owner: [u8; 16]) -> Option<Vec<u8>> {
 #[test]
 fn a_stamp_writes_the_draw_its_anchor_fixes() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_stamp(ALICE_SEED, alice()),
-    ));
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_stamp(
+        ALICE_SEED,
+        alice(),
+    )));
     let anchor = RevealChain::from_raw(Hash::from_bytes(b"payer block"));
 
     let executed = execute_anchored(&executor, anchor, std::slice::from_ref(&tx));
@@ -400,7 +398,7 @@ fn a_batch_baseline_decides_whether_two_payments_both_land() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
 
     let pay = |seed: u8, from: [u8; 16]| {
-        Arc::new(Verified::<RoutableTransaction>::from_persisted(
+        Arc::new(Verified::<Transaction>::from_persisted(
             signed_transfer_with_fee(seed, from, hot, 100, 10),
         ))
     };
@@ -456,7 +454,7 @@ fn a_batch_baseline_decides_whether_two_payments_both_land() {
 fn execute_on(
     accounts: &[([u8; 16], u128)],
     executor: &Executor,
-    transactions: &[Arc<Verified<RoutableTransaction>>],
+    transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     execute_batch_on(&MapDb::genesis(accounts), executor, transactions)
 }
@@ -466,7 +464,7 @@ fn execute_on(
 fn execute_batch_on(
     snapshot_store: &MapDb,
     executor: &Executor,
-    transactions: &[Arc<Verified<RoutableTransaction>>],
+    transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let snapshot = DynSnapshot(snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
@@ -507,9 +505,12 @@ fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
 #[test]
 fn a_transfer_folds_to_identity_keyed_absolute_updates() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(ALICE_SEED, alice(), bob(), 100),
-    ));
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        ALICE_SEED,
+        alice(),
+        bob(),
+        100,
+    )));
     let executed = execute(&executor, &[tx]);
     assert_eq!(executed.len(), 1);
     let ConsensusReceipt::Succeeded {
@@ -537,12 +538,18 @@ fn a_transfer_folds_to_identity_keyed_absolute_updates() {
 #[test]
 fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
-    let over = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(BOB_SEED, bob(), alice(), 500),
-    ));
-    let fine = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(ALICE_SEED, alice(), bob(), 25),
-    ));
+    let over = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        BOB_SEED,
+        bob(),
+        alice(),
+        500,
+    )));
+    let fine = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        ALICE_SEED,
+        alice(),
+        bob(),
+        25,
+    )));
     let executed = execute(&executor, &[Arc::clone(&over), Arc::clone(&fine)]);
     assert_eq!(executed.len(), 2);
     // Input order is preserved: the infeasible reservation aborts its
@@ -568,11 +575,14 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
 fn serial_and_parallel_scheduling_produce_identical_receipts() {
     let serial = Executor::new(&world_accounts(), ExecutionMode::Serial);
     let parallel = Executor::new(&world_accounts(), ExecutionMode::Parallel);
-    let txs: Vec<Arc<Verified<RoutableTransaction>>> = (0..4u128)
+    let txs: Vec<Arc<Verified<Transaction>>> = (0..4u128)
         .map(|i| {
-            Arc::new(Verified::<RoutableTransaction>::from_persisted(
-                signed_transfer(ALICE_SEED, alice(), bob(), 10 + i),
-            ))
+            Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+                ALICE_SEED,
+                alice(),
+                bob(),
+                10 + i,
+            )))
         })
         .collect();
     let a = execute(&serial, &txs);
@@ -601,9 +611,12 @@ fn serial_and_parallel_scheduling_produce_identical_receipts() {
 #[test]
 fn an_unapplied_attempt_still_attests_its_declaration() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
-    let over = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(ALICE_SEED, alice(), bob(), 1_000_000),
-    ));
+    let over = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        ALICE_SEED,
+        alice(),
+        bob(),
+        1_000_000,
+    )));
     let executed = execute(&executor, &[over]);
     assert_eq!(executed.len(), 1);
     assert!(
@@ -618,9 +631,12 @@ fn an_unapplied_attempt_still_attests_its_declaration() {
 
     // A completed transfer of the same shape attests the same declaration
     // plus the compute it actually consumed.
-    let fine = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(ALICE_SEED, alice(), bob(), 100),
-    ));
+    let fine = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        ALICE_SEED,
+        alice(),
+        bob(),
+        100,
+    )));
     let executed = execute(&executor, &[fine]);
     assert_eq!(executed.len(), 1);
     assert!(
@@ -642,7 +658,7 @@ fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
     // A transfer's fuel far exceeds the tiny ceiling, so the burn is
     // exactly `max_fee` — the cap working.
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(
         signed_transfer_with_fee(7, payer, bob(), 100, 10),
     ));
     let executed = execute_on(&accounts, &executor, &[tx]);
@@ -679,9 +695,7 @@ fn a_missed_edge_bound_charges_its_payer_the_floor() {
     let executed = execute_on(
         &accounts,
         &executor,
-        &[Arc::new(Verified::<RoutableTransaction>::from_persisted(
-            tx,
-        ))],
+        &[Arc::new(Verified::<Transaction>::from_persisted(tx))],
     );
     assert_eq!(executed.len(), 1);
     assert!(
@@ -720,7 +734,7 @@ fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
     // Exactly the transfer plus the ceiling: nothing survives the burn.
     let accounts = [(payer, 110), (bob(), 50)];
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(
         signed_transfer_with_fee(11, payer, bob(), 100, 10),
     ));
     let executed = execute_on(&accounts, &executor, &[tx]);
@@ -750,7 +764,7 @@ const FAR: [u8; 16] = [0x88; 16];
 fn execute_on_shard(
     executor: &Executor,
     local_shard: ShardId,
-    transactions: &[Arc<Verified<RoutableTransaction>>],
+    transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (FAR, 50)]);
     let snapshot = DynSnapshot(&snapshot_store);
@@ -798,9 +812,12 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
     let (near, far) = (trie.shard_for_prefix(alice()), trie.shard_for_prefix(FAR));
     assert_ne!(near, far, "the two accounts must sit on different shards");
 
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(ALICE_SEED, alice(), FAR, 100),
-    ));
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        ALICE_SEED,
+        alice(),
+        FAR,
+        100,
+    )));
     let sender_side = execute_on_shard(&executor, near, std::slice::from_ref(&tx));
     let recipient_side = execute_on_shard(&executor, far, &[tx]);
 
@@ -814,10 +831,10 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
 }
 
 /// A signed publish of `artifact`, paid for by `seed`'s account.
-fn signed_publish(seed: u8, artifact: Vec<u8>) -> RoutableTransaction {
+fn signed_publish(seed: u8, artifact: Vec<u8>) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
-    let vm = VmTransaction {
-        body: VmBody::Publish(artifact.into()),
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Publish(artifact.into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&key.public_key().0),
         max_fee: 1_000_000,
@@ -829,7 +846,7 @@ fn signed_publish(seed: u8, artifact: Vec<u8>) -> RoutableTransaction {
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new(vm)
+    Transaction::new(vm)
 }
 
 /// The raw update a batch made to a package's cell under `publisher`.
@@ -856,9 +873,10 @@ fn a_publish_writes_the_artifact_under_its_publisher() {
     let payer = fee_payer(7);
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
     let artifact = account_artifact().to_vec();
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_publish(7, artifact.clone()),
-    ));
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_publish(
+        7,
+        artifact.clone(),
+    )));
     // Funded well above the burn: at the placeholder rate of one unit
     // per artifact byte, publishing the stdlib guest costs more than the
     // balances the transfer fixtures use.
@@ -942,9 +960,9 @@ fn a_committed_publish_grows_the_cache_that_routing_reads() {
         "the package is unknown before its block commits"
     );
 
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_publish(7, artifact),
-    ));
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_publish(
+        7, artifact,
+    )));
     let executed = execute_on(&[(payer, 1_000_000)], &executor, &[tx]);
     let ConsensusReceipt::Succeeded { .. } = &executed[0].consensus else {
         panic!("the publish must succeed: {:?}", executed[0].consensus);
@@ -999,7 +1017,7 @@ fn only_a_cell_that_addresses_its_own_contents_publishes() {
 fn preview_on(
     accounts: &[([u8; 16], u128)],
     executor: &Executor,
-    tx: &RoutableTransaction,
+    tx: &Transaction,
     grants: PreviewGrants,
 ) -> PreviewReport {
     let snapshot_store = MapDb::genesis(accounts);
@@ -1033,7 +1051,7 @@ const PREVIEW_CEILING: u128 = 10;
 struct PreviewFixture {
     payer: [u8; 16],
     accounts: Vec<([u8; 16], u128)>,
-    tx: RoutableTransaction,
+    tx: Transaction,
 }
 
 fn preview_fixture() -> PreviewFixture {
@@ -1099,7 +1117,7 @@ fn a_preview_agrees_with_the_wave_that_would_commit_it() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
     let report = preview_on(&accounts, &executor, &tx, PreviewGrants::default());
 
-    let verified = Arc::new(Verified::<RoutableTransaction>::from_persisted(tx));
+    let verified = Arc::new(Verified::<Transaction>::from_persisted(tx));
     let executed = execute_on(&accounts, &executor, &[verified]);
     let ConsensusReceipt::Succeeded {
         database_updates, ..
@@ -1284,9 +1302,12 @@ fn a_committed_cell_that_is_not_a_package_is_ignored() {
     // The other half: ordinary traffic cannot grow the cache by
     // accident, whatever it writes.
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
-    let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(ALICE_SEED, alice(), bob(), 100),
-    ));
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        ALICE_SEED,
+        alice(),
+        bob(),
+        100,
+    )));
     let executed = execute(&executor, &[tx]);
     let bogus = package_hash(&ProtocolHasher, encode_amount(900).as_ref());
     absorb_committed_vm_cells([&executed[0].consensus]);

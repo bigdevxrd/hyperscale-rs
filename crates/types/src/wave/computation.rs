@@ -7,8 +7,8 @@ use std::sync::Arc;
 use sbor::prelude::*;
 
 use crate::{
-    Attempt, BlockHeight, Hash, RoutableTransaction, ShardId, TopologySnapshot, ValidatorId,
-    Verifiable, WaveId,
+    Attempt, BlockHeight, Hash, ShardId, TopologySnapshot, Transaction, ValidatorId, Verifiable,
+    WaveId,
 };
 
 /// Compute the set of cross-shard waves for a block's transactions.
@@ -25,7 +25,7 @@ pub fn compute_waves(
     local_shard: ShardId,
     topology_snapshot: &TopologySnapshot,
     block_height: BlockHeight,
-    transactions: &[Arc<Verifiable<RoutableTransaction>>],
+    transactions: &[Arc<Verifiable<Transaction>>],
 ) -> Vec<WaveId> {
     let mut remote_shard_sets: BTreeSet<BTreeSet<ShardId>> = BTreeSet::new();
 

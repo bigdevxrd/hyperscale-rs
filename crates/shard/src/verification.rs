@@ -2378,9 +2378,8 @@ mod tests {
     }
     use hyperscale_types::{
         BeaconWitnessLeafCount, BoundedVec, CertificateRoot, Epoch, Hash, LocalReceiptRoot,
-        LocalTimestamp, ProposerTimestamp, QuorumCertificate, RevealChain, Round,
-        RoutableTransaction, ShardId, ShardLoad, SignerBitfield, TransactionRoot, ValidatorId,
-        WeightedTimestamp,
+        LocalTimestamp, ProposerTimestamp, QuorumCertificate, RevealChain, Round, ShardId,
+        ShardLoad, SignerBitfield, Transaction, TransactionRoot, ValidatorId, WeightedTimestamp,
     };
 
     use super::*;
@@ -2432,7 +2431,7 @@ mod tests {
         height: BlockHeight,
         parent_block_hash: BlockHash,
         in_flight: u32,
-        transactions: Vec<Arc<Verifiable<RoutableTransaction>>>,
+        transactions: Vec<Arc<Verifiable<Transaction>>>,
     ) -> Block {
         block_claiming(height, parent_block_hash, in_flight, transactions, None)
     }
@@ -2441,7 +2440,7 @@ mod tests {
         height: BlockHeight,
         parent_block_hash: BlockHash,
         in_flight: u32,
-        transactions: Vec<Arc<Verifiable<RoutableTransaction>>>,
+        transactions: Vec<Arc<Verifiable<Transaction>>>,
         substate_bytes: Option<u64>,
     ) -> Block {
         Block::Live {

@@ -7,7 +7,7 @@ use hyperscale_crypto_bls::BlsSigner;
 use hyperscale_engine::{PreviewGrants, PreviewReport};
 use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
-    BeaconState, BlockHeight, RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision,
+    BeaconState, BlockHeight, ShardId, Signer, StateRoot, Transaction, TransactionDecision,
     TransactionStatus, TxHash, VmEvent,
 };
 
@@ -30,7 +30,7 @@ use super::Budget;
 /// advance inside `run_until`.
 pub trait Cluster {
     /// Submit a transaction, routed to whichever host serves its source shard.
-    fn submit(&mut self, tx: Arc<RoutableTransaction>);
+    fn submit(&mut self, tx: Arc<Transaction>);
 
     /// Advance the cluster until `cond` holds or `budget` epochs elapse;
     /// return whether `cond` held.
@@ -107,7 +107,7 @@ pub trait Cluster {
     fn vm_preview(
         &self,
         shard: ShardId,
-        tx: &RoutableTransaction,
+        tx: &Transaction,
         grants: PreviewGrants,
     ) -> Option<PreviewReport> {
         let _ = (shard, tx, grants);

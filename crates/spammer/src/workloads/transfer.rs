@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hyperscale_effects_bridge::build_transfer_tx;
-use hyperscale_types::{RoutableTransaction, ShardId};
+use hyperscale_types::{ShardId, Transaction};
 use rand::{Rng, RngExt};
 
 use crate::accounts::{AccountPool, FundedAccount, SelectionMode};
@@ -91,7 +91,7 @@ impl TransferWorkload {
         &self,
         accounts: &AccountPool,
         rng: &mut R,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         // For NoContention mode, use round-robin shard selection to ensure even
         // distribution. Random selection can cause one shard's account counter
         // to advance much faster than others, leading to account reuse before
@@ -112,7 +112,7 @@ impl TransferWorkload {
         &self,
         accounts: &AccountPool,
         rng: &mut R,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         let (from, to) = accounts.cross_shard_pair(rng, self.selection_mode)?;
         Some(self.build_transfer(from, to))
     }
@@ -123,7 +123,7 @@ impl TransferWorkload {
     /// hash covers the whole signed envelope, so without it two transfers
     /// of the same amount inside one validity window would be the same
     /// transaction and the second would dedup away.
-    fn build_transfer(&self, from: &FundedAccount, to: &FundedAccount) -> RoutableTransaction {
+    fn build_transfer(&self, from: &FundedAccount, to: &FundedAccount) -> Transaction {
         let nonce = from.next_nonce();
         build_transfer_tx(
             &from.keypair,
@@ -141,7 +141,7 @@ impl TransferWorkload {
         &self,
         accounts: &AccountPool,
         rng: &mut R,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         let is_cross_shard =
             accounts.num_shards() >= 2 && rng.random::<f64>() < self.cross_shard_ratio;
 
@@ -158,7 +158,7 @@ impl TransferWorkload {
         accounts: &AccountPool,
         target_shard: ShardId,
         rng: &mut R,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         let shard_accounts = accounts.accounts_for_shard(target_shard)?;
 
         if shard_accounts.len() < 2 {
@@ -180,7 +180,7 @@ impl TransferWorkload {
         accounts: &AccountPool,
         target_shard: ShardId,
         rng: &mut R,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         if accounts.num_shards() < 2 {
             return None;
         }
@@ -214,7 +214,7 @@ impl TransferWorkload {
         accounts: &AccountPool,
         target_shard: ShardId,
         rng: &mut R,
-    ) -> Option<RoutableTransaction> {
+    ) -> Option<Transaction> {
         let is_cross_shard =
             accounts.num_shards() >= 2 && rng.random::<f64>() < self.cross_shard_ratio;
 
@@ -235,7 +235,7 @@ impl TransferWorkload {
         target_shard: ShardId,
         count: usize,
         rng: &mut R,
-    ) -> Vec<RoutableTransaction> {
+    ) -> Vec<Transaction> {
         (0..count)
             .filter_map(|_| self.generate_for_shard(accounts, target_shard, rng))
             .collect()
@@ -243,11 +243,7 @@ impl TransferWorkload {
 }
 
 impl WorkloadGenerator for TransferWorkload {
-    fn generate_one(
-        &self,
-        accounts: &AccountPool,
-        rng: &mut dyn Rng,
-    ) -> Option<RoutableTransaction> {
+    fn generate_one(&self, accounts: &AccountPool, rng: &mut dyn Rng) -> Option<Transaction> {
         self.generate_one_inner(accounts, rng)
     }
 
@@ -256,7 +252,7 @@ impl WorkloadGenerator for TransferWorkload {
         accounts: &AccountPool,
         count: usize,
         rng: &mut dyn Rng,
-    ) -> Vec<RoutableTransaction> {
+    ) -> Vec<Transaction> {
         (0..count)
             .filter_map(|_| self.generate_one_inner(accounts, rng))
             .collect()
@@ -278,7 +274,7 @@ mod tests {
     /// own graph. The client never derives effect sets — it routes by the
     /// account addresses it picked — so the assertion reads the same
     /// thing the workload chose.
-    fn shards_touched(tx: &RoutableTransaction, num_shards: u64) -> HashSet<ShardId> {
+    fn shards_touched(tx: &Transaction, num_shards: u64) -> HashSet<ShardId> {
         let partition = ShardTrie::uniform_from_count(num_shards);
         let tree = decode_tree(tx.body().call_tree().expect("a transfer is a call")).unwrap();
         tree.root

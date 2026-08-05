@@ -7,7 +7,7 @@
 //! can compare.
 
 use hyperscale_types::{
-    Ed25519PrivateKey, RoutableTransaction, TimestampRange, VmBody, VmTransaction,
+    Ed25519PrivateKey, TimestampRange, Transaction, TransactionBody, TransactionEnvelope,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -63,7 +63,7 @@ pub fn sign_call(
     max_fee: u128,
     validity: TimestampRange,
     message: Vec<u8>,
-) -> VmTransaction {
+) -> TransactionEnvelope {
     let tree = EnvelopeTree {
         root: IntentDecl {
             graph,
@@ -72,8 +72,8 @@ pub fn sign_call(
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    VmTransaction {
-        body: VmBody::Call(encode_tree(&tree).into()),
+    TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
         fee_payer: vm_account_address(&payer.public_key().0),
         max_fee,
@@ -100,8 +100,8 @@ pub fn build_transfer_tx(
     max_fee: u128,
     validity: TimestampRange,
     message: Vec<u8>,
-) -> RoutableTransaction {
-    RoutableTransaction::new(sign_call(
+) -> Transaction {
+    Transaction::new(sign_call(
         transfer_graph(from, to, amount),
         payer,
         max_fee,

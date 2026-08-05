@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Request to submit a transaction.
 #[derive(Debug, Serialize)]
 pub struct SubmitTransactionRequest {
-    /// Hex-encoded SBOR-serialized `RoutableTransaction`.
+    /// Hex-encoded SBOR-serialized `Transaction`.
     pub transaction_hex: String,
 }
 

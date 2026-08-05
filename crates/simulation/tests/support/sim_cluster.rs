@@ -25,9 +25,9 @@ use hyperscale_scenarios::{
 use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner};
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::{
-    BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds,
-    RoutableTransaction, ShardId, Signer, StateRoot, TransactionDecision, TransactionStatus,
-    TxHash, ValidatorId, VmEvent,
+    BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds, ShardId,
+    Signer, StateRoot, Transaction, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
+    VmEvent,
 };
 
 /// The clock slice `run_until` advances per poll, matching the runner's own
@@ -304,7 +304,7 @@ impl SimCluster {
     /// A host serving any shard `tx` touches, for submission routing. Single
     /// shard tests resolve to the one serving host; cross-shard source
     /// selection is refined when cross-shard scenarios land.
-    fn host_for_tx(&self, tx: &RoutableTransaction) -> Option<NodeIndex> {
+    fn host_for_tx(&self, tx: &Transaction) -> Option<NodeIndex> {
         let topology_snapshot = self.runner.host_topology(0)?;
         let shards: BTreeSet<ShardId> = topology_snapshot
             .all_shards_for_transaction(tx)
@@ -329,7 +329,7 @@ impl Cluster for SimCluster {
         self.runner.signer_from_seed(seed)
     }
 
-    fn submit(&mut self, tx: Arc<RoutableTransaction>) {
+    fn submit(&mut self, tx: Arc<Transaction>) {
         let host = self.host_for_tx(&tx).unwrap_or(0);
         self.runner.schedule_initial_event(
             host,
@@ -410,7 +410,7 @@ impl Cluster for SimCluster {
     fn vm_preview(
         &self,
         shard: ShardId,
-        tx: &RoutableTransaction,
+        tx: &Transaction,
         grants: PreviewGrants,
     ) -> Option<PreviewReport> {
         let store = self

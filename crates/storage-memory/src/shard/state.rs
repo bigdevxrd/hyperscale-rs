@@ -13,8 +13,8 @@ use hyperscale_storage::{
 };
 use hyperscale_types::{
     BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate,
-    ExecutionMetadata, QuorumCertificate, RoutableTransaction, SafeVoteRegisters,
-    ShardWitnessPayload, StateRoot, StoredReceipt, TxHash, ValidatorId, WaveCertificate, WaveId,
+    ExecutionMetadata, QuorumCertificate, SafeVoteRegisters, ShardWitnessPayload, StateRoot,
+    StoredReceipt, Transaction, TxHash, ValidatorId, WaveCertificate, WaveId,
 };
 
 use super::tree_store::SimTreeStore;
@@ -192,7 +192,7 @@ pub struct ConsensusState {
     /// Latest QC.
     pub committed_qc: Option<QuorumCertificate>,
     /// Transactions indexed by hash.
-    pub transactions: HashMap<TxHash, RoutableTransaction>,
+    pub transactions: HashMap<TxHash, Transaction>,
     /// Wave certificates indexed by `WaveId`.
     pub certificates: HashMap<WaveId, WaveCertificate>,
     /// Consensus receipts keyed by transaction hash.

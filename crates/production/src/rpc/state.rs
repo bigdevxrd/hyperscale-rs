@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use hyperscale_node::TxStatusCache;
-use hyperscale_types::{InFlightCount, RoutableTransaction, ShardId, TransactionStatus, TxHash};
+use hyperscale_types::{InFlightCount, ShardId, Transaction, TransactionStatus, TxHash};
 use serde::{Deserialize, Serialize};
 
 use crate::status::SyncStatus;
@@ -33,7 +33,7 @@ pub struct RpcPublishers {
 /// threads — internally it computes the touched-shard fanout from a
 /// lock-free topology snapshot and pushes admit/admit-and-gossip
 /// envelopes onto the relevant per-shard event channels.
-pub type TxSubmissionSender = Arc<dyn Fn(Arc<RoutableTransaction>) -> bool + Send + Sync + 'static>;
+pub type TxSubmissionSender = Arc<dyn Fn(Arc<Transaction>) -> bool + Send + Sync + 'static>;
 
 /// Shared state for RPC handlers.
 #[derive(Clone)]

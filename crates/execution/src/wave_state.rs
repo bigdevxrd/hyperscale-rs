@@ -31,7 +31,7 @@ use std::time::Duration;
 use hyperscale_core::{Action, CrossShardExecutionRequest};
 use hyperscale_types::{
     BlockHash, BlockHeight, ExecutionCertificate, ExecutionOutcome, FinalizedWave,
-    GlobalReceiptRoot, RevealChain, RoutableTransaction, ShardId, StateRoot, StoredReceipt,
+    GlobalReceiptRoot, RevealChain, ShardId, StateRoot, StoredReceipt, Transaction,
     TransactionDecision, TxHash, TxOutcome, Verifiable, Verified, WAVE_TIMEOUT, WaveCertificate,
     WaveId, WeightedTimestamp, compute_global_receipt_root,
 };
@@ -68,7 +68,7 @@ pub struct WaveState {
     tx_hash_set: HashSet<TxHash>,
     /// Transactions owned by the wave, used to build execution requests at
     /// dispatch time.
-    transactions: HashMap<TxHash, Arc<Verified<RoutableTransaction>>>,
+    transactions: HashMap<TxHash, Arc<Verified<Transaction>>>,
 
     /// BFT-authenticated weighted timestamp of the wave-starting block.
     /// Anchor for wave-level wall-clock timeouts (wave abort, vote anchor
@@ -180,11 +180,11 @@ impl WaveState {
         block_hash: BlockHash,
         wave_start_ts: WeightedTimestamp,
         wave_start_reveal: RevealChain,
-        txs: Vec<(Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>)>,
+        txs: Vec<(Arc<Verifiable<Transaction>>, BTreeSet<ShardId>)>,
         single_shard: bool,
     ) -> Self {
         let mut tx_hashes: Vec<TxHash> = Vec::with_capacity(txs.len());
-        let mut transactions: HashMap<TxHash, Arc<Verified<RoutableTransaction>>> =
+        let mut transactions: HashMap<TxHash, Arc<Verified<Transaction>>> =
             HashMap::with_capacity(txs.len());
         let mut participating_shards: HashMap<TxHash, BTreeSet<ShardId>> =
             HashMap::with_capacity(txs.len());
@@ -199,9 +199,9 @@ impl WaveState {
             // BFT-transitive trust that gates the containing block. Honest
             // live-consensus blocks already carry `Verified` entries (the
             // `.into_verified()` arm short-circuits without re-validating).
-            let verified: Arc<Verified<RoutableTransaction>> = match (*tx).clone().into_verified() {
+            let verified: Arc<Verified<Transaction>> = match (*tx).clone().into_verified() {
                 Ok(v) => Arc::new(v),
-                Err(raw) => Arc::new(Verified::<RoutableTransaction>::from_persisted(raw)),
+                Err(raw) => Arc::new(Verified::<Transaction>::from_persisted(raw)),
             };
             transactions.insert(h, verified);
             participating_shards.insert(h, shards);
@@ -372,7 +372,7 @@ impl WaveState {
     fn build_dispatch_action(&self, provisioning: &ProvisioningTracker) -> Option<Action> {
         if self.wave_id.is_zero() {
             // Single-shard wave: no provisions needed.
-            let transactions: Vec<Arc<Verified<RoutableTransaction>>> = self
+            let transactions: Vec<Arc<Verified<Transaction>>> = self
                 .tx_hashes
                 .iter()
                 .filter(|h| !self.is_tx_explicitly_aborted(**h))
@@ -1129,7 +1129,7 @@ mod tests {
 
     const WAVE_START: BlockHeight = BlockHeight::new(10);
 
-    fn make_tx(seed: u8) -> Arc<Verifiable<RoutableTransaction>> {
+    fn make_tx(seed: u8) -> Arc<Verifiable<Transaction>> {
         Arc::new(Verifiable::from(test_transaction_with_prefixes(
             &[seed, seed + 1, seed + 2],
             &[test_prefix(seed)],
@@ -1146,7 +1146,7 @@ mod tests {
     }
 
     fn make_single_shard_wave(n: usize) -> WaveState {
-        let txs: Vec<(Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>)> = (0..n)
+        let txs: Vec<(Arc<Verifiable<Transaction>>, BTreeSet<ShardId>)> = (0..n)
             .map(|i| {
                 (
                     make_tx(u8::try_from(i).unwrap_or(u8::MAX)),
@@ -1166,7 +1166,7 @@ mod tests {
 
     fn make_cross_shard_wave(n: usize) -> WaveState {
         let shards = BTreeSet::from([ShardId::leaf(1, 0), ShardId::leaf(1, 1)]);
-        let txs: Vec<(Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>)> = (0..n)
+        let txs: Vec<(Arc<Verifiable<Transaction>>, BTreeSet<ShardId>)> = (0..n)
             .map(|i| (make_tx(u8::try_from(i).unwrap_or(u8::MAX)), shards.clone()))
             .collect();
         WaveState::new(

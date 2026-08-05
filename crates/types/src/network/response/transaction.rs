@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use sbor::prelude::*;
 
-use crate::{BoundedVec, MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, RoutableTransaction};
+use crate::{BoundedVec, MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, Transaction};
 
 /// Response to a transaction fetch request.
 ///
@@ -14,7 +14,7 @@ use crate::{BoundedVec, MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, Routabl
 pub struct GetTransactionsResponse {
     /// The requested transactions that were found.
     /// Uses Arc to avoid copying transaction data.
-    pub transactions: BoundedVec<Arc<RoutableTransaction>, MAX_TXS_PER_BLOCK>,
+    pub transactions: BoundedVec<Arc<Transaction>, MAX_TXS_PER_BLOCK>,
 }
 
 impl GetTransactionsResponse {
@@ -24,7 +24,7 @@ impl GetTransactionsResponse {
     ///
     /// Panics if `transactions.len() > MAX_TXS_PER_BLOCK`.
     #[must_use]
-    pub fn new(transactions: Vec<Arc<RoutableTransaction>>) -> Self {
+    pub fn new(transactions: Vec<Arc<Transaction>>) -> Self {
         Self {
             transactions: transactions.into(),
         }
@@ -52,7 +52,7 @@ impl GetTransactionsResponse {
 
     /// Consume and return the transactions.
     #[must_use]
-    pub fn into_transactions(self) -> Vec<Arc<RoutableTransaction>> {
+    pub fn into_transactions(self) -> Vec<Arc<Transaction>> {
         self.transactions.into_inner()
     }
 }

@@ -30,8 +30,8 @@ use hyperscale_shard::ShardConsensusConfig;
 use hyperscale_storage::{BeaconChainReader, BeaconStorage, SubstateStore};
 use hyperscale_storage_rocksdb::{RocksDbBeaconStorage, RocksDbShardStorage};
 use hyperscale_types::{
-    BeaconChainConfig, BeaconState, BlockHeight, GenesisValidators, RoutableTransaction, ShardId,
-    StateRoot, TransactionDecision, TransactionStatus, TxHash, shard_prefix_path,
+    BeaconChainConfig, BeaconState, BlockHeight, GenesisValidators, ShardId, StateRoot,
+    Transaction, TransactionDecision, TransactionStatus, TxHash, shard_prefix_path,
 };
 use libp2p::{Multiaddr, PeerId};
 use tempfile::TempDir;
@@ -296,7 +296,7 @@ impl Harness {
     /// `false` only when the host is shutting down. Submit through a host
     /// that runs the transaction's source shard so it admits directly
     /// rather than relying on a gossip hop.
-    pub fn submit_transaction(&self, idx: usize, tx: Arc<RoutableTransaction>) -> bool {
+    pub fn submit_transaction(&self, idx: usize, tx: Arc<Transaction>) -> bool {
         (self.hosts[idx].tx_submission)(tx)
     }
 

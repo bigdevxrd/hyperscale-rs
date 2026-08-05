@@ -21,9 +21,9 @@ use hyperscale_types::{
     InFlightCount, LocalReceiptRoot, LocalReceiptRootContext, NetworkDefinition, PreparedCommit,
     ProposerTimestamp, ProvisionHash, ProvisionTxRootsContext, ProvisionTxRootsMap, Provisions,
     ProvisionsRoot, ProvisionsRootContext, QcContext, QuorumCertificate, ReadySignal,
-    ReshapeTrigger, RevealChain, Round, RoutableTransaction, SettledWavesRoot, ShardId, ShardLoad,
-    SplitChildRoots, StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout,
-    TimeoutContext, TopologySnapshot, TransactionRoot, TransactionRootContext, ValidatorId,
+    ReshapeTrigger, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad, SplitChildRoots,
+    StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout, TimeoutContext,
+    TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext, ValidatorId,
     Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
     absorb_committed_vm_cells, block_header_message, block_vote_message,
     certified_block_header_message, commit_witness_window, compute_waves, derive_leaves,
@@ -200,7 +200,7 @@ pub fn build_proposal<S: ShardChainWriter>(
     is_fallback: bool,
     parent_state_root: StateRoot,
     parent_block_height: BlockHeight,
-    transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+    transactions: Vec<Arc<Verified<Transaction>>>,
     certificates: Vec<Arc<Verifiable<FinalizedWave>>>,
     local_shard: ShardId,
     topology_snapshot: &TopologySnapshot,
@@ -234,10 +234,10 @@ pub fn build_proposal<S: ShardChainWriter>(
         .then(|| split_child_roots_for_header(&jmt_snapshot, local_shard, height))
         .flatten();
 
-    // Lift each `Verified<RoutableTransaction>` into `Verifiable` so block
+    // Lift each `Verified<Transaction>` into `Verifiable` so block
     // construction and per-root compute calls see the form that
     // `Block.transactions` carries.
-    let transactions: Vec<Arc<Verifiable<RoutableTransaction>>> = transactions
+    let transactions: Vec<Arc<Verifiable<Transaction>>> = transactions
         .into_iter()
         .map(|tx| Arc::new(Verifiable::from((*tx).clone())))
         .collect();
@@ -1608,7 +1608,7 @@ mod tests {
 
     #[test]
     fn verify_transaction_root_accepts_matching_root_and_rejects_otherwise() {
-        let txs: Vec<Arc<Verifiable<RoutableTransaction>>> = Vec::new();
+        let txs: Vec<Arc<Verifiable<Transaction>>> = Vec::new();
         let root = Verified::<TransactionRoot>::compute(&txs).into_inner();
         let anchor = WeightedTimestamp::ZERO;
         let ctx = TransactionRootContext {

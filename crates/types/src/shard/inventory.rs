@@ -26,7 +26,7 @@ use sbor::prelude::BasicSbor;
 use crate::{
     Block, BlockHash, BlockHeader, BloomFilter, BloomKey, BoundedVec, CertifiedBlock,
     FinalizedWave, MAX_FINALIZED_TX_PER_BLOCK, MAX_PROVISIONS_PER_BLOCK, MAX_TXS_PER_BLOCK,
-    ProvisionHash, Provisions, QuorumCertificate, RoutableTransaction, TxHash, Verifiable, WaveId,
+    ProvisionHash, Provisions, QuorumCertificate, Transaction, TxHash, Verifiable, WaveId,
     WitnessSources,
 };
 
@@ -88,8 +88,7 @@ impl Inventory {
 pub struct ElidedCertifiedBlock {
     header: Verifiable<BlockHeader>,
     qc: Verifiable<QuorumCertificate>,
-    transactions:
-        BoundedVec<(TxHash, Option<Arc<Verifiable<RoutableTransaction>>>), MAX_TXS_PER_BLOCK>,
+    transactions: BoundedVec<(TxHash, Option<Arc<Verifiable<Transaction>>>), MAX_TXS_PER_BLOCK>,
     certificates:
         BoundedVec<(WaveId, Option<Arc<Verifiable<FinalizedWave>>>), MAX_FINALIZED_TX_PER_BLOCK>,
     provisions: ElidedProvisions,
@@ -147,8 +146,7 @@ impl ElidedCertifiedBlock {
     #[must_use]
     pub const fn transactions(
         &self,
-    ) -> &BoundedVec<(TxHash, Option<Arc<Verifiable<RoutableTransaction>>>), MAX_TXS_PER_BLOCK>
-    {
+    ) -> &BoundedVec<(TxHash, Option<Arc<Verifiable<Transaction>>>), MAX_TXS_PER_BLOCK> {
         &self.transactions
     }
 
@@ -266,7 +264,7 @@ impl ElidedCertifiedBlock {
         mut provision_lookup: FProv,
     ) -> Result<CertifiedBlock, RehydrateError>
     where
-        FTx: FnMut(&TxHash) -> Option<Arc<Verifiable<RoutableTransaction>>>,
+        FTx: FnMut(&TxHash) -> Option<Arc<Verifiable<Transaction>>>,
         FCert: FnMut(&WaveId) -> Option<Arc<Verifiable<FinalizedWave>>>,
         FProv: FnMut(&ProvisionHash) -> Option<Arc<Verifiable<Provisions>>>,
     {
@@ -327,8 +325,7 @@ impl ElidedCertifiedBlock {
             return Err(RehydrateError::Missing(miss));
         }
 
-        let txs: Vec<Arc<Verifiable<RoutableTransaction>>> =
-            txs.into_iter().map(Option::unwrap).collect();
+        let txs: Vec<Arc<Verifiable<Transaction>>> = txs.into_iter().map(Option::unwrap).collect();
         let certs: Vec<Arc<Verifiable<FinalizedWave>>> =
             certs.into_iter().map(Option::unwrap).collect();
         let txs = Arc::new(txs.into());
@@ -676,7 +673,7 @@ mod tests {
             enc.encode(&header).unwrap();
             enc.encode(&qc).unwrap();
             // Empty transactions.
-            enc.encode(&Vec::<(TxHash, Option<Arc<RoutableTransaction>>)>::new())
+            enc.encode(&Vec::<(TxHash, Option<Arc<Transaction>>)>::new())
                 .unwrap();
             // Oversized certificates.
             enc.write_value_kind(ValueKind::Array).unwrap();
@@ -712,7 +709,7 @@ mod tests {
             enc.write_size(6).unwrap();
             enc.encode(&header).unwrap();
             enc.encode(&qc).unwrap();
-            enc.encode(&Vec::<(TxHash, Option<Arc<RoutableTransaction>>)>::new())
+            enc.encode(&Vec::<(TxHash, Option<Arc<Transaction>>)>::new())
                 .unwrap();
             enc.encode(&Vec::<(WaveId, Option<Arc<FinalizedWave>>)>::new())
                 .unwrap();

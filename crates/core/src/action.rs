@@ -14,12 +14,12 @@ use hyperscale_types::{
     PcVector, PcVote1, PcVote2, PcVote3, PcVoteEquivocation, ProposerTimestamp, ProvisionHash,
     ProvisionTxRootsMap, Provisions, ProvisionsRoot, QuorumCertificate, RatifyPhase, RatifyRound,
     RatifyVote, ReadySignal, ReshapeThresholds, ReshapeTrigger, ResolvedCommittee, RevealChain,
-    Round, RoutableTransaction, RoutingCommittees, SafeVoteRegisters, SettledWavesRoot,
-    ShardForkProof, ShardId, ShardLoad, ShardVoteEquivocation, SharedCertificates,
-    SharedTransactions, SharedWitnessSources, SpcEmptyViewMsg, SpcHighTriple, SpcNewCommitMsg,
-    SpcProposalObject, SpcView, SplitChildRoots, StateRoot, SubstateEntry, Timeout,
-    TopologySnapshot, TransactionRoot, TransactionStatus, TxHash, TxOutcome, ValidatorId,
-    Verifiable, Verified, VoteCount, WaveId, WeightedTimestamp,
+    Round, RoutingCommittees, SafeVoteRegisters, SettledWavesRoot, ShardForkProof, ShardId,
+    ShardLoad, ShardVoteEquivocation, SharedCertificates, SharedTransactions, SharedWitnessSources,
+    SpcEmptyViewMsg, SpcHighTriple, SpcNewCommitMsg, SpcProposalObject, SpcView, SplitChildRoots,
+    StateRoot, SubstateEntry, Timeout, TopologySnapshot, Transaction, TransactionRoot,
+    TransactionStatus, TxHash, TxOutcome, ValidatorId, Verifiable, Verified, VoteCount, WaveId,
+    WeightedTimestamp,
 };
 
 use crate::{CommitSource, FetchAbandon, FetchRequest, ProtocolEvent, TimerId};
@@ -30,7 +30,7 @@ pub struct CrossShardExecutionRequest {
     /// Transaction hash (for correlation).
     pub tx_hash: TxHash,
     /// The transaction to execute.
-    pub transaction: Arc<Verified<RoutableTransaction>>,
+    pub transaction: Arc<Verified<Transaction>>,
     /// State entries provisioned by other shards (one `Arc` per source shard
     /// contribution). Engine layers them on top of the local snapshot.
     pub provisions: Vec<Arc<Vec<SubstateEntry>>>,
@@ -873,7 +873,7 @@ pub enum Action {
         /// Height of the parent block (stable anchor for JMT computation).
         parent_block_height: BlockHeight,
         /// Transactions to include in the proposal.
-        transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+        transactions: Vec<Arc<Verified<Transaction>>>,
         /// Finalized waves to include in the block (carries certs + receipts + ECs).
         finalized_waves: Vec<Arc<Verifiable<FinalizedWave>>>,
         /// Provisions from remote shards, included in this block.
@@ -972,7 +972,7 @@ pub enum Action {
         /// [`PendingChain`].
         block_height: BlockHeight,
         /// Transactions to execute (all members of the wave).
-        transactions: Vec<Arc<Verified<RoutableTransaction>>>,
+        transactions: Vec<Arc<Verified<Transaction>>>,
         /// The committing block's parent-QC weighted timestamp: the
         /// transaction clock for every transaction the block commits.
         wave_start_ts: WeightedTimestamp,

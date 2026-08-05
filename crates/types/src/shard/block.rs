@@ -15,9 +15,9 @@ use crate::{
     BeaconWitnessRoot, BlockHash, BlockHeader, BlockHeight, BoundedVec, CertificateRoot,
     ChainOrigin, FinalizedWave, LocalReceiptRoot, MAX_FINALIZED_TX_PER_BLOCK,
     MAX_PROVISIONS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProvisionHash, ProvisionTxRootsMap, Provisions,
-    ProvisionsRoot, QuorumCertificate, RoutableTransaction, ShardId, SharedWitnessSources,
-    SplitChildRoots, StateRoot, TransactionRoot, TxHash, ValidatorId, Verifiable, Verified,
-    WeightedTimestamp, WitnessSources,
+    ProvisionsRoot, QuorumCertificate, ShardId, SharedWitnessSources, SplitChildRoots, StateRoot,
+    Transaction, TransactionRoot, TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp,
+    WitnessSources,
 };
 
 /// Shared transaction list — wrapped in `Arc` so root-verification actions
@@ -25,34 +25,33 @@ use crate::{
 ///
 /// Elements are wrapped in [`Verifiable`] so a locally-built block (whose
 /// txs were admission-validated through `MempoolCoordinator`) preserves
-/// the [`Verified<RoutableTransaction>`] marker through block
+/// the [`Verified<Transaction>`] marker through block
 /// construction; wire-decoded blocks land at [`Verifiable::Unverified`]
 /// because SBOR decode is a transparent passthrough into that variant.
 /// Same rationale as [`SharedCertificates`].
-pub type SharedTransactions =
-    Arc<BoundedVec<Arc<Verifiable<RoutableTransaction>>, MAX_TXS_PER_BLOCK>>;
+pub type SharedTransactions = Arc<BoundedVec<Arc<Verifiable<Transaction>>, MAX_TXS_PER_BLOCK>>;
 
-/// Build a [`SharedTransactions`] from a list of raw `Arc<RoutableTransaction>`
+/// Build a [`SharedTransactions`] from a list of raw `Arc<Transaction>`
 /// recovered from persistent storage.
 ///
 /// Each entry is lifted via
-/// [`Verified::<RoutableTransaction>::from_persisted`] — the BFT-transitive
+/// [`Verified::<Transaction>::from_persisted`] — the BFT-transitive
 /// trust chain (persisted ⇒ committed block ⇒ voter-validated by ≥1 honest
 /// voter) justifies marking each as [`Verifiable::Verified`]. Callers
 /// outside that trust source must construct
-/// `Vec<Arc<Verifiable<RoutableTransaction>>>` directly.
+/// `Vec<Arc<Verifiable<Transaction>>>` directly.
 ///
 /// # Panics
 ///
 /// Panics if `txs.len() > MAX_TXS_PER_BLOCK`.
 #[must_use]
-pub fn shared_transactions_from_raw(txs: Vec<Arc<RoutableTransaction>>) -> SharedTransactions {
-    let wrapped: Vec<Arc<Verifiable<RoutableTransaction>>> = txs
+pub fn shared_transactions_from_raw(txs: Vec<Arc<Transaction>>) -> SharedTransactions {
+    let wrapped: Vec<Arc<Verifiable<Transaction>>> = txs
         .into_iter()
         .map(|tx| {
-            Arc::new(Verifiable::from(
-                Verified::<RoutableTransaction>::from_persisted((*tx).clone()),
-            ))
+            Arc::new(Verifiable::from(Verified::<Transaction>::from_persisted(
+                (*tx).clone(),
+            )))
         })
         .collect();
     Arc::new(wrapped.into())
@@ -177,8 +176,8 @@ const BLOCK_VARIANT_SEALED: u8 = 1;
 impl PartialEq for Block {
     fn eq(&self, other: &Self) -> bool {
         fn tx_lists_equal(
-            a: &[Arc<Verifiable<RoutableTransaction>>],
-            b: &[Arc<Verifiable<RoutableTransaction>>],
+            a: &[Arc<Verifiable<Transaction>>],
+            b: &[Arc<Verifiable<Transaction>>],
         ) -> bool {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.hash() == y.hash())
         }

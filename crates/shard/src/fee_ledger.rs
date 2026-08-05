@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_types::{
-    FinalizedWave, RETENTION_HORIZON, RoutableTransaction, TxHash, Verifiable, WeightedTimestamp,
+    FinalizedWave, RETENTION_HORIZON, Transaction, TxHash, Verifiable, WeightedTimestamp,
 };
 
 /// One engaged reservation: the payer's owner prefix, the held ceiling,
@@ -44,7 +44,7 @@ impl FeeReservationLedger {
     /// transaction whose fee payer `payer_local` claims for this shard.
     pub fn register_committed(
         &mut self,
-        transactions: &[Arc<Verifiable<RoutableTransaction>>],
+        transactions: &[Arc<Verifiable<Transaction>>],
         payer_local: impl Fn([u8; 16]) -> bool,
     ) {
         for tx in transactions {
@@ -99,7 +99,7 @@ mod tests {
 
     const PAYER: [u8; 16] = [0xAA; 16];
 
-    fn vm_tx(max_fee: u128, end_ms: u64) -> Arc<Verifiable<RoutableTransaction>> {
+    fn vm_tx(max_fee: u128, end_ms: u64) -> Arc<Verifiable<Transaction>> {
         let validity = TimestampRange::new(
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(end_ms),

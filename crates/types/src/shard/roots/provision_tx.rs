@@ -6,8 +6,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    BoundedBTreeMap, Hash, MAX_REMOTE_SHARDS_PER_WAVE, ProvisionTxRoot, RoutableTransaction,
-    ShardId, TopologySnapshot, Verifiable, Verified, Verify, compute_merkle_root,
+    BoundedBTreeMap, Hash, MAX_REMOTE_SHARDS_PER_WAVE, ProvisionTxRoot, ShardId, TopologySnapshot,
+    Transaction, Verifiable, Verified, Verify, compute_merkle_root,
 };
 
 /// Inputs the provision-tx-roots verifier reads against.
@@ -21,7 +21,7 @@ pub struct ProvisionTxRootsContext<'a> {
     /// shards each cross-shard tx contributes to.
     pub topology_snapshot: &'a TopologySnapshot,
     /// The block's transactions in block order.
-    pub transactions: &'a [Arc<Verifiable<RoutableTransaction>>],
+    pub transactions: &'a [Arc<Verifiable<Transaction>>],
 }
 
 /// Provision-tx roots map type as carried by [`BlockHeader`](crate::BlockHeader).
@@ -74,7 +74,7 @@ impl Verified<ProvisionTxRootsMap> {
     pub fn compute(
         local_shard: ShardId,
         topology_snapshot: &TopologySnapshot,
-        transactions: &[Arc<Verifiable<RoutableTransaction>>],
+        transactions: &[Arc<Verifiable<Transaction>>],
     ) -> Self {
         let mut per_target: BTreeMap<ShardId, Vec<Hash>> = BTreeMap::new();
 
@@ -156,7 +156,7 @@ mod tests {
     use crate::test_utils::{TestCommittee, install_stub_vm_statics, stub_vm_transaction};
     use crate::{TimestampRange, WeightedTimestamp};
 
-    fn cross_shard_vm_tx(payer: [u8; 16]) -> Arc<Verifiable<RoutableTransaction>> {
+    fn cross_shard_vm_tx(payer: [u8; 16]) -> Arc<Verifiable<Transaction>> {
         install_stub_vm_statics();
         let validity = TimestampRange::new(
             WeightedTimestamp::ZERO,
