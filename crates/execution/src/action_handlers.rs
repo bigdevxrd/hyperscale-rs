@@ -19,9 +19,9 @@ use hyperscale_types::network::notification::{
     ExecutionCertificatesNotification, ExecutionVotesNotification,
 };
 use hyperscale_types::{
-    ExecutionCertificate, ExecutionCertificateContext, ExecutionVote, FinalizedWaveContext,
-    Stopwatch, StoredReceipt, TxHash, TxOutcome, Verifiable, Verified, exec_cert_batch_message,
-    exec_vote_batch_message,
+    ExecCertBatchMessage, ExecVoteBatchMessage, ExecutionCertificate, ExecutionCertificateContext,
+    ExecutionVote, FinalizedWaveContext, Stopwatch, StoredReceipt, TxHash, TxOutcome, Verifiable,
+    Verified, signed_bytes,
 };
 
 // ============================================================================
@@ -267,8 +267,11 @@ where
             // `Verifiable::Verified` marker, letting the handler skip
             // re-verification of our own signature.
             if leader != validator_id {
-                let batch_msg =
-                    exec_vote_batch_message(network, local_shard, std::iter::once(&*verified));
+                let batch_msg = signed_bytes(&ExecVoteBatchMessage::new(
+                    network,
+                    local_shard,
+                    std::iter::once(&*verified),
+                ));
                 let Ok(batch_sig) = ctx.signer.sign(&batch_msg) else {
                     tracing::error!(
                         ?block_hash,
@@ -298,11 +301,11 @@ where
             recipients,
         } => {
             let cert = Arc::unwrap_or_clone(certificate).into_inner();
-            let msg = exec_cert_batch_message(
+            let msg = signed_bytes(&ExecCertBatchMessage::new(
                 ctx.topology_snapshot.network(),
                 cert.shard_id(),
                 std::slice::from_ref(&cert),
-            );
+            ));
             let Ok(sig) = ctx.signer.sign(&msg) else {
                 tracing::error!("cannot sign execution certificate batch; skipping broadcast");
                 return;

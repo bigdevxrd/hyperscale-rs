@@ -1,44 +1,58 @@
-//! Domain-separated signing for validator "ready on shard" signals.
+//! Signing message for validator "ready on shard" signals.
+
+use hyperscale_hbor::Hbor;
 
 use crate::{NetworkDefinition, ShardId, ValidatorId, WeightedTimestamp};
 
-/// Domain tag for validator "ready on shard" signals.
-///
-/// Format: `HYPERSCALE_READY_SIGNAL_v1` || `network.id` || `validator_id` ||
-/// `shard` || `wt_window_start` || `wt_window_end`
+/// What a [`ReadySignal`](crate::ReadySignal) signature covers.
 ///
 /// Signed by the validator and broadcast to their shard committee. The
 /// `shard` binding names the shard whose synced state the signal attests,
 /// so a signal from a validator's prior reshape seat cannot be re-credited
-/// to a seat on a different shard. The proposer includes valid dwell-eligible
-/// signals in the next block's manifest; verifiers re-derive these bytes to
-/// check the signature before admitting the signal to their local pool. The
-/// weighted-time window bounds replay surface — a signal hoarded past `end`
-/// no longer validates.
-pub const DOMAIN_READY_SIGNAL: &[u8] = b"HYPERSCALE_READY_SIGNAL_v1";
+/// to a seat on a different shard. The proposer includes valid
+/// dwell-eligible signals in the next block's manifest; verifiers rebuild
+/// this message to check the signature before admitting the signal to
+/// their local pool. The weighted-time window bounds replay surface — a
+/// signal hoarded past `wt_window_end` no longer validates.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "HYPERSCALE_READY_SIGNAL_v1")]
+pub struct ReadySignalMessage {
+    /// Network the signal binds to.
+    pub network_id: u8,
+    /// The validator declaring readiness.
+    pub validator_id: ValidatorId,
+    /// The shard whose synced state the signal attests.
+    pub shard: ShardId,
+    /// Start of the weighted-time validity window.
+    pub wt_window_start: WeightedTimestamp,
+    /// End of the weighted-time validity window.
+    pub wt_window_end: WeightedTimestamp,
+}
 
-/// Build the canonical signing bytes for a
-/// [`ReadySignal`](crate::ReadySignal).
-#[must_use]
-pub fn ready_signal_message(
-    network: &NetworkDefinition,
-    validator_id: ValidatorId,
-    shard: ShardId,
-    wt_window_start: WeightedTimestamp,
-    wt_window_end: WeightedTimestamp,
-) -> Vec<u8> {
-    let mut message = Vec::with_capacity(DOMAIN_READY_SIGNAL.len() + 1 + 8 + 8 + 8 + 8);
-    message.extend_from_slice(DOMAIN_READY_SIGNAL);
-    message.push(network.id);
-    message.extend_from_slice(&validator_id.to_le_bytes());
-    message.extend_from_slice(&shard.to_le_bytes());
-    message.extend_from_slice(&wt_window_start.as_millis().to_le_bytes());
-    message.extend_from_slice(&wt_window_end.as_millis().to_le_bytes());
-    message
+impl ReadySignalMessage {
+    /// Assemble the message a ready signal signs.
+    #[must_use]
+    pub const fn new(
+        network: &NetworkDefinition,
+        validator_id: ValidatorId,
+        shard: ShardId,
+        wt_window_start: WeightedTimestamp,
+        wt_window_end: WeightedTimestamp,
+    ) -> Self {
+        Self {
+            network_id: network.id,
+            validator_id,
+            shard,
+            wt_window_start,
+            wt_window_end,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::HborSigned;
+
     use super::*;
 
     fn net() -> NetworkDefinition {
@@ -46,55 +60,35 @@ mod tests {
     }
 
     #[test]
-    fn ready_signal_message_byte_layout_is_pinned() {
-        let network = net();
-        let validator = ValidatorId::new(0x0123_4567_89AB_CDEF);
-        let shard = ShardId::ROOT.children().1;
-        let start = WeightedTimestamp::from_millis(100);
-        let end = WeightedTimestamp::from_millis(228);
-
-        let msg = ready_signal_message(&network, validator, shard, start, end);
-        let mut expected = Vec::with_capacity(DOMAIN_READY_SIGNAL.len() + 1 + 8 + 8 + 8 + 8);
-        expected.extend_from_slice(DOMAIN_READY_SIGNAL);
-        expected.push(network.id);
-        expected.extend_from_slice(&validator.to_le_bytes());
-        expected.extend_from_slice(&shard.to_le_bytes());
-        expected.extend_from_slice(&start.as_millis().to_le_bytes());
-        expected.extend_from_slice(&end.as_millis().to_le_bytes());
-
-        assert_eq!(msg, expected);
-        assert_eq!(msg.len(), DOMAIN_READY_SIGNAL.len() + 1 + 8 + 8 + 8 + 8);
-    }
-
-    #[test]
     fn ready_signal_message_differs_by_window() {
-        let validator = ValidatorId::new(7);
-        let shard = ShardId::ROOT;
-        let a = ready_signal_message(
-            &net(),
-            validator,
-            shard,
-            WeightedTimestamp::from_millis(0),
-            WeightedTimestamp::from_millis(1),
-        );
-        let b = ready_signal_message(
-            &net(),
-            validator,
-            shard,
-            WeightedTimestamp::from_millis(0),
-            WeightedTimestamp::from_millis(2),
-        );
-        assert_ne!(a, b);
+        let mk = |end: u64| {
+            ReadySignalMessage::new(
+                &net(),
+                ValidatorId::new(7),
+                ShardId::ROOT,
+                WeightedTimestamp::from_millis(0),
+                WeightedTimestamp::from_millis(end),
+            )
+            .signing_bytes()
+            .unwrap()
+        };
+        assert_ne!(mk(1), mk(2));
     }
 
     #[test]
     fn ready_signal_message_differs_by_shard() {
-        let validator = ValidatorId::new(7);
         let (left, right) = ShardId::ROOT.children();
-        let start = WeightedTimestamp::from_millis(0);
-        let end = WeightedTimestamp::from_millis(1);
-        let a = ready_signal_message(&net(), validator, left, start, end);
-        let b = ready_signal_message(&net(), validator, right, start, end);
-        assert_ne!(a, b);
+        let mk = |shard: ShardId| {
+            ReadySignalMessage::new(
+                &net(),
+                ValidatorId::new(7),
+                shard,
+                WeightedTimestamp::from_millis(0),
+                WeightedTimestamp::from_millis(1),
+            )
+            .signing_bytes()
+            .unwrap()
+        };
+        assert_ne!(mk(left), mk(right));
     }
 }

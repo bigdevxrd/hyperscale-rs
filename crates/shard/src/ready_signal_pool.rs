@@ -88,7 +88,7 @@ impl ReadySignalPool {
     /// cohort's `ReshapeReady` would never commit.
     ///
     /// Caller is responsible for any cryptographic verification (the
-    /// sig over [`crate::signing::ready_signal_message`]) before
+    /// sig over [`crate::signing::ReadySignalMessage::new`]) before
     /// calling — the pool trusts what it's given and only enforces
     /// pool-shape invariants.
     pub fn admit(&mut self, signal: ReadySignal, received_at: LocalTimestamp) {

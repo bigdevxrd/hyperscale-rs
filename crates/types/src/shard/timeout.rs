@@ -15,10 +15,10 @@ use hyperscale_crypto::{SignError, Signer, Verifier};
 use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
-use crate::signing::timeout_message;
+use crate::signing::TimeoutMessage;
 use crate::{
     ConsensusPublicKey, ConsensusSignature, NetworkDefinition, QuorumCertificate, Round, ShardId,
-    ValidatorId, Verified, Verify,
+    ValidatorId, Verified, Verify, signed_bytes,
 };
 
 /// A validator's timeout for a shard consensus round.
@@ -50,7 +50,7 @@ impl Timeout {
         voter: ValidatorId,
         signer: &dyn Signer,
     ) -> Result<Self, SignError> {
-        let message = timeout_message(network, shard_id, round);
+        let message = signed_bytes(&TimeoutMessage::new(network, shard_id, round));
         let signature = signer.sign(&message)?;
         Ok(Self {
             shard_id,
@@ -140,7 +140,7 @@ impl Timeout {
     /// Build the canonical signing message for this timeout.
     #[must_use]
     pub fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        timeout_message(network, self.shard_id, self.round)
+        signed_bytes(&TimeoutMessage::new(network, self.shard_id, self.round))
     }
 }
 
@@ -171,7 +171,7 @@ pub enum TimeoutVerifyError {
 
 /// Construction asserts: the signature on the timeout validates against
 /// the voter's public key for the domain-separated signing message
-/// `timeout_message(network, shard, round)`. It does **not** assert anything
+/// `TimeoutMessage::new(network, shard, round)`. It does **not** assert anything
 /// about the carried `high_qc` — that is verified as a QC where it is adopted.
 ///
 /// Construction goes through one of two gates:
@@ -199,7 +199,7 @@ impl Verified<Timeout> {
     /// Sign a fresh [`Timeout`] with `signer` and return its verified form.
     ///
     /// The predicate holds by construction: the signature over the
-    /// canonical `timeout_message` is produced by `signer` inside this
+    /// canonical `TimeoutMessage::new` is produced by `signer` inside this
     /// call. Used at the pacemaker site that echoes the signed timeout back to
     /// the local `TimeoutKeeper`.
     ///
@@ -215,7 +215,7 @@ impl Verified<Timeout> {
         signer: &dyn Signer,
     ) -> Result<Self, SignError> {
         // SAFETY: the signature is produced by `signer` over the
-        // canonical `timeout_message`, which is exactly the `Timeout::verify`
+        // canonical `TimeoutMessage::new`, which is exactly the `Timeout::verify`
         // predicate's check against this voter's matching pubkey.
         Ok(Self::new_unchecked(Timeout::new(
             network, shard_id, round, high_qc, voter, signer,

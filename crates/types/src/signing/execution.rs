@@ -1,115 +1,119 @@
-//! Domain-separated signing for execution votes and certificate gossip.
+//! Signing messages for execution votes and certificate gossip.
 
 use blake3::Hasher;
+use hyperscale_hbor::Hbor;
 
 use crate::{
-    ExecutionCertificate, ExecutionVote, GlobalReceiptRoot, NetworkDefinition, ShardId, WaveId,
-    WeightedTimestamp,
+    ExecutionCertificate, ExecutionVote, GlobalReceiptRoot, Hash, NetworkDefinition, ShardId,
+    WaveId, WeightedTimestamp,
 };
 
-/// Domain tag for execution votes.
+/// What an execution vote's signature covers.
 ///
-/// Format: `EXEC_VOTE` || `network.id` || `vote_anchor_ts` || `wave_id_shard`
-/// || `wave_id_height` || `wave_id_remote_shards_len` ||
-/// `wave_id_remote_shards`... || `shard_group` || `global_receipt_root` ||
-/// `tx_count`
-///
-/// Used for both individual `ExecutionVote` signatures and
-/// `ExecutionCertificate` aggregated signature verification.
-pub const DOMAIN_EXEC_VOTE: &[u8] = b"EXEC_VOTE";
-
-/// Domain tag for execution vote batch gossip.
-///
-/// Format: `EXEC_VOTE_BATCH` || `network.id` || `shard_id` ||
-/// `H(global_receipt_roots)`
-pub const DOMAIN_EXEC_VOTE_BATCH: &[u8] = b"EXEC_VOTE_BATCH";
-
-/// Domain tag for execution certificate batch gossip.
-///
-/// Format: `EXEC_CERT_BATCH` || `network.id` || `shard_id` ||
-/// `H(global_receipt_roots)`
-pub const DOMAIN_EXEC_CERT_BATCH: &[u8] = b"EXEC_CERT_BATCH";
-
-/// Build the signing message for an execution vote.
-///
-/// This is used for:
-/// - Individual `ExecutionVote` signatures
-/// - `ExecutionCertificate` aggregated signature verification
-///
-/// The `wave_id` is serialized as length-prefixed sorted shard IDs, making
-/// the message deterministic regardless of construction order.
-#[must_use]
-pub fn exec_vote_message(
-    network: &NetworkDefinition,
-    vote_anchor_ts: WeightedTimestamp,
-    wave_id: &WaveId,
-    shard_group: ShardId,
-    global_receipt_root: &GlobalReceiptRoot,
-    tx_count: u32,
-) -> Vec<u8> {
-    let mut message = Vec::with_capacity(129);
-    message.extend_from_slice(DOMAIN_EXEC_VOTE);
-    message.push(network.id);
-    message.extend_from_slice(&vote_anchor_ts.as_millis().to_le_bytes());
-    // WaveId is self-contained (shard + block_height + remote_shards),
-    // so no separate block_hash needed in the signing message.
-    message.extend_from_slice(&wave_id.shard_id().to_le_bytes());
-    message.extend_from_slice(&wave_id.block_height().to_le_bytes());
-    message.extend_from_slice(
-        &u32::try_from(wave_id.remote_shards().len())
-            .unwrap_or(u32::MAX)
-            .to_le_bytes(),
-    );
-    for shard in wave_id.remote_shards() {
-        message.extend_from_slice(&shard.to_le_bytes());
-    }
-    message.extend_from_slice(&shard_group.to_le_bytes());
-    message.extend_from_slice(global_receipt_root.as_raw().as_bytes());
-    message.extend_from_slice(&tx_count.to_le_bytes());
-    message
+/// Used for both individual [`ExecutionVote`] signatures and
+/// [`ExecutionCertificate`] aggregated signature verification. The
+/// `wave_id` is self-contained (shard + block height + remote shards), so
+/// no separate block hash is needed.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "EXEC_VOTE")]
+pub struct ExecVoteMessage {
+    /// Network the vote binds to — cross-network replay protection.
+    pub network_id: u8,
+    /// BFT-authenticated anchor the vote was cast at.
+    pub vote_anchor_ts: WeightedTimestamp,
+    /// The wave being voted on.
+    pub wave_id: WaveId,
+    /// Shard casting the vote.
+    pub shard_group: ShardId,
+    /// Merkle root over per-tx outcome leaves.
+    pub global_receipt_root: GlobalReceiptRoot,
+    /// Number of transactions in the wave.
+    pub tx_count: u32,
 }
 
-/// Build the signing message for an execution vote batch gossip.
-#[must_use]
-pub fn exec_vote_batch_message<'a, I>(
-    network: &NetworkDefinition,
-    shard_group: ShardId,
-    votes: I,
-) -> Vec<u8>
-where
-    I: IntoIterator<Item = &'a ExecutionVote>,
-{
-    let mut hasher = Hasher::new();
-    for v in votes {
-        hasher.update(v.global_receipt_root().as_raw().as_bytes());
+impl ExecVoteMessage {
+    /// Assemble the message an execution vote signs.
+    #[must_use]
+    pub const fn new(
+        network: &NetworkDefinition,
+        vote_anchor_ts: WeightedTimestamp,
+        wave_id: WaveId,
+        shard_group: ShardId,
+        global_receipt_root: GlobalReceiptRoot,
+        tx_count: u32,
+    ) -> Self {
+        Self {
+            network_id: network.id,
+            vote_anchor_ts,
+            wave_id,
+            shard_group,
+            global_receipt_root,
+            tx_count,
+        }
     }
-    let digest = hasher.finalize();
-
-    let mut message = Vec::with_capacity(65);
-    message.extend_from_slice(DOMAIN_EXEC_VOTE_BATCH);
-    message.push(network.id);
-    message.extend_from_slice(&shard_group.to_le_bytes());
-    message.extend_from_slice(digest.as_bytes());
-    message
 }
 
-/// Build the signing message for an execution certificate batch gossip.
-#[must_use]
-pub fn exec_cert_batch_message(
-    network: &NetworkDefinition,
-    shard_group: ShardId,
-    certificates: &[ExecutionCertificate],
-) -> Vec<u8> {
-    let mut hasher = Hasher::new();
-    for c in certificates {
-        hasher.update(c.global_receipt_root().as_raw().as_bytes());
-    }
-    let digest = hasher.finalize();
+/// What an execution-vote batch gossip signature covers: the shard plus a
+/// digest of the batch's receipt roots.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "EXEC_VOTE_BATCH")]
+pub struct ExecVoteBatchMessage {
+    /// Network the batch binds to.
+    pub network_id: u8,
+    /// Shard the votes belong to.
+    pub shard_group: ShardId,
+    /// Digest over the batch's `global_receipt_root`s, in batch order.
+    pub roots_digest: Hash,
+}
 
-    let mut message = Vec::with_capacity(65);
-    message.extend_from_slice(DOMAIN_EXEC_CERT_BATCH);
-    message.push(network.id);
-    message.extend_from_slice(&shard_group.to_le_bytes());
-    message.extend_from_slice(digest.as_bytes());
-    message
+impl ExecVoteBatchMessage {
+    /// Assemble the message an execution-vote batch signs.
+    #[must_use]
+    pub fn new<'a, I>(network: &NetworkDefinition, shard_group: ShardId, votes: I) -> Self
+    where
+        I: IntoIterator<Item = &'a ExecutionVote>,
+    {
+        let mut hasher = Hasher::new();
+        for v in votes {
+            hasher.update(v.global_receipt_root().as_raw().as_bytes());
+        }
+        Self {
+            network_id: network.id,
+            shard_group,
+            roots_digest: Hash::from_hash_bytes(hasher.finalize().as_bytes()),
+        }
+    }
+}
+
+/// What an execution-certificate batch gossip signature covers — same
+/// shape as [`ExecVoteBatchMessage`] under its own domain.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "EXEC_CERT_BATCH")]
+pub struct ExecCertBatchMessage {
+    /// Network the batch binds to.
+    pub network_id: u8,
+    /// Shard the certificates belong to.
+    pub shard_group: ShardId,
+    /// Digest over the batch's `global_receipt_root`s, in batch order.
+    pub roots_digest: Hash,
+}
+
+impl ExecCertBatchMessage {
+    /// Assemble the message an execution-certificate batch signs.
+    #[must_use]
+    pub fn new(
+        network: &NetworkDefinition,
+        shard_group: ShardId,
+        certificates: &[ExecutionCertificate],
+    ) -> Self {
+        let mut hasher = Hasher::new();
+        for c in certificates {
+            hasher.update(c.global_receipt_root().as_raw().as_bytes());
+        }
+        Self {
+            network_id: network.id,
+            shard_group,
+            roots_digest: Hash::from_hash_bytes(hasher.finalize().as_bytes()),
+        }
+    }
 }

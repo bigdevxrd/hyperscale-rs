@@ -6,8 +6,8 @@ use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{
-    CertifiedBlockHeader, ConsensusSignature, MessageClass, NetworkDefinition, NetworkMessage,
-    ShardId, Signed, ValidatorId, Verifiable, certified_block_header_message,
+    CertifiedBlockHeader, CertifiedBlockHeaderMessage, ConsensusSignature, MessageClass,
+    NetworkDefinition, NetworkMessage, ShardId, Signed, ValidatorId, Verifiable, signed_bytes,
 };
 
 /// Gossips a committed block header globally to all shards.
@@ -38,12 +38,12 @@ impl Signed for CertifiedBlockHeaderGossip {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        certified_block_header_message(
+        signed_bytes(&CertifiedBlockHeaderMessage::new(
             network,
             self.certified_header.header().shard_id(),
             self.certified_header.header().height(),
-            &self.certified_header.header().hash(),
-        )
+            self.certified_header.header().hash(),
+        ))
     }
 }
 

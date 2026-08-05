@@ -1,73 +1,45 @@
-//! Domain-separated signing for cross-shard state provisions.
+//! Signing message for cross-shard state provisions gossip.
 
 use blake3::Hasher;
+use hyperscale_hbor::Hbor;
 
-use crate::{NetworkDefinition, Provisions};
+use crate::{BlockHeight, Hash, NetworkDefinition, Provisions, ShardId};
 
-/// Domain tag for state provisions gossip.
+/// What a state-provisions gossip signature covers: the route, the source
+/// height, and a digest of the transaction hashes in the bundle.
 ///
-/// Format: `STATE_PROVISION_BATCH` || `network.id` || `source_shard` ||
-/// `target_shard` || `block_height` || `H(tx_hashes)`
-///
-/// Signed by the sender when broadcasting cross-shard state provisions.
-/// Verified by receivers to reject unauthenticated provision spam before
-/// doing expensive merkle proof verification.
-pub const DOMAIN_STATE_PROVISION_BATCH: &[u8] = b"STATE_PROVISION_BATCH";
-
-/// Build the signing message for a state provisions gossip.
-///
-/// The message covers source shard, target shard, block height, and a
-/// digest of the transaction hashes in the bundle. Cheap to reconstruct at
-/// verification while binding the signature to the specific bundle contents.
-#[must_use]
-pub fn state_provisions_message(network: &NetworkDefinition, provisions: &Provisions) -> Vec<u8> {
-    let mut hasher = Hasher::new();
-    for tx in provisions.transactions() {
-        hasher.update(tx.tx_hash.as_bytes());
-    }
-    let tx_digest = hasher.finalize();
-
-    let mut message = Vec::with_capacity(97);
-    message.extend_from_slice(DOMAIN_STATE_PROVISION_BATCH);
-    message.push(network.id);
-    message.extend_from_slice(&provisions.source_shard().to_le_bytes());
-    message.extend_from_slice(&provisions.target_shard().to_le_bytes());
-    message.extend_from_slice(&provisions.block_height().to_le_bytes());
-    message.extend_from_slice(tx_digest.as_bytes());
-    message
+/// Cheap to reconstruct at verification while binding the signature to the
+/// specific bundle contents, so unauthenticated provision spam is rejected
+/// before expensive merkle proof verification.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "STATE_PROVISION_BATCH")]
+pub struct StateProvisionsMessage {
+    /// Network the bundle binds to.
+    pub network_id: u8,
+    /// Shard the bundle was produced on.
+    pub source_shard: ShardId,
+    /// Shard the bundle serves.
+    pub target_shard: ShardId,
+    /// Source block height the bundle belongs to.
+    pub block_height: BlockHeight,
+    /// Digest over the bundle's transaction hashes, in bundle order.
+    pub tx_digest: Hash,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, RevealChain, ShardId, TxHash,
-        WeightedTimestamp,
-    };
-
-    fn net() -> NetworkDefinition {
-        NetworkDefinition::simulator()
-    }
-
-    #[test]
-    fn test_state_provisions_message_deterministic() {
-        let provisions = Provisions::new(
-            ShardId::leaf(1, 0),
-            ShardId::leaf(1, 1),
-            BlockHeight::new(10),
-            WeightedTimestamp::ZERO,
-            RevealChain::ZERO,
-            MerkleInclusionProof::dummy(),
-            vec![ProvisionEntry::new(
-                TxHash::from_raw(Hash::from_bytes(b"tx1")),
-                vec![],
-            )],
-        );
-
-        let msg1 = state_provisions_message(&net(), &provisions);
-        let msg2 = state_provisions_message(&net(), &provisions);
-
-        assert_eq!(msg1, msg2);
-        assert!(msg1.starts_with(DOMAIN_STATE_PROVISION_BATCH));
+impl StateProvisionsMessage {
+    /// Assemble the message a provisions broadcast signs.
+    #[must_use]
+    pub fn new(network: &NetworkDefinition, provisions: &Provisions) -> Self {
+        let mut hasher = Hasher::new();
+        for tx in provisions.transactions() {
+            hasher.update(tx.tx_hash.as_bytes());
+        }
+        Self {
+            network_id: network.id,
+            source_shard: provisions.source_shard(),
+            target_shard: provisions.target_shard(),
+            block_height: provisions.block_height(),
+            tx_digest: Hash::from_hash_bytes(hasher.finalize().as_bytes()),
+        }
     }
 }

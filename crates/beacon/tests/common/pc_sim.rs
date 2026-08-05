@@ -13,8 +13,8 @@ use std::sync::Arc;
 use hyperscale_beacon::pc::{PcEffect, PcEvent, PcInstance};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_types::{
-    ConsensusPublicKey, Epoch, NetworkDefinition, PcContext, PcQc3, PcVector, PcVote1, PcVote2,
-    PcVote3, Signer, SpcView, ValidatorId, Verified, pc_context, spc_context,
+    ConsensusPublicKey, Epoch, NetworkDefinition, PcQc3, PcScope, PcVector, PcVote1, PcVote2,
+    PcVote3, Signer, SpcView, ValidatorId, Verified,
 };
 
 use super::fixtures::Committee;
@@ -31,7 +31,7 @@ pub struct PcSim {
     pub members: Vec<(ValidatorId, ConsensusPublicKey)>,
     pub sks: Vec<Arc<BlsSigner>>,
     network: NetworkDefinition,
-    pc_ctx: PcContext,
+    pc_ctx: PcScope,
     pending: VecDeque<Envelope>,
     pub decided: Vec<Option<Box<PcQc3>>>,
 }
@@ -50,7 +50,7 @@ impl PcSim {
             .map(|_| PcInstance::new(Arc::new(BlsVerifier), epoch, view, members.clone()))
             .collect();
         let decided = vec![None; n];
-        let pc_ctx = pc_context(&spc_context(epoch), view);
+        let pc_ctx = PcScope { epoch, view };
         Self {
             instances,
             members,
@@ -137,7 +137,7 @@ impl PcSim {
                         sk.as_ref(),
                         sender,
                         &self.network,
-                        &self.pc_ctx,
+                        self.pc_ctx,
                         v_in,
                     )
                     .expect("sign");
@@ -148,7 +148,7 @@ impl PcSim {
                         sk.as_ref(),
                         sender,
                         &self.network,
-                        &self.pc_ctx,
+                        self.pc_ctx,
                         *qc1,
                     )
                     .expect("sign");
@@ -159,7 +159,7 @@ impl PcSim {
                         sk.as_ref(),
                         sender,
                         &self.network,
-                        &self.pc_ctx,
+                        self.pc_ctx,
                         *qc2,
                     )
                     .expect("sign");

@@ -14,8 +14,8 @@ use std::time::Duration;
 use hyperscale_beacon::spc::{SpcEffect, SpcEvent, SpcInstance};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_types::{
-    ConsensusPublicKey, Epoch, NetworkDefinition, PcVector, PcVote1, PcVote2, PcVote3, Signer,
-    SpcCert, SpcEmptyViewMsg, SpcView, ValidatorId, Verified, pc_context, spc_context,
+    ConsensusPublicKey, Epoch, NetworkDefinition, PcScope, PcVector, PcVote1, PcVote2, PcVote3,
+    Signer, SpcCert, SpcEmptyViewMsg, SpcView, ValidatorId, Verified,
 };
 
 use super::fixtures::Committee;
@@ -181,12 +181,15 @@ impl SpcSim {
                         view,
                         v_in: v_in.clone(),
                     });
-                    let pc_ctx = pc_context(&spc_context(self.epoch), view);
+                    let pc_ctx = PcScope {
+                        epoch: self.epoch,
+                        view,
+                    };
                     let vote = Verified::<PcVote1>::sign_local(
                         sk.as_ref(),
                         sender,
                         &self.network,
-                        &pc_ctx,
+                        pc_ctx,
                         v_in,
                     )
                     .expect("sign");
@@ -197,12 +200,15 @@ impl SpcSim {
                         idx: sender_idx,
                         view,
                     });
-                    let pc_ctx = pc_context(&spc_context(self.epoch), view);
+                    let pc_ctx = PcScope {
+                        epoch: self.epoch,
+                        view,
+                    };
                     let vote = Verified::<PcVote2>::sign_local(
                         sk.as_ref(),
                         sender,
                         &self.network,
-                        &pc_ctx,
+                        pc_ctx,
                         *qc1,
                     )
                     .expect("sign");
@@ -216,12 +222,15 @@ impl SpcSim {
                         idx: sender_idx,
                         view,
                     });
-                    let pc_ctx = pc_context(&spc_context(self.epoch), view);
+                    let pc_ctx = PcScope {
+                        epoch: self.epoch,
+                        view,
+                    };
                     let vote = Verified::<PcVote3>::sign_local(
                         sk.as_ref(),
                         sender,
                         &self.network,
-                        &pc_ctx,
+                        pc_ctx,
                         *qc2,
                     )
                     .expect("sign");
@@ -263,12 +272,12 @@ impl SpcSim {
                         idx: sender_idx,
                         view,
                     });
-                    let spc_ctx = spc_context(self.epoch);
+                    let spc_ctx = self.epoch;
                     let msg = Verified::<SpcEmptyViewMsg>::sign_local(
                         sk.as_ref(),
                         sender,
                         &self.network,
-                        &spc_ctx,
+                        spc_ctx,
                         view,
                         *reported,
                     )

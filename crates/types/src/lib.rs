@@ -80,6 +80,7 @@ pub use hyperscale_crypto::{
     ConsensusPublicKey, ConsensusSignature, SignError, Signer, VRF_PROOF_BYTES, Verifier,
     VrfOutput, VrfProof,
 };
+pub use hyperscale_hbor::HborSigned;
 pub use hyperscale_vm_types::{Address, LocalKey, SubstateKey};
 pub use network::{
     GossipMessage, MessageClass, NetworkMessage, Request, Signed, SignedContext, SignedVerifyError,
@@ -161,14 +162,13 @@ pub use shard::{
     work_over_certificates,
 };
 pub use signing::{
-    DOMAIN_PC_VOTE1, DOMAIN_SPC_NEW_COMMIT, DOMAIN_SPC_NEW_VIEW, PcContext,
-    VALIDATOR_BIND_NONCE_LEN, block_header_message, block_vote_message,
-    certified_block_header_message, exec_cert_batch_message, exec_vote_batch_message,
-    exec_vote_message, pc_context, pc_vote_signing_message, ratify_vote_message,
-    ready_signal_message, shard_reveal_sign, spc_context, spc_relay_signing_message,
-    state_provisions_message, validator_address_message, validator_bind_message,
-    validator_possession_proof_sign, validator_possession_proof_verify, vrf_output_from_proof,
-    vrf_sign, vrf_verify,
+    BlockHeaderMessage, BlockVoteMessage, CertifiedBlockHeaderMessage, ExecCertBatchMessage,
+    ExecVoteBatchMessage, ExecVoteMessage, PcRound, PcScope, PcVoteMessage, RatifyVoteMessage,
+    ReadySignalMessage, ShardRevealMessage, SpcEmptyViewMessage, SpcRelayKind, SpcRelayMessage,
+    StateProvisionsMessage, TimeoutMessage, VALIDATOR_BIND_NONCE_LEN, ValidatorAddressMessage,
+    ValidatorBindMessage, ValidatorPossessionProofMessage, VrfRevealMessage, shard_reveal_sign,
+    shard_reveal_verify, signed_bytes, validator_possession_proof_sign,
+    validator_possession_proof_verify, vrf_output_from_proof, vrf_sign, vrf_verify,
 };
 pub use state_key::{MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
 pub use substate::{

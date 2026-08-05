@@ -39,16 +39,16 @@ use hyperscale_types::{
     BeaconWitnessRoot, BeaconWitnessRootContext, BeaconWitnessRootVerifyError, Block, BlockHash,
     BlockHeader, BlockHeight, BlockManifest, BlockVote, CertRootVerifyError, CertificateRoot,
     CertificateRootContext, CertifiedBlock, ConsensusPublicKey, ConsensusReceipt, Epoch,
-    FinalizedWave, Hash, InFlightCount, LocalReceiptRoot, LocalReceiptRootContext,
+    FinalizedWave, Hash, HborSigned, InFlightCount, LocalReceiptRoot, LocalReceiptRootContext,
     LocalReceiptRootVerifyError, LocalTimestamp, NetworkDefinition, ProposerTimestamp,
     ProvisionRootVerifyError, ProvisionTxRootsContext, ProvisionTxRootsMap,
     ProvisionTxRootsVerifyError, Provisions, ProvisionsRoot, ProvisionsRootContext, QcContext,
-    QcVerifyError, QuorumCertificate, ReadySignal, Round, ShardId, ShardLoad,
+    QcVerifyError, QuorumCertificate, ReadySignal, ReadySignalMessage, Round, ShardId, ShardLoad,
     ShardVoteEquivocation, ShardWitnessPayload, Signer, StateRoot, StateRootContext,
     StateRootVerifyError, StoredReceipt, Timeout, TimeoutContext, TopologySchedule,
     TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext, TxHash,
     TxRootVerifyError, ValidatorId, Verifiable, Verified, Verify, VoteCount, VrfProof,
-    WeightedTimestamp, local_settled_wave_ids, ready_signal_message, shard_reveal_sign,
+    WeightedTimestamp, local_settled_wave_ids, shard_reveal_sign, signed_bytes,
 };
 
 use crate::common::fixtures::build_genesis_block;
@@ -782,13 +782,13 @@ impl ShardCoordinatorSim {
     ) {
         let validator = self.members[signer_idx].0;
         let sk = &self.sks[signer_idx];
-        let msg = ready_signal_message(
+        let msg = signed_bytes(&ReadySignalMessage::new(
             &self.network,
             validator,
             shard,
             wt_window_start,
             wt_window_end,
-        );
+        ));
         let sig = sk.as_ref().sign(&msg).expect("sign");
         let signal = ReadySignal::new(validator, shard, wt_window_start, wt_window_end, sig);
         for idx in 0..self.n() {

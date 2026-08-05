@@ -37,15 +37,15 @@ use thiserror::Error;
 use super::certified::verify_committed_proposal_binding;
 use crate::{
     AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconProposal, ConsensusPublicKey,
-    ConsensusSignature, Epoch, NetworkDefinition, RatifyRound, ShardEpochContribution, ShardId,
-    SignerBitfield, SpcCert, ValidatorId, Verified, Verify, ratify_vote_message, spc_context,
-    verify_block_cert, verify_vote_equivocation,
+    ConsensusSignature, Epoch, NetworkDefinition, RatifyRound, RatifyVoteMessage,
+    ShardEpochContribution, ShardId, SignerBitfield, SpcCert, ValidatorId, Verified, Verify,
+    signed_bytes, verify_block_cert, verify_vote_equivocation,
 };
 
 /// Which of the two ratification vote kinds a signature commits to.
 ///
 /// The tag is baked into the signing bytes
-/// ([`ratify_vote_message`](crate::ratify_vote_message)), so a prevote
+/// ([`RatifyVoteMessage::new`](crate::RatifyVoteMessage::new)), so a prevote
 /// can never be counted as a precommit or vice versa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub enum RatifyPhase {
@@ -354,14 +354,14 @@ pub fn verify_ratify_vote(
     else {
         return Err(RatifyVoteVerifyError::SignerNotInPool);
     };
-    let msg = ratify_vote_message(
+    let msg = signed_bytes(&RatifyVoteMessage::new(
         network,
-        &vote.anchor_hash(),
+        vote.anchor_hash(),
         vote.epoch(),
         vote.round(),
         vote.phase(),
-        &vote.block_hash(),
-    );
+        vote.block_hash(),
+    ));
     if verifier.verify(&signer_pk, &msg, &vote.sig()) {
         Ok(())
     } else {
@@ -410,14 +410,14 @@ pub fn verify_ratify_cert(
     if signer_pks.is_empty() {
         return Err(RatifyCertVerifyError::EmptySignerSet);
     }
-    let msg = ratify_vote_message(
+    let msg = signed_bytes(&RatifyVoteMessage::new(
         network,
-        &cert.anchor_hash(),
+        cert.anchor_hash(),
         cert.epoch(),
         cert.round(),
         RatifyPhase::Precommit,
-        &cert.block_hash(),
-    );
+        cert.block_hash(),
+    ));
     let msgs: Vec<&[u8]> = std::iter::repeat_n(msg.as_slice(), signer_pks.len()).collect();
     if verifier.verify_aggregate_different_messages(&msgs, &cert.aggregate_sig(), &signer_pks) {
         Ok(())
@@ -444,7 +444,14 @@ pub fn sign_ratify_vote(
     phase: RatifyPhase,
     block_hash: BeaconBlockHash,
 ) -> Result<RatifyVote, SignError> {
-    let msg = ratify_vote_message(network, &anchor_hash, epoch, round, phase, &block_hash);
+    let msg = signed_bytes(&RatifyVoteMessage::new(
+        network,
+        anchor_hash,
+        epoch,
+        round,
+        phase,
+        block_hash,
+    ));
     let sig = signer.sign(&msg)?;
     Ok(RatifyVote::new(
         anchor_hash,
@@ -718,7 +725,7 @@ impl Verify<&CandidateVerifyContext<'_>> for CandidateBeaconBlock {
             ctx.verifier,
             self.spc(),
             ctx.network,
-            &spc_context(self.epoch()),
+            self.epoch(),
             ctx.committee,
         )
         .is_err()

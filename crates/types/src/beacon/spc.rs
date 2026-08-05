@@ -28,7 +28,7 @@
 //!   skip signers; verifiers reject ties (per-signer dedup) and short
 //!   sets.
 //! - **Embedded PC proof binding to the view's context**: every
-//!   embedded [`PcQc3`] verifies under `pc_context(spc_ctx, view)`. A
+//!   embedded [`PcQc3`] verifies under its `(epoch, view)` scope. A
 //!   QC3 produced under a different view (or a different SPC instance)
 //!   won't verify.
 
@@ -37,19 +37,18 @@ use hyperscale_crypto::{SignError, Signer, Verifier};
 use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use thiserror::Error;
 
-use crate::signing::{DOMAIN_PC_EMPTY_VIEW, SpcContext};
 use crate::{
-    AggregateSignature, ConsensusPublicKey, ConsensusSignature, Hash, NetworkDefinition, PcQc3,
-    PcValueElement, PcVector, PcVoteVerifyContext, PositionalBundle, SignerBitfield, SpcView,
-    ValidatorId, Verifiable, Verified, Verify, byzantine_threshold, pc_context,
-    pc_vote_signing_message, verify_qc3,
+    AggregateSignature, ConsensusPublicKey, ConsensusSignature, Epoch, Hash, NetworkDefinition,
+    PcQc3, PcScope, PcValueElement, PcVector, PcVoteVerifyContext, PositionalBundle,
+    SignerBitfield, SpcEmptyViewMessage, SpcView, ValidatorId, Verifiable, Verified, Verify,
+    byzantine_threshold, signed_bytes, verify_qc3,
 };
 
 /// `(view, value, proof)` — a verifiable high triple.
 ///
 /// Tracked locally as `max_high` by every SPC participant and reported
 /// in [`SpcEmptyViewMsg`]s. The `proof` is the round-3 cert from the
-/// PC instance that ran in `view` (`view`'s `pc_context` is derived
+/// PC instance that ran in `view` (`view`'s signing scope is derived
 /// from the slot's SPC context and `view.to_le_bytes()`). Wire decode
 /// lands `proof` as `Verifiable::Unverified`; locally-built triples
 /// from [`Verified::<SpcHighTriple>::from_verified_proof`] preserve
@@ -191,7 +190,7 @@ impl SpcProposalObject {
 ///
 /// Self-authenticating via the embedded `PcQc3`; no outer signature.
 /// Verifier predicate: the embedded QC3 verifies under
-/// `pc_context(spc_ctx, view)` and `proof.x_pp() == value`.
+/// its `(epoch, view)` scope and `proof.x_pp() == value`.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcNewCommitMsg {
     /// View whose inner PC produced this commit.
@@ -318,7 +317,7 @@ pub fn verify_empty_view_msg(
     verifier: &dyn Verifier,
     msg: &SpcEmptyViewMsg,
     network: &NetworkDefinition,
-    spc_ctx: &SpcContext,
+    epoch: Epoch,
     committee: &[(ValidatorId, ConsensusPublicKey)],
 ) -> Result<(), SpcEmptyViewMsgVerifyError> {
     let Some(pk) = pubkey_in_committee(committee, msg.signer) else {
@@ -326,13 +325,16 @@ pub fn verify_empty_view_msg(
     };
     // Reported triple's PcQc3 must verify under the right view's PC ctx.
     // Short-circuit if the embedded marker is already live.
-    let reported_pc_ctx = pc_context(spc_ctx, msg.reported.view);
+    let reported_instance = PcScope {
+        epoch,
+        view: msg.reported.view,
+    };
     if msg.reported.proof.verified().is_none()
         && verify_qc3(
             verifier,
             msg.reported.proof.as_unverified(),
             network,
-            &reported_pc_ctx,
+            reported_instance,
             committee,
         )
         .is_err()
@@ -346,7 +348,7 @@ pub fn verify_empty_view_msg(
     // Sig over the canonical skip target.
     let value_hash = hash_high_value(&msg.reported.value);
     let target = skip_target(msg.view, msg.reported.view, value_hash);
-    let signed = pc_vote_signing_message(network, DOMAIN_PC_EMPTY_VIEW, spc_ctx, &target);
+    let signed = signed_bytes(&SpcEmptyViewMessage::new(network, epoch, target));
     if verifier.verify(&pk, &signed, &msg.sig) {
         Ok(())
     } else {
@@ -371,7 +373,7 @@ pub fn verify_block_cert(
     verifier: &dyn Verifier,
     cert: &SpcCert,
     network: &NetworkDefinition,
-    spc_ctx: &SpcContext,
+    epoch: Epoch,
     committee: &[(ValidatorId, ConsensusPublicKey)],
 ) -> Result<(), SpcCertVerifyError> {
     match cert {
@@ -384,12 +386,12 @@ pub fn verify_block_cert(
                 cert,
                 SpcView::new(entering),
                 network,
-                spc_ctx,
+                epoch,
                 committee,
             )
         }
         SpcCert::Indirect { for_view, .. } => {
-            verify_cert(verifier, cert, *for_view, network, spc_ctx, committee)
+            verify_cert(verifier, cert, *for_view, network, epoch, committee)
         }
     }
 }
@@ -409,7 +411,7 @@ pub fn verify_cert(
     cert: &SpcCert,
     entering_view: SpcView,
     network: &NetworkDefinition,
-    spc_ctx: &SpcContext,
+    epoch: Epoch,
     committee: &[(ValidatorId, ConsensusPublicKey)],
 ) -> Result<(), SpcCertVerifyError> {
     match cert {
@@ -424,7 +426,7 @@ pub fn verify_cert(
             proof,
             entering_view,
             network,
-            spc_ctx,
+            epoch,
             committee,
         ),
         SpcCert::Indirect {
@@ -444,7 +446,7 @@ pub fn verify_cert(
             *skip_aggregate_sig,
             entering_view,
             network,
-            spc_ctx,
+            epoch,
             committee,
         ),
     }
@@ -458,7 +460,7 @@ fn verify_direct_cert(
     proof: &Verifiable<PcQc3>,
     entering_view: SpcView,
     network: &NetworkDefinition,
-    spc_ctx: &SpcContext,
+    epoch: Epoch,
     committee: &[(ValidatorId, ConsensusPublicKey)],
 ) -> Result<(), SpcCertVerifyError> {
     // `prev_view + 1 == entering_view`, guarded against u32 overflow.
@@ -469,9 +471,19 @@ fn verify_direct_cert(
         return Err(SpcCertVerifyError::DirectViewMismatch);
     }
     // Short-circuit on the embedded QC3 marker.
-    let pc_ctx = pc_context(spc_ctx, prev_view);
+    let instance = PcScope {
+        epoch,
+        view: prev_view,
+    };
     if proof.verified().is_none()
-        && verify_qc3(verifier, proof.as_unverified(), network, &pc_ctx, committee).is_err()
+        && verify_qc3(
+            verifier,
+            proof.as_unverified(),
+            network,
+            instance,
+            committee,
+        )
+        .is_err()
     {
         return Err(SpcCertVerifyError::DirectBadQc3);
     }
@@ -494,7 +506,7 @@ fn verify_indirect_cert(
     skip_aggregate_sig: AggregateSignature,
     entering_view: SpcView,
     network: &NetworkDefinition,
-    spc_ctx: &SpcContext,
+    epoch: Epoch,
     committee: &[(ValidatorId, ConsensusPublicKey)],
 ) -> Result<(), SpcCertVerifyError> {
     // Indirect certs only make sense at entering_view >= 2 (view 1
@@ -538,12 +550,9 @@ fn verify_indirect_cert(
             return Err(SpcCertVerifyError::IndirectSignerOutOfRange);
         };
         let target = skip_target(empty_view, report.reported_view, report.reported_value_hash);
-        messages_owned.push(pc_vote_signing_message(
-            network,
-            DOMAIN_PC_EMPTY_VIEW,
-            spc_ctx,
-            &target,
-        ));
+        messages_owned.push(signed_bytes(&SpcEmptyViewMessage::new(
+            network, epoch, target,
+        )));
         pks.push(*pk);
     }
     let messages: Vec<&[u8]> = messages_owned.iter().map(Vec::as_slice).collect();
@@ -553,13 +562,16 @@ fn verify_indirect_cert(
     // Target proof verifies under target_view's PC ctx, and its x_pe
     // matches the claimed target_value. Short-circuit on the embedded
     // QC3 marker.
-    let target_pc_ctx = pc_context(spc_ctx, target_view);
+    let target_instance = PcScope {
+        epoch,
+        view: target_view,
+    };
     if target_proof.verified().is_none()
         && verify_qc3(
             verifier,
             target_proof.as_unverified(),
             network,
-            &target_pc_ctx,
+            target_instance,
             committee,
         )
         .is_err()
@@ -584,10 +596,10 @@ pub fn verify_proposal_object(
     verifier: &dyn Verifier,
     po: &SpcProposalObject,
     network: &NetworkDefinition,
-    spc_ctx: &SpcContext,
+    epoch: Epoch,
     committee: &[(ValidatorId, ConsensusPublicKey)],
 ) -> Result<(), SpcProposalObjectVerifyError> {
-    verify_cert(verifier, &po.cert, po.view, network, spc_ctx, committee)
+    verify_cert(verifier, &po.cert, po.view, network, epoch, committee)
         .map_err(SpcProposalObjectVerifyError)
 }
 
@@ -598,7 +610,7 @@ pub fn verify_proposal_object(
 /// `reported` is the signer's current `max_high` triple — the latest
 /// PC output they consider verifiable. The sig covers
 /// `skip_target(empty_view, reported.view, hash_high_value(&reported.value))`
-/// under [`DOMAIN_PC_EMPTY_VIEW`], so the indirect-cert verifier can
+/// under [`SpcEmptyViewMessage`], so the indirect-cert verifier can
 /// reconstruct the canonical preimage on aggregation.
 /// # Errors
 ///
@@ -607,13 +619,13 @@ pub fn sign_empty_view_msg(
     signer: &dyn Signer,
     validator: ValidatorId,
     network: &NetworkDefinition,
-    spc_ctx: &SpcContext,
+    epoch: Epoch,
     empty_view: SpcView,
     reported: SpcHighTriple,
 ) -> Result<SpcEmptyViewMsg, SignError> {
     let value_hash = hash_high_value(&reported.value);
     let target = skip_target(empty_view, reported.view, value_hash);
-    let msg = pc_vote_signing_message(network, DOMAIN_PC_EMPTY_VIEW, spc_ctx, &target);
+    let msg = signed_bytes(&SpcEmptyViewMessage::new(network, epoch, target));
     let sig = signer.sign(&msg)?;
     Ok(SpcEmptyViewMsg {
         view: empty_view,
@@ -712,7 +724,7 @@ pub struct SpcVerifyContext<'a> {
     /// Network the signer was bound to.
     pub network: &'a NetworkDefinition,
     /// Canonical SPC signing context every signer was bound to.
-    pub spc_ctx: &'a SpcContext,
+    pub epoch: Epoch,
     /// Committee membership and pubkeys.
     pub committee: &'a [(ValidatorId, ConsensusPublicKey)],
     /// Scheme verifier the signature checks run through.
@@ -828,12 +840,15 @@ fn upgrade_cert_proof(
             SpcCertVerifyError::IndirectBadTargetQc3,
         ),
     };
-    let pc_ctx = pc_context(ctx.spc_ctx, view);
+    let instance = PcScope {
+        epoch: ctx.epoch,
+        view,
+    };
     proof
         .upgrade_in_place(&PcVoteVerifyContext {
             verifier: ctx.verifier,
             network: ctx.network,
-            pc_ctx: &pc_ctx,
+            instance,
             committee: ctx.committee,
         })
         .map_err(|_| on_reject)?;
@@ -845,14 +860,17 @@ impl Verify<&SpcVerifyContext<'_>> for SpcEmptyViewMsg {
 
     fn verify(&self, ctx: &SpcVerifyContext<'_>) -> Result<Verified<Self>, Self::Error> {
         let mut verified = self.clone();
-        let pc_ctx = pc_context(ctx.spc_ctx, verified.reported.view);
+        let instance = PcScope {
+            epoch: ctx.epoch,
+            view: verified.reported.view,
+        };
         verified
             .reported
             .proof
             .upgrade_in_place(&PcVoteVerifyContext {
                 verifier: ctx.verifier,
                 network: ctx.network,
-                pc_ctx: &pc_ctx,
+                instance,
                 committee: ctx.committee,
             })
             .map_err(|_| SpcEmptyViewMsgVerifyError::BadReportedQc3)?;
@@ -860,7 +878,7 @@ impl Verify<&SpcVerifyContext<'_>> for SpcEmptyViewMsg {
             ctx.verifier,
             &verified,
             ctx.network,
-            ctx.spc_ctx,
+            ctx.epoch,
             ctx.committee,
         )?;
         Ok(Verified::new_unchecked(verified))
@@ -880,7 +898,7 @@ impl Verify<&SpcVerifyContext<'_>> for SpcCert {
             ctx.verifier,
             &verified,
             ctx.network,
-            ctx.spc_ctx,
+            ctx.epoch,
             ctx.committee,
         )?;
         Ok(Verified::new_unchecked(verified))
@@ -897,7 +915,7 @@ impl Verify<&SpcVerifyContext<'_>> for SpcProposalObject {
             ctx.verifier,
             &verified,
             ctx.network,
-            ctx.spc_ctx,
+            ctx.epoch,
             ctx.committee,
         )?;
         Ok(Verified::new_unchecked(verified))
@@ -908,17 +926,20 @@ impl Verify<&SpcVerifyContext<'_>> for SpcHighTriple {
     type Error = SpcHighTripleVerifyError;
 
     /// High-triple predicate: embedded `proof` verifies under
-    /// `pc_context(spc_ctx, view)` and `proof.x_pe() == value`.
+    /// its `(epoch, view)` scope and `proof.x_pe() == value`.
     /// Short-circuits the embedded QC3 check when its marker is live.
     fn verify(&self, ctx: &SpcVerifyContext<'_>) -> Result<Verified<Self>, Self::Error> {
-        let pc_ctx = pc_context(ctx.spc_ctx, self.view);
+        let instance = PcScope {
+            epoch: ctx.epoch,
+            view: self.view,
+        };
         let mut verified = self.clone();
         verified
             .proof
             .upgrade_in_place(&PcVoteVerifyContext {
                 verifier: ctx.verifier,
                 network: ctx.network,
-                pc_ctx: &pc_ctx,
+                instance,
                 committee: ctx.committee,
             })
             .map_err(|_| SpcHighTripleVerifyError::BadQc3)?;
@@ -933,21 +954,24 @@ impl Verify<&SpcVerifyContext<'_>> for SpcNewCommitMsg {
     type Error = SpcNewCommitMsgVerifyError;
 
     /// New-commit predicate: embedded `proof` verifies under
-    /// `pc_context(spc_ctx, view)` and `proof.x_pp() == value` (the
+    /// its `(epoch, view)` scope and `proof.x_pp() == value` (the
     /// committed low value matches the embedded round-3 cert's `x_pp`).
     /// Short-circuits the embedded QC3 check when its marker is live,
     /// and persists the upgraded marker into the returned
     /// `Verified<Self>`'s `proof` field so downstream gates lifting the
     /// inner can extract it as a `Verified<PcQc3>` directly.
     fn verify(&self, ctx: &SpcVerifyContext<'_>) -> Result<Verified<Self>, Self::Error> {
-        let pc_ctx = pc_context(ctx.spc_ctx, self.view);
+        let instance = PcScope {
+            epoch: ctx.epoch,
+            view: self.view,
+        };
         let mut cloned = self.clone();
         cloned
             .proof
             .upgrade_in_place(&PcVoteVerifyContext {
                 verifier: ctx.verifier,
                 network: ctx.network,
-                pc_ctx: &pc_ctx,
+                instance,
                 committee: ctx.committee,
             })
             .map_err(|_| SpcNewCommitMsgVerifyError::BadQc3)?;
@@ -973,7 +997,7 @@ impl Verified<SpcEmptyViewMsg> {
         signer: &dyn Signer,
         validator: ValidatorId,
         network: &NetworkDefinition,
-        spc_ctx: &SpcContext,
+        epoch: Epoch,
         empty_view: SpcView,
         reported: Verified<SpcHighTriple>,
     ) -> Result<Self, SignError> {
@@ -981,7 +1005,7 @@ impl Verified<SpcEmptyViewMsg> {
             signer,
             validator,
             network,
-            spc_ctx,
+            epoch,
             empty_view,
             reported.into_inner(),
         )?))
@@ -1242,7 +1266,7 @@ mod tests {
 
     // ─── Verifier / builder tests ──────────────────────────────────────
 
-    use crate::{Epoch, spc_context};
+    use crate::Epoch;
 
     fn committee(n: usize) -> Vec<(ValidatorId, ConsensusPublicKey)> {
         (0..n as u64)
@@ -1254,8 +1278,8 @@ mod tests {
         NetworkDefinition::simulator()
     }
 
-    fn ctx() -> SpcContext {
-        spc_context(Epoch::new(1))
+    fn ctx() -> Epoch {
+        Epoch::new(1)
     }
 
     /// Distinct `(empty_view, reported_view, value_hash)` triples
@@ -1285,7 +1309,7 @@ mod tests {
             proof: sample_pc_qc3().into(),
         };
         // Entering view = 7 but prev_view + 1 = 4. Mismatch.
-        assert!(verify_cert(&BlsVerifier, &cert, SpcView::new(7), &net(), &ctx(), &c).is_err());
+        assert!(verify_cert(&BlsVerifier, &cert, SpcView::new(7), &net(), ctx(), &c).is_err());
     }
 
     /// Indirect cert at `entering_view = 1` is rejected (no prior
@@ -1306,7 +1330,7 @@ mod tests {
                     .as_bytes(),
             ),
         };
-        assert!(verify_cert(&BlsVerifier, &cert, SpcView::new(1), &net(), &ctx(), &c).is_err());
+        assert!(verify_cert(&BlsVerifier, &cert, SpcView::new(1), &net(), ctx(), &c).is_err());
     }
 
     /// Indirect cert with fewer than `f + 1` skip reports is rejected.
@@ -1332,7 +1356,7 @@ mod tests {
                     .as_bytes(),
             ),
         };
-        assert!(verify_cert(&BlsVerifier, &cert, SpcView::new(2), &net(), &ctx(), &c).is_err());
+        assert!(verify_cert(&BlsVerifier, &cert, SpcView::new(2), &net(), ctx(), &c).is_err());
     }
 
     /// `build_indirect_cert` returns `None` on empty input.

@@ -295,9 +295,10 @@ mod tests {
 
     use hyperscale_crypto_bls::BlsSigner;
     use hyperscale_types::{
-        AggregateSignature, BlockHash, BlockHeight, ConsensusSignature, ExecutionOutcome,
-        GlobalReceiptHash, GlobalReceiptRoot, Hash, NetworkDefinition, RETENTION_HORIZON, ShardId,
-        Signer, SignerBitfield, TxHash, TxOutcome, ValidatorId, exec_vote_message,
+        AggregateSignature, BlockHash, BlockHeight, ConsensusSignature, ExecVoteMessage,
+        ExecutionOutcome, GlobalReceiptHash, GlobalReceiptRoot, Hash, NetworkDefinition,
+        RETENTION_HORIZON, ShardId, Signer, SignerBitfield, TxHash, TxOutcome, ValidatorId,
+        signed_bytes,
     };
     use proptest::collection::vec as prop_vec;
 
@@ -347,14 +348,14 @@ mod tests {
     fn make_vote(wave_id: WaveId, anchor_ts: WeightedTimestamp) -> ExecutionVote {
         let tx_outcomes = vec![make_tx_outcome(TxHash::from_raw(Hash::from_bytes(b"tx")))];
         let global_receipt_root = GlobalReceiptRoot::from_raw(Hash::from_bytes(b"root"));
-        let msg = exec_vote_message(
+        let msg = signed_bytes(&ExecVoteMessage::new(
             &NetworkDefinition::simulator(),
             anchor_ts,
-            &wave_id,
+            wave_id.clone(),
             wave_id.shard_id(),
-            &global_receipt_root,
+            global_receipt_root,
             u32::try_from(tx_outcomes.len()).unwrap_or(u32::MAX),
-        );
+        ));
         let kp = BlsSigner::from_seed(&[7u8; 32]);
         let signature = kp.sign(&msg).expect("sign");
         ExecutionVote::new(

@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 use hyperscale_hbor::Hbor;
 
-use crate::signing::DOMAIN_PC_EMPTY_VIEW;
 use crate::{
     ConsensusSignature, Epoch, MessageClass, NetworkDefinition, NetworkMessage, Signed,
-    SpcEmptyViewMsg, ValidatorId, Verifiable, hash_high_value, pc_vote_signing_message,
-    skip_target, spc_context,
+    SpcEmptyViewMessage, SpcEmptyViewMsg, ValidatorId, Verifiable, hash_high_value, signed_bytes,
+    skip_target,
 };
 
 /// SPC empty-view declaration sent via unicast when a participant
@@ -16,8 +15,8 @@ use crate::{
 ///
 /// The inner [`SpcEmptyViewMsg`] is content-signed — it carries the
 /// signer id and a signature over the canonical empty-view signing
-/// bytes (`skip_target` under [`DOMAIN_PC_EMPTY_VIEW`], bound to the
-/// epoch via `spc_context`). The wrapper carries `epoch` so the relay
+/// bytes (`skip_target` under [`SpcEmptyViewMessage`], bound to the
+/// epoch). The wrapper carries `epoch` so the relay
 /// edge can reconstruct that signing message and authenticate the
 /// signer via the [`Signed`] check before the coordinator keys a
 /// per-`(epoch, view, signer)` verification slot — the same relay-edge
@@ -30,8 +29,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SpcEmptyViewMsgNotification {
     /// Epoch the inner SPC instance belongs to. Bound into the signer's
-    /// signing message via `spc_context`, so a swap across epochs makes
-    /// the relay-edge signature check fail.
+    /// signing message, so a swap across epochs makes the relay-edge
+    /// signature check fail.
     pub epoch: Epoch,
     /// The empty-view message.
     pub msg: Arc<Verifiable<SpcEmptyViewMsg>>,
@@ -77,8 +76,7 @@ impl Signed for SpcEmptyViewMsgNotification {
         let msg = self.msg.as_unverified();
         let value_hash = hash_high_value(&msg.reported.value);
         let target = skip_target(msg.view, msg.reported.view, value_hash);
-        let spc_ctx = spc_context(self.epoch);
-        pc_vote_signing_message(network, DOMAIN_PC_EMPTY_VIEW, spc_ctx.as_bytes(), &target)
+        signed_bytes(&SpcEmptyViewMessage::new(network, self.epoch, target))
     }
 }
 
@@ -102,7 +100,7 @@ mod tests {
     use crate::{
         AggregateSignature, Epoch, NetworkDefinition, PcQc2, PcQc3, PcSignerLengths, PcVector,
         PcXpProof, SignedContext, SignedVerifyError, SignerBitfield, SpcHighTriple, SpcView,
-        ValidatorId, sign_empty_view_msg, spc_context,
+        ValidatorId, sign_empty_view_msg,
     };
 
     fn sample_pc_qc3() -> PcQc3 {
@@ -156,7 +154,7 @@ mod tests {
             &signer_from_u64_seed(signer_key_seed),
             ValidatorId::new(claimed_signer),
             &NetworkDefinition::simulator(),
-            &spc_context(epoch),
+            epoch,
             SpcView::new(5),
             reported,
         )
@@ -218,8 +216,7 @@ mod tests {
     }
 
     /// A signature bound to one epoch fails to verify when the wrapper
-    /// claims another — `spc_context(epoch)` is folded into the signed
-    /// bytes.
+    /// claims another — the epoch is folded into the signed bytes.
     #[test]
     fn signed_signature_is_epoch_bound() {
         let mut n = signed_notification(Epoch::new(7), 2, 2);

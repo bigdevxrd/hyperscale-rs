@@ -4,9 +4,7 @@
 use std::sync::Arc;
 
 use hyperscale_crypto_bls::BlsSigner;
-use hyperscale_types::{
-    ConsensusPublicKey, Epoch, PcContext, Signer, SpcView, ValidatorId, pc_context, spc_context,
-};
+use hyperscale_types::{ConsensusPublicKey, Epoch, PcScope, Signer, SpcView, ValidatorId};
 
 /// A small in-test validator committee — deterministic keys derived
 /// from a `(test_seed, validator_id)` pair so each test gets a stable
@@ -76,10 +74,11 @@ impl Committee {
     }
 }
 
-/// Build a PC signing context for `(epoch, view)`. Matches the runtime
-/// path: SPC binds the epoch, PC binds the view on top.
+/// Build the PC instance identity for `(epoch, view)`.
 #[must_use]
-pub fn pc_ctx(epoch: u64, view: u32) -> PcContext {
-    let spc = spc_context(Epoch::new(epoch));
-    pc_context(&spc, SpcView::new(view))
+pub const fn pc_ctx(epoch: u64, view: u32) -> PcScope {
+    PcScope {
+        epoch: Epoch::new(epoch),
+        view: SpcView::new(view),
+    }
 }

@@ -13,8 +13,8 @@ use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_types::{
     Epoch, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PRODUCTION_BEACON_COMMITTEE_SIZE, PcQc3,
     PcValueElement, PcVector, SpcCert, SpcEmptyViewMsg, SpcHighTriple, SpcProposalObject, SpcView,
-    ValidatorId, build_indirect_cert, sign_empty_view_msg, spc_context, verify_block_cert,
-    verify_cert, verify_empty_view_msg, verify_proposal_object,
+    ValidatorId, build_indirect_cert, sign_empty_view_msg, verify_block_cert, verify_cert,
+    verify_empty_view_msg, verify_proposal_object,
 };
 
 const fn elem(byte: u8) -> PcValueElement {
@@ -41,7 +41,7 @@ fn harvest_real_qc3(seed: u64, view: u32, value: &PcVector) -> (PcSim, PcQc3) {
 fn direct_cert_round_trip() {
     let network = NetworkDefinition::simulator();
     let epoch = Epoch::new(1);
-    let spc_ctx = spc_context(epoch);
+    let spc_ctx = epoch;
     let value = PcVector::new([elem(1), elem(2)]);
     let (sim, qc3) = harvest_real_qc3(0xD1, 3, &value);
 
@@ -58,7 +58,7 @@ fn direct_cert_round_trip() {
             &cert,
             SpcView::new(4),
             &network,
-            &spc_ctx,
+            spc_ctx,
             &sim.members
         )
         .is_ok()
@@ -68,7 +68,7 @@ fn direct_cert_round_trip() {
         view: SpcView::new(4),
         cert,
     };
-    assert!(verify_proposal_object(&BlsVerifier, &po, &network, &spc_ctx, &sim.members).is_ok());
+    assert!(verify_proposal_object(&BlsVerifier, &po, &network, spc_ctx, &sim.members).is_ok());
 }
 
 /// Full indirect-cert round-trip: harvest a real `Qc3`, have 2 of
@@ -78,7 +78,7 @@ fn direct_cert_round_trip() {
 fn indirect_cert_round_trip() {
     let network = NetworkDefinition::simulator();
     let epoch = Epoch::new(1);
-    let spc_ctx = spc_context(epoch);
+    let spc_ctx = epoch;
     let value = PcVector::new([elem(7)]);
     let (sim, qc3) = harvest_real_qc3(0xD2, 3, &value);
 
@@ -99,7 +99,7 @@ fn indirect_cert_round_trip() {
                 sk.as_ref(),
                 *validator,
                 &network,
-                &spc_ctx,
+                spc_ctx,
                 empty_view,
                 reported.clone(),
             )
@@ -109,7 +109,7 @@ fn indirect_cert_round_trip() {
 
     // Each empty-view msg must individually verify.
     for m in &msgs {
-        assert!(verify_empty_view_msg(&BlsVerifier, m, &network, &spc_ctx, &sim.members).is_ok());
+        assert!(verify_empty_view_msg(&BlsVerifier, m, &network, spc_ctx, &sim.members).is_ok());
     }
 
     let cert =
@@ -120,7 +120,7 @@ fn indirect_cert_round_trip() {
             &cert,
             entering_view,
             &network,
-            &spc_ctx,
+            spc_ctx,
             &sim.members
         )
         .is_ok()
@@ -135,7 +135,7 @@ fn indirect_cert_round_trip() {
 fn indirect_cert_with_swapped_target_value_rejected() {
     let network = NetworkDefinition::simulator();
     let epoch = Epoch::new(1);
-    let spc_ctx = spc_context(epoch);
+    let spc_ctx = epoch;
 
     // Two different high triples at the same SPC view 3 — two sim
     // runs with different inputs yield distinct QC3s.
@@ -161,7 +161,7 @@ fn indirect_cert_with_swapped_target_value_rejected() {
                 sk.as_ref(),
                 *validator,
                 &network,
-                &spc_ctx,
+                spc_ctx,
                 empty_view,
                 reported_a.clone(),
             )
@@ -197,7 +197,7 @@ fn indirect_cert_with_swapped_target_value_rejected() {
             &forged,
             entering_view,
             &network,
-            &spc_ctx,
+            spc_ctx,
             &sim.members
         )
         .is_err(),
@@ -410,7 +410,7 @@ fn spc_empty_view_rejected_under_different_network() {
     let network = NetworkDefinition::simulator();
     let other_network = NetworkDefinition::mainnet();
     let epoch = Epoch::new(1);
-    let spc_ctx = spc_context(epoch);
+    let spc_ctx = epoch;
     let value = PcVector::new([elem(7)]);
     let (sim, qc3) = harvest_real_qc3(0xE0, 3, &value);
 
@@ -425,15 +425,15 @@ fn spc_empty_view_rejected_under_different_network() {
         sk.as_ref(),
         validator,
         &network,
-        &spc_ctx,
+        spc_ctx,
         empty_view,
         reported,
     )
     .expect("sign");
 
-    assert!(verify_empty_view_msg(&BlsVerifier, &msg, &network, &spc_ctx, &sim.members).is_ok());
+    assert!(verify_empty_view_msg(&BlsVerifier, &msg, &network, spc_ctx, &sim.members).is_ok());
     assert!(
-        verify_empty_view_msg(&BlsVerifier, &msg, &other_network, &spc_ctx, &sim.members).is_err()
+        verify_empty_view_msg(&BlsVerifier, &msg, &other_network, spc_ctx, &sim.members).is_err()
     );
 }
 
@@ -445,7 +445,7 @@ fn spc_block_cert_rejected_under_different_network() {
     let network = NetworkDefinition::simulator();
     let other_network = NetworkDefinition::mainnet();
     let epoch = Epoch::new(1);
-    let spc_ctx = spc_context(epoch);
+    let spc_ctx = epoch;
     let value = PcVector::new([elem(3), elem(5)]);
     let (sim, qc3) = harvest_real_qc3(0xE1, 3, &value);
 
@@ -454,8 +454,6 @@ fn spc_block_cert_rejected_under_different_network() {
         value: qc3.x_pe().clone(),
         proof: qc3.into(),
     };
-    assert!(verify_block_cert(&BlsVerifier, &cert, &network, &spc_ctx, &sim.members).is_ok());
-    assert!(
-        verify_block_cert(&BlsVerifier, &cert, &other_network, &spc_ctx, &sim.members).is_err()
-    );
+    assert!(verify_block_cert(&BlsVerifier, &cert, &network, spc_ctx, &sim.members).is_ok());
+    assert!(verify_block_cert(&BlsVerifier, &cert, &other_network, spc_ctx, &sim.members).is_err());
 }

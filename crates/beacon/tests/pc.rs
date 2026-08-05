@@ -9,10 +9,10 @@ mod common;
 use common::{Committee, PcSim, pc_ctx};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_types::{
-    Epoch, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcContext, PcQc1, PcQc2, PcQc3,
-    PcValueElement, PcVector, PcVote1, PcVote2, PcVote3, PcVoteEquivocation, PcVoteRound,
-    PcXpProof, SpcView, Verifiable, build_qc1, build_qc2, build_qc3, sign_vote1, sign_vote2,
-    sign_vote3, verify_qc1, verify_qc2, verify_qc3, verify_vote_equivocation,
+    Epoch, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcQc1, PcQc2, PcQc3, PcScope, PcValueElement,
+    PcVector, PcVote1, PcVote2, PcVote3, PcVoteEquivocation, PcVoteRound, PcXpProof, SpcView,
+    Verifiable, build_qc1, build_qc2, build_qc3, sign_vote1, sign_vote2, sign_vote3, verify_qc1,
+    verify_qc2, verify_qc3, verify_vote_equivocation,
 };
 
 const fn elem(byte: u8) -> PcValueElement {
@@ -23,7 +23,7 @@ const fn elem(byte: u8) -> PcValueElement {
 fn round1_quorum(
     cm: &Committee,
     network: &NetworkDefinition,
-    ctx: &PcContext,
+    ctx: PcScope,
     quorum: usize,
     v_in: &PcVector,
 ) -> Vec<PcVote1> {
@@ -37,7 +37,7 @@ fn round1_quorum(
 fn round2_quorum(
     cm: &Committee,
     network: &NetworkDefinition,
-    ctx: &PcContext,
+    ctx: PcScope,
     quorum: usize,
     qc1: &PcQc1,
 ) -> Vec<PcVote2> {
@@ -50,7 +50,7 @@ fn round2_quorum(
 fn round3_quorum(
     cm: &Committee,
     network: &NetworkDefinition,
-    ctx: &PcContext,
+    ctx: PcScope,
     quorum: usize,
     qc2: &PcQc2,
 ) -> Vec<PcVote3> {
@@ -68,11 +68,11 @@ fn qc1_round_trip_n4() {
     let ctx = pc_ctx(1, 0);
     let v_in = PcVector::new([elem(1), elem(2), elem(3)]);
 
-    let votes = round1_quorum(&cm, &network, &ctx, 3, &v_in);
+    let votes = round1_quorum(&cm, &network, ctx, 3, &v_in);
     let refs: Vec<&PcVote1> = votes.iter().collect();
     let qc1 = build_qc1(&BlsVerifier, &refs, &cm.members);
 
-    assert!(verify_qc1(&BlsVerifier, &qc1, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc1(&BlsVerifier, &qc1, &network, ctx, &cm.members).is_ok());
 }
 
 /// QC1 verification must reject the same QC1 under a different
@@ -85,12 +85,12 @@ fn qc1_rejected_under_different_network() {
     let ctx = pc_ctx(1, 0);
     let v_in = PcVector::new([elem(1), elem(2)]);
 
-    let votes = round1_quorum(&cm, &network, &ctx, 3, &v_in);
+    let votes = round1_quorum(&cm, &network, ctx, 3, &v_in);
     let refs: Vec<&PcVote1> = votes.iter().collect();
     let qc1 = build_qc1(&BlsVerifier, &refs, &cm.members);
 
-    assert!(verify_qc1(&BlsVerifier, &qc1, &network, &ctx, &cm.members).is_ok());
-    assert!(verify_qc1(&BlsVerifier, &qc1, &other_network, &ctx, &cm.members).is_err());
+    assert!(verify_qc1(&BlsVerifier, &qc1, &network, ctx, &cm.members).is_ok());
+    assert!(verify_qc1(&BlsVerifier, &qc1, &other_network, ctx, &cm.members).is_err());
 }
 
 /// QC2 verification must reject the same QC2 under a different
@@ -103,16 +103,16 @@ fn qc2_rejected_under_different_network() {
     let ctx = pc_ctx(2, 0);
     let v_in = PcVector::new([elem(1), elem(2)]);
 
-    let v1s = round1_quorum(&cm, &network, &ctx, 3, &v_in);
+    let v1s = round1_quorum(&cm, &network, ctx, 3, &v_in);
     let v1_refs: Vec<&PcVote1> = v1s.iter().collect();
     let qc1 = build_qc1(&BlsVerifier, &v1_refs, &cm.members);
 
-    let v2s = round2_quorum(&cm, &network, &ctx, 3, &qc1);
+    let v2s = round2_quorum(&cm, &network, ctx, 3, &qc1);
     let v2_refs: Vec<&PcVote2> = v2s.iter().collect();
     let qc2 = build_qc2(&BlsVerifier, &v2_refs, &cm.members);
 
-    assert!(verify_qc2(&BlsVerifier, &qc2, &network, &ctx, &cm.members).is_ok());
-    assert!(verify_qc2(&BlsVerifier, &qc2, &other_network, &ctx, &cm.members).is_err());
+    assert!(verify_qc2(&BlsVerifier, &qc2, &network, ctx, &cm.members).is_ok());
+    assert!(verify_qc2(&BlsVerifier, &qc2, &other_network, ctx, &cm.members).is_err());
 }
 
 /// QC3 verification must reject the same QC3 under a different
@@ -125,20 +125,20 @@ fn qc3_rejected_under_different_network() {
     let ctx = pc_ctx(3, 0);
     let v_in = PcVector::new([elem(1), elem(2)]);
 
-    let v1s = round1_quorum(&cm, &network, &ctx, 3, &v_in);
+    let v1s = round1_quorum(&cm, &network, ctx, 3, &v_in);
     let v1_refs: Vec<&PcVote1> = v1s.iter().collect();
     let qc1 = build_qc1(&BlsVerifier, &v1_refs, &cm.members);
 
-    let v2s = round2_quorum(&cm, &network, &ctx, 3, &qc1);
+    let v2s = round2_quorum(&cm, &network, ctx, 3, &qc1);
     let v2_refs: Vec<&PcVote2> = v2s.iter().collect();
     let qc2 = build_qc2(&BlsVerifier, &v2_refs, &cm.members);
 
-    let v3s = round3_quorum(&cm, &network, &ctx, 3, &qc2);
+    let v3s = round3_quorum(&cm, &network, ctx, 3, &qc2);
     let v3_refs: Vec<&PcVote3> = v3s.iter().collect();
     let qc3 = build_qc3(&BlsVerifier, &v3_refs, &cm.members);
 
-    assert!(verify_qc3(&BlsVerifier, &qc3, &network, &ctx, &cm.members).is_ok());
-    assert!(verify_qc3(&BlsVerifier, &qc3, &other_network, &ctx, &cm.members).is_err());
+    assert!(verify_qc3(&BlsVerifier, &qc3, &network, ctx, &cm.members).is_ok());
+    assert!(verify_qc3(&BlsVerifier, &qc3, &other_network, ctx, &cm.members).is_err());
 }
 
 /// QC1 verification must reject the same QC1 under a different PC
@@ -151,12 +151,12 @@ fn qc1_rejected_under_different_view() {
     let ctx_v1 = pc_ctx(7, 1);
     let v_in = PcVector::new([elem(9)]);
 
-    let votes = round1_quorum(&cm, &network, &ctx_v0, 3, &v_in);
+    let votes = round1_quorum(&cm, &network, ctx_v0, 3, &v_in);
     let refs: Vec<&PcVote1> = votes.iter().collect();
     let qc1 = build_qc1(&BlsVerifier, &refs, &cm.members);
 
-    assert!(verify_qc1(&BlsVerifier, &qc1, &network, &ctx_v0, &cm.members).is_ok());
-    assert!(verify_qc1(&BlsVerifier, &qc1, &network, &ctx_v1, &cm.members).is_err());
+    assert!(verify_qc1(&BlsVerifier, &qc1, &network, ctx_v0, &cm.members).is_ok());
+    assert!(verify_qc1(&BlsVerifier, &qc1, &network, ctx_v1, &cm.members).is_err());
 }
 
 /// Full PC pipeline at n=4 — three rounds, all signers vote the same
@@ -170,22 +170,22 @@ fn qc3_round_trip_n4_all_agree() {
     let v_in = PcVector::new([elem(1), elem(2)]);
 
     // Round 1.
-    let v1s = round1_quorum(&cm, &network, &ctx, 3, &v_in);
+    let v1s = round1_quorum(&cm, &network, ctx, 3, &v_in);
     let v1_refs: Vec<&PcVote1> = v1s.iter().collect();
     let qc1 = build_qc1(&BlsVerifier, &v1_refs, &cm.members);
-    assert!(verify_qc1(&BlsVerifier, &qc1, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc1(&BlsVerifier, &qc1, &network, ctx, &cm.members).is_ok());
 
     // Round 2.
-    let v2s = round2_quorum(&cm, &network, &ctx, 3, &qc1);
+    let v2s = round2_quorum(&cm, &network, ctx, 3, &qc1);
     let v2_refs: Vec<&PcVote2> = v2s.iter().collect();
     let qc2 = build_qc2(&BlsVerifier, &v2_refs, &cm.members);
-    assert!(verify_qc2(&BlsVerifier, &qc2, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc2(&BlsVerifier, &qc2, &network, ctx, &cm.members).is_ok());
 
     // Round 3.
-    let v3s = round3_quorum(&cm, &network, &ctx, 3, &qc2);
+    let v3s = round3_quorum(&cm, &network, ctx, 3, &qc2);
     let v3_refs: Vec<&PcVote3> = v3s.iter().collect();
     let qc3 = build_qc3(&BlsVerifier, &v3_refs, &cm.members);
-    assert!(verify_qc3(&BlsVerifier, &qc3, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc3(&BlsVerifier, &qc3, &network, ctx, &cm.members).is_ok());
 }
 
 /// Larger committee (n=7, q=5) exercises the same pipeline at non-
@@ -198,20 +198,20 @@ fn qc3_round_trip_n7_all_agree() {
     let ctx = pc_ctx(3, 0);
     let v_in = PcVector::new([elem(0xA1)]);
 
-    let v1s = round1_quorum(&cm, &network, &ctx, 5, &v_in);
+    let v1s = round1_quorum(&cm, &network, ctx, 5, &v_in);
     let v1_refs: Vec<&PcVote1> = v1s.iter().collect();
     let qc1 = build_qc1(&BlsVerifier, &v1_refs, &cm.members);
-    assert!(verify_qc1(&BlsVerifier, &qc1, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc1(&BlsVerifier, &qc1, &network, ctx, &cm.members).is_ok());
 
-    let v2s = round2_quorum(&cm, &network, &ctx, 5, &qc1);
+    let v2s = round2_quorum(&cm, &network, ctx, 5, &qc1);
     let v2_refs: Vec<&PcVote2> = v2s.iter().collect();
     let qc2 = build_qc2(&BlsVerifier, &v2_refs, &cm.members);
-    assert!(verify_qc2(&BlsVerifier, &qc2, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc2(&BlsVerifier, &qc2, &network, ctx, &cm.members).is_ok());
 
-    let v3s = round3_quorum(&cm, &network, &ctx, 5, &qc2);
+    let v3s = round3_quorum(&cm, &network, ctx, 5, &qc2);
     let v3_refs: Vec<&PcVote3> = v3s.iter().collect();
     let qc3 = build_qc3(&BlsVerifier, &v3_refs, &cm.members);
-    assert!(verify_qc3(&BlsVerifier, &qc3, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc3(&BlsVerifier, &qc3, &network, ctx, &cm.members).is_ok());
 }
 
 /// Round-1 equivocation round-trip: have validator 0 sign two
@@ -229,8 +229,8 @@ fn equivocation_round_trip_round1() {
     let value_a = PcVector::new([elem(1), elem(2)]);
     let value_b = PcVector::new([elem(1), elem(3)]);
 
-    let vote_a = sign_vote1(cm.sk(0), cm.id(0), &network, &ctx, value_a.clone()).expect("sign");
-    let vote_b = sign_vote1(cm.sk(0), cm.id(0), &network, &ctx, value_b.clone()).expect("sign");
+    let vote_a = sign_vote1(cm.sk(0), cm.id(0), &network, ctx, value_a.clone()).expect("sign");
+    let vote_b = sign_vote1(cm.sk(0), cm.id(0), &network, ctx, value_b.clone()).expect("sign");
 
     // Slim wire-form pulls the primary sig from `prefix_sigs[|v_in|]`
     // — the signature over the full vector.
@@ -329,7 +329,7 @@ fn sim_n4_with_one_silent_party_still_converges() {
 fn qc1_over(
     cm: &Committee,
     network: &NetworkDefinition,
-    ctx: &PcContext,
+    ctx: PcScope,
     quorum: usize,
     v_in: &PcVector,
 ) -> PcQc1 {
@@ -349,12 +349,12 @@ fn build_qc2_produces_diverging_proof_under_divergent_round1_inputs() {
     let x_a = PcVector::new([elem(1), elem(2)]);
     let x_b = PcVector::new([elem(1), elem(3)]);
 
-    let qc1_a = qc1_over(&cm, &network, &ctx, 3, &x_a);
-    let qc1_b = qc1_over(&cm, &network, &ctx, 3, &x_b);
+    let qc1_a = qc1_over(&cm, &network, ctx, 3, &x_a);
+    let qc1_b = qc1_over(&cm, &network, ctx, 3, &x_b);
 
-    let v2_0 = sign_vote2(cm.sk(0), cm.id(0), &network, &ctx, qc1_a.clone()).expect("sign");
-    let v2_1 = sign_vote2(cm.sk(1), cm.id(1), &network, &ctx, qc1_a).expect("sign");
-    let v2_2 = sign_vote2(cm.sk(2), cm.id(2), &network, &ctx, qc1_b).expect("sign");
+    let v2_0 = sign_vote2(cm.sk(0), cm.id(0), &network, ctx, qc1_a.clone()).expect("sign");
+    let v2_1 = sign_vote2(cm.sk(1), cm.id(1), &network, ctx, qc1_a).expect("sign");
+    let v2_2 = sign_vote2(cm.sk(2), cm.id(2), &network, ctx, qc1_b).expect("sign");
 
     let refs: Vec<&PcVote2> = vec![&v2_0, &v2_1, &v2_2];
     let qc2 = build_qc2(&BlsVerifier, &refs, &cm.members);
@@ -365,7 +365,7 @@ fn build_qc2_produces_diverging_proof_under_divergent_round1_inputs() {
         "qc2.pi is {:?}, expected Diverging",
         qc2.pi(),
     );
-    assert!(verify_qc2(&BlsVerifier, &qc2, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc2(&BlsVerifier, &qc2, &network, ctx, &cm.members).is_ok());
 }
 
 /// Four signers vote round-2 over a QC1 with `x = [1, 2]`; one signs
@@ -380,15 +380,15 @@ fn build_qc2_produces_short_witness_proof_when_one_signer_is_short() {
     let x_long = PcVector::new([elem(1), elem(2)]);
     let x_short = PcVector::new([elem(1)]);
 
-    let qc1_long = qc1_over(&cm, &network, &ctx, 5, &x_long);
-    let qc1_short = qc1_over(&cm, &network, &ctx, 5, &x_short);
+    let qc1_long = qc1_over(&cm, &network, ctx, 5, &x_long);
+    let qc1_short = qc1_over(&cm, &network, ctx, 5, &x_short);
 
     let v2s = [
-        sign_vote2(cm.sk(0), cm.id(0), &network, &ctx, qc1_long.clone()).expect("sign"),
-        sign_vote2(cm.sk(1), cm.id(1), &network, &ctx, qc1_long.clone()).expect("sign"),
-        sign_vote2(cm.sk(2), cm.id(2), &network, &ctx, qc1_long.clone()).expect("sign"),
-        sign_vote2(cm.sk(3), cm.id(3), &network, &ctx, qc1_long).expect("sign"),
-        sign_vote2(cm.sk(4), cm.id(4), &network, &ctx, qc1_short).expect("sign"),
+        sign_vote2(cm.sk(0), cm.id(0), &network, ctx, qc1_long.clone()).expect("sign"),
+        sign_vote2(cm.sk(1), cm.id(1), &network, ctx, qc1_long.clone()).expect("sign"),
+        sign_vote2(cm.sk(2), cm.id(2), &network, ctx, qc1_long.clone()).expect("sign"),
+        sign_vote2(cm.sk(3), cm.id(3), &network, ctx, qc1_long).expect("sign"),
+        sign_vote2(cm.sk(4), cm.id(4), &network, ctx, qc1_short).expect("sign"),
     ];
     let refs: Vec<&PcVote2> = v2s.iter().collect();
     let qc2 = build_qc2(&BlsVerifier, &refs, &cm.members);
@@ -399,7 +399,7 @@ fn build_qc2_produces_short_witness_proof_when_one_signer_is_short() {
         "qc2.pi is {:?}, expected ShortWitness",
         qc2.pi(),
     );
-    assert!(verify_qc2(&BlsVerifier, &qc2, &network, &ctx, &cm.members).is_ok());
+    assert!(verify_qc2(&BlsVerifier, &qc2, &network, ctx, &cm.members).is_ok());
 }
 
 /// A tampered `sig_b` (signed by a different validator) must not
@@ -415,11 +415,11 @@ fn equivocation_rejected_when_one_side_signed_by_other_validator() {
     let value_a = PcVector::new([elem(1), elem(2)]);
     let value_b = PcVector::new([elem(1), elem(3)]);
 
-    let vote_a = sign_vote1(cm.sk(0), cm.id(0), &network, &ctx, value_a.clone()).expect("sign");
+    let vote_a = sign_vote1(cm.sk(0), cm.id(0), &network, ctx, value_a.clone()).expect("sign");
     // Validator 1 signs the other vote — there's no contradiction
     // from validator 0's perspective.
     let vote_b_by_other =
-        sign_vote1(cm.sk(1), cm.id(0), &network, &ctx, value_b.clone()).expect("sign");
+        sign_vote1(cm.sk(1), cm.id(0), &network, ctx, value_b.clone()).expect("sign");
 
     let ev = PcVoteEquivocation {
         validator: cm.id(0),
@@ -468,7 +468,7 @@ fn forge_qc3_with_empty_xpp_is_rejected() {
 
     // Sanity: the real QC3 verifies and its x_pp matches the input.
     assert_eq!(real.x_pp().as_slice(), &[elem(42), elem(42), elem(42)]);
-    assert!(verify_qc3(&BlsVerifier, &real, &network, &pc_ctx(1, 0), &sim.members).is_ok());
+    assert!(verify_qc3(&BlsVerifier, &real, &network, pc_ctx(1, 0), &sim.members).is_ok());
 
     // Forge: swap in an empty x_pp while keeping the rest.
     let real_x_pe = real.x_pe().clone();
@@ -484,7 +484,7 @@ fn forge_qc3_with_empty_xpp_is_rejected() {
     );
 
     assert!(
-        verify_qc3(&BlsVerifier, &forged, &network, &pc_ctx(1, 0), &sim.members).is_err(),
+        verify_qc3(&BlsVerifier, &forged, &network, pc_ctx(1, 0), &sim.members).is_err(),
         "forged QC3 with x_pp=[] but real signers' x_p non-empty must be rejected",
     );
 }
@@ -515,7 +515,7 @@ fn forge_qc3_with_extended_xpe_is_rejected() {
     );
 
     assert!(
-        verify_qc3(&BlsVerifier, &forged, &network, &pc_ctx(2, 0), &sim.members).is_err(),
+        verify_qc3(&BlsVerifier, &forged, &network, pc_ctx(2, 0), &sim.members).is_err(),
         "forged QC3 with x_pe extended past real mce must be rejected",
     );
 }

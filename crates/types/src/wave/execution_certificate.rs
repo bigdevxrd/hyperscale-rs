@@ -17,10 +17,10 @@ use hyperscale_hbor::{
 use thiserror::Error;
 
 use crate::{
-    AggregateSignature, BlockHeight, ConsensusPublicKey, ExecutionVote, GlobalReceiptRoot, Hash,
-    MAX_TXS_PER_BLOCK, NetworkDefinition, RETENTION_HORIZON, ShardId, SignerBitfield, TxOutcome,
-    ValidatorId, Verified, Verify, WaveId, WeightedTimestamp, compute_global_receipt_root,
-    exec_vote_message,
+    AggregateSignature, BlockHeight, ConsensusPublicKey, ExecVoteMessage, ExecutionVote,
+    GlobalReceiptRoot, Hash, MAX_TXS_PER_BLOCK, NetworkDefinition, RETENTION_HORIZON, ShardId,
+    SignerBitfield, TxOutcome, ValidatorId, Verified, Verify, WaveId, WeightedTimestamp,
+    compute_global_receipt_root, signed_bytes,
 };
 
 /// Aggregated certificate for an execution wave.
@@ -255,14 +255,14 @@ impl ExecutionCertificate {
     /// from the EC's own fields so verifiers don't need a vote sample.
     #[must_use]
     pub fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        exec_vote_message(
+        signed_bytes(&ExecVoteMessage::new(
             network,
             self.vote_anchor_ts,
-            &self.wave_id,
+            self.wave_id.clone(),
             self.shard_id(),
-            &self.global_receipt_root,
+            self.global_receipt_root,
             u32::try_from(self.tx_outcomes.len()).unwrap_or(u32::MAX),
-        )
+        ))
     }
 }
 
@@ -296,7 +296,7 @@ pub enum ExecutionCertificateVerifyError {
 
 /// Construction asserts: the aggregated signature validates against
 /// the public key formed by aggregating `public_keys[i]` for every `i`
-/// set in `signers`, over the canonical [`exec_vote_message`] derived
+/// set in `signers`, over the canonical [`ExecVoteMessage::new`] derived
 /// from the certificate's `(vote_anchor_ts, wave_id, shard_id,
 /// global_receipt_root, tx_count)`. Empty signer sets must carry the
 /// zero signature.

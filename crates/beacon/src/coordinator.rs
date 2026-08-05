@@ -1541,7 +1541,7 @@ impl BeaconCoordinator {
     ///
     /// Async (on the crypto pool):
     /// - signature verifies against the canonical
-    ///   [`ratify_vote_message`](hyperscale_types::ratify_vote_message)
+    ///   [`RatifyVoteMessage::new`](hyperscale_types::RatifyVoteMessage::new)
     ///   under the signer's pubkey.
     pub fn on_unverified_ratify_vote_received(
         &mut self,
@@ -2697,13 +2697,13 @@ mod tests {
         CertifiedBlockHeader, ChainOrigin, ConsensusPublicKey, ConsensusSignature, Epoch,
         GenesisConfigHash, GenesisPool, GenesisValidator, Hash, InFlightCount, JailReason,
         KeptSeat, LeafIndex, LocalReceiptRoot, MIN_BEACON_COMMITTEE_SIZE, MIN_STAKE_FLOOR,
-        NetworkDefinition, ObserverSeat, PcVector, ProposerTimestamp, ProvisionsRoot,
+        NetworkDefinition, ObserverSeat, PcScope, PcVector, ProposerTimestamp, ProvisionsRoot,
         QuorumCertificate, Randomness, RevealChain, Round, ShardBoundary, ShardCommittee,
         ShardEpochContribution, ShardId, ShardLoad, ShardWitnessPayload, Signer, SignerBitfield,
         SpcCert, SpcView, Stake, StakePoolId, StateRoot, TransactionRoot, ValidatorId, VrfProof,
         WeightedTimestamp, build_qc1, build_qc2, build_qc3, build_ratify_cert, compute_merkle_root,
-        compute_range_proof, genesis_config_hash, pc_context, sign_ratify_vote, sign_vote1,
-        sign_vote2, sign_vote3, spc_context,
+        compute_range_proof, genesis_config_hash, sign_ratify_vote, sign_vote1, sign_vote2,
+        sign_vote3,
     };
 
     use super::*;
@@ -3637,7 +3637,7 @@ mod tests {
 
     /// A beacon-eligible set that resampled below the BFT minimum
     /// (`n < MIN_BEACON_COMMITTEE_SIZE`) must not bootstrap an SPC instance —
-    /// `PcInstance::new` would panic on it. The coordinator declines and
+    /// `PcScope::new` would panic on it. The coordinator declines and
     /// leaves `spc` cleared so the skip path can carry the epoch.
     #[test]
     fn bootstrap_below_bft_minimum_declines_without_panicking() {
@@ -4147,12 +4147,14 @@ mod tests {
         v_in: &PcVector,
     ) -> SpcCert {
         let net = NetworkDefinition::simulator();
-        let spc_ctx = spc_context(epoch);
-        let pc_ctx = pc_context(&spc_ctx, prev_view);
+        let pc_ctx = PcScope {
+            epoch,
+            view: prev_view,
+        };
         let v1s: Vec<_> = signer_positions
             .iter()
             .map(|&i| {
-                sign_vote1(&keys[i], committee[i].0, &net, &pc_ctx, v_in.clone()).expect("sign")
+                sign_vote1(&keys[i], committee[i].0, &net, pc_ctx, v_in.clone()).expect("sign")
             })
             .collect();
         let v1_refs: Vec<&_> = v1s.iter().collect();
@@ -4160,7 +4162,7 @@ mod tests {
         let v2s: Vec<_> = signer_positions
             .iter()
             .map(|&i| {
-                sign_vote2(&keys[i], committee[i].0, &net, &pc_ctx, qc1.clone()).expect("sign")
+                sign_vote2(&keys[i], committee[i].0, &net, pc_ctx, qc1.clone()).expect("sign")
             })
             .collect();
         let v2_refs: Vec<&_> = v2s.iter().collect();
@@ -4168,7 +4170,7 @@ mod tests {
         let v3s: Vec<_> = signer_positions
             .iter()
             .map(|&i| {
-                sign_vote3(&keys[i], committee[i].0, &net, &pc_ctx, qc2.clone()).expect("sign")
+                sign_vote3(&keys[i], committee[i].0, &net, pc_ctx, qc2.clone()).expect("sign")
             })
             .collect();
         let v3_refs: Vec<&_> = v3s.iter().collect();

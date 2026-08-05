@@ -357,8 +357,8 @@ mod tests {
 
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
     use hyperscale_types::{
-        Epoch, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcValueElement, PcVector, PcVoteRound,
-        Signer, SpcView, pc_context, spc_context,
+        Epoch, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcScope, PcValueElement, PcVector,
+        PcVoteRound, Signer, SpcView,
     };
 
     use super::*;
@@ -450,7 +450,10 @@ mod tests {
             SpcView::new(0),
             members.clone(),
         );
-        let pc_ctx_bytes = pc_context(&spc_context(Epoch::new(1)), SpcView::new(0));
+        let pc_ctx_bytes = PcScope {
+            epoch: Epoch::new(1),
+            view: SpcView::new(0),
+        };
 
         let v = PcVector::new(std::iter::once(elem(7)));
         let _ = fsm.handle(PcEvent::Input(v.clone()));
@@ -462,7 +465,7 @@ mod tests {
                 sks[i].as_ref(),
                 members[i].0,
                 &net(),
-                &pc_ctx_bytes,
+                pc_ctx_bytes,
                 v.clone(),
             )
             .expect("sign")
@@ -515,14 +518,17 @@ mod tests {
         );
 
         // Two distinct v_ins signed by validator 1 (the equivocator).
-        let pc_ctx_bytes = pc_context(&spc_context(Epoch::new(1)), SpcView::new(0));
+        let pc_ctx_bytes = PcScope {
+            epoch: Epoch::new(1),
+            view: SpcView::new(0),
+        };
         let v_a = PcVector::new(std::iter::once(elem(1)));
         let v_b = PcVector::new(std::iter::once(elem(2)));
         let vote_a = Verified::<PcVote1>::sign_local(
             sks[1].as_ref(),
             members[1].0,
             &net(),
-            &pc_ctx_bytes,
+            pc_ctx_bytes,
             v_a,
         )
         .expect("sign");
@@ -530,7 +536,7 @@ mod tests {
             sks[1].as_ref(),
             members[1].0,
             &net(),
-            &pc_ctx_bytes,
+            pc_ctx_bytes,
             v_b,
         )
         .expect("sign");

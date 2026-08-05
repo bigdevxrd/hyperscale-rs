@@ -42,8 +42,8 @@ use dashmap::DashMap;
 use hyperscale_crypto::Verifier;
 use hyperscale_network::ValidatorKeyMap;
 use hyperscale_types::{
-    ConsensusSignature, NetworkDefinition, Signer, VALIDATOR_BIND_NONCE_LEN, ValidatorId,
-    validator_bind_message,
+    ConsensusSignature, NetworkDefinition, Signer, VALIDATOR_BIND_NONCE_LEN, ValidatorBindMessage,
+    ValidatorId, signed_bytes,
 };
 use libp2p::{PeerId as Libp2pPeerId, Stream, StreamProtocol};
 use libp2p_stream::{Control, IncomingStreams};
@@ -231,7 +231,11 @@ fn verify_bind(
         .get(&claimed_vid)
         .ok_or(BindError::UnknownValidator(claimed_vid))?;
 
-    let message = validator_bind_message(network, &peer_id.to_bytes(), nonce);
+    let message = signed_bytes(&ValidatorBindMessage::new(
+        network,
+        &peer_id.to_bytes(),
+        nonce,
+    ));
     if verifier.verify(pubkey, &message, signature) {
         Ok(())
     } else {
@@ -295,8 +299,11 @@ impl BindContext {
     /// whose signer cannot sign contributes no attestation (logged at
     /// error level); the exchange proceeds with the rest.
     fn sign_all(&self, remote_nonce: &[u8; VALIDATOR_BIND_NONCE_LEN]) -> Attestations {
-        let message =
-            validator_bind_message(&self.network, &self.local_peer_id.to_bytes(), remote_nonce);
+        let message = signed_bytes(&ValidatorBindMessage::new(
+            &self.network,
+            &self.local_peer_id.to_bytes(),
+            remote_nonce,
+        ));
         self.local_vnodes
             .iter()
             .filter_map(|(vid, key)| match key.sign(&message) {
@@ -762,11 +769,11 @@ mod tests {
         let bad_vid = ValidatorId::new(2);
 
         let good_sig = keypair
-            .sign(&validator_bind_message(
+            .sign(&signed_bytes(&ValidatorBindMessage::new(
                 &NetworkDefinition::simulator(),
                 &peer_id.to_bytes(),
                 &nonce,
-            ))
+            )))
             .expect("sign");
         let bad_sig = ConsensusSignature::ZERO;
 
@@ -797,11 +804,11 @@ mod tests {
         let nonce = [9u8; VALIDATOR_BIND_NONCE_LEN];
 
         let sig = keypair
-            .sign(&validator_bind_message(
+            .sign(&signed_bytes(&ValidatorBindMessage::new(
                 &NetworkDefinition::simulator(),
                 &peer_id.to_bytes(),
                 &nonce,
-            ))
+            )))
             .expect("sign");
 
         let keys = make_bind_keys(vid, pubkey);
@@ -834,11 +841,11 @@ mod tests {
 
         // Sign over nonce_a — what the remote would have produced in session A.
         let sig = keypair
-            .sign(&validator_bind_message(
+            .sign(&signed_bytes(&ValidatorBindMessage::new(
                 &NetworkDefinition::simulator(),
                 &peer_id.to_bytes(),
                 &nonce_a,
-            ))
+            )))
             .expect("sign");
 
         // Verifier in session B challenged with nonce_b, so they verify the
@@ -869,11 +876,11 @@ mod tests {
 
         // Sign peer_a's id but try to verify as peer_b.
         let sig = keypair
-            .sign(&validator_bind_message(
+            .sign(&signed_bytes(&ValidatorBindMessage::new(
                 &NetworkDefinition::simulator(),
                 &peer_a.to_bytes(),
                 &nonce,
-            ))
+            )))
             .expect("sign");
 
         let keys = make_bind_keys(vid, pubkey);
@@ -899,11 +906,11 @@ mod tests {
         let nonce = [4u8; VALIDATOR_BIND_NONCE_LEN];
 
         let sig = keypair
-            .sign(&validator_bind_message(
+            .sign(&signed_bytes(&ValidatorBindMessage::new(
                 &NetworkDefinition::simulator(),
                 &peer_id.to_bytes(),
                 &nonce,
-            ))
+            )))
             .expect("sign");
 
         // Key map has validator 7 but we claim to be validator 99.
@@ -932,11 +939,11 @@ mod tests {
 
         // Sign with key_a but key map has key_b for this validator.
         let sig = keypair_a
-            .sign(&validator_bind_message(
+            .sign(&signed_bytes(&ValidatorBindMessage::new(
                 &NetworkDefinition::simulator(),
                 &peer_id.to_bytes(),
                 &nonce,
-            ))
+            )))
             .expect("sign");
 
         let keys = make_bind_keys(vid, keypair_b.public_key());

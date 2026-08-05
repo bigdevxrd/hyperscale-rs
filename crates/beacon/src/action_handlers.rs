@@ -22,10 +22,9 @@ use hyperscale_types::network::notification::{
     SpcEmptyViewMsgNotification, SpcNewCommitNotification, SpcNewViewNotification,
 };
 use hyperscale_types::{
-    BeaconProposal, CandidateVerifyContext, CertifiedBeaconBlockVerifyContext,
-    DOMAIN_SPC_NEW_COMMIT, DOMAIN_SPC_NEW_VIEW, PcVote1, PcVote2, PcVote3, PcVoteVerifyContext,
-    RatifyVerifyContext, RatifyVote, SpcEmptyViewMsg, SpcVerifyContext, Verifiable, Verified,
-    pc_context, spc_context, spc_relay_signing_message,
+    BeaconProposal, CandidateVerifyContext, CertifiedBeaconBlockVerifyContext, PcScope, PcVote1,
+    PcVote2, PcVote3, PcVoteVerifyContext, RatifyVerifyContext, RatifyVote, SpcEmptyViewMsg,
+    SpcRelayKind, SpcRelayMessage, SpcVerifyContext, Verifiable, Verified, signed_bytes,
 };
 
 /// Dispatch a beacon-owned [`Action`]. Panics on non-beacon variants —
@@ -44,9 +43,9 @@ where
             v_in,
             recipients,
         } => {
-            let pc_ctx = pc_context(&spc_context(epoch), view);
+            let instance = PcScope { epoch, view };
             let Ok(verified) =
-                Verified::<PcVote1>::sign_local(ctx.signer.as_ref(), me, network, &pc_ctx, v_in)
+                Verified::<PcVote1>::sign_local(ctx.signer.as_ref(), me, network, instance, v_in)
             else {
                 tracing::error!(?view, "cannot sign PC vote1; abstaining");
                 return;
@@ -66,9 +65,9 @@ where
             qc1,
             recipients,
         } => {
-            let pc_ctx = pc_context(&spc_context(epoch), view);
+            let instance = PcScope { epoch, view };
             let Ok(verified) =
-                Verified::<PcVote2>::sign_local(ctx.signer.as_ref(), me, network, &pc_ctx, *qc1)
+                Verified::<PcVote2>::sign_local(ctx.signer.as_ref(), me, network, instance, *qc1)
             else {
                 tracing::error!(?view, "cannot sign PC vote2; abstaining");
                 return;
@@ -88,9 +87,9 @@ where
             qc2,
             recipients,
         } => {
-            let pc_ctx = pc_context(&spc_context(epoch), view);
+            let instance = PcScope { epoch, view };
             let Ok(verified) =
-                Verified::<PcVote3>::sign_local(ctx.signer.as_ref(), me, network, &pc_ctx, *qc2)
+                Verified::<PcVote3>::sign_local(ctx.signer.as_ref(), me, network, instance, *qc2)
             else {
                 tracing::error!(?view, "cannot sign PC vote3; abstaining");
                 return;
@@ -110,12 +109,11 @@ where
             reported,
             recipients,
         } => {
-            let spc_ctx = spc_context(epoch);
             let Ok(verified) = Verified::<SpcEmptyViewMsg>::sign_local(
                 ctx.signer.as_ref(),
                 me,
                 network,
-                &spc_ctx,
+                epoch,
                 view,
                 *reported,
             ) else {
@@ -140,13 +138,13 @@ where
         } => {
             let view = proposal.view;
             let proposal_hash = proposal.hash();
-            let signing_msg = spc_relay_signing_message(
+            let signing_msg = signed_bytes(&SpcRelayMessage::new(
                 network,
-                DOMAIN_SPC_NEW_VIEW,
+                SpcRelayKind::NewView,
                 epoch,
                 view,
-                &proposal_hash,
-            );
+                proposal_hash,
+            ));
             let Ok(sig) = ctx.signer.sign(&signing_msg) else {
                 tracing::error!(?view, "cannot sign SPC new-view relay; skipping");
                 return;
@@ -163,8 +161,13 @@ where
         } => {
             let view = msg.view;
             let msg_hash = msg.hash();
-            let signing_msg =
-                spc_relay_signing_message(network, DOMAIN_SPC_NEW_COMMIT, epoch, view, &msg_hash);
+            let signing_msg = signed_bytes(&SpcRelayMessage::new(
+                network,
+                SpcRelayKind::NewCommit,
+                epoch,
+                view,
+                msg_hash,
+            ));
             let Ok(sig) = ctx.signer.sign(&signing_msg) else {
                 tracing::error!(?view, "cannot sign SPC new-commit relay; skipping");
                 return;
@@ -316,12 +319,12 @@ where
             vote,
             committee,
         } => {
-            let pc_ctx = pc_context(&spc_context(epoch), view);
+            let instance = PcScope { epoch, view };
             let signer = vote.validator();
             let result = vote.upgrade(&PcVoteVerifyContext {
                 verifier: ctx.verifier,
                 network,
-                pc_ctx: &pc_ctx,
+                instance,
                 committee: &committee,
             });
             ctx.notify_protocol(ProtocolEvent::PcVote1Verified {
@@ -337,12 +340,12 @@ where
             vote,
             committee,
         } => {
-            let pc_ctx = pc_context(&spc_context(epoch), view);
+            let instance = PcScope { epoch, view };
             let signer = vote.validator();
             let result = (*vote).upgrade(&PcVoteVerifyContext {
                 verifier: ctx.verifier,
                 network,
-                pc_ctx: &pc_ctx,
+                instance,
                 committee: &committee,
             });
             ctx.notify_protocol(ProtocolEvent::PcVote2Verified {
@@ -358,12 +361,12 @@ where
             vote,
             committee,
         } => {
-            let pc_ctx = pc_context(&spc_context(epoch), view);
+            let instance = PcScope { epoch, view };
             let signer = vote.validator();
             let result = (*vote).upgrade(&PcVoteVerifyContext {
                 verifier: ctx.verifier,
                 network,
-                pc_ctx: &pc_ctx,
+                instance,
                 committee: &committee,
             });
             ctx.notify_protocol(ProtocolEvent::PcVote3Verified {
@@ -379,12 +382,11 @@ where
             proposal,
             committee,
         } => {
-            let spc_ctx = spc_context(epoch);
             let view = proposal.view;
             let result = (*proposal).upgrade(&SpcVerifyContext {
                 verifier: ctx.verifier,
                 network,
-                spc_ctx: &spc_ctx,
+                epoch,
                 committee: &committee,
             });
             ctx.notify_protocol(ProtocolEvent::SpcNewViewVerified {
@@ -400,12 +402,11 @@ where
             msg,
             committee,
         } => {
-            let spc_ctx = spc_context(epoch);
             let view = msg.view;
             let result = (*msg).upgrade(&SpcVerifyContext {
                 verifier: ctx.verifier,
                 network,
-                spc_ctx: &spc_ctx,
+                epoch,
                 committee: &committee,
             });
             ctx.notify_protocol(ProtocolEvent::SpcNewCommitVerified {
@@ -420,13 +421,12 @@ where
             msg,
             committee,
         } => {
-            let spc_ctx = spc_context(epoch);
             let from = msg.signer;
             let view = msg.view;
             let result = (*msg).upgrade(&SpcVerifyContext {
                 verifier: ctx.verifier,
                 network,
-                spc_ctx: &spc_ctx,
+                epoch,
                 committee: &committee,
             });
             ctx.notify_protocol(ProtocolEvent::SpcEmptyViewVerified {

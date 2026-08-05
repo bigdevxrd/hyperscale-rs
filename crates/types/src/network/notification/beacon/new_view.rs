@@ -5,8 +5,8 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    ConsensusSignature, DOMAIN_SPC_NEW_VIEW, Epoch, MessageClass, NetworkDefinition,
-    NetworkMessage, Signed, SpcProposalObject, ValidatorId, Verifiable, spc_relay_signing_message,
+    ConsensusSignature, Epoch, MessageClass, NetworkDefinition, NetworkMessage, Signed,
+    SpcProposalObject, SpcRelayKind, SpcRelayMessage, ValidatorId, Verifiable, signed_bytes,
 };
 
 /// View-entry authorization sent by a beacon-committee member to the
@@ -37,8 +37,8 @@ pub struct SpcNewViewNotification {
     /// Validator relaying this proposal — the implicit signer of
     /// `sender_signature`.
     pub sender: ValidatorId,
-    /// signature over `spc_relay_signing_message(network,
-    /// DOMAIN_SPC_NEW_VIEW, epoch, proposal.view, proposal.hash())`.
+    /// Signature over the [`SpcRelayMessage`] for
+    /// `(epoch, proposal.view, proposal.hash())`.
     pub sender_signature: ConsensusSignature,
     /// The proposal object.
     pub proposal: Arc<Verifiable<SpcProposalObject>>,
@@ -47,8 +47,7 @@ pub struct SpcNewViewNotification {
 impl SpcNewViewNotification {
     /// Wrap an [`SpcProposalObject`] for notification with the
     /// relay-attestation sender + signature. The caller produces
-    /// `sender_signature` over [`spc_relay_signing_message`] with
-    /// [`DOMAIN_SPC_NEW_VIEW`].
+    /// `sender_signature` over the [`SpcRelayMessage`].
     #[must_use]
     pub fn new(
         epoch: Epoch,
@@ -89,13 +88,13 @@ impl Signed for SpcNewViewNotification {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        spc_relay_signing_message(
+        signed_bytes(&SpcRelayMessage::new(
             network,
-            DOMAIN_SPC_NEW_VIEW,
+            SpcRelayKind::NewView,
             self.epoch,
             self.proposal.as_unverified().view,
-            &self.proposal.as_unverified().hash(),
-        )
+            self.proposal.as_unverified().hash(),
+        ))
     }
 }
 

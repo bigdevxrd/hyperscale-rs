@@ -826,7 +826,7 @@ mod tests {
         Randomness, Round, ShardCommittee, ShardId, ShardVoteEquivocation, ShardWitnessPayload,
         Stake, StakePool, StakePoolId, ValidatorId, ValidatorStatus,
     };
-    use hyperscale_types::{ConsensusSignature, Signer};
+    use hyperscale_types::{ConsensusSignature, Signer, signed_bytes};
 
     use super::*;
     use crate::rules::contribution_chunk_valid;
@@ -2242,8 +2242,8 @@ mod tests {
     // ─── Equivocation witnesses ──────────────────────────────────────────
 
     use hyperscale_types::{
-        DOMAIN_PC_VOTE1, PcValueElement, PcVector, PcVoteEquivocation, PcVoteRound, SpcView,
-        pc_context, pc_vote_signing_message, spc_context,
+        PcRound, PcScope, PcValueElement, PcVector, PcVoteEquivocation, PcVoteMessage, PcVoteRound,
+        SpcView,
     };
 
     fn build_vote_equivocation(
@@ -2252,12 +2252,21 @@ mod tests {
         view: SpcView,
     ) -> PcVoteEquivocation {
         let sk = keypair(equivocator);
-        let spc_ctx = spc_context(epoch);
-        let pc_ctx = pc_context(&spc_ctx, view);
+        let instance = PcScope { epoch, view };
         let value_a = PcVector::new([PcValueElement::new([0xAA; 32])]);
         let value_b = PcVector::new([PcValueElement::new([0xBB; 32])]);
-        let msg_a = pc_vote_signing_message(&net(), DOMAIN_PC_VOTE1, &pc_ctx, &value_a);
-        let msg_b = pc_vote_signing_message(&net(), DOMAIN_PC_VOTE1, &pc_ctx, &value_b);
+        let msg_a = signed_bytes(&PcVoteMessage::new(
+            &net(),
+            PcRound::Vote1,
+            instance,
+            value_a.clone(),
+        ));
+        let msg_b = signed_bytes(&PcVoteMessage::new(
+            &net(),
+            PcRound::Vote1,
+            instance,
+            value_b.clone(),
+        ));
         PcVoteEquivocation {
             validator: ValidatorId::new(equivocator),
             epoch,

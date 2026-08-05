@@ -1,37 +1,30 @@
-//! Domain-separated signing for cryptographic operations.
+//! Signing messages for every signature the consensus protocol gathers.
 //!
-//! This module provides type-safe domain separation tags for all signed messages
-//! in the consensus protocol. Domain separation prevents cross-protocol attacks
-//! where a signature from one context could be replayed in another.
-//!
-//! # Domain Tags
-//!
-//! Each signable message type has a unique domain tag prefix:
-//!
-//! | Tag | Purpose |
-//! |-----|---------|
-//! | `BLOCK_VOTE` | shard consensus block votes |
-//! | `BLOCK_HEADER` | Block header proposal gossip |
-//! | `COMMITTED_BLOCK_HEADER` | Committed block header gossip |
-//! | `STATE_PROVISION_BATCH` | Cross-shard state provisions gossip |
-//! | `VALIDATOR_BIND` | Validator-bind `PeerId` authentication |
-//! | `VALIDATOR_ADDRESS` | Validator address announcement gossip |
-//! | `EXEC_VOTE` | Execution votes |
-//! | `EXEC_VOTE_BATCH` | Execution vote batch gossip |
-//! | `EXEC_CERT_BATCH` | Execution certificate batch gossip |
-//! | `HYPERSCALE_PC_VOTE{1,2,3}_v1` | Beacon PC inner-consensus votes |
-//! | `HYPERSCALE_PC_VOTE2_LENGTH_v1` | Length attestation rider on PC round-2 |
-//! | `HYPERSCALE_PC_EMPTY_VIEW_v1` | SPC empty-view skip statement |
-//! | `HYPERSCALE_PC_VRF_v1` | Beacon VRF reveal (per-epoch randomness contribution) |
-//! | `HYPERSCALE_RATIFY_VOTE_v1` | Epoch ratification vote + aggregated ratify cert sig |
-//! | `HYPERSCALE_READY_SIGNAL_v1` | Validator "ready on shard" signals |
-//! | `HYPERSCALE_VALIDATOR_POSSESSION_PROOF_v1` | Validator proof-of-possession at registration |
-//!
-//! # Usage
-//!
-//! Each signable type pairs with a free `signing_message()` function that
-//! constructs the bytes to sign by prepending its domain tag to the
-//! serialized content.
+//! Each signable artifact pairs with a message struct deriving
+//! `#[hbor(signing_domain = "...")]`: the bytes a signature covers are
+//! [`HborSigned::signing_bytes`](hyperscale_hbor::HborSigned) — the
+//! framed domain, then the canonical encoding of the fields. Domain
+//! separation prevents cross-protocol replay; injectivity of the
+//! canonical encoding makes every field binding, with no per-message
+//! framing argument.
+
+use hyperscale_hbor::HborSigned;
+
+/// The bytes a signature over `message` covers.
+///
+/// Every signing message is a small closed struct, so encoding cannot
+/// hit a length or depth cap; the panic is unreachable.
+///
+/// # Panics
+///
+/// Panics if encoding the message fails, which the message shapes rule
+/// out.
+#[must_use]
+pub fn signed_bytes<M: HborSigned>(message: &M) -> Vec<u8> {
+    message
+        .signing_bytes()
+        .expect("signing messages are small closed structs")
+}
 
 mod beacon_pc;
 mod beacon_ratify;
@@ -46,21 +39,20 @@ mod validator_bind;
 mod validator_possession_proof;
 
 pub use beacon_pc::{
-    DOMAIN_PC_EMPTY_VIEW, DOMAIN_PC_VOTE1, DOMAIN_PC_VOTE2, DOMAIN_PC_VOTE2_LENGTH,
-    DOMAIN_PC_VOTE3, DOMAIN_SPC_NEW_COMMIT, DOMAIN_SPC_NEW_VIEW, PcContext, SpcContext, pc_context,
-    pc_vote_signing_message, spc_context, spc_relay_signing_message,
+    PcRound, PcScope, PcVoteMessage, SpcEmptyViewMessage, SpcRelayKind, SpcRelayMessage,
 };
-pub use beacon_ratify::ratify_vote_message;
-pub use beacon_vrf::{vrf_output_from_proof, vrf_sign, vrf_verify};
-pub use execution::{exec_cert_batch_message, exec_vote_batch_message, exec_vote_message};
-pub use provisions::state_provisions_message;
-pub use ready_signal::ready_signal_message;
+pub use beacon_ratify::RatifyVoteMessage;
+pub use beacon_vrf::{VrfRevealMessage, vrf_output_from_proof, vrf_sign, vrf_verify};
+pub use execution::{ExecCertBatchMessage, ExecVoteBatchMessage, ExecVoteMessage};
+pub use provisions::StateProvisionsMessage;
+pub use ready_signal::ReadySignalMessage;
 pub use shard::{
-    block_header_message, block_vote_message, certified_block_header_message, timeout_message,
+    BlockHeaderMessage, BlockVoteMessage, CertifiedBlockHeaderMessage, TimeoutMessage,
 };
-pub use shard_reveal::{shard_reveal_sign, shard_reveal_verify};
-pub use validator_address::validator_address_message;
-pub use validator_bind::{VALIDATOR_BIND_NONCE_LEN, validator_bind_message};
+pub use shard_reveal::{ShardRevealMessage, shard_reveal_sign, shard_reveal_verify};
+pub use validator_address::ValidatorAddressMessage;
+pub use validator_bind::{VALIDATOR_BIND_NONCE_LEN, ValidatorBindMessage};
 pub use validator_possession_proof::{
-    validator_possession_proof_sign, validator_possession_proof_verify,
+    ValidatorPossessionProofMessage, validator_possession_proof_sign,
+    validator_possession_proof_verify,
 };

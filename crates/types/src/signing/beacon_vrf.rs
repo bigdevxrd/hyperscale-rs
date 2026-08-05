@@ -1,35 +1,41 @@
-//! Domain-separated signing for beacon-chain VRF reveals.
+//! Signing message for beacon-chain VRF reveals.
 //!
-//! Each committee member signs `(network, epoch)` under [`DOMAIN_PC_VRF`]
-//! to produce a epoch-bound VRF reveal. The 96-byte signature is the
+//! Each committee member signs `(network, epoch)` to produce an
+//! epoch-bound VRF reveal. The 96-byte signature is the
 //! [`VrfProof`](crate::VrfProof); its digest is the
 //! [`VrfOutput`](crate::VrfOutput) mixed into beacon randomness.
 //!
 //! The VRF property — uniquely determined by `(secret_key, message)` —
-//! follows from signatures being deterministic in min-pk mode. Domain
-//! separation here keeps a VRF reveal from being confused with a PC vote
+//! follows from signatures being deterministic in min-pk mode. The
+//! signing domain keeps a VRF reveal from being confused with a PC vote
 //! or a block header sig, both of which reuse the same consensus keys.
 
 pub use hyperscale_crypto::vrf_output_from_proof;
 use hyperscale_crypto::{SignError, Signer, Verifier};
+use hyperscale_hbor::Hbor;
 
+use crate::signing::signed_bytes;
 use crate::{ConsensusPublicKey, Epoch, NetworkDefinition, VrfProof};
 
-/// Domain tag for beacon VRF reveals.
-pub const DOMAIN_PC_VRF: &[u8] = b"HYPERSCALE_PC_VRF_v1";
+/// What a VRF reveal covers: the epoch, under the network.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "HYPERSCALE_PC_VRF_v1")]
+pub struct VrfRevealMessage {
+    /// Network the reveal binds to.
+    pub network_id: u8,
+    /// The epoch whose randomness the reveal contributes to.
+    pub epoch: Epoch,
+}
 
-/// Build the canonical signing bytes for a VRF reveal at `epoch` under
-/// `network`.
-///
-/// Layout: `domain || network.id || slot_le_bytes (8)`. Both fields are
-/// fixed-width so no length prefixes are needed.
-#[must_use]
-pub fn vrf_reveal_message(network: &NetworkDefinition, epoch: Epoch) -> Vec<u8> {
-    let mut out = Vec::with_capacity(DOMAIN_PC_VRF.len() + 1 + 8);
-    out.extend_from_slice(DOMAIN_PC_VRF);
-    out.push(network.id);
-    out.extend_from_slice(&epoch.to_le_bytes());
-    out
+impl VrfRevealMessage {
+    /// Assemble the message a VRF reveal signs.
+    #[must_use]
+    pub const fn new(network: &NetworkDefinition, epoch: Epoch) -> Self {
+        Self {
+            network_id: network.id,
+            epoch,
+        }
+    }
 }
 
 /// Sign `(network, epoch)` and return the VRF proof. The output is
@@ -48,7 +54,7 @@ pub fn vrf_sign(
     network: &NetworkDefinition,
     epoch: Epoch,
 ) -> Result<VrfProof, SignError> {
-    let msg = vrf_reveal_message(network, epoch);
+    let msg = signed_bytes(&VrfRevealMessage::new(network, epoch));
     signer.vrf_sign(&msg)
 }
 
@@ -56,8 +62,8 @@ pub fn vrf_sign(
 ///
 /// The VRF output is a pure function of the proof
 /// ([`vrf_output_from_proof`]), so there is nothing to grind and only one
-/// check: the proof, as a signature, verifies against `pk` over the bytes
-/// produced by [`vrf_reveal_message`] at `(network, epoch)`.
+/// check: the proof, as a signature, verifies against `pk` over the
+/// reveal message at `(network, epoch)`.
 #[must_use]
 pub fn vrf_verify(
     verifier: &dyn Verifier,
@@ -66,7 +72,7 @@ pub fn vrf_verify(
     epoch: Epoch,
     proof: &VrfProof,
 ) -> bool {
-    let msg = vrf_reveal_message(network, epoch);
+    let msg = signed_bytes(&VrfRevealMessage::new(network, epoch));
     verifier.verify_vrf(pk, &msg, proof)
 }
 
@@ -75,64 +81,10 @@ mod tests {
     use hyperscale_crypto_bls::{BlsVerifier, signer_from_u64_seed};
 
     use super::*;
-    use crate::signing::{DOMAIN_PC_EMPTY_VIEW, DOMAIN_PC_VOTE1};
 
     fn net() -> NetworkDefinition {
         NetworkDefinition::simulator()
     }
-
-    /// Pins the byte layout of `vrf_reveal_message`. Any change to the
-    /// encoder — field order, length-prefix width, domain tag — shifts
-    /// these bytes and fails this test. Cross-arch determinism rides on
-    /// this layout being identical regardless of `usize` width on the
-    /// host.
-    #[test]
-    fn vrf_reveal_message_byte_layout_is_pinned() {
-        let bytes = vrf_reveal_message(&net(), Epoch::new(5));
-
-        let mut expected = Vec::new();
-        expected.extend_from_slice(DOMAIN_PC_VRF);
-        expected.push(net().id);
-        expected.extend_from_slice(&5u64.to_le_bytes());
-
-        assert_eq!(bytes, expected);
-        assert_eq!(bytes.len(), DOMAIN_PC_VRF.len() + 1 + 8);
-    }
-
-    /// Distinct slots produce distinct signing bytes under the same
-    /// network — every epoch's reveal is bound to its own epoch number so
-    /// a reveal can't be replayed against a later epoch.
-    #[test]
-    fn vrf_reveal_message_differs_across_slots() {
-        let a = vrf_reveal_message(&net(), Epoch::new(1));
-        let b = vrf_reveal_message(&net(), Epoch::new(2));
-        assert_ne!(a, b);
-    }
-
-    /// Cross-network replay protection: byte-identical `(epoch,)` inputs
-    /// under different networks must produce different signing bytes.
-    #[test]
-    fn vrf_reveal_message_differs_across_networks() {
-        let mainnet = vrf_reveal_message(&NetworkDefinition::mainnet(), Epoch::new(7));
-        let stokenet = vrf_reveal_message(&NetworkDefinition::stokenet(), Epoch::new(7));
-        assert_ne!(mainnet, stokenet);
-    }
-
-    /// Cross-domain replay protection: a VRF reveal must not collide
-    /// with a PC vote or empty-view skip statement under any input.
-    /// Tested by constructing both with disjoint encoders and asserting
-    /// the result bytes diverge.
-    #[test]
-    fn vrf_reveal_message_differs_from_other_beacon_pc_domains() {
-        let vrf = vrf_reveal_message(&net(), Epoch::new(1));
-        // The PC-vote encoders take a context + vector, but as long as
-        // the prefix bytes differ at the domain tag, the full messages
-        // can never match regardless of suffix content.
-        assert_ne!(&vrf[..DOMAIN_PC_VRF.len()], DOMAIN_PC_VOTE1);
-        assert_ne!(&vrf[..DOMAIN_PC_VRF.len()], DOMAIN_PC_EMPTY_VIEW);
-    }
-
-    // ─── sign / verify round trip and adversarial cases ──────────────────
 
     #[test]
     fn vrf_sign_verify_round_trip() {
@@ -171,10 +123,10 @@ mod tests {
         ));
     }
 
-    /// A reveal for epoch N doesn't verify against epoch M ≠ N — the epoch
-    /// is bound into the signing message.
+    /// A reveal for epoch N doesn't verify against epoch M ≠ N — the
+    /// epoch is bound into the signing message.
     #[test]
-    fn vrf_verify_rejects_wrong_slot() {
+    fn vrf_verify_rejects_wrong_epoch() {
         let signer = signer_from_u64_seed(3);
         let proof = vrf_sign(&signer, &net(), Epoch::new(42)).expect("sign");
         assert!(!vrf_verify(
@@ -202,8 +154,8 @@ mod tests {
         ));
     }
 
-    /// Tampered proof (signature invalid) must reject. The output can't be
-    /// tampered independently — it's derived from the proof — so the
+    /// Tampered proof (signature invalid) must reject. The output can't
+    /// be tampered independently — it's derived from the proof — so the
     /// proof's signature check is the whole predicate.
     #[test]
     fn vrf_verify_rejects_tampered_proof() {

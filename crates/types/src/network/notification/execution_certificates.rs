@@ -3,8 +3,8 @@
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    ConsensusSignature, ExecutionCertificate, MessageClass, NetworkDefinition, NetworkMessage,
-    ShardId, Signed, ValidatorId, exec_cert_batch_message,
+    ConsensusSignature, ExecCertBatchMessage, ExecutionCertificate, MessageClass,
+    NetworkDefinition, NetworkMessage, ShardId, Signed, ValidatorId, signed_bytes,
 };
 
 /// Batched execution certificates proving quorum for execution waves.
@@ -80,7 +80,11 @@ impl Signed for ExecutionCertificatesNotification {
             .certificates
             .first()
             .map_or(ShardId::ROOT, ExecutionCertificate::shard_id);
-        exec_cert_batch_message(network, shard, &self.certificates)
+        signed_bytes(&ExecCertBatchMessage::new(
+            network,
+            shard,
+            &self.certificates,
+        ))
     }
 }
 

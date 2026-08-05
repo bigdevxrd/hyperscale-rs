@@ -36,8 +36,9 @@ use hyperscale_types::network::response::{GetBlockResponse, GetStateRangeRespons
 use hyperscale_types::{
     Block, BlockHash, BlockHeader, BlockHeight, CertifiedBlockHeader, ChainOrigin, CommitProof,
     MAX_COMMIT_PROOF_ANCESTRY, NetworkDefinition, QuorumCertificate, ReadySignal,
-    ResolvedCommittee, ShardAnchor, ShardId, SignError, Signer, StateRoot, StoredReceipt,
-    ValidatorId, WeightedTimestamp, ready_signal_message, ready_signal_window, shard_prefix_path,
+    ReadySignalMessage, ResolvedCommittee, ShardAnchor, ShardId, SignError, Signer, StateRoot,
+    StoredReceipt, ValidatorId, WeightedTimestamp, ready_signal_window, shard_prefix_path,
+    signed_bytes,
 };
 
 use crate::bootstrap::snap_sync::{SnapSync, StateRangeOutcome};
@@ -67,7 +68,9 @@ pub fn observer_ready_signal(
 ) -> Result<ReadySignal, SignError> {
     let start = anchor.weighted_timestamp;
     let end = start.plus(ready_signal_window(epoch_duration_ms));
-    let msg = ready_signal_message(network, validator, child, start, end);
+    let msg = signed_bytes(&ReadySignalMessage::new(
+        network, validator, child, start, end,
+    ));
     let sig = signer.sign(&msg)?;
     Ok(ReadySignal::new(validator, child, start, end, sig))
 }

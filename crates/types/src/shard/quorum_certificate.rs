@@ -9,9 +9,9 @@ use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
-    AggregateSignature, BlockHash, BlockHeight, BlockVote, ChainOrigin, ConsensusPublicKey,
-    ConsensusSignature, NetworkDefinition, Round, ShardId, SignerBitfield, Verified, Verify,
-    VoteCount, WeightedTimestamp, block_vote_message,
+    AggregateSignature, BlockHash, BlockHeight, BlockVote, BlockVoteMessage, ChainOrigin,
+    ConsensusPublicKey, ConsensusSignature, NetworkDefinition, Round, ShardId, SignerBitfield,
+    Verified, Verify, VoteCount, WeightedTimestamp, signed_bytes,
 };
 
 /// A quorum certificate proving 2f+1 validators voted for a block.
@@ -162,18 +162,18 @@ impl QuorumCertificate {
 
     /// Build the canonical signing message for this QC.
     ///
-    /// Uses `DOMAIN_BLOCK_VOTE` tag for domain separation.
+    /// The [`BlockVoteMessage`] domain separates it from every other signature.
     /// This is the same message used for individual block vote verification.
     #[must_use]
     pub fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        block_vote_message(
+        signed_bytes(&BlockVoteMessage::new(
             network,
             self.shard_id,
             self.height,
             self.round,
-            &self.block_hash,
-            &self.parent_block_hash,
-        )
+            self.block_hash,
+            self.parent_block_hash,
+        ))
     }
 
     /// Check if this is a genesis QC.
@@ -368,7 +368,7 @@ impl Verified<QuorumCertificate> {
 
         // SAFETY: every vote in `verified_votes` carries a type-level
         // claim that its signature validates against the voter's
-        // pubkey for `block_vote_message`. The signature aggregation just
+        // pubkey for `BlockVoteMessage::new`. The signature aggregation just
         // succeeded against those same signatures, so the resulting
         // aggregated signature verifies against the matching
         // aggregated public key. Quorum is the caller's precondition.
@@ -494,7 +494,7 @@ mod tests {
     // ─── Verify impl tests ──────────────────────────────────────────────
 
     /// Build a QC with `signer_indices` of the `n`-validator committee
-    /// signing it. Each signer signs the canonical `block_vote_message`,
+    /// signing it. Each signer signs the canonical `BlockVoteMessage::new`,
     /// and the resulting signatures are aggregated into the QC. Returns
     /// the QC and the committee's public keys (in committee order).
     fn signed_qc(
@@ -507,7 +507,14 @@ mod tests {
     ) -> QuorumCertificate {
         let net = NetworkDefinition::simulator();
         // Sign over the same parent the QC carries, so the aggregate verifies.
-        let message = block_vote_message(&net, shard, height, round, &block_hash, &BlockHash::ZERO);
+        let message = signed_bytes(&BlockVoteMessage::new(
+            &net,
+            shard,
+            height,
+            round,
+            block_hash,
+            BlockHash::ZERO,
+        ));
 
         let sigs: Vec<ConsensusSignature> = signer_indices
             .iter()
@@ -581,14 +588,14 @@ mod tests {
         // Tamper: replace the aggregated signature with one signed over a
         // different message, so the signature check fails on aggregation.
         let net = NetworkDefinition::simulator();
-        let wrong_msg = block_vote_message(
+        let wrong_msg = signed_bytes(&BlockVoteMessage::new(
             &net,
             ShardId::ROOT,
             BlockHeight::new(1),
             Round::INITIAL,
-            &BlockHash::from_raw(Hash::from_bytes(b"other_block")),
-            &BlockHash::ZERO,
-        );
+            BlockHash::from_raw(Hash::from_bytes(b"other_block")),
+            BlockHash::ZERO,
+        ));
         let bad_sigs: Vec<_> = [0, 1, 2]
             .iter()
             .map(|&i| keys[i].sign(&wrong_msg).expect("sign"))

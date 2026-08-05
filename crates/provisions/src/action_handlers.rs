@@ -17,8 +17,8 @@ use hyperscale_network::Network;
 use hyperscale_storage::{ShardStorage, SubstateStore, SubstateView, VersionedStore};
 use hyperscale_types::network::notification::ProvisionsNotification;
 use hyperscale_types::{
-    BlockHeight, Provisions, ProvisionsContext, RevealChain, ShardId, Stopwatch, ValidatorId,
-    Verifiable, Verified, Verify, WeightedTimestamp, state_provisions_message,
+    BlockHeight, Provisions, ProvisionsContext, RevealChain, ShardId, StateProvisionsMessage,
+    Stopwatch, ValidatorId, Verifiable, Verified, Verify, WeightedTimestamp, signed_bytes,
 };
 use tracing::warn;
 
@@ -152,7 +152,10 @@ where
                     provisions,
                 )));
 
-                let msg = state_provisions_message(ctx.topology_snapshot.network(), &verified);
+                let msg = signed_bytes(&StateProvisionsMessage::new(
+                    ctx.topology_snapshot.network(),
+                    &verified,
+                ));
                 let Ok(sig) = ctx.signer.sign(&msg) else {
                     tracing::error!("cannot sign provisions broadcast; skipping");
                     return;

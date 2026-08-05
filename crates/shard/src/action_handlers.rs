@@ -15,20 +15,20 @@ use hyperscale_types::network::notification::{
     BlockHeaderNotification, BlockVoteNotification, ReadySignalNotification, TimeoutNotification,
 };
 use hyperscale_types::{
-    BeaconWitnessLeafCount, BeaconWitnessRootContext, Block, BlockHash, BlockHeader, BlockHeight,
-    BlockVote, CertificateRoot, CertificateRootContext, CertifiedBlockHeader,
+    BeaconWitnessLeafCount, BeaconWitnessRootContext, Block, BlockHash, BlockHeader,
+    BlockHeaderMessage, BlockHeight, BlockVote, BlockVoteMessage, CertificateRoot,
+    CertificateRootContext, CertifiedBlockHeader, CertifiedBlockHeaderMessage,
     CertifiedHeaderVerifyError, ConsensusPublicKey, ConsensusReceipt, Epoch, FinalizedWave, Hash,
     InFlightCount, LocalReceiptRoot, LocalReceiptRootContext, NetworkDefinition, PreparedCommit,
     ProposerTimestamp, ProvisionHash, ProvisionTxRootsContext, ProvisionTxRootsMap, Provisions,
     ProvisionsRoot, ProvisionsRootContext, QcContext, QuorumCertificate, ReadySignal,
-    ReshapeTrigger, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad, SplitChildRoots,
-    StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout, TimeoutContext,
-    TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext, ValidatorId,
-    Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
-    absorb_committed_cells, block_header_message, block_vote_message,
-    certified_block_header_message, commit_witness_window, compute_waves, derive_leaves,
+    ReadySignalMessage, ReshapeTrigger, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad,
+    SplitChildRoots, StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout,
+    TimeoutContext, TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext,
+    ValidatorId, Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp,
+    WitnessSources, absorb_committed_cells, commit_witness_window, compute_waves, derive_leaves,
     local_settled_wave_ids, missed_proposals_since_prev_commit, next_reveal_chain,
-    ready_signal_message, shard_reveal_sign, vrf_output_from_proof, work_over_certificates,
+    shard_reveal_sign, signed_bytes, vrf_output_from_proof, work_over_certificates,
 };
 
 /// Result of QC verification and assembly.
@@ -73,14 +73,14 @@ pub fn verify_and_build_qc(
     already_verified: Vec<(usize, Verified<BlockVote>)>,
     total_votes: VoteCount,
 ) -> QcVerificationResult {
-    let signing_message = block_vote_message(
+    let signing_message = signed_bytes(&BlockVoteMessage::new(
         network,
         shard_id,
         height,
         round,
-        &block_hash,
-        &parent_block_hash,
-    );
+        block_hash,
+        parent_block_hash,
+    ));
 
     let all_verified = verify_vote_batch(
         verifier,
@@ -990,13 +990,13 @@ where
         // ── Sign + broadcast actions ──────────────────────────────────────
         Action::BroadcastBlockHeader { header, manifest } => {
             let block_hash = header.hash();
-            let msg = block_header_message(
+            let msg = signed_bytes(&BlockHeaderMessage::new(
                 ctx.topology_snapshot.network(),
                 header.shard_id(),
                 header.height(),
                 header.round(),
-                &block_hash,
-            );
+                block_hash,
+            ));
             let Ok(sig) = ctx.signer.sign(&msg) else {
                 tracing::error!(?block_hash, "cannot sign block header; skipping broadcast");
                 return;
@@ -1079,13 +1079,13 @@ where
             wt_window_end,
             recipients,
         } => {
-            let msg = ready_signal_message(
+            let msg = signed_bytes(&ReadySignalMessage::new(
                 ctx.topology_snapshot.network(),
                 ctx.me,
                 shard,
                 wt_window_start,
                 wt_window_end,
-            );
+            ));
             let Ok(sig) = ctx.signer.sign(&msg) else {
                 tracing::error!(?shard, "cannot sign ready signal; skipping");
                 return;
@@ -1122,12 +1122,12 @@ where
         }
 
         Action::BroadcastCertifiedBlockHeader { certified_header } => {
-            let msg = certified_block_header_message(
+            let msg = signed_bytes(&CertifiedBlockHeaderMessage::new(
                 ctx.topology_snapshot.network(),
                 certified_header.header().shard_id(),
                 certified_header.header().height(),
-                &certified_header.header().hash(),
-            );
+                certified_header.header().hash(),
+            ));
             let Ok(sig) = ctx.signer.sign(&msg) else {
                 tracing::error!("cannot sign certified header gossip; skipping");
                 return;
@@ -1157,6 +1157,7 @@ where
 
 #[cfg(test)]
 mod tests {
+
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
     use hyperscale_types::test_utils::{install_stub_vm_statics, stub_transaction, test_prefix};
     use hyperscale_types::{
@@ -1231,14 +1232,14 @@ mod tests {
         let block_hash = BlockHash::from_raw(Hash::from_bytes(b"b1"));
         let height = BlockHeight::new(1);
         let round = Round::INITIAL;
-        let msg = block_vote_message(
+        let msg = signed_bytes(&BlockVoteMessage::new(
             &net(),
             shard(),
             height,
             round,
-            &block_hash,
-            &BlockHash::ZERO,
-        );
+            block_hash,
+            BlockHash::ZERO,
+        ));
 
         let to_verify: Vec<_> = (0..3)
             .map(|i| {
@@ -1257,14 +1258,14 @@ mod tests {
         let block_hash = BlockHash::from_raw(Hash::from_bytes(b"b1"));
         let height = BlockHeight::new(1);
         let round = Round::INITIAL;
-        let msg = block_vote_message(
+        let msg = signed_bytes(&BlockVoteMessage::new(
             &net(),
             shard(),
             height,
             round,
-            &block_hash,
-            &BlockHash::ZERO,
-        );
+            block_hash,
+            BlockHash::ZERO,
+        ));
 
         // Vote 1's signature is replaced by a signature over a different block.
         let other_hash = BlockHash::from_raw(Hash::from_bytes(b"other"));

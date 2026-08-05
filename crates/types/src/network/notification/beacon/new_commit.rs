@@ -5,8 +5,8 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    ConsensusSignature, DOMAIN_SPC_NEW_COMMIT, Epoch, MessageClass, NetworkDefinition,
-    NetworkMessage, Signed, SpcNewCommitMsg, ValidatorId, Verifiable, spc_relay_signing_message,
+    ConsensusSignature, Epoch, MessageClass, NetworkDefinition, NetworkMessage, Signed,
+    SpcNewCommitMsg, SpcRelayKind, SpcRelayMessage, ValidatorId, Verifiable, signed_bytes,
 };
 
 /// Committed-low announcement broadcast within the slot's committee
@@ -28,8 +28,8 @@ pub struct SpcNewCommitNotification {
     /// Validator relaying this commit — the implicit signer of
     /// `sender_signature`.
     pub sender: ValidatorId,
-    /// signature over `spc_relay_signing_message(network,
-    /// DOMAIN_SPC_NEW_COMMIT, epoch, msg.view, msg.hash())`.
+    /// Signature over the [`SpcRelayMessage`] for
+    /// `(epoch, msg.view, msg.hash())`.
     pub sender_signature: ConsensusSignature,
     /// The committed new-commit message.
     pub msg: Arc<Verifiable<SpcNewCommitMsg>>,
@@ -38,8 +38,7 @@ pub struct SpcNewCommitNotification {
 impl SpcNewCommitNotification {
     /// Wrap an [`SpcNewCommitMsg`] for notification with the
     /// relay-attestation sender + signature. The caller produces
-    /// `sender_signature` over [`spc_relay_signing_message`] with
-    /// [`DOMAIN_SPC_NEW_COMMIT`].
+    /// `sender_signature` over the [`SpcRelayMessage`].
     #[must_use]
     pub fn new(
         epoch: Epoch,
@@ -80,13 +79,13 @@ impl Signed for SpcNewCommitNotification {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        spc_relay_signing_message(
+        signed_bytes(&SpcRelayMessage::new(
             network,
-            DOMAIN_SPC_NEW_COMMIT,
+            SpcRelayKind::NewCommit,
             self.epoch,
             self.msg.as_unverified().view,
-            &self.msg.as_unverified().hash(),
-        )
+            self.msg.as_unverified().hash(),
+        ))
     }
 }
 

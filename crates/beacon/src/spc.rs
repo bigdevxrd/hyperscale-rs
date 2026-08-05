@@ -1,7 +1,7 @@
 //! Strong Prefix Consensus FSM.
 //!
 //! SPC drives one epoch through a sequence of views. Each view runs an
-//! inner PC instance under `pc_context(spc_context(epoch), view)`; the
+//! inner PC instance under its `(epoch, view)` scope; the
 //! inner PC is leaderless (every committee member broadcasts their
 //! `v_in`), but view *entry* is leader-driven — the cyclic-shifted
 //! first party in the view's ranking proposes an [`SpcProposalObject`]
@@ -1179,7 +1179,7 @@ mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
     use hyperscale_types::{
         AggregateSignature, ConsensusSignature, Epoch, NetworkDefinition, PcQc2, PcQc3,
-        PcSignerLengths, PcVote1, PcXpProof, Signer, SignerBitfield, spc_context,
+        PcSignerLengths, PcVote1, PcXpProof, Signer, SignerBitfield,
     };
 
     use super::*;
@@ -1802,7 +1802,7 @@ mod tests {
     fn heartbeat_replays_own_empty_view() {
         let (sks, members) = fsm_committee(4);
         let mut fsm = fsm_instance(0);
-        let spc_ctx = spc_context(Epoch::new(1));
+        let spc_ctx = Epoch::new(1);
 
         // Enter view 2 so the empty-view targets the current view.
         let entry = SpcCert::Direct {
@@ -1827,7 +1827,7 @@ mod tests {
             sks[0].as_ref(),
             members[0].0,
             &net(),
-            &spc_ctx,
+            spc_ctx,
             SpcView::new(2),
             Verified::<SpcHighTriple>::new_unchecked_for_test(reported.clone()),
         )
@@ -1920,7 +1920,7 @@ mod tests {
     fn empty_view_with_non_progressing_reported_view_rejected() {
         let mut fsm = fsm_instance(0);
         let (sks, members) = fsm_committee(4);
-        let spc_ctx = spc_context(Epoch::new(1));
+        let spc_ctx = Epoch::new(1);
         let reported = SpcHighTriple {
             view: SpcView::new(5),
             value: PcVector::empty(),
@@ -1931,7 +1931,7 @@ mod tests {
             sks[1].as_ref(),
             members[1].0,
             &net(),
-            &spc_ctx,
+            spc_ctx,
             SpcView::new(3),
             Verified::<SpcHighTriple>::new_unchecked_for_test(reported),
         )

@@ -3,8 +3,8 @@
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    ConsensusSignature, ExecutionVote, MessageClass, NetworkDefinition, NetworkMessage, ShardId,
-    Signed, ValidatorId, Verifiable, exec_vote_batch_message,
+    ConsensusSignature, ExecVoteBatchMessage, ExecutionVote, MessageClass, NetworkDefinition,
+    NetworkMessage, ShardId, Signed, ValidatorId, Verifiable, signed_bytes,
 };
 
 /// Batched execution votes within a shard.
@@ -78,11 +78,11 @@ impl Signed for ExecutionVotesNotification {
     /// verification, so this branch is defensive only.
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
         let shard = self.votes.first().map_or(ShardId::ROOT, |v| v.shard_id());
-        exec_vote_batch_message(
+        signed_bytes(&ExecVoteBatchMessage::new(
             network,
             shard,
             self.votes.iter().map(Verifiable::as_unverified),
-        )
+        ))
     }
 }
 

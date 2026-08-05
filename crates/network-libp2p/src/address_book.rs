@@ -177,7 +177,7 @@ impl AddressBook {
 #[cfg(test)]
 mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
-    use hyperscale_types::{Signer, validator_address_message};
+    use hyperscale_types::{Signer, ValidatorAddressMessage, signed_bytes};
 
     use super::*;
 
@@ -198,12 +198,12 @@ mod tests {
                 .to_vec(),
         ];
         let signature = keypair()
-            .sign(&validator_address_message(
+            .sign(&signed_bytes(&ValidatorAddressMessage::new(
                 &net(),
                 &peer_bytes,
                 &addresses,
                 sequence,
-            ))
+            )))
             .expect("sign");
         ValidatorAddressGossip {
             validator: vid,
@@ -338,12 +338,12 @@ mod tests {
                 .to_vec(),
         ];
         let signature = keypair()
-            .sign(&validator_address_message(
+            .sign(&signed_bytes(&ValidatorAddressMessage::new(
                 &net(),
                 &bogus_peer_bytes,
                 &addresses,
                 3,
-            ))
+            )))
             .expect("sign");
         let unparseable = ValidatorAddressGossip {
             validator: vid,

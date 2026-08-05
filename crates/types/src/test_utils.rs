@@ -10,15 +10,15 @@ use hyperscale_vm_types::Address;
 use crate::crypto::Ed25519PrivateKey;
 use crate::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
-    BlockHeight, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin, CommitProof,
-    ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived, EnvelopeExt,
-    ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot,
-    Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, ProposerTimestamp, ProvisionsRoot,
-    QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId, ShardLoad,
-    SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, Transaction, TransactionBody,
-    TransactionDecision, TransactionEnvelope, TransactionRoot, TxHash, TxOutcome, ValidatorId,
-    ValidatorInfo, ValidatorSet, Verifiable, Verified, VmStatics, VmStaticsError, WaveCertificate,
-    WaveId, WeightedTimestamp, WitnessSources, block_vote_message, install_vm_statics,
+    BlockHeight, BlockVoteMessage, CertificateRoot, CertifiedBlock, CertifiedBlockHeader,
+    ChainOrigin, CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived,
+    EnvelopeExt, ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
+    GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, ProposerTimestamp,
+    ProvisionsRoot, QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId,
+    ShardLoad, SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, Transaction,
+    TransactionBody, TransactionDecision, TransactionEnvelope, TransactionRoot, TxHash, TxOutcome,
+    ValidatorId, ValidatorInfo, ValidatorSet, Verifiable, Verified, VmStatics, VmStaticsError,
+    WaveCertificate, WaveId, WeightedTimestamp, WitnessSources, install_vm_statics, signed_bytes,
     vm_statics_installed,
 };
 
@@ -499,14 +499,14 @@ pub(crate) fn certify_header(
 ) -> CertifiedBlockHeader {
     let net = NetworkDefinition::simulator();
     let block_hash = header.hash();
-    let msg = block_vote_message(
+    let msg = signed_bytes(&BlockVoteMessage::new(
         &net,
         header.shard_id(),
         header.height(),
         header.round(),
-        &block_hash,
-        &header.parent_block_hash(),
-    );
+        block_hash,
+        header.parent_block_hash(),
+    ));
     let sigs: Vec<ConsensusSignature> = signers
         .iter()
         .map(|&i| committee.signer(i).sign(&msg).expect("sign"))
@@ -696,14 +696,14 @@ fn live_certify(
 ) -> CertifiedBlockHeader {
     let net = NetworkDefinition::simulator();
     let block_hash = header.hash();
-    let msg = block_vote_message(
+    let msg = signed_bytes(&BlockVoteMessage::new(
         &net,
         header.shard_id(),
         header.height(),
         header.round(),
-        &block_hash,
-        &header.parent_block_hash(),
-    );
+        block_hash,
+        header.parent_block_hash(),
+    ));
     let sigs: Vec<ConsensusSignature> = committee_keys
         .iter()
         .map(|k| k.sign(&msg).expect("sign"))

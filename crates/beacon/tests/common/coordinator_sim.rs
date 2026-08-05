@@ -26,15 +26,15 @@ use hyperscale_types::{
     BlockHeight, BlockVote, CandidateBeaconBlock, CandidateVerifyContext, CertificateRoot,
     CertifiedBeaconBlock, CertifiedBeaconBlockVerifyContext, CertifiedBlockHeader,
     ConsensusPublicKey, Epoch, GenesisPool, GenesisValidator, Hash, InFlightCount, LeafIndex,
-    LocalReceiptRoot, LocalTimestamp, MIN_STAKE_FLOOR, NetworkDefinition, PcValueElement, PcVector,
-    PcVote1, PcVote2, PcVote3, PcVoteEquivocation, PcVoteVerifyContext, ProposerTimestamp,
-    ProvisionsRoot, QuorumCertificate, Randomness, RatifyPhase, RatifyRound, RatifyVerifyContext,
-    RatifyVote, RevealChain, Round, SKIP_TIMEOUT, ShardId, ShardLoad, ShardVoteEquivocation,
-    ShardWitnessPayload, Signer, SignerBitfield, SpcEmptyViewMsg, SpcNewCommitMsg,
-    SpcProposalObject, SpcVerifyContext, SpcView, Stake, StakePoolId, StateRoot, TransactionRoot,
-    ValidatorId, Verifiable, Verified, WeightedTimestamp, compute_merkle_root, compute_range_proof,
-    genesis_config_hash, pc_context, sign_empty_view_msg, sign_vote1, sign_vote2, sign_vote3,
-    spc_context, vrf_sign,
+    LocalReceiptRoot, LocalTimestamp, MIN_STAKE_FLOOR, NetworkDefinition, PcScope, PcValueElement,
+    PcVector, PcVote1, PcVote2, PcVote3, PcVoteEquivocation, PcVoteVerifyContext,
+    ProposerTimestamp, ProvisionsRoot, QuorumCertificate, Randomness, RatifyPhase, RatifyRound,
+    RatifyVerifyContext, RatifyVote, RevealChain, Round, SKIP_TIMEOUT, ShardId, ShardLoad,
+    ShardVoteEquivocation, ShardWitnessPayload, Signer, SignerBitfield, SpcEmptyViewMsg,
+    SpcNewCommitMsg, SpcProposalObject, SpcVerifyContext, SpcView, Stake, StakePoolId, StateRoot,
+    TransactionRoot, ValidatorId, Verifiable, Verified, WeightedTimestamp, compute_merkle_root,
+    compute_range_proof, genesis_config_hash, sign_empty_view_msg, sign_vote1, sign_vote2,
+    sign_vote3, vrf_sign,
 };
 
 use super::fixtures::Committee;
@@ -976,12 +976,12 @@ impl CoordinatorSim {
                 v_in,
                 recipients,
             } => {
-                let pc_ctx = pc_context(&spc_context(epoch), view);
+                let pc_ctx = PcScope { epoch, view };
                 let vote = sign_vote1(
                     self.sks[emitter_idx].as_ref(),
                     me,
                     &self.network,
-                    &pc_ctx,
+                    pc_ctx,
                     v_in.clone(),
                 )
                 .expect("sign");
@@ -1002,7 +1002,7 @@ impl CoordinatorSim {
                         self.sks[emitter_idx].as_ref(),
                         me,
                         &self.network,
-                        &pc_ctx,
+                        pc_ctx,
                         conflicting_v_in,
                     )
                     .expect("sign");
@@ -1015,12 +1015,12 @@ impl CoordinatorSim {
                 qc1,
                 recipients,
             } => {
-                let pc_ctx = pc_context(&spc_context(epoch), view);
+                let pc_ctx = PcScope { epoch, view };
                 let vote = sign_vote2(
                     self.sks[emitter_idx].as_ref(),
                     me,
                     &self.network,
-                    &pc_ctx,
+                    pc_ctx,
                     *qc1,
                 )
                 .expect("sign");
@@ -1032,12 +1032,12 @@ impl CoordinatorSim {
                 qc2,
                 recipients,
             } => {
-                let pc_ctx = pc_context(&spc_context(epoch), view);
+                let pc_ctx = PcScope { epoch, view };
                 let vote = sign_vote3(
                     self.sks[emitter_idx].as_ref(),
                     me,
                     &self.network,
-                    &pc_ctx,
+                    pc_ctx,
                     *qc2,
                 )
                 .expect("sign");
@@ -1049,12 +1049,12 @@ impl CoordinatorSim {
                 reported,
                 recipients,
             } => {
-                let spc_ctx = spc_context(epoch);
+                let spc_ctx = epoch;
                 let verified = Verified::<SpcEmptyViewMsg>::sign_local(
                     self.sks[emitter_idx].as_ref(),
                     me,
                     &self.network,
-                    &spc_ctx,
+                    spc_ctx,
                     view,
                     *reported,
                 )
@@ -1255,12 +1255,12 @@ impl CoordinatorSim {
                 vote,
                 committee,
             } => {
-                let pc_ctx = pc_context(&spc_context(epoch), view);
+                let pc_ctx = PcScope { epoch, view };
                 let signer = vote.validator();
                 let result = vote.upgrade(&PcVoteVerifyContext {
                     verifier: &BlsVerifier,
                     network: &self.network,
-                    pc_ctx: &pc_ctx,
+                    instance: pc_ctx,
                     committee: &committee,
                 });
                 let post = self.coordinators[emitter_idx].on_pc_vote1_verified(
@@ -1277,12 +1277,12 @@ impl CoordinatorSim {
                 vote,
                 committee,
             } => {
-                let pc_ctx = pc_context(&spc_context(epoch), view);
+                let pc_ctx = PcScope { epoch, view };
                 let signer = vote.validator();
                 let result = (*vote).upgrade(&PcVoteVerifyContext {
                     verifier: &BlsVerifier,
                     network: &self.network,
-                    pc_ctx: &pc_ctx,
+                    instance: pc_ctx,
                     committee: &committee,
                 });
                 let post = self.coordinators[emitter_idx].on_pc_vote2_verified(
@@ -1299,12 +1299,12 @@ impl CoordinatorSim {
                 vote,
                 committee,
             } => {
-                let pc_ctx = pc_context(&spc_context(epoch), view);
+                let pc_ctx = PcScope { epoch, view };
                 let signer = vote.validator();
                 let result = (*vote).upgrade(&PcVoteVerifyContext {
                     verifier: &BlsVerifier,
                     network: &self.network,
-                    pc_ctx: &pc_ctx,
+                    instance: pc_ctx,
                     committee: &committee,
                 });
                 let post = self.coordinators[emitter_idx].on_pc_vote3_verified(
@@ -1321,12 +1321,12 @@ impl CoordinatorSim {
                 proposal,
                 committee,
             } => {
-                let spc_ctx = spc_context(epoch);
+                let spc_ctx = epoch;
                 let view = proposal.view;
                 let result = (*proposal).upgrade(&SpcVerifyContext {
                     verifier: &BlsVerifier,
                     network: &self.network,
-                    spc_ctx: &spc_ctx,
+                    epoch: spc_ctx,
                     committee: &committee,
                 });
                 let post = self.coordinators[emitter_idx].on_spc_new_view_verified(
@@ -1343,12 +1343,12 @@ impl CoordinatorSim {
                 msg,
                 committee,
             } => {
-                let spc_ctx = spc_context(epoch);
+                let spc_ctx = epoch;
                 let view = msg.view;
                 let result = (*msg).upgrade(&SpcVerifyContext {
                     verifier: &BlsVerifier,
                     network: &self.network,
-                    spc_ctx: &spc_ctx,
+                    epoch: spc_ctx,
                     committee: &committee,
                 });
                 let post = self.coordinators[emitter_idx].on_spc_new_commit_verified(
@@ -1364,13 +1364,13 @@ impl CoordinatorSim {
                 msg,
                 committee,
             } => {
-                let spc_ctx = spc_context(epoch);
+                let spc_ctx = epoch;
                 let from = msg.signer;
                 let view = msg.view;
                 let result = (*msg).upgrade(&SpcVerifyContext {
                     verifier: &BlsVerifier,
                     network: &self.network,
-                    spc_ctx: &spc_ctx,
+                    epoch: spc_ctx,
                     committee: &committee,
                 });
                 let post = self.coordinators[emitter_idx].on_spc_empty_view_verified(

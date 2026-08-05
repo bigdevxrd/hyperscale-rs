@@ -1,191 +1,174 @@
-//! Domain-separated signing for beacon PC inner-consensus votes.
+//! Signing messages for beacon PC inner-consensus votes.
+//!
+//! Every PC-level signature covers a typed message naming the epoch, the
+//! SPC view, the round the vote belongs to, and the vector voted on. The
+//! round rides inside the signed content: under a canonical encoding two
+//! distinct rounds produce distinct preimages, so a round-1 signature can
+//! never verify as a round-3 signature — the same guarantee per-round
+//! domain tags gave, with one domain for the family.
 
-use std::ops::Deref;
+use hyperscale_hbor::Hbor;
 
-use crate::{Epoch, Hash, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcVector, SpcView};
+use crate::{Epoch, Hash, NetworkDefinition, PcVector, SpcView};
 
-/// Per-epoch SPC signing context. Holds the byte-encoding that binds
-/// SPC-level signatures (block certs, empty-views, recovery
-/// equivocations) to a specific epoch.
+/// One PC instance's identity: the epoch and SPC view it runs under.
 ///
-/// Wrapping the bytes as a newtype prevents the SPC and PC contexts
-/// from being silently cross-fed at call sites: an `&SpcContext`
-/// passed where the verifier expects `&PcContext` fails at compile
-/// time rather than producing a vote that verifies against the wrong
-/// domain.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SpcContext(Vec<u8>);
+/// Passing the pair as one typed value keeps sign and verify sites from
+/// silently cross-feeding an epoch where a view belongs — the same
+/// mistake-proofing the signing messages get from their typed fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PcScope {
+    /// The epoch whose SPC instance the PC run belongs to.
+    pub epoch: Epoch,
+    /// The SPC view whose PC instance the run belongs to.
+    pub view: SpcView,
+}
 
-impl SpcContext {
-    /// Borrow the canonical signing bytes.
+/// Which PC round a vote signature belongs to.
+///
+/// `Vote2Length` is the length attestation rider on a round-2 vote: each
+/// round-2 vote carries an extra sig over a single-element vector
+/// containing its `x.len()`, binding the signer to a specific `x` length
+/// and closing a splice vulnerability in the short-witness construction.
+/// A Byzantine prover that lacks the signer's length sig can't splice a
+/// long round-2 vote's prefix sigs to fake a "shorter x" claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
+pub enum PcRound {
+    /// Round-1 votes.
+    Vote1,
+    /// Round-2 votes (per-prefix sigs).
+    Vote2,
+    /// The length attestation rider on a round-2 vote.
+    Vote2Length,
+    /// Round-3 votes.
+    Vote3,
+}
+
+/// What a PC round vote's signature covers.
+///
+/// The `(epoch, view)` pair binds the vote to one PC instance: the same
+/// vector signed in one view will not verify against another.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "HYPERSCALE_PC_VOTE_v1")]
+pub struct PcVoteMessage {
+    /// Network the vote binds to.
+    pub network_id: u8,
+    /// The round the vote belongs to — inside the signed content, so
+    /// rounds cannot replay against each other.
+    pub round: PcRound,
+    /// The epoch whose SPC instance the vote belongs to.
+    pub epoch: Epoch,
+    /// The SPC view whose PC instance the vote belongs to.
+    pub view: SpcView,
+    /// The vector voted on.
+    pub vector: PcVector,
+}
+
+impl PcVoteMessage {
+    /// Assemble the message a PC round vote signs.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
+    pub const fn new(
+        network: &NetworkDefinition,
+        round: PcRound,
+        instance: PcScope,
+        vector: PcVector,
+    ) -> Self {
+        Self {
+            network_id: network.id,
+            round,
+            epoch: instance.epoch,
+            view: instance.view,
+            vector,
+        }
     }
 }
 
-impl Deref for SpcContext {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-/// Per-(epoch, view) PC signing context. Holds the byte-encoding that
-/// binds PC-level signatures (per-round votes, QC verification) to a
-/// specific SPC view within an epoch.
+/// What an SPC empty-view skip statement's signature covers.
 ///
-/// See [`SpcContext`] for the type-level rationale.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PcContext(Vec<u8>);
+/// The vector carries the `(empty_view, reported_max_view)` pair for the
+/// view-change protocol; the binding is per-epoch — an empty-view
+/// statement is about views, so it cannot be scoped to one.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "HYPERSCALE_PC_EMPTY_VIEW_v1")]
+pub struct SpcEmptyViewMessage {
+    /// Network the statement binds to.
+    pub network_id: u8,
+    /// The epoch whose SPC instance the statement belongs to.
+    pub epoch: Epoch,
+    /// The `(empty_view, reported_max_view)` pair, as a vector.
+    pub vector: PcVector,
+}
 
-impl PcContext {
-    /// Borrow the canonical signing bytes.
+impl SpcEmptyViewMessage {
+    /// Assemble the message an empty-view skip statement signs.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
+    pub const fn new(network: &NetworkDefinition, epoch: Epoch, vector: PcVector) -> Self {
+        Self {
+            network_id: network.id,
+            epoch,
+            vector,
+        }
     }
 }
 
-impl Deref for PcContext {
-    type Target = [u8];
+/// Which SPC relay notification a sender attestation covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
+pub enum SpcRelayKind {
+    /// A relayed [`SpcProposalObject`](crate::SpcProposalObject).
+    NewView,
+    /// A relayed [`SpcNewCommitMsg`](crate::SpcNewCommitMsg).
+    NewCommit,
+}
 
-    fn deref(&self) -> &[u8] {
-        &self.0
+/// What a sender-attestation signature on an SPC relay notification
+/// covers.
+///
+/// The attestation attributes "this validator relayed this payload for
+/// `(epoch, view)`" — the inner cert is self-authenticating, so this is
+/// purely accountability plus pipeline-slot dedup, not content
+/// authentication. A swapped payload or a replay across `(epoch, view)`
+/// invalidates the sig.
+#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "HYPERSCALE_SPC_RELAY_v1")]
+pub struct SpcRelayMessage {
+    /// Network the relay binds to.
+    pub network_id: u8,
+    /// Which notification kind is being relayed.
+    pub kind: SpcRelayKind,
+    /// The epoch the relay belongs to.
+    pub epoch: Epoch,
+    /// The view the relay belongs to.
+    pub view: SpcView,
+    /// The relayed payload's content hash.
+    pub content_hash: Hash,
+}
+
+impl SpcRelayMessage {
+    /// Assemble the message a relay attestation signs.
+    #[must_use]
+    pub const fn new(
+        network: &NetworkDefinition,
+        kind: SpcRelayKind,
+        epoch: Epoch,
+        view: SpcView,
+        content_hash: Hash,
+    ) -> Self {
+        Self {
+            network_id: network.id,
+            kind,
+            epoch,
+            view,
+            content_hash,
+        }
     }
-}
-
-/// Domain tag for beacon PC round-1 votes.
-pub const DOMAIN_PC_VOTE1: &[u8] = b"HYPERSCALE_PC_VOTE1_v1";
-
-/// Domain tag for beacon PC round-2 votes (per-prefix sigs).
-pub const DOMAIN_PC_VOTE2: &[u8] = b"HYPERSCALE_PC_VOTE2_v1";
-
-/// Domain tag for the length attestation rider on a PC round-2 vote.
-///
-/// Each round-2 vote carries an extra sig over a single-element vector
-/// containing its `x.len()` under this tag, binding the signer to a
-/// specific `x` length and closing a splice vulnerability in the
-/// short-witness construction. A Byzantine prover that lacks the
-/// signer's length sig can't splice a long round-2 vote's prefix sigs
-/// to fake a "shorter x" claim.
-pub const DOMAIN_PC_VOTE2_LENGTH: &[u8] = b"HYPERSCALE_PC_VOTE2_LENGTH_v1";
-
-/// Domain tag for beacon PC round-3 votes.
-pub const DOMAIN_PC_VOTE3: &[u8] = b"HYPERSCALE_PC_VOTE3_v1";
-
-/// Domain tag for the SPC empty-view skip statement, which signs the
-/// pair `(empty_view, reported_max_view)` for the view-change protocol.
-pub const DOMAIN_PC_EMPTY_VIEW: &[u8] = b"HYPERSCALE_PC_EMPTY_VIEW_v1";
-
-/// Domain tag for the sender-attestation signature on
-/// [`SpcNewViewNotification`](crate::network::notification::beacon::SpcNewViewNotification).
-///
-/// The relay sig attributes "this validator relayed this
-/// `SpcProposalObject` for `(epoch, view)`" — the inner cert is
-/// self-authenticating, so this is purely accountability +
-/// pipeline-slot dedup, not content authentication.
-pub const DOMAIN_SPC_NEW_VIEW: &[u8] = b"HYPERSCALE_SPC_NEW_VIEW_v1";
-
-/// Domain tag for the sender-attestation signature on
-/// [`SpcNewCommitNotification`](crate::network::notification::beacon::SpcNewCommitNotification).
-///
-/// Same shape as [`DOMAIN_SPC_NEW_VIEW`] — relay accountability over
-/// the inner `SpcNewCommitMsg` payload.
-pub const DOMAIN_SPC_NEW_COMMIT: &[u8] = b"HYPERSCALE_SPC_NEW_COMMIT_v1";
-
-/// Derive an SPC instance's domain context from its epoch.
-///
-/// Used as the per-epoch binding when constructing PC signing messages
-/// — the same vector signed under one epoch's context will not verify
-/// against another epoch's context.
-#[must_use]
-pub fn spc_context(epoch: Epoch) -> SpcContext {
-    SpcContext(epoch.to_le_bytes().to_vec())
-}
-
-/// Derive a PC instance's domain context from its containing SPC
-/// context and the view number.
-///
-/// Used as the per-view binding when constructing PC signing messages
-/// inside a specific SPC view, so a vote in view `w` will not verify
-/// as a vote in view `w' ≠ w`.
-#[must_use]
-pub fn pc_context(spc_ctx: &SpcContext, view: SpcView) -> PcContext {
-    let spc_bytes = spc_ctx.as_bytes();
-    let mut out = Vec::with_capacity(spc_bytes.len() + 4);
-    out.extend_from_slice(spc_bytes);
-    out.extend_from_slice(&view.to_le_bytes());
-    PcContext(out)
-}
-
-/// Build the canonical signing bytes for a PC round vote.
-///
-/// `domain` is one of [`DOMAIN_PC_VOTE1`] / [`DOMAIN_PC_VOTE2`] /
-/// [`DOMAIN_PC_VOTE2_LENGTH`] / [`DOMAIN_PC_VOTE3`] /
-/// [`DOMAIN_PC_EMPTY_VIEW`]. `context` is normally the output of
-/// [`pc_context`] (per-view binding); standalone tests may pass any
-/// fixed-width bytes as long as signers and verifiers agree.
-///
-/// Layout: `domain || network.id || ctx_len (u32 LE) || ctx ||
-/// vector_len (u32 LE) || vector_bytes`. Both `context` and `vector`
-/// are length-prefixed so callers that route arbitrary bytes through
-/// the signature can't confuse one `(ctx, v)` for another `(ctx', v')`
-/// via boundary ambiguity.
-#[must_use]
-pub fn pc_vote_signing_message(
-    network: &NetworkDefinition,
-    domain: &[u8],
-    context: &[u8],
-    vector: &PcVector,
-) -> Vec<u8> {
-    let ctx_len = u32::try_from(context.len()).unwrap_or(u32::MAX);
-    let v_len = u32::try_from(vector.len()).unwrap_or(u32::MAX);
-    let mut out = Vec::with_capacity(
-        domain.len() + 1 + 4 + context.len() + 4 + vector.len() * PC_VALUE_ELEMENT_BYTES,
-    );
-    out.extend_from_slice(domain);
-    out.push(network.id);
-    out.extend_from_slice(&ctx_len.to_le_bytes());
-    out.extend_from_slice(context);
-    out.extend_from_slice(&v_len.to_le_bytes());
-    for el in vector.iter() {
-        out.extend_from_slice(el.as_bytes());
-    }
-    out
-}
-
-/// Sender-attestation signing message for SPC relay notifications.
-///
-/// Layout: `domain || network.id || epoch (u64 LE) || view (u64 LE) ||
-/// content_hash (32 bytes)`. The `content_hash` is
-/// [`SpcProposalObject::hash`](crate::SpcProposalObject::hash) for
-/// `DOMAIN_SPC_NEW_VIEW` and [`SpcNewCommitMsg::hash`](crate::SpcNewCommitMsg::hash)
-/// for `DOMAIN_SPC_NEW_COMMIT`. Binds the relay attestation to one
-/// specific payload at one specific `(epoch, view)` — a swapped
-/// payload or a replay across `(epoch, view)` invalidates the sig.
-#[must_use]
-pub fn spc_relay_signing_message(
-    network: &NetworkDefinition,
-    domain: &[u8],
-    epoch: Epoch,
-    view: SpcView,
-    content_hash: &Hash,
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(domain.len() + 1 + 8 + 8 + 32);
-    out.extend_from_slice(domain);
-    out.push(network.id);
-    out.extend_from_slice(&epoch.inner().to_le_bytes());
-    out.extend_from_slice(&view.inner().to_le_bytes());
-    out.extend_from_slice(content_hash.as_bytes());
-    out
 }
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_hbor::HborSigned;
+
     use super::*;
-    use crate::PcValueElement;
+    use crate::{PC_VALUE_ELEMENT_BYTES, PcValueElement};
 
     fn net() -> NetworkDefinition {
         NetworkDefinition::simulator()
@@ -195,47 +178,31 @@ mod tests {
         PcValueElement::new([n; PC_VALUE_ELEMENT_BYTES])
     }
 
-    /// Pins the byte layout of `pc_vote_signing_message`. Any change
-    /// to the encoder — field order, length-prefix width, domain tag
-    /// — shifts these bytes and fails this test. Cross-arch
-    /// determinism rides on this layout being identical regardless of
-    /// `usize` width on the host.
+    /// Distinct rounds must produce distinct signing bytes for the same
+    /// `(epoch, view, vector)`. Cross-round replay protection inside a
+    /// single SPC view depends on this.
     #[test]
-    fn pc_vote_signing_message_byte_layout_is_pinned() {
-        let network = net();
-        let ctx = spc_context(Epoch::new(5));
-        let v = PcVector::new(vec![ve(1), ve(2)]);
-        let bytes = pc_vote_signing_message(&network, DOMAIN_PC_VOTE1, &ctx, &v);
-
-        let mut expected = Vec::new();
-        expected.extend_from_slice(DOMAIN_PC_VOTE1);
-        expected.push(network.id);
-        expected.extend_from_slice(&8u32.to_le_bytes()); // ctx_len
-        expected.extend_from_slice(&5u64.to_le_bytes()); // epoch
-        expected.extend_from_slice(&2u32.to_le_bytes()); // vector_len
-        expected.extend_from_slice(ve(1).as_bytes());
-        expected.extend_from_slice(ve(2).as_bytes());
-
-        assert_eq!(bytes, expected);
-        assert_eq!(
-            bytes.len(),
-            DOMAIN_PC_VOTE1.len() + 1 + 4 + 8 + 4 + 2 * PC_VALUE_ELEMENT_BYTES
-        );
-    }
-
-    /// Distinct domain tags must produce distinct signing bytes for
-    /// the same `(ctx, vector)`. Cross-round replay protection inside
-    /// a single SPC view depends on this.
-    #[test]
-    fn pc_vote_signing_message_domain_separates_rounds() {
-        let ctx = spc_context(Epoch::new(1));
+    fn pc_vote_message_separates_rounds() {
         let v = PcVector::new(vec![ve(7)]);
-        let m1 = pc_vote_signing_message(&net(), DOMAIN_PC_VOTE1, &ctx, &v);
-        let m2 = pc_vote_signing_message(&net(), DOMAIN_PC_VOTE2, &ctx, &v);
-        let m3 = pc_vote_signing_message(&net(), DOMAIN_PC_VOTE3, &ctx, &v);
-        let mev = pc_vote_signing_message(&net(), DOMAIN_PC_EMPTY_VIEW, &ctx, &v);
-        let m2l = pc_vote_signing_message(&net(), DOMAIN_PC_VOTE2_LENGTH, &ctx, &v);
-        let all = [&m1, &m2, &m3, &mev, &m2l];
+        let mk = |round| {
+            PcVoteMessage::new(
+                &net(),
+                round,
+                PcScope {
+                    epoch: Epoch::new(1),
+                    view: SpcView::new(1),
+                },
+                v.clone(),
+            )
+            .signing_bytes()
+            .unwrap()
+        };
+        let all = [
+            mk(PcRound::Vote1),
+            mk(PcRound::Vote2),
+            mk(PcRound::Vote2Length),
+            mk(PcRound::Vote3),
+        ];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b);
@@ -243,40 +210,81 @@ mod tests {
         }
     }
 
-    /// Cross-network replay protection: byte-identical `(domain, ctx,
-    /// vector)` inputs under different networks must produce different
-    /// signing bytes.
+    /// Two distinct views under the same epoch produce distinct signing
+    /// bytes — cross-view replay protection.
     #[test]
-    fn pc_vote_signing_message_differs_across_networks() {
-        let ctx = spc_context(Epoch::new(1));
+    fn pc_vote_message_separates_views() {
         let v = PcVector::new(vec![ve(7)]);
-        let mainnet =
-            pc_vote_signing_message(&NetworkDefinition::mainnet(), DOMAIN_PC_VOTE1, &ctx, &v);
-        let stokenet =
-            pc_vote_signing_message(&NetworkDefinition::stokenet(), DOMAIN_PC_VOTE1, &ctx, &v);
-        assert_ne!(mainnet, stokenet);
+        let mk = |view| {
+            PcVoteMessage::new(
+                &net(),
+                PcRound::Vote1,
+                PcScope {
+                    epoch: Epoch::new(3),
+                    view,
+                },
+                v.clone(),
+            )
+            .signing_bytes()
+            .unwrap()
+        };
+        assert_ne!(mk(SpcView::new(1)), mk(SpcView::new(2)));
     }
 
-    /// `pc_context` extends an SPC context by 4 bytes of view, so two
-    /// distinct views under the same SPC produce distinct PC
-    /// contexts. Locks the cross-view replay protection.
+    /// Cross-network replay protection.
     #[test]
-    fn pc_context_separates_views() {
-        let spc = spc_context(Epoch::new(3));
-        let pc_a = pc_context(&spc, SpcView::new(1));
-        let pc_b = pc_context(&spc, SpcView::new(2));
-        assert_eq!(pc_a.len(), spc.len() + 4);
-        assert_eq!(pc_b.len(), spc.len() + 4);
-        assert_ne!(pc_a, pc_b);
-    }
-
-    /// `spc_context` is exactly the epoch LE bytes — bytes-pinned so
-    /// the cross-epoch replay-protection layout never drifts.
-    #[test]
-    fn spc_context_byte_layout_is_pinned() {
-        assert_eq!(
-            spc_context(Epoch::new(0x42)).as_bytes(),
-            &0x42u64.to_le_bytes(),
+    fn pc_vote_message_differs_across_networks() {
+        let v = PcVector::new(vec![ve(7)]);
+        let mk = |n: &NetworkDefinition| {
+            PcVoteMessage::new(
+                n,
+                PcRound::Vote1,
+                PcScope {
+                    epoch: Epoch::new(1),
+                    view: SpcView::new(1),
+                },
+                v.clone(),
+            )
+            .signing_bytes()
+            .unwrap()
+        };
+        assert_ne!(
+            mk(&NetworkDefinition::mainnet()),
+            mk(&NetworkDefinition::stokenet())
         );
+    }
+
+    /// A PC vote and an empty-view statement over the same vector sign
+    /// different bytes — distinct domains.
+    #[test]
+    fn pc_vote_differs_from_empty_view() {
+        let v = PcVector::new(vec![ve(7)]);
+        let vote = PcVoteMessage::new(
+            &net(),
+            PcRound::Vote1,
+            PcScope {
+                epoch: Epoch::new(1),
+                view: SpcView::new(0),
+            },
+            v.clone(),
+        )
+        .signing_bytes()
+        .unwrap();
+        let skip = SpcEmptyViewMessage::new(&net(), Epoch::new(1), v)
+            .signing_bytes()
+            .unwrap();
+        assert_ne!(vote, skip);
+    }
+
+    /// The two relay kinds sign different bytes for the same payload.
+    #[test]
+    fn relay_kinds_separate() {
+        let hash = Hash::from_bytes(b"payload");
+        let mk = |kind| {
+            SpcRelayMessage::new(&net(), kind, Epoch::new(1), SpcView::new(2), hash)
+                .signing_bytes()
+                .unwrap()
+        };
+        assert_ne!(mk(SpcRelayKind::NewView), mk(SpcRelayKind::NewCommit));
     }
 }

@@ -28,7 +28,7 @@ use thiserror::Error;
 use crate::{
     BeaconBlock, BeaconBlockHash, BeaconCert, CandidateBeaconBlock, ConsensusPublicKey, Epoch,
     GenesisConfigHash, NetworkDefinition, PcValueElement, RatifyCert, SpcCert, ValidatorId,
-    Verified, Verify, spc_context, verify_block_cert, verify_ratify_cert, verify_vote_equivocation,
+    Verified, Verify, verify_block_cert, verify_ratify_cert, verify_vote_equivocation,
 };
 
 /// A beacon block paired with the cert that authenticates it.
@@ -221,14 +221,7 @@ pub fn verify_certified(
 ) -> bool {
     match block.cert() {
         BeaconCert::Normal { spc, ratify } => {
-            verify_block_cert(
-                verifier,
-                spc,
-                network,
-                &spc_context(block.epoch()),
-                committee,
-            )
-            .is_ok()
+            verify_block_cert(verifier, spc, network, block.epoch(), committee).is_ok()
                 && verify_ratify_cert(verifier, ratify, network, active_pool).is_ok()
         }
         BeaconCert::Skip(ratify) => {

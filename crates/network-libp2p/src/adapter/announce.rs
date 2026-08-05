@@ -12,7 +12,7 @@ use hyperscale_hbor::to_vec as hbor_to_vec;
 use hyperscale_network::Topic;
 use hyperscale_network::compression::compress;
 use hyperscale_types::network::gossip::{MAX_ANNOUNCED_ADDRESSES, ValidatorAddressGossip};
-use hyperscale_types::{NetworkDefinition, NetworkMessage, validator_address_message};
+use hyperscale_types::{NetworkDefinition, NetworkMessage, ValidatorAddressMessage, signed_bytes};
 use libp2p::gossipsub::{IdentTopic, PublishError};
 use libp2p::{Multiaddr, Swarm};
 use tracing::{debug, error, trace, warn};
@@ -58,12 +58,12 @@ pub(super) fn announce_validator_addresses(
     let topic =
         IdentTopic::new(Topic::global(ValidatorAddressGossip::message_type_id()).to_string());
     for (validator, key) in vnodes {
-        let signature = match key.sign(&validator_address_message(
+        let signature = match key.sign(&signed_bytes(&ValidatorAddressMessage::new(
             network,
             &peer_bytes,
             &address_bytes,
             sequence,
-        )) {
+        ))) {
             Ok(sig) => sig,
             Err(err) => {
                 error!(

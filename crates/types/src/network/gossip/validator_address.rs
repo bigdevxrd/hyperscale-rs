@@ -5,7 +5,7 @@ use hyperscale_hbor::Hbor;
 use crate::network::{GossipMessage, TopicScope};
 use crate::{
     ConsensusSignature, MessageClass, NetworkDefinition, NetworkMessage, ShardId, Signed,
-    ValidatorId, validator_address_message,
+    ValidatorAddressMessage, ValidatorId, signed_bytes,
 };
 
 /// Maximum addresses one announcement may carry. A validator announces its
@@ -60,7 +60,12 @@ impl Signed for ValidatorAddressGossip {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        validator_address_message(network, &self.peer_id, &self.addresses, self.sequence)
+        signed_bytes(&ValidatorAddressMessage::new(
+            network,
+            &self.peer_id,
+            &self.addresses,
+            self.sequence,
+        ))
     }
 }
 
@@ -110,7 +115,12 @@ mod tests {
         let key = BlsSigner::from_seed(&[7u8; 32]);
         let peer_id = b"peer-id".to_vec();
         let addresses = vec![b"addr".to_vec()];
-        let message = validator_address_message(&net(), &peer_id, &addresses, sequence);
+        let message = signed_bytes(&ValidatorAddressMessage::new(
+            &net(),
+            &peer_id,
+            &addresses,
+            sequence,
+        ));
         let gossip = ValidatorAddressGossip {
             validator: ValidatorId::new(3),
             peer_id,

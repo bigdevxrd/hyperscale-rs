@@ -11,9 +11,9 @@ use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
-    BlockHash, BlockHeight, ConsensusPublicKey, ConsensusSignature, GlobalReceiptRoot,
-    MAX_TXS_PER_BLOCK, NetworkDefinition, ShardId, TxOutcome, ValidatorId, Verified, Verify,
-    WaveId, WeightedTimestamp, compute_global_receipt_root, exec_vote_message,
+    BlockHash, BlockHeight, ConsensusPublicKey, ConsensusSignature, ExecVoteMessage,
+    GlobalReceiptRoot, MAX_TXS_PER_BLOCK, NetworkDefinition, ShardId, TxOutcome, ValidatorId,
+    Verified, Verify, WaveId, WeightedTimestamp, compute_global_receipt_root, signed_bytes,
 };
 
 /// A validator's vote on all transactions in an execution wave.
@@ -162,7 +162,7 @@ impl ExecutionVote {
             self.block_hash,
             self.block_height,
             self.vote_anchor_ts,
-            self.wave_id,
+            self.wave_id.clone(),
             self.shard_id,
             self.global_receipt_root,
             self.tx_count,
@@ -174,18 +174,18 @@ impl ExecutionVote {
 
     /// Build the canonical signing message for this vote.
     ///
-    /// Uses `DOMAIN_EXEC_VOTE` tag for domain separation. Same message
+    /// The [`ExecVoteMessage`] domain separates it from every other signature. Same message
     /// used for `ExecutionCertificate` aggregated signature verification.
     #[must_use]
     pub fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        exec_vote_message(
+        signed_bytes(&ExecVoteMessage::new(
             network,
             self.vote_anchor_ts,
-            &self.wave_id,
+            self.wave_id.clone(),
             self.shard_id,
-            &self.global_receipt_root,
+            self.global_receipt_root,
             self.tx_count,
-        )
+        ))
     }
 }
 
@@ -226,7 +226,7 @@ pub enum ExecutionVoteVerifyError {
 ///    self.global_receipt_root()` — binds the unsigned outcomes
 ///    payload to the signed root.
 /// 2. The signature validates against the voter's public key for
-///    the canonical [`exec_vote_message`].
+///    the canonical [`ExecVoteMessage::new`].
 ///
 /// Construction goes through one of three gates:
 ///
@@ -267,7 +267,7 @@ impl Verified<ExecutionVote> {
     /// by the caller and the `global_receipt_root` is derived from
     /// them via [`compute_global_receipt_root`], so the binding check
     /// is trivially satisfied. The signature over the canonical
-    /// [`exec_vote_message`] is produced by `signer` inside this
+    /// [`ExecVoteMessage::new`] is produced by `signer` inside this
     /// call, so any later
     /// [`<ExecutionVote as Verify>::verify`](Verify::verify) call
     /// against the matching public key would succeed.
@@ -289,19 +289,19 @@ impl Verified<ExecutionVote> {
     ) -> Result<Self, SignError> {
         let global_receipt_root = compute_global_receipt_root(&tx_outcomes);
         let tx_count = u32::try_from(tx_outcomes.len()).unwrap_or(u32::MAX);
-        let message = exec_vote_message(
+        let message = signed_bytes(&ExecVoteMessage::new(
             network,
             vote_anchor_ts,
-            &wave_id,
+            wave_id.clone(),
             shard_id,
-            &global_receipt_root,
+            global_receipt_root,
             tx_count,
-        );
+        ));
         let signature = signer.sign(&message)?;
         // SAFETY: outcomes-root binding holds by construction
         // (root is derived from `tx_outcomes` above); the signature
         // is produced by `signer` over the canonical
-        // `exec_vote_message`, which is exactly the verify
+        // `ExecVoteMessage::new`, which is exactly the verify
         // predicate's check against this voter's matching pubkey.
         Ok(Self::new_unchecked(ExecutionVote::new(
             block_hash,
@@ -449,14 +449,14 @@ mod tests {
         let shard_id = ShardId::leaf(1, 0);
         let global_receipt_root = compute_global_receipt_root(&outcomes);
         let tx_count = u32::try_from(outcomes.len()).unwrap();
-        let message = exec_vote_message(
+        let message = signed_bytes(&ExecVoteMessage::new(
             network,
             vote_anchor_ts,
-            &wave_id,
+            wave_id.clone(),
             shard_id,
-            &global_receipt_root,
+            global_receipt_root,
             tx_count,
-        );
+        ));
         let signature = signer.sign(&message).expect("sign");
         ExecutionVote::new(
             block_hash,

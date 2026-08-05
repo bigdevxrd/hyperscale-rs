@@ -121,7 +121,7 @@ impl SpcDriver {
     /// Declines (leaves the instance cleared) when `committee.len() <
     /// MIN_BEACON_COMMITTEE_SIZE`: a committee that can't tolerate a single
     /// Byzantine fault must not run PC. Rather than panic in
-    /// [`PcInstance::new`](crate::pc), the driver skips the bootstrap and
+    /// [`PcScope::new`](crate::pc), the driver skips the bootstrap and
     /// lets the skip path carry the epoch — the ready on-shard set has
     /// collapsed below the BFT floor, an operator-visible degradation the
     /// chain recovers from once enough validators ready up.
@@ -757,8 +757,7 @@ impl SpcDriver {
 mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
     use hyperscale_types::{
-        NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcValueElement, Signer, pc_context, sign_vote1,
-        spc_context,
+        NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcScope, PcValueElement, Signer, sign_vote1,
     };
 
     use super::*;
@@ -797,13 +796,16 @@ mod tests {
     /// signer id and the passed-in view matter to the admission gate —
     /// the signature isn't checked until the async dispatch resolves.
     fn vote1(i: u64, view: u32) -> PcVote1 {
-        let ctx = pc_context(&spc_context(Epoch::new(EPOCH)), SpcView::new(view));
+        let ctx = PcScope {
+            epoch: Epoch::new(EPOCH),
+            view: SpcView::new(view),
+        };
         let v_in = PcVector::new((0..3).map(|b| PcValueElement::new([b; PC_VALUE_ELEMENT_BYTES])));
         sign_vote1(
             &bls_sk(i),
             ValidatorId::new(i),
             &NetworkDefinition::simulator(),
-            &ctx,
+            ctx,
             v_in,
         )
         .expect("sign")
