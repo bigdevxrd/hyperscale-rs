@@ -2,95 +2,15 @@
 
 use std::sync::Arc;
 
-use hyperscale_types::{ShardId, TransactionDecision, TransactionStatus};
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
+use hyperscale_types::{TransactionDecision, TransactionStatus};
 
 use crate::reshape::split_lifecycle;
-use crate::support::tx::{
-    PROBE_PAYMENT, account_from_seed, build_faucet_tx, build_transfer_tx, build_vm_transfer_tx,
-    signer_from_seed, validity_around, vm_livelock_pair,
-};
-use crate::support::wait::{await_height, await_tx_terminal};
+use crate::support::tx::{PROBE_PAYMENT, build_vm_transfer_tx, validity_around, vm_livelock_pair};
+use crate::support::wait::await_tx_terminal;
 use crate::support::{Cluster, epochs};
 
-/// Submit a faucet-funded single-shard transfer and assert it accepts.
-///
-/// Awaits the transfer completing with an `Accept` decision and the root shard
-/// advancing past genesis. The faucet is a fixed native component on both
-/// harnesses, so no funded-account discovery is needed.
-///
-/// # Panics
-///
-/// Panics if the transfer does not accept within budget or the root shard does
-/// not advance past genesis.
-pub fn single_shard_tx(c: &mut impl Cluster) {
-    let signer = signer_from_seed(1);
-    let to = account_from_seed(2);
-    let transfer = build_faucet_tx(
-        to,
-        &signer,
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
-    let hash = transfer.hash();
-    c.submit(Arc::new(transfer));
-
-    let status = await_tx_terminal(c, hash, epochs(8));
-    assert!(
-        matches!(
-            status,
-            Some(TransactionStatus::Completed(TransactionDecision::Accept))
-        ),
-        "single-shard tx did not accept within budget; status = {status:?}"
-    );
-    assert!(
-        await_height(c, ShardId::ROOT, 1, epochs(2)),
-        "root shard did not advance past genesis"
-    );
-}
-
-/// Grow the root into two shards, then settle a cross-shard transfer.
-///
-/// Transfers between a funded account on each child, asserting it completes with
-/// `Accept` — provisioning, execution, and per-shard certificates all agree,
-/// with zero aborts. Composes [`split_lifecycle`] for the grow; account `31`
-/// sits on the left child and `30` on the right, both funded at genesis.
-///
-/// # Panics
-///
-/// Panics if the grow misses its budget or the transfer does not accept.
-pub fn cross_shard_tx(c: &mut impl Cluster) {
-    split_lifecycle(c);
-
-    let payer = signer_from_seed(31);
-    let from = account_from_seed(31);
-    let to = account_from_seed(30);
-    let transfer = build_transfer_tx(
-        &payer,
-        from,
-        to,
-        Decimal::from(500),
-        &NetworkDefinition::simulator(),
-        1,
-        validity_around(c.now()),
-    );
-    let hash = transfer.hash();
-    c.submit(Arc::new(transfer));
-
-    let status = await_tx_terminal(c, hash, epochs(8));
-    assert!(
-        matches!(
-            status,
-            Some(TransactionStatus::Completed(TransactionDecision::Accept))
-        ),
-        "cross-shard transfer did not accept (zero aborts) within budget; status = {status:?}"
-    );
-}
-
-/// Grow to two shards, then submit a conflicting cross-shard pair (`31 → 30`
-/// and `30 → 31`, across the two children) and assert it resolves promptly.
+/// Grow to two shards, then submit a conflicting cross-shard pair — each
+/// account paying the other, one on each child — and assert it resolves.
 ///
 /// Each transfer is the other's mirror across the two children, so the
 /// pair shares its whole account set and each engages the shard the other

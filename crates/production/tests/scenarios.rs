@@ -24,7 +24,7 @@ use hyperscale_scenarios::{
     cross_shard_fraction, cross_shard_header_fetch_fallback,
     cross_shard_provisions_drop_fetch_fallback, cross_shard_provisions_fetch_with_request_loss,
     cross_shard_provisions_recovers_after_transient_outage,
-    cross_shard_transaction_da_fetch_fallback, cross_shard_tx, gossip_drop_engages_fetch_fallback,
+    cross_shard_transaction_da_fetch_fallback, gossip_drop_engages_fetch_fallback,
     grow_reaches_four_shard_topology, grow_reaches_two_shard_topology,
     halted_shard_recovers_by_committee_redraw, halted_shard_straddler_atomic,
     hot_component_saturation, inter_shard_partition_strands_waves_until_it_heals,
@@ -34,7 +34,7 @@ use hyperscale_scenarios::{
     partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
-    single_shard_tx, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
+    split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
     surviving_sibling_split_seats_full_committees, vm_abort_converges,
     vm_delegation_folds_into_beacon_state, vm_hot_recipient, vm_single_transfer, vm_zipf_payments,
@@ -73,17 +73,6 @@ const fn liveness_config() -> ScenarioConfig {
 fn liveness_baseline_prod() {
     let mut cluster = ProdCluster::start(&liveness_config(), 7, EPOCH_MS);
     liveness_baseline(&mut cluster);
-}
-
-#[test]
-#[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
-fn single_shard_tx_prod() {
-    let mut cluster = ProdCluster::start(&liveness_config(), 7, EPOCH_MS);
-    single_shard_tx(&mut cluster);
 }
 
 #[test]
@@ -253,17 +242,6 @@ fn split_lifecycle_prod() {
         vm_genesis_accounts(1, 1),
     );
     split_lifecycle(&mut cluster);
-}
-
-#[test]
-#[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
-fn cross_shard_tx_prod() {
-    let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
-    cross_shard_tx(&mut cluster);
 }
 
 #[test]

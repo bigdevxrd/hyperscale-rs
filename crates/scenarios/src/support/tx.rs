@@ -17,8 +17,7 @@ use hyperscale_types::{
     ReshapeThresholds, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
     TimestampRange, ValidatorId, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
     build_transfer_tx as build_transfer, ed25519_keypair_from_seed, encode_system_action,
-    routable_from_notarized_v1, sign_and_notarize, sign_and_notarize_with_options,
-    uniform_shard_for_node,
+    routable_from_notarized_v1, sign_and_notarize_with_options, uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -629,32 +628,6 @@ pub fn intershard_partition_genesis_balances() -> Vec<(ComponentAddress, Decimal
         (account_from_seed(40), Decimal::from(10_000)),
         (account_from_seed(41), Decimal::from(10_000)),
     ]
-}
-
-/// Build a faucet-funded transfer.
-///
-/// The faucet pays the fee and supplies free XRD, deposited to `to`. Portable —
-/// the faucet is a fixed native component on every network — so no
-/// funded-account discovery is needed.
-///
-/// # Panics
-///
-/// Panics if signing or the routability conversion fails (malformed manifest).
-#[must_use]
-pub fn build_faucet_tx(
-    to: ComponentAddress,
-    signer: &Ed25519PrivateKey,
-    network: &NetworkDefinition,
-    nonce: u32,
-    validity: TimestampRange,
-) -> RoutableTransaction {
-    let manifest = ManifestBuilder::new()
-        .lock_fee_from_faucet()
-        .get_free_xrd_from_faucet()
-        .try_deposit_entire_worktop_or_abort(to, None)
-        .build();
-    let notarized = sign_and_notarize(manifest, network, nonce, signer).expect("faucet tx signs");
-    routable_from_notarized_v1(notarized, validity).expect("faucet tx is routable")
 }
 
 /// A validity window bracketing `now`.

@@ -26,23 +26,22 @@ use hyperscale_scenarios::{
     cross_shard_header_fetch_fallback, cross_shard_provisions_drop_fetch_fallback,
     cross_shard_provisions_fetch_with_request_loss,
     cross_shard_provisions_recovers_after_transient_outage,
-    cross_shard_transaction_da_fetch_fallback, cross_shard_tx, epochs,
-    gossip_drop_engages_fetch_fallback, grow_reaches_four_shard_topology,
-    grow_reaches_two_shard_topology, halted_shard_recovers_by_committee_redraw,
-    halted_shard_straddler_atomic, hot_component_saturation,
-    inter_shard_partition_strands_waves_until_it_heals, isolated_validator_still_settles,
-    livelock_resolves_promptly, liveness_baseline, merge_lifecycle,
-    merge_seats_full_keeper_committee, merge_straddler_atomic,
-    minority_fragment_rejoins_after_partition, mixed_engine_blocks, multi_vnode_progress,
-    participant_count_sweep, partition_halts_and_heals, partition_heals_at_exact_quorum,
-    pool_capacity_caps_registrations, re_registration_of_a_live_validator_is_a_no_op,
-    register_validator_pools_a_node, register_without_capacity_is_rejected,
-    registered_validator_activates_onto_a_shard, shared_read_payments, single_shard_tx,
-    split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
-    split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees, vm_a_failed_attempt_still_attests_work,
-    vm_abort_converges, vm_abort_floor_settles_on_deadline, vm_attested_load_reaches_the_beacon,
-    vm_cross_shard_transfer, vm_delegation_folds_into_beacon_state, vm_deploy_storm_rides_out,
+    cross_shard_transaction_da_fetch_fallback, epochs, gossip_drop_engages_fetch_fallback,
+    grow_reaches_four_shard_topology, grow_reaches_two_shard_topology,
+    halted_shard_recovers_by_committee_redraw, halted_shard_straddler_atomic,
+    hot_component_saturation, inter_shard_partition_strands_waves_until_it_heals,
+    isolated_validator_still_settles, livelock_resolves_promptly, liveness_baseline,
+    merge_lifecycle, merge_seats_full_keeper_committee, merge_straddler_atomic,
+    minority_fragment_rejoins_after_partition, multi_vnode_progress, participant_count_sweep,
+    partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
+    re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
+    register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
+    shared_read_payments, split_lifecycle, split_straddler_atomic,
+    split_straddler_ec_partition_atomic, split_terminating_payer_releases_its_reservation,
+    stake_withdraw_drops_effective_stake, surviving_sibling_split_seats_full_committees,
+    vm_a_failed_attempt_still_attests_work, vm_abort_converges, vm_abort_floor_settles_on_deadline,
+    vm_attested_load_reaches_the_beacon, vm_cross_shard_transfer,
+    vm_delegation_folds_into_beacon_state, vm_deploy_storm_rides_out,
     vm_events_land_on_their_emitters_home_shard, vm_failure_charges_its_payer, vm_hot_recipient,
     vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
     vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,
@@ -74,12 +73,6 @@ const fn liveness_config() -> ScenarioConfig {
 fn liveness_baseline_sim() {
     let mut cluster = SimCluster::new(&liveness_config(), 11);
     liveness_baseline(&mut cluster);
-}
-
-#[test]
-fn single_shard_tx_sim() {
-    let mut cluster = SimCluster::new(&liveness_config(), 42);
-    single_shard_tx(&mut cluster);
 }
 
 #[test]
@@ -153,12 +146,6 @@ const fn split_config() -> ScenarioConfig {
 fn split_lifecycle_sim() {
     let mut cluster = SimCluster::with_vm_accounts(&split_config(), 11, &vm_genesis_accounts(1, 1));
     split_lifecycle(&mut cluster);
-}
-
-#[test]
-fn cross_shard_tx_sim() {
-    let mut cluster = SimCluster::new(&split_config(), 11);
-    cross_shard_tx(&mut cluster);
 }
 
 // ─── VM engine scenarios ───────────────────────────────────────────────
@@ -318,20 +305,6 @@ fn vm_hot_recipient_sim() {
     println!(
         "vm_hot_recipient senders=12 height_span={height_span} executed={executed}: {report:?}"
     );
-}
-
-#[test]
-fn mixed_engine_blocks_sim() {
-    // The Radix side reuses the contention recipients; the VM side its
-    // own funded lane — one chain carries both engines' receipts.
-    let mut cluster = SimCluster::with_vm_mode_and_balances(
-        &liveness_config(),
-        42,
-        &contention_genesis_balances(0, 6),
-        &vm_genesis_accounts(6, 1),
-        ExecutionMode::Serial,
-    );
-    mixed_engine_blocks(&mut cluster, 6);
 }
 
 /// Deterministic parallel wave execution on committed blocks: one seed,

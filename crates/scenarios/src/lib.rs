@@ -60,11 +60,10 @@ pub use support::{
     Budget, Cluster, FaultHandle, FaultableCluster, ScenarioConfig, epochs, grow_to, query, tx,
     vote_reshape_threshold, wait,
 };
-pub use transactions::{cross_shard_tx, livelock_resolves_promptly, single_shard_tx};
+pub use transactions::livelock_resolves_promptly;
 pub use vm::{
-    mixed_engine_blocks, vm_a_failed_attempt_still_attests_work, vm_abort_converges,
-    vm_abort_floor_settles_on_deadline, vm_attested_load_reaches_the_beacon,
-    vm_cross_shard_transfer, vm_deploy_storm_rides_out,
+    vm_a_failed_attempt_still_attests_work, vm_abort_converges, vm_abort_floor_settles_on_deadline,
+    vm_attested_load_reaches_the_beacon, vm_cross_shard_transfer, vm_deploy_storm_rides_out,
     vm_events_land_on_their_emitters_home_shard, vm_failure_charges_its_payer, vm_hot_recipient,
     vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
     vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,

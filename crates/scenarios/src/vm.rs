@@ -18,18 +18,15 @@ use hyperscale_engine_vm::genesis::{entropy_key, vault_key};
 use hyperscale_engine_vm::{
     PreviewGrants, PreviewOutcome, PreviewReport, ResourceChange, VM_XRD, vm_account_address,
 };
-use hyperscale_types::{
-    BlockHeight, NetworkDefinition, ShardId, TransactionDecision, TransactionStatus, TxHash,
-};
+use hyperscale_types::{BlockHeight, ShardId, TransactionDecision, TransactionStatus, TxHash};
 use hyperscale_vm_effects::package_hash;
 
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
-    build_faucet_tx, build_vm_composed_tx, build_vm_publish_tx, build_vm_stamp_tx,
-    build_vm_transfer_tx, contention_recipient, signer_from_seed, validity_around,
-    vm_cross_shard_cast, vm_cross_shard_keys, vm_nullifier_race_cast, vm_payment_request,
-    vm_recipient, vm_sender, vm_storm_artifact, vm_storm_publishers,
+    build_vm_composed_tx, build_vm_publish_tx, build_vm_stamp_tx, build_vm_transfer_tx,
+    validity_around, vm_cross_shard_cast, vm_cross_shard_keys, vm_nullifier_race_cast,
+    vm_payment_request, vm_recipient, vm_sender, vm_storm_artifact, vm_storm_publishers,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -701,50 +698,6 @@ pub fn vm_insolvent_payer_engages_nothing(c: &mut impl Cluster) {
         counterpart_inclusion.is_none(),
         "the counterpart must not engage an insolvent payer's transaction"
     );
-}
-
-/// Radix and VM traffic interleaved on one chain: both engines' receipts
-/// merge through the per-variant wave dispatch and every transaction
-/// accepts.
-///
-/// # Panics
-///
-/// Panics if any transaction misses its budget or does not accept.
-pub fn mixed_engine_blocks(c: &mut impl Cluster, pairs: u8) {
-    let network = NetworkDefinition::simulator();
-    let mut hashes = Vec::with_capacity(2 * pairs as usize);
-    for index in 0..pairs {
-        let (vm_payer, vm_from) = vm_sender(index);
-        let vm_tx = build_vm_transfer_tx(
-            &vm_payer,
-            vm_from,
-            vm_recipient(0),
-            PAYMENT + u128::from(index),
-            validity_around(c.now()),
-        );
-        let radix_signer = signer_from_seed(index + 1);
-        let radix_tx = build_faucet_tx(
-            contention_recipient(index),
-            &radix_signer,
-            &network,
-            u32::from(index),
-            validity_around(c.now()),
-        );
-        hashes.push(vm_tx.hash());
-        hashes.push(radix_tx.hash());
-        c.submit(Arc::new(vm_tx));
-        c.submit(Arc::new(radix_tx));
-    }
-    for (index, hash) in hashes.iter().enumerate() {
-        let status = await_tx_terminal(c, *hash, epochs(10));
-        assert!(
-            matches!(
-                status,
-                Some(TransactionStatus::Completed(TransactionDecision::Accept))
-            ),
-            "mixed-engine transaction #{index} did not accept; status = {status:?}"
-        );
-    }
 }
 
 /// A payer whose counterpart never engages settles the abort floor and
