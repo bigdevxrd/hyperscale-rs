@@ -3,12 +3,12 @@
 //! This is the single source of truth for what column families exist,
 //! what they store, and how their keys/values are encoded.
 
+use hyperscale_storage::{DbPartitionKey, DbSortKey};
 use hyperscale_types::{
     BlockMetadata, ChainOrigin, ConsensusReceipt, ExecutionCertificate, ExecutionMetadata, Hash,
     Round, SafeVoteRegisters, ShardWitnessPayload, Transaction, ValidatorId, WaveCertificate,
     WaveId,
 };
-use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey};
 use rocksdb::{ColumnFamily, DB};
 
 use super::jmt_stored::{StaleTreePart, StoredNodeKey, VersionedStoredNode};

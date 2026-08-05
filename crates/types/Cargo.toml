@@ -28,8 +28,8 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Radix transaction types
+indexmap.workspace = true
 radix-common.workspace = true
-radix-substate-store-interface.workspace = true
 
 [features]
 test-utils = ["dep:hyperscale-crypto-bls"]

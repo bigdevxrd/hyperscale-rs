@@ -21,7 +21,6 @@ indexmap.workspace = true
 tracing.workspace = true
 
 radix-common.workspace = true
-radix-substate-store-interface.workspace = true
 
 # The blessed engine runs native; the reference interpreter is the
 # wasm32 implementation by decision (the in-browser simulation), not a

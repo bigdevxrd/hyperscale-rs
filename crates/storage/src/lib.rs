@@ -112,9 +112,38 @@ pub fn empty_substate_database() -> impl SubstateDatabase {
     Empty
 }
 
-// Re-export commonly needed Radix types for storage implementations
-pub use radix_common::prelude::{DatabaseUpdate, DbSubstateValue};
-pub use radix_substate_store_interface::interface::{
-    CommittableSubstateDatabase, DatabaseUpdates, DbPartitionKey, DbSortKey, NodeDatabaseUpdates,
-    PartitionDatabaseUpdates, PartitionEntry, SubstateDatabase,
+// The substate vocabulary lives in `types` because a receipt carries it;
+// re-exported here so storage implementations need one import.
+pub use hyperscale_types::substate::{
+    DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue,
+    NodeDatabaseUpdates, PartitionDatabaseUpdates, PartitionEntry,
 };
+
+/// Read access to a substate store.
+///
+/// Object-safe: the execution seam borrows one as `dyn SubstateDatabase`
+/// so a single batch entry point serves every backend's snapshot type.
+pub trait SubstateDatabase {
+    /// The value at `(partition_key, sort_key)`, or `None` if absent.
+    fn get_raw_substate_by_db_key(
+        &self,
+        partition_key: &DbPartitionKey,
+        sort_key: &DbSortKey,
+    ) -> Option<DbSubstateValue>;
+
+    /// Every entry of `partition_key`, in ascending sort-key order,
+    /// starting at `from_sort_key` (or its immediate successor when that
+    /// exact key is absent).
+    fn list_raw_values_from_db_key(
+        &self,
+        partition_key: &DbPartitionKey,
+        from_sort_key: Option<&DbSortKey>,
+    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_>;
+}
+
+/// Write access to a substate store. Test and genesis paths commit
+/// through it directly; the live path goes through `ShardChainWriter`.
+pub trait CommittableSubstateDatabase {
+    /// Apply `database_updates` to the store.
+    fn commit(&mut self, database_updates: &DatabaseUpdates);
+}

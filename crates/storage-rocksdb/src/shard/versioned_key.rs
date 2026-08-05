@@ -7,7 +7,7 @@
 //! enabling the forward seek used by historical reads to find the
 //! smallest `write_version > V` for a key.
 
-use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey};
+use hyperscale_storage::{DbPartitionKey, DbSortKey};
 
 use super::substate_key::SubstateKeyCodec;
 use crate::typed_cf::{DbCodec, DbEncode};

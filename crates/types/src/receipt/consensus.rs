@@ -13,8 +13,6 @@
 
 use std::sync::LazyLock;
 
-use radix_common::prelude::DatabaseUpdate;
-use radix_substate_store_interface::interface::PartitionDatabaseUpdates;
 use sbor::prelude::basic_encode;
 use sbor::{
     Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
@@ -23,6 +21,7 @@ use sbor::{
 
 use crate::sbor_codec::decode_bounded_vec;
 use crate::state_key::{VM_PARTITION, vm_db_node_key_owner};
+use crate::substate::{DatabaseUpdate, PartitionDatabaseUpdates};
 use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
     BeaconWitnessEvent, BeaconWitnessRoot, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
@@ -386,14 +385,15 @@ mod tests {
     /// keys, so a Reset would silently diverge the live and sync JMT roots.
     #[test]
     fn decode_rejects_partition_reset_updates() {
-        use radix_substate_store_interface::interface::NodeDatabaseUpdates;
-        use sbor::prelude::index_map_new;
+        use indexmap::IndexMap;
+
+        use crate::substate::NodeDatabaseUpdates;
 
         let mut node = NodeDatabaseUpdates::default();
         node.partition_updates.insert(
             0u8,
             PartitionDatabaseUpdates::Reset {
-                new_substate_values: index_map_new(),
+                new_substate_values: IndexMap::new(),
             },
         );
         let mut database_updates = DatabaseUpdates::default();

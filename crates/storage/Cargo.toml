@@ -17,7 +17,6 @@ rayon.workspace = true
 
 # Radix dependencies (for SubstateDatabase, DatabaseUpdates, etc.)
 radix-common.workspace = true
-radix-substate-store-interface.workspace = true
 
 # Key encoding
 indexmap.workspace = true

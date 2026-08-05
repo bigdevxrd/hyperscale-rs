@@ -49,8 +49,8 @@ impl SubstateStore for RocksDbShardStorage {
         local: [u8; 16],
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
+        use hyperscale_storage::{DbPartitionKey, SubstateDatabase};
         use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
-        use radix_substate_store_interface::interface::{DbPartitionKey, SubstateDatabase};
         let snapshot = self.db.snapshot();
         let (current_version, _) = read_jmt_metadata(&snapshot);
         if block_height.inner() > current_version {

@@ -9,8 +9,8 @@
 //! preserves lexicographic ordering for prefix scans and decodes back
 //! without a length prefix.
 
+use hyperscale_storage::{DbPartitionKey, DbSortKey};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
-use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey};
 
 use crate::typed_cf::{DbCodec, DbEncode};
 

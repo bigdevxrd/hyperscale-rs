@@ -6,7 +6,7 @@
 //! Both the `RocksDB` backend and the engine's provision overlay use these
 //! functions to produce compatible keys.
 
-use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey};
+use crate::{DbPartitionKey, DbSortKey};
 
 /// Convert Radix partition key + sort key to a flat storage key.
 #[must_use]

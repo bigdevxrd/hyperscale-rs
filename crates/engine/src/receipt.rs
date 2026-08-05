@@ -9,11 +9,11 @@
 //!   to produce the final [`ExecutedTx`]. Only the `database_updates`
 //!   slice, the events, and the beacon facts are shard-specific.
 
+use hyperscale_storage::DatabaseUpdates;
 use hyperscale_types::{
     BeaconWitnessEvent, ConsensusReceipt, Event, ExecutionMetadata, GlobalReceiptHash, ShardId,
     ShardTrie, TxHash, has_partition_reset,
 };
-use radix_substate_store_interface::interface::DatabaseUpdates;
 
 use crate::output::ExecutedTx;
 use crate::sharding::{filter_updates_for_shard, sort_database_updates};

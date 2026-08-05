@@ -17,14 +17,13 @@ use hyperscale_types::{
     WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
     settled_waves_root_from_ids,
 };
-use radix_common::prelude::DatabaseUpdate;
-use radix_substate_store_interface::interface::SubstateDatabase;
 
 use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
 use crate::tree::proofs::generate_proof;
 use crate::{
-    BlockForSync, DatabaseUpdates, DbPartitionKey, DbSortKey, JmtSnapshot,
-    PartitionDatabaseUpdates, ShardChainReader, ShardChainWriter, SubstateStore, VersionedStore,
+    BlockForSync, DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, JmtSnapshot,
+    PartitionDatabaseUpdates, ShardChainReader, ShardChainWriter, SubstateDatabase, SubstateStore,
+    VersionedStore,
 };
 
 /// Cached base-storage reads observed through a [`SubstateView`].
@@ -1106,10 +1105,9 @@ mod tests {
         WaveCertificate, WaveId, WitnessSources,
     };
     use indexmap::IndexMap;
-    use radix_substate_store_interface::interface::{DatabaseUpdates, PartitionDatabaseUpdates};
 
     use super::*;
-    use crate::BlockForSync;
+    use crate::{BlockForSync, DatabaseUpdates, PartitionDatabaseUpdates};
 
     /// Minimal stub implementing every trait `PendingChain<S>` requires.
     /// Returns no data by default; tests that need persisted fall-through

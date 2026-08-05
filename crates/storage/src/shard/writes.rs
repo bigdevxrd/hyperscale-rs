@@ -4,10 +4,8 @@ use hyperscale_jmt::NibblePath;
 use hyperscale_types::StoredReceipt;
 use hyperscale_types::state_key::vm_db_node_key_owner;
 use indexmap::map::Entry;
-use radix_common::prelude::DatabaseUpdate;
-use radix_substate_store_interface::interface::{
-    DatabaseUpdates, NodeDatabaseUpdates, PartitionDatabaseUpdates,
-};
+
+use crate::{DatabaseUpdate, DatabaseUpdates, NodeDatabaseUpdates, PartitionDatabaseUpdates};
 
 /// Extract and merge `DatabaseUpdates` from stored receipts.
 ///
@@ -152,10 +150,9 @@ fn merge_partition_updates(
 #[cfg(test)]
 mod tests {
     use indexmap::IndexMap;
-    use radix_common::prelude::DatabaseUpdate;
-    use radix_substate_store_interface::interface::DbSortKey;
 
     use super::*;
+    use crate::{DatabaseUpdate, DbSortKey};
 
     // Helper to create a Delta DatabaseUpdates with a single node/partition/substate.
     fn make_delta_updates(

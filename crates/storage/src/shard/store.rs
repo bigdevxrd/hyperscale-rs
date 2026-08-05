@@ -4,7 +4,8 @@
 //! substate state.
 
 use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot};
-use radix_substate_store_interface::interface::SubstateDatabase;
+
+use crate::SubstateDatabase;
 
 /// Extension trait for substate storage with snapshots, historical reads,
 /// and JMT state roots.

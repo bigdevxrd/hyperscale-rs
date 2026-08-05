@@ -2,6 +2,7 @@
 
 use sbor::prelude::*;
 
+#[cfg(any(test, feature = "test-utils"))]
 use crate::state_key::vm_flat_key;
 use crate::{BoundedBytes, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
 

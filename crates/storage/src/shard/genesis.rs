@@ -1,7 +1,8 @@
 //! Genesis install primitive.
 
 use hyperscale_types::StateRoot;
-use radix_substate_store_interface::interface::DatabaseUpdates;
+
+use crate::DatabaseUpdates;
 
 /// Storage backends that can install a genesis snapshot in one shot.
 ///

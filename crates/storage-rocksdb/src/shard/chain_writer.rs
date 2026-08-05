@@ -8,14 +8,13 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, JmtSnapshot, ShardChainWriter, merge_database_updates,
+    BaseReadCache, DatabaseUpdates, JmtSnapshot, ShardChainWriter, merge_database_updates,
     merge_updates_from_receipts,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, Block, BlockHeight, CertifiedBlock, FinalizedWave, PreparedCommit,
     QuorumCertificate, StateRoot, StoredReceipt, SyncHint, Verifiable, Verified,
 };
-use radix_substate_store_interface::interface::DatabaseUpdates;
 use rocksdb::{WriteBatch, WriteOptions};
 
 use super::column_families::{ALL_COLUMN_FAMILIES, ConsensusReceiptsCf, ExecutionMetadataCf};

@@ -24,6 +24,7 @@ mod provisioning;
 mod sbor_codec;
 mod signing;
 pub mod state_key;
+pub mod substate;
 mod time;
 mod verifiable;
 
@@ -110,7 +111,6 @@ pub use provisioning::proof::MerkleInclusionProof;
 pub use provisioning::provisions::{Provisions, ProvisionsContext, ProvisionsVerifyError};
 pub use provisioning::substate::SubstateEntry;
 pub use radix_common::network::NetworkDefinition;
-pub use radix_substate_store_interface::interface::DatabaseUpdates;
 pub use receipt::consensus::{
     ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_cells, has_partition_reset,
 };
@@ -175,6 +175,10 @@ pub use signing::{
     vrf_sign, vrf_verify,
 };
 pub use state_key::{MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
+pub use substate::{
+    DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue,
+    NodeDatabaseUpdates, PartitionDatabaseUpdates, PartitionEntry,
+};
 pub use time::epoch_windows::EpochWindows;
 pub use time::limits::{MAX_TIMESTAMP_DELAY, MAX_TIMESTAMP_RUSH};
 pub use time::range::{MAX_VALIDITY_RANGE, TimestampRange};
