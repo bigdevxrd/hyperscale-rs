@@ -201,7 +201,7 @@ fn signed_transfer_under_bound(
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new_vm(vm)
+    RoutableTransaction::new(vm)
 }
 
 fn signed_transfer_with_fee(
@@ -233,7 +233,7 @@ fn signed_transfer_with_fee(
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new_vm(vm)
+    RoutableTransaction::new(vm)
 }
 
 /// The account address the fee-paying tests derive from their signing key.
@@ -301,7 +301,7 @@ fn signed_stamp(seed: u8, owner: [u8; 16]) -> RoutableTransaction {
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new_vm(vm)
+    RoutableTransaction::new(vm)
 }
 
 /// Execute `transactions` as a single-shard batch anchored on `reveal`.
@@ -679,7 +679,7 @@ fn a_missed_edge_bound_charges_its_payer_the_floor() {
     // The withdrawal is covered and the guest is honest — it returns the
     // 100 it reserved. What fails is the recipient's signed floor.
     let tx = signed_transfer_under_bound(23, payer, bob(), 100, 150, 1_000);
-    let floor = tx.vm().expect("a VM envelope").abort_floor();
+    let floor = tx.body().abort_floor();
     let executed = execute_on(
         &accounts,
         &executor,
@@ -833,7 +833,7 @@ fn signed_publish(seed: u8, artifact: Vec<u8>) -> RoutableTransaction {
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new_vm(vm)
+    RoutableTransaction::new(vm)
 }
 
 /// The raw update a batch made to a package's cell under `publisher`.

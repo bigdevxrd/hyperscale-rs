@@ -1,28 +1,14 @@
 //! Account management for transaction generation.
 //!
 //! Provides a `FundedAccount` type and `AccountPool` for managing accounts
-//! distributed across shards. The first [`MAX_GENESIS_ACCOUNTS_PER_SHARD`]
-//! accounts per shard are funded at genesis time; any beyond that limit are
-//! funded via runtime transactions before the main workload starts.
+//! distributed across shards. Every account is funded at genesis.
 
-use hyperscale_types::{
-    Ed25519PrivateKey, NodeId, ShardId, ShardTrie, ed25519_keypair_from_seed,
-    uniform_shard_for_node,
-};
-
-/// Maximum number of accounts that can be created per shard at genesis.
-///
-/// The Radix Engine panics when a single node's genesis includes more than
-/// approximately 16,000 accounts. Since each node only processes its own
-/// shard's accounts at genesis, this is the per-shard limit. Accounts beyond
-/// this limit must be funded via runtime transactions after genesis.
-pub const MAX_GENESIS_ACCOUNTS_PER_SHARD: usize = 16_000;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hex::encode as hex_encode;
-use radix_common::math::Decimal;
-use radix_common::types::ComponentAddress;
+use hyperscale_effects_bridge::vm_account_address;
+use hyperscale_types::{Ed25519PrivateKey, ShardId, ShardTrie, ed25519_keypair_from_seed};
 use rand::{Rng, RngExt};
 use serde_json::{from_str as json_from_str, to_string_pretty as json_to_string_pretty};
 use tracing::info;
@@ -35,8 +21,8 @@ pub struct FundedAccount {
     /// The Ed25519 keypair for signing transactions.
     pub keypair: Ed25519PrivateKey,
 
-    /// The Radix component address for this account.
-    pub address: ComponentAddress,
+    /// This account's 16-byte address — also its shard placement.
+    pub address: [u8; 16],
 
     /// The shard this account belongs to.
     pub shard: ShardId,
@@ -111,15 +97,14 @@ impl FundedAccount {
     }
 
     /// Derive account address from keypair.
-    fn address_from_keypair(keypair: &Ed25519PrivateKey) -> ComponentAddress {
-        let radix_pk = keypair.public_key();
-        ComponentAddress::preallocated_account_from_public_key(&radix_pk)
+    fn address_from_keypair(keypair: &Ed25519PrivateKey) -> [u8; 16] {
+        vm_account_address(&keypair.public_key().0)
     }
 
-    /// Determine which shard an address belongs to.
-    fn shard_for_address(address: &ComponentAddress, num_shards: u64) -> ShardId {
-        let det_node_id = NodeId::from_radix(address.into_node_id());
-        uniform_shard_for_node(&det_node_id, num_shards)
+    /// Determine which shard an address belongs to. An account's address
+    /// *is* its placement, so this is a trie walk over the address bits.
+    fn shard_for_address(address: &[u8; 16], num_shards: u64) -> ShardId {
+        ShardTrie::uniform_from_count(num_shards).shard_for_prefix(*address)
     }
 }
 
@@ -270,13 +255,13 @@ impl AccountPool {
         Ok(pool)
     }
 
-    /// Get the XRD balances for a specific shard to configure in genesis.
+    /// Get the balances for a specific shard to configure in genesis.
     #[must_use]
     pub fn genesis_balances_for_shard(
         &self,
         shard: ShardId,
-        balance: Decimal,
-    ) -> Vec<(ComponentAddress, Decimal)> {
+        balance: u128,
+    ) -> Vec<([u8; 16], u128)> {
         self.by_shard
             .get(&shard)
             .map(|accounts| {
@@ -290,94 +275,11 @@ impl AccountPool {
 
     /// Get all genesis balances across all shards.
     #[must_use]
-    pub fn all_genesis_balances(&self, balance: Decimal) -> Vec<(ComponentAddress, Decimal)> {
+    pub fn all_genesis_balances(&self, balance: u128) -> Vec<([u8; 16], u128)> {
         self.by_shard
             .values()
             .flat_map(|accounts| accounts.iter().map(|a| (a.address, balance)))
             .collect()
-    }
-
-    /// Whether any shard has more accounts than the genesis limit.
-    ///
-    /// When true, the caller must run a funding phase after genesis to create
-    /// the remaining accounts via runtime transactions.
-    #[must_use]
-    pub fn needs_runtime_funding(&self) -> bool {
-        self.by_shard
-            .values()
-            .any(|accounts| accounts.len() > MAX_GENESIS_ACCOUNTS_PER_SHARD)
-    }
-
-    /// Get capped genesis balances for a shard, respecting the engine limit.
-    ///
-    /// Returns balances for at most [`MAX_GENESIS_ACCOUNTS_PER_SHARD`] accounts.
-    /// Accounts that will serve as funding sources for runtime-funded accounts
-    /// receive extra balance to cover those transfers (amount + fee per funded account).
-    #[must_use]
-    pub fn genesis_balances_capped(
-        &self,
-        shard: ShardId,
-        balance: Decimal,
-        fee_per_funding_tx: Decimal,
-    ) -> Vec<(ComponentAddress, Decimal)> {
-        let Some(accounts) = self.by_shard.get(&shard) else {
-            return Vec::new();
-        };
-
-        let genesis_count = accounts.len().min(MAX_GENESIS_ACCOUNTS_PER_SHARD);
-        let unfunded_count = accounts
-            .len()
-            .saturating_sub(MAX_GENESIS_ACCOUNTS_PER_SHARD);
-
-        if unfunded_count == 0 {
-            // All accounts fit in genesis — no extra balance needed.
-            return accounts.iter().map(|a| (a.address, balance)).collect();
-        }
-
-        // Distribute unfunded accounts round-robin across genesis accounts.
-        // Compute how many extra accounts each genesis account will fund.
-        let base_extra = unfunded_count / genesis_count;
-        let remainder = unfunded_count % genesis_count;
-        let cost_per_funded = balance + fee_per_funding_tx;
-
-        accounts[..genesis_count]
-            .iter()
-            .enumerate()
-            .map(|(i, account)| {
-                let num_to_fund = base_extra + usize::from(i < remainder);
-                let extra =
-                    cost_per_funded * Decimal::from(u32::try_from(num_to_fund).unwrap_or(u32::MAX));
-                (account.address, balance + extra)
-            })
-            .collect()
-    }
-
-    /// Build a plan of funding operations for accounts beyond the genesis limit.
-    ///
-    /// Each operation pairs a genesis account (source) with an unfunded account
-    /// (destination) on the same shard. Sources are assigned round-robin.
-    #[must_use]
-    pub fn runtime_funding_plan(&self, funding_amount: Decimal) -> Vec<FundingOp> {
-        let mut plan = Vec::new();
-
-        for (&shard, accounts) in &self.by_shard {
-            let genesis_count = accounts.len().min(MAX_GENESIS_ACCOUNTS_PER_SHARD);
-            if accounts.len() <= genesis_count {
-                continue;
-            }
-
-            for (i, dest) in accounts[genesis_count..].iter().enumerate() {
-                let source_idx = i % genesis_count;
-                plan.push(FundingOp {
-                    source_shard: shard,
-                    source_idx,
-                    dest_address: dest.address,
-                    amount: funding_amount,
-                });
-            }
-        }
-
-        plan
     }
 
     /// Get a pair of accounts on the same shard.
@@ -708,20 +610,6 @@ impl AccountPool {
     }
 }
 
-/// A single runtime-funding operation: transfer from a genesis account to an
-/// unfunded account on the same shard.
-#[derive(Clone, Debug)]
-pub struct FundingOp {
-    /// Shard of the source (genesis) account.
-    pub source_shard: ShardId,
-    /// Index of the source account within its shard's account vec.
-    pub source_idx: usize,
-    /// Address of the destination (unfunded) account.
-    pub dest_address: ComponentAddress,
-    /// Amount of XRD to transfer.
-    pub amount: Decimal,
-}
-
 /// Statistics about account usage distribution.
 #[derive(Clone, Debug)]
 pub struct AccountUsageStats {
@@ -799,7 +687,7 @@ impl AccountPool {
         let mut loaded = 0;
         for accounts in self.by_shard.values() {
             for account in accounts {
-                let addr_hex = hex_encode(account.address.as_bytes());
+                let addr_hex = hex_encode(account.address);
                 if let Some(&nonce) = nonces.get(&addr_hex) {
                     account.nonce.store(nonce, Ordering::SeqCst);
                     loaded += 1;
@@ -827,7 +715,7 @@ impl AccountPool {
             for account in accounts {
                 let nonce = account.nonce.load(Ordering::SeqCst);
                 if nonce > 0 {
-                    let addr_hex = hex_encode(account.address.as_bytes());
+                    let addr_hex = hex_encode(account.address);
                     nonces.insert(addr_hex, nonce);
                 }
             }
@@ -1144,7 +1032,7 @@ mod tests {
     #[test]
     fn test_genesis_balances() {
         let pool = AccountPool::generate(2, 5).unwrap();
-        let balance = Decimal::from(1000u32);
+        let balance = 1_000u128;
 
         let all_balances = pool.all_genesis_balances(balance);
         assert_eq!(all_balances.len(), 10);

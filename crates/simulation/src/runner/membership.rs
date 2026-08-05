@@ -451,7 +451,6 @@ impl SimulationRunner {
             // Harness default: the routing overlay runs in every
             // simulation; prod stays off unless configured.
             mempool_config: MempoolConfig {
-                routing_overlay: true,
                 share_declared_reads: self.share_declared_reads,
                 ..MempoolConfig::default()
             },

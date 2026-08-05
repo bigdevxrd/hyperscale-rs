@@ -15,7 +15,7 @@
 //! memoized in the per-transaction `ProcessExecutionCache` — the same
 //! transaction in a different block may abort differently.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use blake3::hash as blake3_hash;
@@ -228,9 +228,7 @@ impl VmExecutor {
         tx: &RoutableTransaction,
         authority: TargetAuthority,
     ) -> Result<PreparedVmTx, String> {
-        let vm = tx
-            .vm()
-            .ok_or_else(|| "Radix body in a VM sub-batch".to_string())?;
+        let vm = tx.body();
         let packages = self.world.cache.load();
         let tree = decode_tree(
             vm.call_tree()
@@ -584,7 +582,7 @@ fn build_fee_receipt(
     // work is unattested — a failed outcome carries no gas either — so an
     // abort contributes nothing to its shard's emission weight. Pricing
     // aborted work is the floor's job, not the weight's.
-    let cached = CachedVmOutput::vm_succeeded(
+    let cached = CachedVmOutput::succeeded(
         updates,
         receipt_hash,
         vm_metadata(0, None),
@@ -592,16 +590,7 @@ fn build_fee_receipt(
         Vec::new(),
         Vec::new(),
     );
-    Some(
-        project_to_shard(
-            &cached,
-            tx_hash,
-            ctx.local_shard,
-            ctx.shard_trie,
-            &HashMap::new(),
-        )
-        .consensus,
-    )
+    Some(project_to_shard(&cached, tx_hash, ctx.local_shard, ctx.shard_trie).consensus)
 }
 
 /// What judging and storing one artifact costs, whatever the verdict:
@@ -644,7 +633,7 @@ fn assemble_published_tx(
         fees_applied: BTreeMap::new(),
     };
     let cached = if let Some(reason) = &refusal {
-        CachedVmOutput::vm_failed(vm_metadata(work, Some(reason.clone())))
+        CachedVmOutput::failed(vm_metadata(work, Some(reason.clone())))
     } else {
         {
             let mut writes: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
@@ -674,7 +663,7 @@ fn assemble_published_tx(
                 OwnershipRoot::ZERO,
             )
             .receipt_hash();
-            CachedVmOutput::vm_succeeded(
+            CachedVmOutput::succeeded(
                 updates,
                 receipt_hash,
                 vm_metadata(work, None),
@@ -694,13 +683,7 @@ fn assemble_published_tx(
         _ => None,
     };
 
-    let mut executed = project_to_shard(
-        &cached,
-        tx_hash,
-        ctx.local_shard,
-        ctx.shard_trie,
-        &HashMap::new(),
-    );
+    let mut executed = project_to_shard(&cached, tx_hash, ctx.local_shard, ctx.shard_trie);
     executed.fee_receipt = fee_receipt;
     executed.attested_work = work;
     executed
@@ -800,7 +783,7 @@ fn assemble_executed_tx(
             OwnershipRoot::ZERO,
         )
         .receipt_hash();
-        CachedVmOutput::vm_succeeded(
+        CachedVmOutput::succeeded(
             updates,
             receipt_hash,
             vm_metadata(receipt.fuel, None),
@@ -809,18 +792,12 @@ fn assemble_executed_tx(
             vm_witnesses,
         )
     } else {
-        CachedVmOutput::vm_failed(vm_metadata(
+        CachedVmOutput::failed(vm_metadata(
             receipt.fuel,
             Some(abort_reason(&receipt.outcome)),
         ))
     };
-    let mut executed = project_to_shard(
-        &cached,
-        tx_hash,
-        ctx.local_shard,
-        ctx.shard_trie,
-        &HashMap::new(),
-    );
+    let mut executed = project_to_shard(&cached, tx_hash, ctx.local_shard, ctx.shard_trie);
     executed.fee_receipt = fee_receipt;
     executed.attested_work = attested_work;
     executed
@@ -858,7 +835,7 @@ impl VmExecutor {
         let publishes: BTreeMap<VmTxHash, ([u8; 16], Vec<u8>)> = transactions
             .iter()
             .filter_map(|tx| {
-                let vm = tx.vm()?;
+                let vm = tx.body();
                 let artifact = vm.artifact()?;
                 Some((
                     VmTxHash(Hash32(*tx.hash().as_bytes())),
@@ -929,16 +906,15 @@ impl VmExecutor {
             if !publishes.contains_key(&vm_tx) {
                 continue;
             }
-            if let Some((owner, local)) = tx.vm_fee_vault() {
-                let key = SubstateKey {
-                    owner: Address(owner),
-                    local: LocalKey(local),
-                };
-                if locality.is_local(key.owner)
-                    && let Some(value) = read_cell(snapshot, key)
-                {
-                    cells.insert(key, value);
-                }
+            let (owner, local) = tx.fee_vault();
+            let key = SubstateKey {
+                owner: Address(owner),
+                local: LocalKey(local),
+            };
+            if locality.is_local(key.owner)
+                && let Some(value) = read_cell(snapshot, key)
+            {
+                cells.insert(key, value);
             }
         }
         let base = Arc::new(VmBase { cells });
@@ -985,8 +961,8 @@ impl VmExecutor {
         let fee_by_tx: BTreeMap<VmTxHash, PayerFee> = transactions
             .iter()
             .filter_map(|tx| {
-                let vm = tx.vm()?;
-                let (owner, local) = tx.vm_fee_vault()?;
+                let vm = tx.body();
+                let (owner, local) = tx.fee_vault();
                 if !locality.is_local(Address(owner)) {
                     return None;
                 }
@@ -1073,14 +1049,8 @@ impl VmExecutor {
                         .get(&tx.hash())
                         .cloned()
                         .unwrap_or_else(|| "missing batch receipt".to_string());
-                    let cached = CachedVmOutput::vm_failed(vm_metadata(0, Some(reason)));
-                    project_to_shard(
-                        &cached,
-                        tx.hash(),
-                        ctx.local_shard,
-                        ctx.shard_trie,
-                        &HashMap::new(),
-                    )
+                    let cached = CachedVmOutput::failed(vm_metadata(0, Some(reason)));
+                    project_to_shard(&cached, tx.hash(), ctx.local_shard, ctx.shard_trie)
                 })
             })
             .collect()

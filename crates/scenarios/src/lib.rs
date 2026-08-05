@@ -27,9 +27,7 @@ mod transactions;
 mod vm;
 mod witnesses;
 
-pub use contention::{
-    ContentionReport, cross_shard_fraction, participant_count_sweep, shared_read_payments,
-};
+pub use contention::{ContentionReport, cross_shard_fraction, participant_count_sweep};
 pub use faults::{
     beacon_lag_drops_skipped_epochs_reveal_chains, beacon_pool_partition_stalls_epoch_production,
     cross_shard_compound_drop_fetch_fallback, cross_shard_exec_cert_drop_fetch_fallback,

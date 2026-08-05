@@ -1,18 +1,23 @@
-//! XRD transfer workload generator.
+//! Native-resource transfer workload generator.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hyperscale_types::{RoutableTransaction, ShardId, build_transfer_tx};
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
+use hyperscale_effects_bridge::build_transfer_tx;
+use hyperscale_types::{RoutableTransaction, ShardId};
 use rand::{Rng, RngExt};
-use tracing::warn;
 
 use crate::accounts::{AccountPool, FundedAccount, SelectionMode};
 use crate::validity::{ValidityClock, wall_clock};
 use crate::workloads::WorkloadGenerator;
 
-/// Generates XRD transfer transactions.
+/// What a transfer moves when the caller sets no amount.
+pub const DEFAULT_TRANSFER_AMOUNT: u128 = 100;
+
+/// The fee ceiling every generated transfer signs. Placeholder pricing,
+/// well above what a transfer draws.
+pub const TRANSFER_MAX_FEE: u128 = 1_000;
+
+/// Generates transfer transactions.
 pub struct TransferWorkload {
     /// Ratio of cross-shard transactions (0.0 to 1.0).
     cross_shard_ratio: f64,
@@ -21,10 +26,7 @@ pub struct TransferWorkload {
     selection_mode: SelectionMode,
 
     /// Transfer amount per transaction.
-    amount: Decimal,
-
-    /// Network definition for transaction signing.
-    network: NetworkDefinition,
+    amount: u128,
 
     /// Round-robin counter for shard selection in `NoContention` mode.
     /// Ensures even distribution across shards to prevent one shard's
@@ -36,15 +38,20 @@ pub struct TransferWorkload {
     validity_clock: ValidityClock,
 }
 
+impl Default for TransferWorkload {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransferWorkload {
     /// Create a new transfer workload generator.
     #[must_use]
-    pub fn new(network: NetworkDefinition) -> Self {
+    pub fn new() -> Self {
         Self {
             cross_shard_ratio: 0.3,
             selection_mode: SelectionMode::default(),
-            amount: Decimal::from(100u32),
-            network,
+            amount: DEFAULT_TRANSFER_AMOUNT,
             shard_counter: AtomicU64::new(0),
             validity_clock: wall_clock(),
         }
@@ -74,7 +81,7 @@ impl TransferWorkload {
 
     /// Set the transfer amount.
     #[must_use]
-    pub const fn with_amount(mut self, amount: Decimal) -> Self {
+    pub const fn with_amount(mut self, amount: u128) -> Self {
         self.amount = amount;
         self
     }
@@ -97,7 +104,7 @@ impl TransferWorkload {
             ShardId::leaf(depth, rng.random_range(0..accounts.num_shards()))
         };
         let (from, to) = accounts.pair_for_shard(shard, rng, self.selection_mode)?;
-        self.build_transfer(from, to)
+        Some(self.build_transfer(from, to))
     }
 
     /// Generate a cross-shard transfer.
@@ -107,31 +114,26 @@ impl TransferWorkload {
         rng: &mut R,
     ) -> Option<RoutableTransaction> {
         let (from, to) = accounts.cross_shard_pair(rng, self.selection_mode)?;
-        self.build_transfer(from, to)
+        Some(self.build_transfer(from, to))
     }
 
     /// Build a transfer transaction from one account to another.
-    fn build_transfer(
-        &self,
-        from: &FundedAccount,
-        to: &FundedAccount,
-    ) -> Option<RoutableTransaction> {
+    ///
+    /// The sender's nonce rides the envelope message: the transaction
+    /// hash covers the whole signed envelope, so without it two transfers
+    /// of the same amount inside one validity window would be the same
+    /// transaction and the second would dedup away.
+    fn build_transfer(&self, from: &FundedAccount, to: &FundedAccount) -> RoutableTransaction {
         let nonce = from.next_nonce();
-        match build_transfer_tx(
+        build_transfer_tx(
             &from.keypair,
             from.address,
             to.address,
             self.amount,
-            &self.network,
-            u32::try_from(nonce).unwrap_or(u32::MAX),
+            TRANSFER_MAX_FEE,
             (self.validity_clock)(),
-        ) {
-            Ok(tx) => Some(tx),
-            Err(e) => {
-                warn!(error = ?e, "Failed to build transfer transaction");
-                None
-            }
-        }
+            nonce.to_le_bytes().to_vec(),
+        )
     }
 
     /// Generate one transaction (internal helper for trait impl).
@@ -167,7 +169,7 @@ impl TransferWorkload {
         // which use atomic counters to ensure proper distribution/no conflicts.
         let (from, to) = accounts.pair_for_shard(target_shard, rng, self.selection_mode)?;
 
-        self.build_transfer(from, to)
+        Some(self.build_transfer(from, to))
     }
 
     /// Generate a cross-shard transfer that involves a specific shard.
@@ -200,7 +202,7 @@ impl TransferWorkload {
             accounts.cross_shard_pair_for(other_shard, target_shard, rng, self.selection_mode)?
         };
 
-        self.build_transfer(from, to)
+        Some(self.build_transfer(from, to))
     }
 
     /// Generate a transaction that involves a specific shard.
@@ -263,43 +265,59 @@ impl WorkloadGenerator for TransferWorkload {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::uniform_shard_for_node;
+    use std::collections::HashSet;
+
+    use hyperscale_effects_bridge::decode_tree;
+    use hyperscale_types::ShardTrie;
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
     use super::*;
 
+    /// The shards a generated transfer touches, read off the envelope's
+    /// own graph. The client never derives effect sets — it routes by the
+    /// account addresses it picked — so the assertion reads the same
+    /// thing the workload chose.
+    fn shards_touched(tx: &RoutableTransaction, num_shards: u64) -> HashSet<ShardId> {
+        let partition = ShardTrie::uniform_from_count(num_shards);
+        let tree = decode_tree(tx.body().call_tree().expect("a transfer is a call")).unwrap();
+        tree.root
+            .graph
+            .nodes
+            .iter()
+            .map(|node| partition.shard_for_prefix(node.target.0))
+            .collect()
+    }
+
     #[test]
     fn test_generate_same_shard_transfer() {
         let accounts = AccountPool::generate(2, 10).unwrap();
-        let workload =
-            TransferWorkload::new(NetworkDefinition::simulator()).with_cross_shard_ratio(0.0); // All same-shard
+        let workload = TransferWorkload::new().with_cross_shard_ratio(0.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let tx = workload.generate_one(&accounts, &mut rng);
-        assert!(tx.is_some(), "Should generate a transaction");
-
-        let tx = tx.unwrap();
-        assert!(
-            !tx.declared_writes().is_empty(),
-            "Transaction should have declared writes"
+        let tx = workload
+            .generate_one(&accounts, &mut rng)
+            .expect("Should generate a transaction");
+        assert_eq!(
+            shards_touched(&tx, 2).len(),
+            1,
+            "a same-shard transfer touches exactly one shard"
         );
     }
 
     #[test]
     fn test_generate_cross_shard_transfer() {
         let accounts = AccountPool::generate(2, 10).unwrap();
-        let workload =
-            TransferWorkload::new(NetworkDefinition::simulator()).with_cross_shard_ratio(1.0); // All cross-shard
+        let workload = TransferWorkload::new().with_cross_shard_ratio(1.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let tx = workload.generate_one(&accounts, &mut rng);
-        assert!(tx.is_some(), "Should generate a transaction");
-
-        let tx = tx.unwrap();
-        assert!(
-            tx.is_cross_shard(2),
-            "Transaction should be cross-shard for 2 shards"
+        let tx = workload
+            .generate_one(&accounts, &mut rng)
+            .expect("Should generate a transaction");
+        assert_eq!(
+            shards_touched(&tx, 2).len(),
+            2,
+            "a cross-shard transfer touches both shards"
         );
     }
 
@@ -307,25 +325,19 @@ mod tests {
     fn test_generate_for_shard_same_shard() {
         let num_shards = 4u64;
         let accounts = AccountPool::generate(num_shards, 10).unwrap();
-        let workload =
-            TransferWorkload::new(NetworkDefinition::simulator()).with_cross_shard_ratio(0.0); // All same-shard
+        let workload = TransferWorkload::new().with_cross_shard_ratio(0.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        // Generate transactions targeting shard 2
         let target_shard = ShardId::leaf(2, 2);
         for _ in 0..20 {
             let tx = workload
                 .generate_for_shard(&accounts, target_shard, &mut rng)
                 .expect("Should generate a transaction");
-
-            // All writes should be on the target shard
-            for write in tx.declared_writes().iter() {
-                let write_shard = uniform_shard_for_node(write, num_shards);
-                assert_eq!(
-                    write_shard, target_shard,
-                    "Same-shard transaction should only write to target shard"
-                );
-            }
+            assert_eq!(
+                shards_touched(&tx, num_shards),
+                HashSet::from([target_shard]),
+                "Same-shard transaction should only touch the target shard"
+            );
         }
     }
 
@@ -333,31 +345,18 @@ mod tests {
     fn test_generate_for_shard_cross_shard() {
         let num_shards = 4u64;
         let accounts = AccountPool::generate(num_shards, 10).unwrap();
-        let workload =
-            TransferWorkload::new(NetworkDefinition::simulator()).with_cross_shard_ratio(1.0); // All cross-shard
+        let workload = TransferWorkload::new().with_cross_shard_ratio(1.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        // Generate transactions targeting shard 1
         let target_shard = ShardId::leaf(2, 1);
         for _ in 0..20 {
             let tx = workload
                 .generate_for_shard(&accounts, target_shard, &mut rng)
                 .expect("Should generate a transaction");
-
-            // Transaction should be cross-shard
+            let touched = shards_touched(&tx, num_shards);
+            assert!(touched.len() > 1, "Should be a cross-shard transaction");
             assert!(
-                tx.is_cross_shard(num_shards),
-                "Should be a cross-shard transaction"
-            );
-
-            // At least one write should be on the target shard
-            let shards_written: std::collections::HashSet<_> = tx
-                .declared_writes()
-                .iter()
-                .map(|w| uniform_shard_for_node(w, num_shards))
-                .collect();
-            assert!(
-                shards_written.contains(&target_shard),
+                touched.contains(&target_shard),
                 "Cross-shard transaction should involve target shard"
             );
         }
@@ -367,27 +366,16 @@ mod tests {
     fn test_generate_batch_for_shard() {
         let num_shards = 4u64;
         let accounts = AccountPool::generate(num_shards, 10).unwrap();
-        let workload =
-            TransferWorkload::new(NetworkDefinition::simulator()).with_cross_shard_ratio(0.5);
+        let workload = TransferWorkload::new().with_cross_shard_ratio(0.5);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        // Generate a batch targeting shard 0
         let target_shard = ShardId::leaf(2, 0);
         let batch = workload.generate_batch_for_shard(&accounts, target_shard, 50, &mut rng);
-
         assert!(!batch.is_empty(), "Should generate transactions");
 
-        // All transactions should involve the target shard
         for tx in &batch {
-            let shards_involved: std::collections::HashSet<_> = tx
-                .declared_writes()
-                .iter()
-                .chain(tx.declared_reads().iter())
-                .map(|n| uniform_shard_for_node(n, num_shards))
-                .collect();
-
             assert!(
-                shards_involved.contains(&target_shard),
+                shards_touched(tx, num_shards).contains(&target_shard),
                 "All transactions should involve the target shard"
             );
         }

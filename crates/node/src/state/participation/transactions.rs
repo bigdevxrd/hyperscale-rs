@@ -87,7 +87,7 @@ mod tests {
     use std::sync::Arc;
 
     use hyperscale_core::{ProtocolEvent, StateMachine};
-    use hyperscale_types::test_utils::{test_transaction, test_transaction_with_nodes};
+    use hyperscale_types::test_utils::{test_transaction, test_transaction_with_prefixes};
     use hyperscale_types::{LocalTimestamp, Verified};
 
     use crate::state::test_support::TestNode;
@@ -101,10 +101,10 @@ mod tests {
         let TestNode { mut node, .. } = TestNode::new();
 
         let tx = Arc::new(Verified::new_unchecked_for_test(
-            test_transaction_with_nodes(
+            test_transaction_with_prefixes(
                 b"empty-shards-xyz",
-                /* read_nodes */ vec![],
-                /* write_nodes */ vec![],
+                /* read_nodes */ &[],
+                /* write_nodes */ &[],
             ),
         ));
 

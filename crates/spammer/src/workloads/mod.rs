@@ -3,13 +3,11 @@
 //! Provides the `WorkloadGenerator` trait and implementations for various
 //! transaction types.
 
-mod funding;
 mod transfer;
 
-pub use funding::FundingWorkload;
 use hyperscale_types::RoutableTransaction;
 use rand::Rng;
-pub use transfer::TransferWorkload;
+pub use transfer::{DEFAULT_TRANSFER_AMOUNT, TRANSFER_MAX_FEE, TransferWorkload};
 
 use crate::accounts::AccountPool;
 
@@ -43,11 +41,7 @@ pub enum WorkloadError {
     #[error("No suitable accounts available")]
     NoAccounts,
 
-    /// Signing the manifest with the sender's private key failed.
+    /// Signing the envelope with the sender's private key failed.
     #[error("Transaction signing failed: {0}")]
     SigningFailed(String),
-
-    /// Conversion from notarized v1 transaction to `RoutableTransaction` failed.
-    #[error("Transaction conversion failed: {0}")]
-    ConversionFailed(String),
 }

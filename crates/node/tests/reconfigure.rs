@@ -14,7 +14,6 @@ use hyperscale_beacon::coordinator::BeaconCoordinator;
 use hyperscale_beacon::genesis::build_genesis_beacon_state;
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch_sync::SyncDispatch;
-use hyperscale_engine::{RadixExecutor, TransactionValidation};
 use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_execution::{ExecCertStore, FinalizedWaveStore};
 use hyperscale_mempool::{MempoolConfig, TxStore};
@@ -188,7 +187,6 @@ fn add_and_remove_shard_at_runtime() {
         std::iter::once((SHARD_A, SimShardStorage::new(shard_prefix_path(SHARD_A)))).collect(),
         Arc::clone(&beacon_storage),
         NetworkDefinition::simulator(),
-        RadixExecutor::new(NetworkDefinition::simulator()),
         Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
@@ -196,7 +194,6 @@ fn add_and_remove_shard_at_runtime() {
         event_tx.clone(),
         Arc::new(ArcSwap::from(Arc::clone(&fix.topology_snapshot))),
         NodeConfig::default(),
-        Arc::new(TransactionValidation::new(NetworkDefinition::simulator())),
     );
     host.register_inbound_handlers();
     // Drain anything startup produced so later assertions see only
@@ -294,7 +291,6 @@ fn pooled_vnode_follows_the_beacon_via_the_network_path() {
         HashMap::<ShardId, SimShardStorage>::new(),
         Arc::clone(&beacon_storage),
         NetworkDefinition::simulator(),
-        RadixExecutor::new(NetworkDefinition::simulator()),
         Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
@@ -302,7 +298,6 @@ fn pooled_vnode_follows_the_beacon_via_the_network_path() {
         event_tx,
         Arc::new(ArcSwap::from(Arc::clone(&fix.topology_snapshot))),
         NodeConfig::default(),
-        Arc::new(TransactionValidation::new(NetworkDefinition::simulator())),
     );
     host.register_inbound_handlers();
 
@@ -357,7 +352,6 @@ fn runtime_built_pool_is_fed_beacon_blocks() {
         std::iter::once((SHARD_A, SimShardStorage::new(shard_prefix_path(SHARD_A)))).collect(),
         Arc::clone(&beacon_storage),
         NetworkDefinition::simulator(),
-        RadixExecutor::new(NetworkDefinition::simulator()),
         Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
@@ -365,7 +359,6 @@ fn runtime_built_pool_is_fed_beacon_blocks() {
         event_tx,
         Arc::new(ArcSwap::from(Arc::clone(&fix.topology_snapshot))),
         NodeConfig::default(),
-        Arc::new(TransactionValidation::new(NetworkDefinition::simulator())),
     );
     host.register_inbound_handlers();
     while event_rx.try_recv().is_ok() {}
@@ -438,7 +431,6 @@ fn remove_unknown_shard_is_none() {
         std::iter::once((SHARD_A, SimShardStorage::new(shard_prefix_path(SHARD_A)))).collect(),
         beacon_storage,
         NetworkDefinition::simulator(),
-        RadixExecutor::new(NetworkDefinition::simulator()),
         Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
         network,
         SyncDispatch,
@@ -446,7 +438,6 @@ fn remove_unknown_shard_is_none() {
         event_tx,
         Arc::new(ArcSwap::from(Arc::clone(&fix.topology_snapshot))),
         NodeConfig::default(),
-        Arc::new(TransactionValidation::new(NetworkDefinition::simulator())),
     );
     assert!(host.remove_shard(SHARD_B).is_none());
     assert!(host.hosted_shards().any(|s| s == SHARD_A));

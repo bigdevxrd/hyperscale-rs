@@ -1120,7 +1120,7 @@ impl WaveState {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::test_utils::{test_node, test_transaction_with_nodes};
+    use hyperscale_types::test_utils::{test_prefix, test_transaction_with_prefixes};
     use hyperscale_types::{
         AggregateSignature, BoundedVec, ConsensusReceipt, DatabaseUpdates, GlobalReceiptHash, Hash,
         MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, SignerBitfield,
@@ -1132,10 +1132,10 @@ mod tests {
     const WAVE_START: BlockHeight = BlockHeight::new(10);
 
     fn make_tx(seed: u8) -> Arc<Verifiable<RoutableTransaction>> {
-        Arc::new(Verifiable::from(test_transaction_with_nodes(
+        Arc::new(Verifiable::from(test_transaction_with_prefixes(
             &[seed, seed + 1, seed + 2],
-            vec![test_node(seed)],
-            vec![test_node(seed + 50)],
+            &[test_prefix(seed)],
+            &[test_prefix(seed + 50)],
         )))
     }
 

@@ -1,10 +1,10 @@
-//! Synchronous Radix Engine executor.
+//! The batch execution seam.
 //!
-//! [`RadixExecutor`] runs transactions against a caller-supplied
-//! snapshot and returns the shard-invariant [`CachedVmOutput`]. The
-//! caller projects it into a per-shard [`ExecutedTx`] via
-//! [`project_to_shard`](crate::project_to_shard) and typically
-//! memoises the intermediate in
+//! An [`Executor`] runs a wave's transactions against a caller-supplied
+//! snapshot and returns one [`ExecutedTx`] per input, projected to the
+//! context's local shard via
+//! [`project_to_shard`](crate::project_to_shard) — typically memoising
+//! the shard-invariant intermediate in
 //! [`ProcessExecutionCache`](crate::ProcessExecutionCache).
 //!
 //! Storage is NOT owned by the executor — the runner provides it as a
@@ -12,35 +12,25 @@
 //! and so the runner can hoist a single snapshot across an entire
 //! action batch.
 //!
-//! All methods are READ-ONLY: results are returned as [`ExecutedTx`]
+//! Execution is READ-ONLY: results are returned as [`ExecutedTx`]
 //! values whose `DatabaseUpdates` the state machine caches and applies
 //! later, when the wave's certificate is included in a committed block.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_dispatch::Parallelism;
-use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{SubstateDatabase, SubstateStore};
 use hyperscale_types::{
     BlockHash, BlockHeight, NodeId, RevealChain, RoutableTransaction, ShardId, ShardTrie,
-    Stopwatch, SubstateEntry, Verified, WeightedTimestamp,
+    SubstateEntry, Verified, WeightedTimestamp,
 };
-use radix_common::network::NetworkDefinition;
 use radix_common::prelude::DbSubstateValue;
 use radix_common::types::NodeId as RadixNodeId;
-use radix_engine::transaction::{ExecutionConfig, execute_transaction};
-use radix_engine::vm::DefaultVmModules;
 use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey, PartitionEntry};
-use radix_transactions::validation::TransactionValidator;
-use tracing::field::Empty;
-use tracing::{Level, Span, instrument};
 
 use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 use crate::output::ExecutedTx;
-use crate::provisioned_snapshot::ProvisionedSnapshot;
-use crate::receipt::{CachedVmOutput, compute_vm_output, project_to_shard};
-use crate::sharding::{build_cross_shard_ownership, resolve_owned_nodes};
+use crate::receipt::CachedVmOutput;
 
 /// Fetch state entries for the given nodes from storage at a specific block height.
 ///
@@ -79,160 +69,6 @@ pub fn fetch_state_entries<S: SubstateStore>(
     }
 
     Some(entries)
-}
-
-/// Shared executor caches to avoid rebuilding on clone.
-///
-/// Wrapped in [`Arc`] so cloning [`RadixExecutor`] is cheap.
-struct ExecutorCaches {
-    /// VM modules — recreating per transaction would dominate small-tx cost.
-    vm_modules: DefaultVmModules,
-    /// Execution config (pinned to the network's notarized-transaction profile).
-    exec_config: ExecutionConfig,
-    /// Transaction validator (latest config for the network).
-    validator: TransactionValidator,
-}
-
-/// Synchronous Radix Engine executor for deterministic execution.
-///
-/// Storage is NOT owned by the executor; the runner passes it to each
-/// method. State machines stay pure; I/O is delegated to runners.
-///
-/// # Cloning
-///
-/// Cloning is cheap — only the [`Arc`] around [`ExecutorCaches`] is bumped.
-pub struct RadixExecutor {
-    network: NetworkDefinition,
-    caches: Arc<ExecutorCaches>,
-}
-
-impl RadixExecutor {
-    /// Create a new executor for the given network.
-    ///
-    /// VM modules and execution config are cached to avoid per-transaction overhead.
-    #[must_use]
-    pub fn new(network: NetworkDefinition) -> Self {
-        let vm_modules = DefaultVmModules::default();
-        let exec_config = ExecutionConfig::for_notarized_transaction(network.clone());
-        let validator = TransactionValidator::new_with_latest_config(&network);
-        Self {
-            network,
-            caches: Arc::new(ExecutorCaches {
-                vm_modules,
-                exec_config,
-                validator,
-            }),
-        }
-    }
-
-    /// Network definition this executor runs against.
-    #[must_use]
-    pub const fn network(&self) -> &NetworkDefinition {
-        &self.network
-    }
-
-    /// Run the VM for a single-shard transaction and return the
-    /// [`CachedVmOutput`] — the shard-invariant projection of the
-    /// receipt. Caller pairs this with
-    /// [`crate::project_to_shard`] to produce an [`ExecutedTx`] for
-    /// each participating shard.
-    ///
-    /// Ownership is resolved locally against `snapshot`: every declared
-    /// account of a single-shard transaction is owned by the executing
-    /// shard, so the walk sees the full substate set.
-    #[instrument(level = Level::DEBUG, skip_all, fields(latency_us = Empty))]
-    pub fn compute_vm_output_single_shard<D: SubstateDatabase>(
-        &self,
-        snapshot: &D,
-        tx: &RoutableTransaction,
-    ) -> CachedVmOutput {
-        let start = Stopwatch::start();
-        if tx.is_vm() {
-            // The wave dispatch routes VM sub-batches to the VM engine;
-            // a VM body reaching the Radix engine fails deterministically
-            // rather than panicking on the body accessor.
-            return CachedVmOutput::validation_failed(tx.hash());
-        }
-        let Some(validated) = tx.get_or_validate(&self.caches.validator) else {
-            return CachedVmOutput::validation_failed(tx.hash());
-        };
-        let executable = validated.clone().create_executable();
-        record_transaction_executed();
-        let receipt = execute_transaction(
-            snapshot,
-            &self.caches.vm_modules,
-            &self.caches.exec_config,
-            &executable,
-        );
-        let declared_nodes: Vec<NodeId> = tx
-            .declared_reads()
-            .iter()
-            .chain(tx.declared_writes().iter())
-            .copied()
-            .collect();
-        let ownership = resolve_owned_nodes(snapshot, &declared_nodes);
-        let output = compute_vm_output(tx, &receipt, &ownership);
-        Span::current().record(
-            "latency_us",
-            u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX),
-        );
-        output
-    }
-
-    /// Layers `provisions` on top of `snapshot` via [`ProvisionedSnapshot`]
-    /// and executes against the merged view. Provisions carry pre-computed
-    /// storage keys from the sending shard for O(log n) lookups without
-    /// expensive hash work.
-    ///
-    /// `ownership` is the per-vnode merged `vault → owning_account` map
-    /// the caller built via
-    /// [`crate::sharding::build_cross_shard_ownership`] (provisions for
-    /// remote-shard owners, local-snapshot resolve for local-shard owners).
-    /// It is consumed here ONLY for `receipt_hash` (computed inside
-    /// [`compute_vm_output`]); the returned [`CachedVmOutput`] does not
-    /// store it, so callers re-pass their own ownership to
-    /// [`crate::project_to_shard`].
-    #[instrument(level = Level::DEBUG, skip_all, fields(
-        provision_count = provisions.len(),
-        latency_us = Empty,
-    ))]
-    #[allow(clippy::implicit_hasher)]
-    pub fn compute_vm_output_cross_shard<D: SubstateDatabase>(
-        &self,
-        snapshot: &D,
-        tx: &RoutableTransaction,
-        provisions: &[Arc<Vec<SubstateEntry>>],
-        ownership: &HashMap<NodeId, NodeId>,
-    ) -> CachedVmOutput {
-        let start = Stopwatch::start();
-        let Some(validated) = tx.get_or_validate(&self.caches.validator) else {
-            return CachedVmOutput::validation_failed(tx.hash());
-        };
-        let executable = validated.clone().create_executable();
-        let entry_slices: Vec<&[SubstateEntry]> = provisions.iter().map(|p| p.as_slice()).collect();
-        let provisioned = ProvisionedSnapshot::from_provisions(snapshot, &entry_slices);
-        record_transaction_executed();
-        let receipt = provisioned.execute(
-            &executable,
-            &self.caches.vm_modules,
-            &self.caches.exec_config,
-        );
-        let output = compute_vm_output(tx, &receipt, ownership);
-        Span::current().record(
-            "latency_us",
-            u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX),
-        );
-        output
-    }
-}
-
-impl Clone for RadixExecutor {
-    fn clone(&self) -> Self {
-        Self {
-            network: self.network.clone(),
-            caches: Arc::clone(&self.caches),
-        }
-    }
 }
 
 /// Object-safe borrow of the wave's state snapshot, so the batch seam
@@ -289,9 +125,6 @@ pub struct CrossShardTxInput<'a> {
     pub transaction: &'a Arc<Verified<RoutableTransaction>>,
     /// Verified provision entry lists, one per source shard contribution.
     pub provisions: &'a [Arc<Vec<SubstateEntry>>],
-    /// The merged `vault → owning_account` map for the Radix variant;
-    /// structurally empty for VM transactions.
-    pub ownership: &'a HashMap<NodeId, NodeId>,
     /// The transaction clock: the payer-shard committing block's
     /// parent-QC weighted timestamp, identical on every participant.
     pub clock: WeightedTimestamp,
@@ -300,12 +133,11 @@ pub struct CrossShardTxInput<'a> {
     pub randomness: RevealChain,
 }
 
-/// One engine's execution of a wave's same-variant sub-batch.
+/// Execution of a wave's sub-batch.
 ///
-/// The unit is the batch: the Radix implementation runs its
-/// per-transaction loop over it, the VM implementation hands the whole
-/// batch to its deterministic-parallel executor. Both return one
-/// [`ExecutedTx`] per input transaction, in input order.
+/// The unit is the batch: the whole of it goes to the deterministic-parallel
+/// executor at once, which returns one [`ExecutedTx`] per input
+/// transaction, in input order.
 pub trait Executor: Send + Sync {
     /// Execute `transactions` against `snapshot` and project each result
     /// to the context's local shard.
@@ -337,10 +169,10 @@ pub fn participating_shards<'a>(
     tx: &'a RoutableTransaction,
     shard_trie: &'a ShardTrie,
 ) -> impl Iterator<Item = ShardId> + 'a {
-    tx.declared_reads()
-        .iter()
-        .chain(tx.declared_writes().iter())
-        .map(move |n| shard_trie.shard_for(n))
+    tx.routing()
+        .all_prefixes()
+        .into_iter()
+        .map(move |prefix| shard_trie.shard_for_prefix(prefix))
 }
 
 /// Plan derived for each position in a batch by classifying its
@@ -391,105 +223,4 @@ pub fn batch_compute_cached(
         }
         Plan::Pending(slot) => Arc::clone(slot.get_or_init(|| Arc::new(compute(i)))),
     })
-}
-
-impl Executor for RadixExecutor {
-    fn execute_wave_batch(
-        &self,
-        ctx: &WaveBatchContext<'_>,
-        snapshot: &DynSnapshot<'_>,
-        transactions: &[Arc<Verified<RoutableTransaction>>],
-    ) -> Vec<ExecutedTx> {
-        let cached = batch_compute_cached(ctx.par, ctx.cache, transactions, ctx.shard_trie, |i| {
-            self.compute_vm_output_single_shard(snapshot, &transactions[i])
-        });
-        transactions
-            .iter()
-            .zip(cached)
-            .map(|(tx, cached)| {
-                // Single-shard ownership is purely local: every declared
-                // account lives on this shard. Computed per-call rather
-                // than cached so the cache stays shard-invariant (matches
-                // the cross-shard path).
-                let declared: Vec<NodeId> = tx
-                    .declared_reads()
-                    .iter()
-                    .chain(tx.declared_writes().iter())
-                    .copied()
-                    .collect();
-                let ownership = resolve_owned_nodes(snapshot, &declared);
-                project_to_shard(
-                    &cached,
-                    tx.hash(),
-                    ctx.local_shard,
-                    ctx.shard_trie,
-                    &ownership,
-                )
-            })
-            .collect()
-    }
-
-    fn execute_cross_shard_batch(
-        &self,
-        ctx: &WaveBatchContext<'_>,
-        snapshot: &DynSnapshot<'_>,
-        requests: &[CrossShardTxInput<'_>],
-    ) -> Vec<ExecutedTx> {
-        let txs: Vec<Arc<Verified<RoutableTransaction>>> =
-            requests.iter().map(|r| Arc::clone(r.transaction)).collect();
-        // Per-request merged ownership: provisions for remote-shard
-        // owners, local-snapshot resolve for local ones. `Err` means the
-        // transaction touches a vault claimed by accounts on both shards
-        // — fast-abort so every committee produces the same `Failed`
-        // outcome instead of executing a divergent VM view.
-        let ownerships: Vec<Result<HashMap<NodeId, NodeId>, Vec<NodeId>>> = requests
-            .iter()
-            .map(|req| {
-                let declared: Vec<NodeId> = req
-                    .transaction
-                    .declared_reads()
-                    .iter()
-                    .chain(req.transaction.declared_writes().iter())
-                    .copied()
-                    .collect();
-                build_cross_shard_ownership(
-                    snapshot,
-                    &declared,
-                    req.ownership,
-                    ctx.local_shard,
-                    ctx.shard_trie,
-                )
-            })
-            .collect();
-        let cached = batch_compute_cached(ctx.par, ctx.cache, &txs, ctx.shard_trie, |i| {
-            let req = &requests[i];
-            ownerships[i].as_ref().map_or_else(
-                |_| CachedVmOutput::ownership_conflict_aborted(req.transaction.hash()),
-                |ownership| {
-                    self.compute_vm_output_cross_shard(
-                        snapshot,
-                        req.transaction,
-                        req.provisions,
-                        ownership,
-                    )
-                },
-            )
-        });
-        let empty_ownership: HashMap<NodeId, NodeId> = HashMap::new();
-        requests
-            .iter()
-            .zip(cached)
-            .zip(ownerships.iter())
-            .map(|((req, cached), ownership)| {
-                let ownership = ownership.as_ref().unwrap_or(&empty_ownership);
-                project_to_shard(
-                    &cached,
-                    req.transaction.hash(),
-                    ctx.local_shard,
-                    ctx.shard_trie,
-                    ownership,
-                )
-            })
-            .collect()
-    }
 }

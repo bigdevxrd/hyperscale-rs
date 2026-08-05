@@ -207,12 +207,12 @@ impl LockTracker {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::test_utils::test_node;
+    use hyperscale_types::test_utils::test_prefix;
 
     use super::*;
 
     fn key(seed: u8) -> DeclaredKey {
-        DeclaredKey::node(test_node(seed))
+        DeclaredKey::prefix(test_prefix(seed))
     }
 
     #[test]

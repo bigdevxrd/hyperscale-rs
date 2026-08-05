@@ -35,8 +35,6 @@ use hyperscale_shard::{ShardConsensusConfig, ShardCoordinator};
 use hyperscale_storage::RecoveredState;
 use hyperscale_types::{BlockHeight, ForkFence, LocalTimestamp, ShardId, ValidatorId, Verifier};
 
-use crate::routing_observer::BridgeRoutingObserver;
-
 /// The coordinators a vnode runs while seated on a shard.
 ///
 /// Fields are visible across the `state` module tree so the per-domain handlers
@@ -118,12 +116,8 @@ impl ShardParticipation {
         let committed_height = recovered.committed_height;
         let committed_block_anchor_wt = recovered.block_anchor_wt();
         let committed_committee_anchor_wt = recovered.committee_anchor_wt();
-        let routing_overlay = mempool_config.routing_overlay;
-        let mut mempool_coordinator =
+        let mempool_coordinator =
             MempoolCoordinator::with_tx_store(local_shard, mempool_config, tx_store);
-        if routing_overlay {
-            mempool_coordinator.set_routing_observer(Arc::new(BridgeRoutingObserver));
-        }
         Self {
             local_shard,
             shard_coordinator: ShardCoordinator::new(

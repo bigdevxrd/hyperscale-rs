@@ -144,7 +144,7 @@ where
         config
             .vm_accounts
             .retain(|(address, _)| topology_snapshot.shard_for_prefix(*address) == shard);
-        let prepared = prepared_genesis(self.process.dispatch_handles.executor.network(), &config);
+        let prepared = prepared_genesis(&self.process.dispatch_handles.genesis_network, &config);
         let merged = if config.vm_accounts.is_empty() && config.vm_pools.is_empty() {
             prepared
         } else {

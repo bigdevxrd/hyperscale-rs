@@ -20,7 +20,6 @@ use arc_swap::ArcSwap;
 pub(crate) use canonical_txs::CanonicalTxs;
 use crossbeam::channel::Sender;
 use hyperscale_dispatch::Dispatch;
-use hyperscale_engine::TransactionValidation;
 use hyperscale_network::Network;
 use hyperscale_storage::{BeaconStorage, ShardStorage};
 use hyperscale_types::{
@@ -196,7 +195,6 @@ where
     /// Stateless transaction validator (signature + format + EC checks).
     /// `Arc` so it can be cloned into the `tx_validation` pool closure
     /// on each batch flush.
-    pub(crate) tx_validator: Arc<TransactionValidation>,
 
     /// Process-level beacon chain storage. One handle per host,
     /// shared across every vnode's `Action::CommitBeaconBlock`
@@ -258,7 +256,6 @@ where
         beacon_event_sender: Sender<HostEvent>,
         topology_snapshot: SharedTopologySnapshot,
         dispatch_handles: Arc<DispatchHandles<S, N>>,
-        tx_validator: Arc<TransactionValidation>,
         beacon_storage: Arc<dyn BeaconStorage>,
     ) -> Self {
         Self {
@@ -271,7 +268,6 @@ where
             topology_snapshot,
             apply_topology_epoch: Mutex::new(Epoch::GENESIS),
             dispatch_handles,
-            tx_validator,
             beacon_storage,
             beacon_commit: BeaconCommitCoordinator::new(),
             tx_status: Arc::new(TxStatusCache::new()),

@@ -52,7 +52,6 @@ use hyperscale_types::{
 };
 use tracing::instrument;
 
-use crate::conflict::DetectedConflict;
 use crate::early_arrivals::{EARLY_VOTE_RETENTION, EarlyArrivalBuffer};
 use crate::exec_cert_store::ExecCertStore;
 use crate::expected_certs::ExpectedCertTracker;
@@ -444,8 +443,8 @@ impl ExecutionCoordinator {
     /// Set up per-wave execution state for a newly committed block.
     ///
     /// For each distinct wave, creates a [`WaveState`], records tx → wave
-    /// assignments, registers cross-shard txs with the conflict detector, and
-    /// pre-populates provisions that arrived before the block.
+    /// assignments, and pre-populates provisions that arrived before the
+    /// block.
     ///
     /// Emits `ExecuteTransactions` / `ExecuteCrossShardTransactions` actions
     /// for waves that are fully provisioned at creation time: single-shard
@@ -455,19 +454,14 @@ impl ExecutionCoordinator {
     /// Returns the emitted dispatch actions plus any early execution votes
     /// that need to be replayed through `dispatch_execution_vote()`.
     /// Register a new cross-shard wave's transactions: the dependency set
-    /// execution waits on, the engagement echoes the payer's vote waits
-    /// on, and the conflict detector's reverse verdicts.
+    /// execution waits on and the engagement echoes the payer's vote
+    /// waits on.
     fn register_cross_shard_txs(
         &mut self,
         classification: &TopologySnapshot,
         txs: &[(Arc<Verifiable<RoutableTransaction>>, BTreeSet<ShardId>)],
-    ) -> (Vec<DetectedConflict>, Vec<EngagementWait>) {
+    ) -> Vec<EngagementWait> {
         let local_shard = self.local_shard;
-        // Reverse conflicts are where a newly-registered tx loses against
-        // a previously-committed remote provision; they only apply if the
-        // tx isn't already fully provisioned — if provisions are in,
-        // execution can proceed and there's no deadlock to break.
-        let mut reverse_conflicts: Vec<DetectedConflict> = Vec::new();
         let mut engagement_waits: Vec<EngagementWait> = Vec::new();
 
         for (tx, participating) in txs {
@@ -485,8 +479,10 @@ impl ExecutionCoordinator {
             // the window closed without one. Keyed on the same participant
             // set the wave was grouped by, so every replica waits on the
             // same shards.
-            if let Some(vm) = tx.vm()
-                && classification.shard_trie().shard_for_prefix(vm.fee_payer) == local_shard
+            if classification
+                .shard_trie()
+                .shard_for_prefix(tx.body().fee_payer)
+                == local_shard
             {
                 engagement_waits.push((
                     tx_hash,
@@ -495,61 +491,31 @@ impl ExecutionCoordinator {
                 ));
             }
 
-            // The dependency set is what execution waits for. The Radix
-            // engine needs every remote participant's full declared state;
-            // a VM leg needs the shards owning its read set plus — on a
-            // non-payer shard — the payer shard, whose bundle is the
-            // engagement evidence and flows even with empty entries. Only
-            // the payer's own commutative leg records an empty requirement
-            // and dispatches without waiting.
-            let remote_shards: BTreeSet<ShardId> =
-                tx.vm_routing().map_or_else(remote_participants, |routing| {
-                    let trie = classification.shard_trie();
-                    let mut shards: BTreeSet<ShardId> = routing
-                        .provision_prefixes
-                        .iter()
-                        .map(|prefix| trie.shard_for_prefix(*prefix))
-                        .filter(|&s| s != local_shard)
-                        .collect();
-                    if let Some(vm) = tx.vm() {
-                        let payer_shard = trie.shard_for_prefix(vm.fee_payer);
-                        if payer_shard != local_shard {
-                            shards.insert(payer_shard);
-                            // The payer's bundle carries the transaction
-                            // clock; remember whose entry to read it from
-                            // at dispatch.
-                            self.provisioning.record_payer_shard(tx_hash, payer_shard);
-                        }
-                    }
-                    shards
-                });
-            if remote_shards.is_empty() && !tx.is_vm() {
-                continue;
+            // The dependency set is what execution waits for: the shards
+            // owning the transaction's read set, plus — on a non-payer
+            // shard — the payer shard, whose bundle is the engagement
+            // evidence and flows even with empty entries. Only the payer's
+            // own commutative leg records an empty requirement and
+            // dispatches without waiting.
+            let trie = classification.shard_trie();
+            let mut remote_shards: BTreeSet<ShardId> = tx
+                .routing()
+                .provision_prefixes
+                .iter()
+                .map(|prefix| trie.shard_for_prefix(*prefix))
+                .filter(|&s| s != local_shard)
+                .collect();
+            let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
+            if payer_shard != local_shard {
+                remote_shards.insert(payer_shard);
+                // The payer's bundle carries the transaction clock;
+                // remember whose entry to read it from at dispatch.
+                self.provisioning.record_payer_shard(tx_hash, payer_shard);
             }
             self.provisioning.record_required(tx_hash, remote_shards);
-
-            if tx.is_vm() {
-                // The detector is NodeId-shaped and VM provision entries
-                // carry no target or owned nodes, so it cannot track VM
-                // legs. Commutative legs have empty dependency sets and
-                // nothing to wait on; a fresh-read/RMW circular wait falls
-                // back to wave expiry until a substate-keyed resolver
-                // exists.
-                continue;
-            }
-            let conflicts = self.provisioning.register_tx(
-                tx_hash,
-                local_shard,
-                classification,
-                tx.declared_reads(),
-                tx.declared_writes(),
-            );
-            if !self.provisioning.is_fully_provisioned(tx_hash) {
-                reverse_conflicts.extend(conflicts);
-            }
         }
 
-        (reverse_conflicts, engagement_waits)
+        engagement_waits
     }
 
     fn setup_waves_and_dispatch(
@@ -584,14 +550,10 @@ impl ExecutionCoordinator {
 
             let is_single_shard = wave_id.is_zero();
 
-            // Cross-shard: register each tx with the conflict detector and
-            // populate required-provision tracking. Collect reverse conflicts
-            // (where the newly-registered tx is the loser against a
-            // previously-committed remote provision); they only apply if the
-            // tx isn't already fully provisioned — if provisions are in,
-            // execution can proceed and there's no deadlock to break.
-            let (reverse_conflicts, engagement_waits) = if is_single_shard {
-                (Vec::new(), Vec::new())
+            // Cross-shard: populate required-provision tracking and the
+            // engagement echoes the payer's vote waits on.
+            let engagement_waits = if is_single_shard {
+                Vec::new()
             } else {
                 self.register_cross_shard_txs(classification, &txs)
             };
@@ -610,11 +572,6 @@ impl ExecutionCoordinator {
 
             for (tx_hash, counterparts, validity_end) in engagement_waits {
                 wave_state.record_engagement_wait(tx_hash, counterparts, validity_end);
-            }
-
-            // Apply the deadlock-resolving reverse conflicts collected above.
-            for conflict in reverse_conflicts {
-                wave_state.record_abort(conflict.loser_tx, conflict.committed_at);
             }
 
             // For cross-shard waves: fold in any provisions that already arrived.

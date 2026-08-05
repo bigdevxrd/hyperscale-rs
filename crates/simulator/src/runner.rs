@@ -14,18 +14,15 @@ use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_simulation::SimulationRunner;
 use hyperscale_spammer::validity::{ValidityClock, range_starting_at};
 use hyperscale_spammer::{
-    AccountPool, AccountPoolError, AccountUsageStats, FundingWorkload, TransferWorkload,
-    WorkloadGenerator,
+    AccountPool, AccountPoolError, AccountUsageStats, TransferWorkload, WorkloadGenerator,
 };
 use hyperscale_types::{
-    MIN_BEACON_COMMITTEE_SIZE, RoutableTransaction, ShardId, TransactionDecision,
-    TransactionStatus, TxHash, WeightedTimestamp, uniform_shard_for_node,
+    MIN_BEACON_COMMITTEE_SIZE, RoutableTransaction, ShardId, ShardTrie, TransactionDecision,
+    TransactionStatus, TxHash, WeightedTimestamp,
 };
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::config::SimulatorConfig;
 use crate::livelock::{LivelockAnalyzer, LivelockReport};
@@ -82,11 +79,16 @@ impl Simulator {
                 config.validators_per_shard,
             ));
         }
-        let network_config = config.to_sim_config();
-        let runner = SimulationRunner::new(&network_config, config.seed);
-
         let accounts =
             AccountPool::generate(u64::from(config.num_shards), config.accounts_per_shard)?;
+
+        // The world the process VM statics install has to name every
+        // account the workload will transact with: statics are installed
+        // once and first-writer-wins, so an account added afterwards
+        // would fail admission with no instance at its address.
+        let mut network_config = config.to_sim_config();
+        network_config.vm_accounts = accounts.all_genesis_balances(config.initial_balance);
+        let runner = SimulationRunner::new(&network_config, config.seed);
 
         // Workload generators must anchor validity ranges on simulated time,
         // not wall clock — chain-side `weighted_timestamp` mirrors the
@@ -102,7 +104,7 @@ impl Simulator {
             })
         };
 
-        let workload = TransferWorkload::new(NetworkDefinition::simulator())
+        let workload = TransferWorkload::new()
             .with_cross_shard_ratio(config.workload.cross_shard_ratio)
             .with_selection_mode(config.workload.selection_mode)
             .with_validity_clock(Arc::clone(&validity_clock));
@@ -135,24 +137,18 @@ impl Simulator {
         })
     }
 
-    /// Initialize the simulation (genesis + optional runtime funding).
-    ///
-    /// If the requested account count fits within the engine's genesis limit
-    /// (~8000 per shard), all accounts are funded at genesis. Otherwise a
-    /// two-phase approach is used:
-    ///
-    /// 1. **Genesis phase** — fund up to 8000 accounts per shard, giving
-    ///    funding-source accounts extra balance to cover what they'll transfer.
-    /// 2. **Runtime funding phase** — after consensus warmup, submit transfer
-    ///    transactions from genesis accounts to the remaining unfunded accounts.
+    /// Initialize the simulation: genesis funds every account, then the
+    /// cluster warms up and grows to the target topology.
     pub fn initialize(&mut self) {
-        let balance = self.config.initial_balance;
-
-        if self.accounts.needs_runtime_funding() {
-            self.initialize_with_runtime_funding(balance);
-        } else {
-            self.initialize_genesis_only(balance);
-        }
+        info!(
+            num_accounts = self.accounts.total_accounts(),
+            initial_balance = self.config.initial_balance,
+            "Funding accounts at genesis"
+        );
+        self.runner.initialize_genesis();
+        self.run_warmup();
+        self.grow_to_target();
+        info!("Genesis initialized with funded accounts");
     }
 
     /// Grow from the single ROOT genesis to the configured target topology via
@@ -165,82 +161,6 @@ impl Simulator {
             );
             self.runner.grow_to(self.config.num_shards);
         }
-    }
-
-    /// Fast path: all accounts fit in genesis.
-    fn initialize_genesis_only(&mut self, balance: Decimal) {
-        // Genesis funds every account on ROOT; the grow then partitions them
-        // across the children by prefix.
-        let balances: Vec<_> = self
-            .accounts
-            .shards()
-            .flat_map(|shard| self.accounts.genesis_balances_for_shard(shard, balance))
-            .collect();
-
-        info!(
-            num_accounts = balances.len(),
-            initial_balance = %balance,
-            "Funding accounts at genesis"
-        );
-
-        self.runner.initialize_genesis_with_balances(&balances);
-        self.run_warmup();
-        self.grow_to_target();
-        info!("Genesis initialized with funded accounts");
-    }
-
-    /// Two-phase path: genesis for first 8000/shard, then runtime funding.
-    fn initialize_with_runtime_funding(&mut self, balance: Decimal) {
-        // Anchor funding-tx validity ranges on the simulated clock — same
-        // reasoning as the main TransferWorkload above.
-        self.sim_now_ms.store(
-            u64::try_from(self.runner.now().as_millis()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
-        let validity_clock: ValidityClock = {
-            let clock = Arc::clone(&self.sim_now_ms);
-            Arc::new(move || {
-                let ms = clock.load(Ordering::Relaxed);
-                range_starting_at(WeightedTimestamp::from_millis(ms))
-            })
-        };
-        let funding_workload = FundingWorkload::new(NetworkDefinition::simulator())
-            .with_validity_clock(validity_clock);
-        let plan = self.accounts.runtime_funding_plan(balance);
-
-        info!(
-            funding_txs = plan.len(),
-            "Accounts exceed genesis limit, using two-phase funding"
-        );
-
-        // Phase 1: Genesis with capped accounts (funders get extra balance).
-        let balances: Vec<_> = self
-            .accounts
-            .shards()
-            .flat_map(|shard| {
-                self.accounts
-                    .genesis_balances_capped(shard, balance, funding_workload.fee())
-            })
-            .collect();
-
-        info!(
-            genesis_accounts = balances.len(),
-            initial_balance = %balance,
-            "Funding genesis accounts (capped)"
-        );
-
-        self.runner.initialize_genesis_with_balances(&balances);
-        self.run_warmup();
-
-        // Grow to the target topology before runtime funding so the surplus
-        // funding transactions route across the grown shards.
-        self.grow_to_target();
-
-        // Phase 2: Fund remaining accounts via transactions.
-        let txs_by_shard = funding_workload.generate_funding_transactions(&self.accounts, &plan);
-        self.submit_funding_transactions(txs_by_shard);
-
-        info!("Two-phase funding complete");
     }
 
     /// Advance simulated time to `target`, seating whatever the committed
@@ -264,86 +184,6 @@ impl Simulator {
             "Running warmup period for consensus to establish"
         );
         self.advance_to(self.runner.now() + warmup_duration);
-    }
-
-    /// Submit funding transactions in batches and wait for completion.
-    fn submit_funding_transactions(
-        &mut self,
-        txs_by_shard: HashMap<ShardId, Vec<RoutableTransaction>>,
-    ) {
-        let batch_size = 500;
-        let mut total_submitted = 0u64;
-        let mut total_completed = 0u64;
-        let mut total_failed = 0u64;
-
-        // Flatten into (shard, tx) pairs so we can batch across shards.
-        // Sort by shard for deterministic submission order.
-        let mut shards: Vec<_> = txs_by_shard.into_iter().collect();
-        shards.sort_by_key(|(shard, _)| *shard);
-        let all_txs: Vec<_> = shards
-            .into_iter()
-            .flat_map(|(shard, txs)| txs.into_iter().map(move |tx| (shard, tx)))
-            .collect();
-
-        for chunk in all_txs.chunks(batch_size) {
-            let mut pending: HashMap<TxHash, ShardId> = HashMap::new();
-
-            for (shard, tx) in chunk {
-                let hash = tx.hash();
-                let tx = Arc::new(tx.clone());
-                let shard_nodes = self.nodes_for_shard(*shard);
-                for node_idx in shard_nodes {
-                    self.runner.schedule_initial_event(
-                        node_idx,
-                        Duration::ZERO,
-                        HostEvent::process(ProcessScopedInput::SubmitTransaction {
-                            tx: Arc::clone(&tx),
-                        }),
-                    );
-                }
-                pending.insert(hash, *shard);
-                total_submitted += 1;
-            }
-
-            // 30s timeout guards against an unbounded loop if any tx never finalizes.
-            let deadline = self.runner.now() + Duration::from_secs(30);
-            let step = Duration::from_millis(100);
-
-            while !pending.is_empty() && self.runner.now() < deadline {
-                self.advance_to(self.runner.now() + step);
-
-                let hashes: Vec<TxHash> = pending.keys().copied().collect();
-                for hash in hashes {
-                    if let Some(&shard) = pending.get(&hash) {
-                        let node_idx = self.get_node_for_shard(shard);
-                        if let Some(status) = self.runner.tx_status(node_idx, &hash)
-                            && status.is_final()
-                        {
-                            pending.remove(&hash);
-                            if status == TransactionStatus::Completed(TransactionDecision::Accept) {
-                                total_completed += 1;
-                            } else {
-                                total_failed += 1;
-                                warn!(?hash, %status, "Funding transaction failed");
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !pending.is_empty() {
-                warn!(
-                    remaining = pending.len(),
-                    "Some funding transactions did not complete within timeout"
-                );
-                total_failed += pending.len() as u64;
-            }
-        }
-
-        info!(
-            total_submitted,
-            total_completed, total_failed, "Runtime funding transactions processed"
-        );
     }
 
     /// Run the simulation for the specified duration.
@@ -485,12 +325,11 @@ impl Simulator {
         }
     }
 
-    /// Determine the target shard for a transaction.
+    /// Determine the target shard for a transaction: the payer's, which
+    /// every envelope names directly.
     fn get_target_shard(&self, tx: &RoutableTransaction) -> ShardId {
-        tx.declared_writes().first().map_or_else(
-            || ShardId::leaf(self.config.num_shards.trailing_zeros(), 0),
-            |node_id| uniform_shard_for_node(node_id, u64::from(self.config.num_shards)),
-        )
+        ShardTrie::uniform_from_count(u64::from(self.config.num_shards))
+            .shard_for_prefix(tx.body().fee_payer)
     }
 
     /// A host that currently serves `shard`, for status reads. The grow

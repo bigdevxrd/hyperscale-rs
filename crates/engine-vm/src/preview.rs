@@ -246,9 +246,7 @@ impl VmExecutor {
         tx: &RoutableTransaction,
         inputs: PreviewInputs,
     ) -> PreviewReport {
-        let Some(vm) = tx.vm() else {
-            return PreviewReport::refused("not a VM transaction");
-        };
+        let vm = tx.body();
         let payer = PayerFee {
             // Derived rather than read off `vm_fee_vault`, which panics
             // on an envelope derivation refuses — the exact envelope a

@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_types::{
-    BlockHeight, ConsensusPublicKey, DeclaredKey, ExecutionCertificate, NodeId,
-    RoutableTransaction, ShardId, TopologySnapshot, ValidatorId, Verifiable, VoteCount, WaveId,
+    BlockHeight, ConsensusPublicKey, ExecutionCertificate, NodeId, RoutableTransaction, ShardId,
+    TopologySnapshot, ValidatorId, Verifiable, VoteCount, WaveId,
 };
 
 /// Per-shard recipient lists for provision broadcasting.
@@ -124,32 +124,30 @@ pub fn assign_waves(
     waves
 }
 
-/// The VM arm of [`build_provision_requests`]: the locally owned
-/// read-set keys (fresh reads and read-modify-write priors) toward every
-/// remote participant. Nothing node-granular travels. The payer shard's
-/// bundle flows even with nothing to serve — it is the engagement
-/// evidence a counterpart demands before proposing the transaction — and
-/// a counterpart with nothing to serve emits an empty bundle to the
-/// payer alone: the engagement echo the payer's vote waits for.
-fn vm_provision_request(
+/// One transaction's provision request: the locally owned read-set keys
+/// (fresh reads and read-modify-write priors) toward every remote
+/// participant. The payer shard's bundle flows even with nothing to
+/// serve — it is the engagement evidence a counterpart demands before
+/// proposing the transaction — and a counterpart with nothing to serve
+/// emits an empty bundle to the payer alone: the engagement echo the
+/// payer's vote waits for.
+fn provision_request(
     topology_snapshot: &TopologySnapshot,
     tx: &Arc<Verifiable<RoutableTransaction>>,
     local_shard: ShardId,
 ) -> Option<ProvisionsRequest> {
-    let routing = tx.vm_routing()?;
     let trie = topology_snapshot.shard_trie();
-    let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
+    let vm_local_keys: Vec<([u8; 16], [u8; 16])> = tx
+        .routing()
         .provision_keys
         .iter()
-        .filter_map(|key| match key {
-            DeclaredKey::Prefix {
-                owner,
-                local: Some(local),
-            } if trie.shard_for_prefix(*owner) == local_shard => Some((*owner, *local)),
-            _ => None,
+        .filter_map(|key| {
+            key.local
+                .filter(|_| trie.shard_for_prefix(key.owner) == local_shard)
+                .map(|local| (key.owner, local))
         })
         .collect();
-    let payer_shard = tx.vm().map(|vm| trie.shard_for_prefix(vm.fee_payer))?;
+    let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
     let target_nodes: Vec<(ShardId, Vec<NodeId>)> =
         if vm_local_keys.is_empty() && payer_shard != local_shard {
             // The engagement echo: a counterpart with nothing to serve
@@ -193,58 +191,8 @@ pub fn build_provision_requests(
         if topology_snapshot.is_single_shard_transaction(tx) {
             continue;
         }
-        if tx.is_vm() {
-            if let Some(request) = vm_provision_request(topology_snapshot, tx, local_shard) {
-                provision_requests.push(request);
-            }
-            continue;
-        }
-        let all_nodes: Vec<NodeId> = tx
-            .declared_reads()
-            .iter()
-            .chain(tx.declared_writes().iter())
-            .copied()
-            .collect();
-
-        let mut owned_nodes: Vec<NodeId> = all_nodes
-            .iter()
-            .copied()
-            .filter(|n| topology_snapshot.shard_for_node_id(n) == local_shard)
-            .collect();
-        owned_nodes.sort();
-        owned_nodes.dedup();
-
-        if owned_nodes.is_empty() {
-            continue;
-        }
-
-        // Per-target-shard node needs for conflict detection on the remote side.
-        let mut target_nodes: Vec<(ShardId, Vec<NodeId>)> = Vec::new();
-        for target_shard in topology_snapshot
-            .all_shards_for_transaction(tx)
-            .into_iter()
-            .filter(|&s| s != local_shard)
-        {
-            let mut needed: Vec<NodeId> = all_nodes
-                .iter()
-                .copied()
-                .filter(|n| topology_snapshot.shard_for_node_id(n) == target_shard)
-                .collect();
-            // Canonicalise so gossip-emitted and fetch-served `ProvisionEntry`s
-            // hash identically — `serve_provision_request` sorts and dedups too.
-            needed.sort();
-            needed.dedup();
-            target_nodes.push((target_shard, needed));
-        }
-
-        if !target_nodes.is_empty() {
-            provision_requests.push(ProvisionsRequest {
-                tx_hash: tx.hash(),
-                local_nodes: owned_nodes,
-                target_nodes,
-                vm_local_keys: Vec::new(),
-                vm: false,
-            });
+        if let Some(request) = provision_request(topology_snapshot, tx, local_shard) {
+            provision_requests.push(request);
         }
     }
 

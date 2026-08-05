@@ -998,35 +998,21 @@ impl TopologySnapshot {
         self.shard_trie.shard_for_prefix(prefix)
     }
 
-    /// The shard owning a declared admission key, per its variant's
-    /// identity space.
+    /// The shard owning a declared admission key.
     #[must_use]
     pub fn shard_for_declared_key(&self, key: &DeclaredKey) -> ShardId {
-        match key {
-            DeclaredKey::Node { node, .. } => self.shard_for_node_id(node),
-            DeclaredKey::Prefix { owner, .. } => self.shard_for_prefix(*owner),
-        }
+        self.shard_for_prefix(key.owner)
     }
 
-    /// Every shard a transaction touches via its declared access sets —
-    /// node-derived for the Radix variant, prefix-derived for the VM
-    /// variant. Each shard executes the whole transaction, so every
-    /// touched shard needs every input substate it doesn't own locally —
-    /// reads and writes participate symmetrically here.
+    /// Every shard a transaction touches via its derived effect sets.
+    /// Each shard executes the whole transaction, so every touched shard
+    /// needs every input substate it doesn't own locally — reads and
+    /// writes participate symmetrically here.
     pub fn all_shards_for_transaction(&self, tx: &RoutableTransaction) -> Vec<ShardId> {
-        if let Some(routing) = tx.vm_routing() {
-            return routing
-                .all_prefixes()
-                .into_iter()
-                .map(|prefix| self.shard_for_prefix(prefix))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-        }
-        tx.declared_reads()
-            .iter()
-            .chain(tx.declared_writes().iter())
-            .map(|node_id| self.shard_for_node_id(node_id))
+        tx.routing()
+            .all_prefixes()
+            .into_iter()
+            .map(|prefix| self.shard_for_prefix(prefix))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -1045,29 +1031,18 @@ impl TopologySnapshot {
     /// Check if `shard` is involved in `tx`'s consensus path — i.e. owns at
     /// least one of `tx`'s declared writes.
     pub fn involves_shard_for_consensus(&self, shard: ShardId, tx: &RoutableTransaction) -> bool {
-        if let Some(routing) = tx.vm_routing() {
-            return routing
-                .write_prefixes
-                .iter()
-                .any(|prefix| self.shard_for_prefix(*prefix) == shard);
-        }
-        tx.declared_writes()
+        tx.routing()
+            .write_prefixes
             .iter()
-            .any(|node_id| self.shard_for_node_id(node_id) == shard)
+            .any(|prefix| self.shard_for_prefix(*prefix) == shard)
     }
 
     /// Check if `shard` is involved in `tx` at all (reads or writes).
     pub fn involves_shard(&self, shard: ShardId, tx: &RoutableTransaction) -> bool {
-        if let Some(routing) = tx.vm_routing() {
-            return routing
-                .all_prefixes()
-                .into_iter()
-                .any(|prefix| self.shard_for_prefix(prefix) == shard);
-        }
-        tx.declared_writes()
-            .iter()
-            .chain(tx.declared_reads().iter())
-            .any(|node_id| self.shard_for_node_id(node_id) == shard)
+        tx.routing()
+            .all_prefixes()
+            .into_iter()
+            .any(|prefix| self.shard_for_prefix(prefix) == shard)
     }
 }
 
@@ -1119,7 +1094,7 @@ mod tests {
     use hyperscale_crypto_bls::BlsSigner;
 
     use super::*;
-    use crate::test_utils::{test_node, test_transaction_with_nodes};
+    use crate::test_utils::{test_prefix, test_transaction_with_prefixes};
     use crate::{Hash, ValidatorInfo};
 
     fn make_test_validator(id: u64) -> ValidatorInfo {
@@ -1679,29 +1654,29 @@ mod tests {
         )
     }
 
-    /// The first `count` node seeds (scanning from 0) that route to `shard`.
-    fn first_nodes_on_shard(
+    /// The first `count` prefix seeds (scanning from 0) that route to `shard`.
+    fn first_prefixes_on_shard(
         topology_snapshot: &TopologySnapshot,
         shard: ShardId,
         count: usize,
-    ) -> Vec<NodeId> {
-        let nodes: Vec<NodeId> = (0..=u8::MAX)
-            .map(test_node)
-            .filter(|n| topology_snapshot.shard_for_node_id(n) == shard)
+    ) -> Vec<[u8; 16]> {
+        let prefixes: Vec<[u8; 16]> = (0..=u8::MAX)
+            .map(test_prefix)
+            .filter(|p| topology_snapshot.shard_for_prefix(*p) == shard)
             .take(count)
             .collect();
         assert!(
-            nodes.len() == count,
-            "fewer than {count} nodes route to {shard:?} within the seed range",
+            prefixes.len() == count,
+            "fewer than {count} prefixes route to {shard:?} within the seed range",
         );
-        nodes
+        prefixes
     }
 
     #[test]
     fn single_shard_transaction_touches_one_shard() {
         let topology_snapshot = two_shard_topology();
-        let nodes = first_nodes_on_shard(&topology_snapshot, ShardId::leaf(1, 0), 2);
-        let tx = test_transaction_with_nodes(b"single_shard", vec![nodes[0]], vec![nodes[1]]);
+        let nodes = first_prefixes_on_shard(&topology_snapshot, ShardId::leaf(1, 0), 2);
+        let tx = test_transaction_with_prefixes(b"single_shard", &[nodes[0]], &[nodes[1]]);
         assert_eq!(
             topology_snapshot.all_shards_for_transaction(&tx).len(),
             1,
@@ -1712,9 +1687,9 @@ mod tests {
     #[test]
     fn cross_shard_transaction_touches_both_shards() {
         let topology_snapshot = two_shard_topology();
-        let left = first_nodes_on_shard(&topology_snapshot, ShardId::leaf(1, 0), 1);
-        let right = first_nodes_on_shard(&topology_snapshot, ShardId::leaf(1, 1), 1);
-        let tx = test_transaction_with_nodes(b"cross_shard", vec![left[0]], vec![right[0]]);
+        let left = first_prefixes_on_shard(&topology_snapshot, ShardId::leaf(1, 0), 1);
+        let right = first_prefixes_on_shard(&topology_snapshot, ShardId::leaf(1, 1), 1);
+        let tx = test_transaction_with_prefixes(b"cross_shard", &[left[0]], &[right[0]]);
         assert_eq!(
             topology_snapshot.all_shards_for_transaction(&tx).len(),
             2,

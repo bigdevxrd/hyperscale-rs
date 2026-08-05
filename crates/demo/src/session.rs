@@ -4,18 +4,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use hyperscale_effects_bridge::{build_transfer_tx, vm_account_address};
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_simulation::{CryptoScheme, SimConfig, SimulationRunner};
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{
     BeaconChainConfig, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
     SharedCertificates, TimestampRange, TransactionDecision, TransactionStatus, TxHash,
-    ValidatorId, WeightedTimestamp, build_transfer_tx,
+    ValidatorId, WeightedTimestamp,
 };
 use radix_common::crypto::Ed25519PrivateKey;
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
-use radix_common::types::ComponentAddress;
 
 use crate::event::{HostRole, ObserverSeat, ShardPath, TraceEvent};
 
@@ -26,8 +24,8 @@ fn signer_from_seed(seed: u8) -> Ed25519PrivateKey {
     Ed25519PrivateKey::from_bytes(&[seed; 32]).expect("32 bytes is a valid Ed25519 key")
 }
 
-fn account_from_seed(seed: u8) -> ComponentAddress {
-    ComponentAddress::preallocated_account_from_public_key(&signer_from_seed(seed).public_key())
+fn account_from_seed(seed: u8) -> [u8; 16] {
+    vm_account_address(&signer_from_seed(seed).public_key().0)
 }
 
 /// A validity window bracketing `now`, wide enough that a transaction stays
@@ -82,6 +80,15 @@ const RESHAPE_TICK_MS: u64 = 100;
 /// transfers are held by the ready set (INV-EXEC-3) rather than run, which
 /// looks like a stall to anyone watching.
 const ACCOUNTS: u8 = 8;
+
+/// What each demo account holds at genesis — far above anything a session
+/// spends, so the load generator never runs one dry.
+const ACCOUNT_FUNDING: u128 = 100_000;
+
+/// What one demo transfer moves, and the fee ceiling it signs. Placeholder
+/// pricing; the demo is about movement, not economics.
+const TRANSFER_AMOUNT: u128 = 1;
+const TRANSFER_MAX_FEE: u128 = 1_000;
 
 /// How far a status has progressed, for picking the best of several hosts'
 /// answers. A terminal decision beats an ordering, which beats admission.
@@ -378,14 +385,14 @@ impl Session {
             // session that followed them would run several times slower for a
             // signature path it never draws.
             crypto_scheme: CryptoScheme::Mock,
+            vm_accounts: (1..=ACCOUNTS)
+                .map(|s| (account_from_seed(s), ACCOUNT_FUNDING))
+                .collect(),
             ..SimConfig::default()
         };
         let mut runner = SimulationRunner::new(&sim_config, seed);
         runner.enable_delivery_log(DELIVERY_SAMPLE);
-        let balances: Vec<_> = (1..=ACCOUNTS)
-            .map(|s| (account_from_seed(s), Decimal::from(100_000)))
-            .collect();
-        runner.initialize_genesis_with_balances(&balances);
+        runner.initialize_genesis();
         // Seed the partition watermark with the genesis topology, so the
         // first change reported is a real one rather than the session
         // announcing the shard it opened on.
@@ -421,23 +428,22 @@ impl Session {
         roster(&self.runner)
     }
 
-    /// Build an XRD transfer between two funded accounts.
+    /// Build a transfer between two funded accounts.
     ///
-    /// # Panics
-    ///
-    /// Panics if the transfer fails to build, which for genesis-funded demo
-    /// accounts means a malformed manifest — a programming error, not input.
+    /// The rotation nonce rides the envelope message: the transaction hash
+    /// covers the whole signed envelope, so two presses of the button
+    /// inside one validity window would otherwise be the same transaction
+    /// and the second would dedup away.
     fn build_transfer(&self, from: u8, to: u8) -> RoutableTransaction {
         build_transfer_tx(
             &signer_from_seed(from),
             account_from_seed(from),
             account_from_seed(to),
-            Decimal::from(1),
-            &NetworkDefinition::simulator(),
-            self.nonce,
+            TRANSFER_AMOUNT,
+            TRANSFER_MAX_FEE,
             validity_around(self.now),
+            self.nonce.to_le_bytes().to_vec(),
         )
-        .expect("a transfer between funded demo accounts builds")
     }
 
     /// Submit an XRD transfer between two funded accounts, returning its hash.

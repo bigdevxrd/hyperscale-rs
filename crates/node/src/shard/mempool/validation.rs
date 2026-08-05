@@ -24,7 +24,7 @@ use hyperscale_dispatch::{Dispatch, DispatchPool, Parallelism};
 use hyperscale_network::Network;
 use hyperscale_storage::{ShardStorage, SubstateStore};
 use hyperscale_types::network::gossip::TransactionGossip;
-use hyperscale_types::{RoutableTransaction, ShardId, TopologySnapshot, TxHash, Verified};
+use hyperscale_types::{RoutableTransaction, ShardId, TopologySnapshot, TxHash, Verified, Verify};
 
 use super::TransactionBinding;
 use crate::batch_accumulator::BatchAccumulator;
@@ -177,7 +177,6 @@ where
         let delivered_ids: Vec<TxHash> = batch.iter().map(|tx| tx.hash()).collect();
         self.drive_fetch::<TransactionBinding>(FetchInput::Admitted { ids: delivered_ids });
 
-        let validator = self.process.tx_validator.clone();
         let event_tx = self.event_sender().clone();
         let local_shard = self.shard;
         let par: Parallelism = self.process.dispatch.parallelism();
@@ -187,7 +186,7 @@ where
                 let results: Vec<(TxHash, Option<Verified<RoutableTransaction>>)> =
                     par.map(batch, |tx| {
                         let hash = tx.hash();
-                        (hash, validator.verify_transaction(&tx).ok())
+                        (hash, tx.verify(()).ok())
                     });
 
                 let mut valid: Vec<Arc<Verified<RoutableTransaction>>> = Vec::new();
@@ -280,7 +279,6 @@ where
             return;
         }
 
-        let validator = self.process.tx_validator.clone();
         let event_tx = self.event_sender().clone();
         let local_shard = self.shard;
         let par: Parallelism = self.process.dispatch.parallelism();
@@ -307,7 +305,7 @@ where
                 let results: Vec<(TxHash, Option<Verified<RoutableTransaction>>)> =
                     par.map(batch, |tx| {
                         let hash = tx.hash();
-                        let verified = validator.verify_transaction(&tx).ok().filter(|v| {
+                        let verified = tx.verify(()).ok().filter(|v| {
                             payer_covers_fee_ceiling(v, &topology, local_shard, storage.as_deref())
                         });
                         (hash, verified)
@@ -403,12 +401,8 @@ fn payer_covers_fee_ceiling<S: SubstateStore>(
     local_shard: ShardId,
     storage: Option<&S>,
 ) -> bool {
-    let Some(vm) = tx.vm() else {
-        return true;
-    };
-    let Some((owner, vault_local)) = tx.vm_fee_vault() else {
-        return true;
-    };
+    let vm = tx.body();
+    let (owner, vault_local) = tx.fee_vault();
     if topology.shard_trie().shard_for_prefix(owner) != local_shard {
         return true;
     }

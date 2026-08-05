@@ -72,7 +72,7 @@ pub fn vm_nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
     let mut floors = Vec::new();
     for (composer, from) in [(&first_key, first), (&second_key, second)] {
         let tx = build_vm_composed_tx(composer, from, &requester_key, &request, REQUEST, window);
-        floors.push(tx.vm().expect("a VM envelope").abort_floor());
+        floors.push(tx.body().abort_floor());
         hashes.push(tx.hash());
         c.submit(Arc::new(tx));
     }
@@ -734,7 +734,7 @@ pub fn vm_abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
 
     let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
     let hash = tx.hash();
-    let floor = tx.vm().expect("a VM envelope").abort_floor();
+    let floor = tx.body().abort_floor();
     c.submit(Arc::new(tx));
 
     assert!(
@@ -792,7 +792,7 @@ pub fn vm_failure_charges_its_payer(c: &mut impl Cluster) {
 
     let before = vm_vault_balance(c, shard, from);
     let over = build_vm_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
-    let floor = over.vm().expect("a VM envelope").abort_floor();
+    let floor = over.body().abort_floor();
     let over_hash = over.hash();
     c.submit(Arc::new(over));
     let status = await_tx_terminal(c, over_hash, epochs(8));

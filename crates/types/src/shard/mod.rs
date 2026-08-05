@@ -59,7 +59,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::test_utils::test_validity_range;
+    use crate::test_utils::{install_stub_vm_statics, stub_vm_transaction, test_validity_range};
     use crate::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
         BlockHeight, BoundedVec, CertificateRoot, ChainOrigin, ExecutionCertificate,
@@ -67,7 +67,6 @@ mod tests {
         LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
         ShardId, ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome,
         ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
-        generate_ed25519_keypair, routable_from_notarized_v1, sign_and_notarize,
     };
 
     #[test]
@@ -130,17 +129,13 @@ mod tests {
 
     #[test]
     fn test_compute_transaction_root_deterministic() {
-        use radix_common::network::NetworkDefinition;
-        use radix_transactions::builder::ManifestBuilder;
-
-        // Create a simple transaction for testing
-        let manifest = ManifestBuilder::new().drop_all_proofs().build();
-        let network = NetworkDefinition::simulator();
-        let key = generate_ed25519_keypair();
-        let notarized = sign_and_notarize(manifest, &network, 1, &key).unwrap();
-        let tx = Arc::new(Verifiable::from(
-            routable_from_notarized_v1(notarized, test_validity_range()).unwrap(),
-        ));
+        install_stub_vm_statics();
+        let tx = Arc::new(Verifiable::from(stub_vm_transaction(
+            [1; 16],
+            &[[2; 16]],
+            1_000,
+            test_validity_range(),
+        )));
 
         let root1 = Verified::<TransactionRoot>::compute(std::slice::from_ref(&tx)).into_inner();
         let root2 = Verified::<TransactionRoot>::compute(std::slice::from_ref(&tx)).into_inner();

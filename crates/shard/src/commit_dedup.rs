@@ -178,24 +178,29 @@ impl CommitDedupIndex {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::test_utils::{make_finalized_wave, test_notarized_transaction_v1};
+    use hyperscale_types::test_utils::{
+        install_stub_vm_statics, make_finalized_wave, stub_vm_transaction, test_prefix,
+    };
     use hyperscale_types::{
         BlockHeight, Hash, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, ShardId,
-        TimestampRange, TransactionDecision, routable_from_notarized_v1,
+        TimestampRange, TransactionDecision,
     };
 
     use super::*;
 
     /// Build a test tx whose `validity_range.end_timestamp_exclusive == end_ms`.
     fn tx_with_end(seed: u8, end_ms: u64) -> Arc<Verifiable<RoutableTransaction>> {
-        let notarized = test_notarized_transaction_v1(&[seed]);
+        install_stub_vm_statics();
         let range = TimestampRange::new(
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(end_ms),
         );
-        Arc::new(Verifiable::from(
-            routable_from_notarized_v1(notarized, range).expect("valid notarized fixture"),
-        ))
+        Arc::new(Verifiable::from(stub_vm_transaction(
+            test_prefix(seed),
+            &[test_prefix(seed)],
+            1_000,
+            range,
+        )))
     }
 
     fn make_fw(height: u64) -> Arc<Verifiable<FinalizedWave>> {

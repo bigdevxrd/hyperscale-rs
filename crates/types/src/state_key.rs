@@ -10,14 +10,18 @@
 //! Two key namespaces share the store. Radix keys are
 //! `SpreadPrefixKeyMapper`-encoded (`db_node_key || partition || sort_key`)
 //! and hash to their leaves. VM keys are
-//! `VM_BODY_TAG || owner(16) || VM_PARTITION || local(16)` and read as the
+//! `VM_KEY_TAG || owner(16) || VM_PARTITION || local(16)` and read as the
 //! identity leaf `[owner | local]` — no hashing, no owner map. A VM flat key
 //! is exactly [`VM_FLAT_KEY_LEN`] bytes and a Radix key at least
 //! [`DB_NODE_KEY_LEN`] + 1, so the namespaces are disjoint by length.
 
 use blake3::hash as blake3_hash;
 
-use crate::{NodeId, VM_BODY_TAG};
+use crate::NodeId;
+
+/// First byte of every VM storage key, keeping the VM namespace disjoint
+/// from the Radix keys genesis still writes.
+pub const VM_KEY_TAG: u8 = 0x56;
 
 /// Length of the `SpreadPrefixKeyMapper` hash prefix that precedes the `NodeId`
 /// in a `db_node_key`.
@@ -29,7 +33,7 @@ pub const NODE_ID_LEN: usize = 30;
 /// Length of a full `db_node_key`: hash prefix followed by the `NodeId`.
 pub const DB_NODE_KEY_LEN: usize = DB_NODE_KEY_HASH_PREFIX_LEN + NODE_ID_LEN;
 
-/// Length of a VM `db_node_key`: [`VM_BODY_TAG`] followed by the 16-byte
+/// Length of a VM `db_node_key`: [`VM_KEY_TAG`] followed by the 16-byte
 /// owner prefix.
 pub const VM_DB_NODE_KEY_LEN: usize = 1 + 16;
 
@@ -66,21 +70,21 @@ pub const MAX_STATE_ENTRY_KEY_LEN: usize = 4 * 1024;
 /// published package artifact be one value rather than a chunked set.
 pub const MAX_STATE_ENTRY_VALUE_LEN: usize = 2 * 1024 * 1024;
 
-/// The VM `db_node_key` for `owner`: `VM_BODY_TAG || owner`.
+/// The VM `db_node_key` for `owner`: `VM_KEY_TAG || owner`.
 #[must_use]
 pub fn vm_db_node_key(owner: [u8; 16]) -> Vec<u8> {
     let mut key = Vec::with_capacity(VM_DB_NODE_KEY_LEN);
-    key.push(VM_BODY_TAG);
+    key.push(VM_KEY_TAG);
     key.extend_from_slice(&owner);
     key
 }
 
 /// The full VM flat storage key for one substate:
-/// `VM_BODY_TAG || owner || VM_PARTITION || local`.
+/// `VM_KEY_TAG || owner || VM_PARTITION || local`.
 #[must_use]
 pub fn vm_flat_key(owner: [u8; 16], local: [u8; 16]) -> Vec<u8> {
     let mut key = Vec::with_capacity(VM_FLAT_KEY_LEN);
-    key.push(VM_BODY_TAG);
+    key.push(VM_KEY_TAG);
     key.extend_from_slice(&owner);
     key.push(VM_PARTITION);
     key.extend_from_slice(&local);
@@ -95,7 +99,7 @@ pub fn vm_flat_key(owner: [u8; 16], local: [u8; 16]) -> Vec<u8> {
 #[must_use]
 pub fn vm_flat_key_parts(storage_key: &[u8]) -> Option<([u8; 16], [u8; 16])> {
     if storage_key.len() != VM_FLAT_KEY_LEN
-        || storage_key[0] != VM_BODY_TAG
+        || storage_key[0] != VM_KEY_TAG
         || storage_key[VM_DB_NODE_KEY_LEN] != VM_PARTITION
     {
         return None;
@@ -109,7 +113,7 @@ pub fn vm_flat_key_parts(storage_key: &[u8]) -> Option<([u8; 16], [u8; 16])> {
 /// `DatabaseUpdates`), or `None` when the key is not exactly VM-shaped.
 #[must_use]
 pub fn vm_db_node_key_owner(db_node_key: &[u8]) -> Option<[u8; 16]> {
-    if db_node_key.len() != VM_DB_NODE_KEY_LEN || db_node_key[0] != VM_BODY_TAG {
+    if db_node_key.len() != VM_DB_NODE_KEY_LEN || db_node_key[0] != VM_KEY_TAG {
         return None;
     }
     db_node_key[1..].try_into().ok()
@@ -321,7 +325,7 @@ mod tests {
 
         // A Radix key never parses as VM-shaped, whatever its first byte.
         let mut radix = storage_key(NodeId([3u8; NODE_ID_LEN]), 0, b"sort");
-        radix[0] = VM_BODY_TAG;
+        radix[0] = VM_KEY_TAG;
         assert_eq!(vm_flat_key_parts(&radix), None);
 
         assert_eq!(vm_db_node_key_owner(&good), None); // full key, not entity key

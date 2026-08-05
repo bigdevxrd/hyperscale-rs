@@ -5,7 +5,6 @@ use std::time::Duration;
 use hyperscale_simulation::{EPOCH_MS, SimConfig};
 use hyperscale_spammer::SelectionMode;
 use hyperscale_types::{BeaconChainConfig, ReshapeThresholds};
-use radix_common::math::Decimal;
 
 /// Configuration for a simulation run.
 #[derive(Clone, Debug)]
@@ -20,7 +19,7 @@ pub struct SimulatorConfig {
     pub accounts_per_shard: usize,
 
     /// Initial XRD balance for each account.
-    pub initial_balance: Decimal,
+    pub initial_balance: u128,
 
     /// Workload configuration.
     pub workload: WorkloadConfig,
@@ -37,7 +36,7 @@ impl SimulatorConfig {
             num_shards,
             validators_per_shard,
             accounts_per_shard: 50,
-            initial_balance: Decimal::from(10_000u32),
+            initial_balance: 10_000,
             workload: WorkloadConfig::default(),
             seed: 12345,
         }
@@ -52,7 +51,7 @@ impl SimulatorConfig {
 
     /// Set the initial balance for accounts.
     #[must_use]
-    pub const fn with_initial_balance(mut self, balance: Decimal) -> Self {
+    pub const fn with_initial_balance(mut self, balance: u128) -> Self {
         self.initial_balance = balance;
         self
     }

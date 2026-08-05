@@ -248,6 +248,9 @@ enum SimEvent {
         block_hash: BlockHash,
         result: Result<Verified<ProvisionTxRootsMap>, ProvisionTxRootsVerifyError>,
     },
+    VmReservationsVerified {
+        block_hash: BlockHash,
+    },
     BeaconWitnessRootVerified {
         block_hash: BlockHash,
         result: Result<Verified<BeaconWitnessRoot>, BeaconWitnessRootVerifyError>,
@@ -283,6 +286,7 @@ impl SimEvent {
             Self::LocalReceiptRootVerified { .. } => "LocalReceiptRootVerified",
             Self::ProvisionsRootVerified { .. } => "ProvisionsRootVerified",
             Self::ProvisionTxRootsVerified { .. } => "ProvisionTxRootsVerified",
+            Self::VmReservationsVerified { .. } => "VmReservationsVerified",
             Self::BeaconWitnessRootVerified { .. } => "BeaconWitnessRootVerified",
             Self::StateRootVerified { .. } => "StateRootVerified",
             Self::BlockReadyToCommit { .. } => "BlockReadyToCommit",
@@ -1175,6 +1179,9 @@ impl ShardCoordinatorSim {
             SimEvent::ProvisionTxRootsVerified { block_hash, result } => {
                 coord.on_provision_tx_roots_verified(topology_schedule, block_hash, result)
             }
+            SimEvent::VmReservationsVerified { block_hash } => {
+                coord.on_vm_reservations_verified(topology_schedule, block_hash, &Ok(()))
+            }
             SimEvent::BeaconWitnessRootVerified { block_hash, result } => {
                 coord.on_beacon_witness_root_verified(topology_schedule, block_hash, result)
             }
@@ -1660,6 +1667,16 @@ impl ShardCoordinatorSim {
                 self.loopback_q.push_back(Envelope {
                     to_idx: emitter_idx,
                     event: SimEvent::ProvisionTxRootsVerified { block_hash, result },
+                });
+            }
+            // The mini-sim holds no substate store, so a payer's balance is
+            // unreadable here. Every reservation passes: what this harness
+            // covers is the verification pipeline's shape, and solvency is
+            // exercised where balances exist.
+            Action::VerifyVmReservations { block_hash, .. } => {
+                self.loopback_q.push_back(Envelope {
+                    to_idx: emitter_idx,
+                    event: SimEvent::VmReservationsVerified { block_hash },
                 });
             }
             Action::VerifyBeaconWitnessRoot {

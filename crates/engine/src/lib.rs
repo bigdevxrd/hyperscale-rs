@@ -1,16 +1,16 @@
-//! Radix Engine integration.
+//! Engine integration.
 //!
 //! Synchronous transaction execution shared by the production runner
 //! and the deterministic simulator. The executor does NOT own storage:
 //! the runner owns it and passes a snapshot per call.
 //!
-//! State machines emit `Action::ExecuteTransactions`; the runner runs
-//! the VM via [`RadixExecutor::compute_vm_output_single_shard`] or its
-//! cross-shard counterpart, then projects the shard-invariant
-//! [`CachedVmOutput`] into the local shard's [`ExecutedTx`] via
-//! [`project_to_shard`]. The process-scope [`ProcessExecutionCache`]
-//! short-circuits the VM call when same-shard vnodes (or hosted
-//! participating shards) replay an already-executed transaction.
+//! State machines emit `Action::ExecuteTransactions`; the runner drives
+//! an [`Executor`] over the wave's batch, which projects the
+//! shard-invariant [`CachedVmOutput`] into the local shard's
+//! [`ExecutedTx`] via [`project_to_shard`]. The process-scope
+//! [`ProcessExecutionCache`] short-circuits execution when same-shard
+//! vnodes (or hosted participating shards) replay an already-executed
+//! transaction.
 
 #![warn(missing_docs)]
 
@@ -19,17 +19,15 @@ mod executor;
 mod genesis;
 mod genesis_cache;
 mod output;
-mod provisioned_snapshot;
 mod receipt;
-mod validation;
 
-/// Shard assignment and write filtering for Radix Engine `DatabaseUpdates`.
+/// Shard assignment and write filtering for `DatabaseUpdates`.
 pub mod sharding;
 
 pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 pub use executor::{
-    CrossShardTxInput, DynSnapshot, Executor, RadixExecutor, WaveBatchContext,
-    batch_compute_cached, fetch_state_entries, participating_shards,
+    CrossShardTxInput, DynSnapshot, Executor, WaveBatchContext, batch_compute_cached,
+    fetch_state_entries, participating_shards,
 };
 pub use genesis::GenesisConfig;
 pub use genesis_cache::prepared_genesis;
@@ -37,8 +35,5 @@ pub use genesis_cache::prepared_genesis;
 // implementations and their tests need no separate dispatch dependency.
 pub use hyperscale_dispatch::Parallelism;
 pub use output::ExecutedTx;
-// Re-export Radix types needed by engine callers (not storage-related).
 pub use radix_common::network::NetworkDefinition;
-pub use receipt::{CachedVmOutput, build_executed_tx, compute_vm_output, project_to_shard};
-pub use sharding::{build_cross_shard_ownership, resolve_owned_nodes};
-pub use validation::TransactionValidation;
+pub use receipt::{CachedVmOutput, project_to_shard};

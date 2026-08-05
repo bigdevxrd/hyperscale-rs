@@ -31,9 +31,7 @@ use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch::{Dispatch, DispatchPool};
 use hyperscale_dispatch_pooled::{PooledDispatch, ThreadPoolConfig};
-use hyperscale_engine::{
-    Executor, GenesisConfig, NetworkDefinition, RadixExecutor, TransactionValidation,
-};
+use hyperscale_engine::{Executor, GenesisConfig, NetworkDefinition};
 use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_metrics::{set_libp2p_peers, set_pool_queue_depths};
@@ -265,10 +263,7 @@ impl ProductionRunnerBuilder {
             // Harness default: the routing overlay runs in production
             // tests; the validator binary always overrides this from its
             // config file, where the overlay defaults off.
-            mempool_config: MempoolConfig {
-                routing_overlay: true,
-                ..MempoolConfig::default()
-            },
+            mempool_config: MempoolConfig::default(),
             provision_config: ProvisionConfig::default(),
             beacon_chain_config: None,
             storage_factory,
@@ -541,7 +536,6 @@ impl ProductionRunnerBuilder {
         let network_definition = self
             .network_definition
             .unwrap_or_else(NetworkDefinition::simulator);
-        let tx_validator = Arc::new(TransactionValidation::new(network_definition.clone()));
 
         let NetworkStack {
             adapter,
@@ -571,10 +565,9 @@ impl ProductionRunnerBuilder {
         // and this is where both exist.
         seed_founding_members(&boot.state, &mut bootstrap_config.vm_pools);
         let engine_bootstrap = EngineBootstrap {
-            network: network_definition.clone(),
+            network: network_definition,
             config: bootstrap_config,
         };
-        let executor = RadixExecutor::new(network_definition);
         // The VM engine's world derives from the same genesis config the
         // startup genesis path installs, unless a wider one was set:
         // construction installs the process VM statics, which are
@@ -589,7 +582,7 @@ impl ProductionRunnerBuilder {
         } else {
             &self.vm_world_pools
         };
-        let vm_executor: Arc<dyn Executor> = Arc::new(VmExecutor::with_pools(
+        let executor: Arc<dyn Executor> = Arc::new(VmExecutor::with_pools(
             world_accounts,
             world_pools,
             ExecutionMode::Serial,
@@ -614,14 +607,12 @@ impl ProductionRunnerBuilder {
             self.beacon_storage,
             beacon_network.clone(),
             executor,
-            vm_executor,
             libp2p_network,
             (*dispatch).clone(),
             shard_event_senders,
             beacon_event_tx,
             topology_snapshot.clone(),
             NodeConfig::default(),
-            tx_validator,
         );
 
         let tx_status = Arc::clone(host.process().tx_status());

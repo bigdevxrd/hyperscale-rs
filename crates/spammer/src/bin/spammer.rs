@@ -13,8 +13,6 @@ use hyperscale_spammer::genesis::generate_genesis_toml;
 use hyperscale_spammer::runner::Spammer;
 use hyperscale_spammer::workloads::TransferWorkload;
 use hyperscale_types::ShardId;
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tokio::signal::ctrl_c;
@@ -219,8 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             balance,
         } => {
             // Don't initialize tracing for genesis - output goes to stdout
-            let toml =
-                generate_genesis_toml(num_shards, accounts_per_shard, Decimal::from(balance))?;
+            let toml = generate_genesis_toml(num_shards, accounts_per_shard, u128::from(balance))?;
             print!("{toml}");
         }
 
@@ -266,7 +263,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_accounts_per_shard(accounts_per_shard)
                 .with_selection_mode(selection_mode)
                 .with_batch_size(effective_batch_size)
-                .with_network(NetworkDefinition::simulator())
                 .with_num_workers(num_workers);
 
             if measure_latency {
@@ -390,8 +386,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create a simple same-shard transfer targeting shard 0
             // Using a specific shard ensures we know exactly which validators to submit to
-            let workload =
-                TransferWorkload::new(NetworkDefinition::simulator()).with_cross_shard_ratio(0.0); // Same-shard for simplicity
+            let workload = TransferWorkload::new().with_cross_shard_ratio(0.0); // Same-shard for simplicity
 
             // Use current time as seed to generate unique transactions each run
             let seed = u64::try_from(

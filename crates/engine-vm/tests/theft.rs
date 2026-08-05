@@ -145,7 +145,7 @@ fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransa
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    RoutableTransaction::new_vm(
+    RoutableTransaction::new(
         VmTransaction {
             body: VmBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
@@ -201,8 +201,8 @@ fn draining_an_account_the_envelope_does_not_sign_for_is_refused() {
     let _ = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let theft = signed_transfer(VICTIM, thief(), 5_000);
 
-    assert!(theft.vm().expect("a VM envelope").signature_is_valid());
-    let refused = theft.try_vm_derived().expect_err("derivation refuses");
+    assert!(theft.body().signature_is_valid());
+    let refused = theft.try_derived().expect_err("derivation refuses");
     assert!(refused.0.contains("withdraw"), "{}", refused.0);
     assert!(
         refused.0.contains("authority"),
@@ -215,7 +215,7 @@ fn draining_an_account_the_envelope_does_not_sign_for_is_refused() {
     // manifest.
     assert!(
         signed_transfer(thief(), VICTIM, 5_000)
-            .try_vm_derived()
+            .try_derived()
             .is_ok()
     );
 }

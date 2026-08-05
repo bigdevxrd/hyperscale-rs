@@ -199,22 +199,12 @@ pub use topology::snapshot::{
 };
 pub use topology::trie::ShardTrie;
 pub use topology::validator::{ValidatorInfo, ValidatorSet};
-pub use transaction::constructors::{
-    routable_from_notarized_v1, routable_from_notarized_v2, routable_from_user_transaction,
-};
 pub use transaction::declared_key::DeclaredKey;
 pub use transaction::limits::{MAX_DECLARED_NODES_PER_TX, MAX_TX_BYTES_LEN};
-pub use transaction::notarize::{
-    NotarizeOptions, sign_and_notarize, sign_and_notarize_with_options,
-};
-pub use transaction::routable::{
-    RoutableTransaction, RoutableTransactionContext, RoutableTransactionVerifyError,
-    TransactionBody, VM_BODY_TAG,
-};
+pub use transaction::routable::{RoutableTransaction, RoutableTransactionVerifyError};
 pub use transaction::status::{
     TransactionDecision, TransactionError, TransactionStatus, TransactionStatusParseError,
 };
-pub use transaction::transfer::{build_fan_out_transfer_tx, build_transfer_tx};
 pub use transaction::vm::{
     MAX_VM_MESSAGE_LEN, VmBody, VmDerived, VmRouting, VmStatics, VmStaticsError, VmSubintentSig,
     VmTransaction, install_vm_statics, vm_statics_installed,

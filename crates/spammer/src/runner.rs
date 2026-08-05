@@ -5,12 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::future::join_all;
-use hyperscale_types::{
-    RoutableTransaction, ShardId, routable_from_notarized_v1, sign_and_notarize,
-};
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
-use radix_common::types::ComponentAddress;
+use hyperscale_effects_bridge::build_transfer_tx;
+use hyperscale_types::{RoutableTransaction, ShardId};
 use rand::{Rng, RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tokio::spawn;
@@ -25,7 +21,7 @@ use crate::client::{RpcClient, RpcError};
 use crate::config::{ConfigError, EndpointRouting, SpammerConfig};
 use crate::latency::{LatencyReport, LatencyTracker};
 use crate::validity::validity_range_for_now;
-use crate::workloads::TransferWorkload;
+use crate::workloads::{DEFAULT_TRANSFER_AMOUNT, TRANSFER_MAX_FEE, TransferWorkload};
 
 /// Transaction spammer that submits to real network endpoints.
 ///
@@ -169,7 +165,7 @@ impl Spammer {
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
         let mut latency_rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(1));
 
-        let workload = TransferWorkload::new(self.config.network.clone())
+        let workload = TransferWorkload::new()
             .with_cross_shard_ratio(self.config.cross_shard_ratio)
             .with_selection_mode(self.config.selection_mode);
 
@@ -271,7 +267,6 @@ impl Spammer {
                     batch_interval,
                     cross_shard_ratio: self.config.cross_shard_ratio,
                     selection_mode: self.config.selection_mode,
-                    network: self.config.network.clone(),
                     latency_sample_rate: self.config.latency_sample_rate,
                 },
             };
@@ -397,7 +392,7 @@ impl Spammer {
 
     /// Get genesis balances for all accounts.
     #[must_use]
-    pub fn genesis_balances(&self, balance: Decimal) -> Vec<(ComponentAddress, Decimal)> {
+    pub fn genesis_balances(&self, balance: u128) -> Vec<([u8; 16], u128)> {
         self.accounts.all_genesis_balances(balance)
     }
 
@@ -473,7 +468,6 @@ struct WorkerConfig {
     batch_interval: Duration,
     cross_shard_ratio: f64,
     selection_mode: SelectionMode,
-    network: NetworkDefinition,
     latency_sample_rate: f64,
 }
 
@@ -506,7 +500,7 @@ impl Worker {
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
         let mut latency_rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(1));
 
-        let workload = PartitionWorkload::new(self.config.network.clone())
+        let workload = PartitionWorkload::new()
             .with_cross_shard_ratio(self.config.cross_shard_ratio)
             .with_selection_mode(self.config.selection_mode);
 
@@ -581,17 +575,15 @@ impl Worker {
 struct PartitionWorkload {
     cross_shard_ratio: f64,
     selection_mode: SelectionMode,
-    amount: Decimal,
-    network: NetworkDefinition,
+    amount: u128,
 }
 
 impl PartitionWorkload {
-    fn new(network: NetworkDefinition) -> Self {
+    const fn new() -> Self {
         Self {
             cross_shard_ratio: 0.0,
             selection_mode: SelectionMode::NoContention,
-            amount: Decimal::from(100u32),
-            network,
+            amount: DEFAULT_TRANSFER_AMOUNT,
         }
     }
 
@@ -640,7 +632,7 @@ impl PartitionWorkload {
         rng: &mut impl Rng,
     ) -> Option<RoutableTransaction> {
         let (from, to) = partition.pair_for_shard(target_shard, rng, self.selection_mode)?;
-        self.build_transfer(from, to)
+        Some(self.build_transfer(from, to))
     }
 
     fn generate_cross_shard_for(
@@ -667,35 +659,20 @@ impl PartitionWorkload {
             partition.cross_shard_pair_for(other_shard, target_shard, rng, self.selection_mode)?
         };
 
-        self.build_transfer(from, to)
+        Some(self.build_transfer(from, to))
     }
 
-    fn build_transfer(
-        &self,
-        from: &FundedAccount,
-        to: &FundedAccount,
-    ) -> Option<RoutableTransaction> {
-        use radix_common::constants::XRD;
-        use radix_transactions::builder::ManifestBuilder;
-
-        let manifest = ManifestBuilder::new()
-            .lock_fee(from.address, Decimal::from(10u32))
-            .withdraw_from_account(from.address, XRD, self.amount)
-            .try_deposit_entire_worktop_or_abort(to.address, None)
-            .build();
-
+    fn build_transfer(&self, from: &FundedAccount, to: &FundedAccount) -> RoutableTransaction {
         let nonce = from.next_nonce();
-
-        let Ok(notarized) = sign_and_notarize(
-            manifest,
-            &self.network,
-            u32::try_from(nonce).unwrap_or(u32::MAX),
+        build_transfer_tx(
             &from.keypair,
-        ) else {
-            return None;
-        };
-
-        routable_from_notarized_v1(notarized, validity_range_for_now()).ok()
+            from.address,
+            to.address,
+            self.amount,
+            TRANSFER_MAX_FEE,
+            validity_range_for_now(),
+            nonce.to_le_bytes().to_vec(),
+        )
     }
 }
 

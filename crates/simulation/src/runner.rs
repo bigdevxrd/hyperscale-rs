@@ -14,7 +14,7 @@ use hyperscale_core::{ParticipationChange, ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_crypto_mock::{MockSigner, MockVerifier};
 use hyperscale_dispatch_sync::SyncDispatch;
-use hyperscale_engine::{Executor, GenesisConfig, RadixExecutor, TransactionValidation};
+use hyperscale_engine::{Executor, GenesisConfig};
 use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network_memory::{
@@ -416,7 +416,7 @@ impl SimulationRunner {
             world_pools,
             network_config.vm_execution_mode,
         ));
-        let shared_vm_executor: Arc<dyn Executor> = Arc::clone(&vm_engine) as Arc<dyn Executor>;
+        let shared_executor: Arc<dyn Executor> = Arc::clone(&vm_engine) as Arc<dyn Executor>;
 
         // Generate keys for all registered validators using deterministic
         // seeding. Pool extras are registered in beacon genesis (landing
@@ -526,7 +526,6 @@ impl SimulationRunner {
                     // Harness default: the routing overlay runs in every
                     // simulation; prod stays off unless configured.
                     mempool_config: MempoolConfig {
-                        routing_overlay: true,
                         share_declared_reads: network_config.share_declared_reads,
                         ..MempoolConfig::default()
                     },
@@ -550,10 +549,7 @@ impl SimulationRunner {
 
             let (event_tx, event_rx) = unbounded();
 
-            let network_def = NetworkDefinition::simulator();
-            let tx_validator = Arc::new(TransactionValidation::new(network_def.clone()));
-            let executor = RadixExecutor::new(network_def);
-            let vm_executor = Arc::clone(&shared_vm_executor);
+            let executor = Arc::clone(&shared_executor);
 
             // One `SimShardStorage` per hosted shard on this host.
             let storages: HashMap<ShardId, SimShardStorage> = by_shard
@@ -571,7 +567,6 @@ impl SimulationRunner {
                 beacon_storage,
                 beacon_network.clone(),
                 executor,
-                vm_executor,
                 network.create_adapter(
                     NodeIndex::try_from(host_index).expect("host_index fits NodeIndex"),
                 ),
@@ -580,7 +575,6 @@ impl SimulationRunner {
                 event_tx.clone(),
                 topology_arc_for_host,
                 NodeConfig::default(),
-                tx_validator,
             );
 
             hosts.push(host);

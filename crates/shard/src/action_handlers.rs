@@ -903,13 +903,11 @@ where
                 let kept: Vec<_> = transactions
                     .into_iter()
                     .filter(|tx| {
-                        let Some((owner, _)) = tx.vm_fee_vault() else {
-                            return true;
-                        };
+                        let (owner, _) = tx.fee_vault();
                         let Some(used) = running.get_mut(&owner) else {
                             return true;
                         };
-                        let max_fee = tx.vm().map_or(0, |vm| vm.max_fee);
+                        let max_fee = tx.body().max_fee;
                         let wanted = used.saturating_add(max_fee);
                         if wanted > balances.get(&owner).copied().unwrap_or(0) {
                             dropped += 1;
@@ -1167,11 +1165,10 @@ where
 #[cfg(test)]
 mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
-    use hyperscale_types::test_utils::test_notarized_transaction_v1;
+    use hyperscale_types::test_utils::{install_stub_vm_statics, stub_vm_transaction, test_prefix};
     use hyperscale_types::{
         CertificateRoot, LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, Signer,
         StoredReceipt, TimestampRange, TransactionRoot, TxRootVerifyError,
-        routable_from_notarized_v1,
     };
 
     use super::*;
@@ -1637,10 +1634,13 @@ mod tests {
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(1_000),
         );
-        let notarized = test_notarized_transaction_v1(&[1]);
-        let tx = Arc::new(Verifiable::from(
-            routable_from_notarized_v1(notarized, expired_range).expect("valid notarized fixture"),
-        ));
+        install_stub_vm_statics();
+        let tx = Arc::new(Verifiable::from(stub_vm_transaction(
+            test_prefix(1),
+            &[test_prefix(1)],
+            1_000,
+            expired_range,
+        )));
         let txs = vec![tx];
         let root = Verified::<TransactionRoot>::compute(&txs).into_inner();
 
@@ -1655,10 +1655,13 @@ mod tests {
 
         // Same root, anchor inside the range — verification passes.
         let valid_range = TimestampRange::new(anchor, anchor.plus(Duration::from_mins(1)));
-        let notarized2 = test_notarized_transaction_v1(&[2]);
-        let tx2 = Arc::new(Verifiable::from(
-            routable_from_notarized_v1(notarized2, valid_range).expect("valid notarized fixture"),
-        ));
+
+        let tx2 = Arc::new(Verifiable::from(stub_vm_transaction(
+            test_prefix(2),
+            &[test_prefix(2)],
+            1_000,
+            valid_range,
+        )));
         let txs2 = vec![tx2];
         let root2 = Verified::<TransactionRoot>::compute(&txs2).into_inner();
         let ctx2 = TransactionRootContext {
@@ -1678,10 +1681,13 @@ mod tests {
             WeightedTimestamp::ZERO,
             anchor.plus(Duration::from_mins(10)),
         );
-        let notarized = test_notarized_transaction_v1(&[3]);
-        let tx = Arc::new(Verifiable::from(
-            routable_from_notarized_v1(notarized, too_wide).expect("valid notarized fixture"),
-        ));
+        install_stub_vm_statics();
+        let tx = Arc::new(Verifiable::from(stub_vm_transaction(
+            test_prefix(3),
+            &[test_prefix(3)],
+            1_000,
+            too_wide,
+        )));
         let txs = vec![tx];
         let root = Verified::<TransactionRoot>::compute(&txs).into_inner();
 

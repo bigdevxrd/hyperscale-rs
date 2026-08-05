@@ -21,10 +21,10 @@ pub mod validity;
 pub mod workloads;
 
 pub use accounts::{
-    AccountPartition, AccountPool, AccountPoolError, AccountUsageStats, FundedAccount, FundingOp,
-    MAX_GENESIS_ACCOUNTS_PER_SHARD, SelectionMode,
+    AccountPartition, AccountPool, AccountPoolError, AccountUsageStats, FundedAccount,
+    SelectionMode,
 };
 pub use client::RpcClient;
 pub use config::SpammerConfig;
 pub use runner::Spammer;
-pub use workloads::{FundingWorkload, TransferWorkload, WorkloadGenerator};
+pub use workloads::{TransferWorkload, WorkloadGenerator};

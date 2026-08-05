@@ -41,11 +41,11 @@ mod tests {
     use sbor::BASIC_SBOR_V1_MAX_DEPTH;
     use sbor::prelude::*;
 
-    use crate::test_utils::test_transaction_with_nodes;
+    use crate::test_utils::test_transaction_with_prefixes;
     use crate::{
         AggregateSignature, Attempt, BlockHeight, BoundedVec, ConsensusReceipt, DatabaseUpdates,
         ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
-        GlobalReceiptRoot, Hash, NetworkDefinition, NodeId, ProvisionTxRoot, ProvisionTxRootsMap,
+        GlobalReceiptRoot, Hash, NetworkDefinition, ProvisionTxRoot, ProvisionTxRootsMap,
         RETENTION_HORIZON, ReceiptValidationError, ShardId, SignerBitfield, StoredReceipt,
         TopologySnapshot, TxHash, TxOutcome, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
         Verified, WaveCertificate, WaveId, WaveReceiptHash, WeightedTimestamp,
@@ -69,14 +69,14 @@ mod tests {
     }
 
     /// Find a node seed that routes to `target_shard` under 2-way sharding.
-    fn node_on_shard(topology_snapshot: &TopologySnapshot, target_shard: ShardId) -> NodeId {
+    fn prefix_on_shard(topology_snapshot: &TopologySnapshot, target_shard: ShardId) -> [u8; 16] {
         for seed in 0u8..=255 {
-            let node = NodeId([seed; 30]);
-            if topology_snapshot.shard_for_node_id(&node) == target_shard {
-                return node;
+            let prefix = [seed; 16];
+            if topology_snapshot.shard_for_prefix(prefix) == target_shard {
+                return prefix;
             }
         }
-        panic!("no node seed routes to {target_shard:?}");
+        panic!("no prefix seed routes to {target_shard:?}");
     }
 
     fn make_outcome(seed: u8) -> TxOutcome {
@@ -142,11 +142,11 @@ mod tests {
     #[test]
     fn test_compute_provision_tx_roots_single_shard_excluded() {
         let topology_snapshot = two_shard_topology();
-        let local_node = node_on_shard(&topology_snapshot, ShardId::leaf(1, 0));
-        let tx = Arc::new(Verifiable::from(test_transaction_with_nodes(
+        let local_prefix = prefix_on_shard(&topology_snapshot, ShardId::leaf(1, 0));
+        let tx = Arc::new(Verifiable::from(test_transaction_with_prefixes(
             &[1, 2, 3],
-            vec![local_node],
-            vec![local_node],
+            &[local_prefix],
+            &[local_prefix],
         )));
         let map = Verified::<ProvisionTxRootsMap>::compute(
             ShardId::leaf(1, 0),
@@ -159,19 +159,19 @@ mod tests {
     #[test]
     fn test_compute_provision_tx_roots_covers_all_touched_targets() {
         let topology_snapshot = two_shard_topology();
-        let local_node = node_on_shard(&topology_snapshot, ShardId::leaf(1, 0));
-        let remote_node = node_on_shard(&topology_snapshot, ShardId::leaf(1, 1));
+        let local_prefix = prefix_on_shard(&topology_snapshot, ShardId::leaf(1, 0));
+        let remote_prefix = prefix_on_shard(&topology_snapshot, ShardId::leaf(1, 1));
 
         // Cross-shard tx: writes span local shard 0 and remote shard 1.
-        let tx_a = Arc::new(Verifiable::from(test_transaction_with_nodes(
+        let tx_a = Arc::new(Verifiable::from(test_transaction_with_prefixes(
             &[1, 2, 3],
-            vec![],
-            vec![local_node, remote_node],
+            &[],
+            &[local_prefix, remote_prefix],
         )));
-        let tx_b = Arc::new(Verifiable::from(test_transaction_with_nodes(
+        let tx_b = Arc::new(Verifiable::from(test_transaction_with_prefixes(
             &[4, 5, 6],
-            vec![],
-            vec![local_node, remote_node],
+            &[],
+            &[local_prefix, remote_prefix],
         )));
 
         let roots = Verified::<ProvisionTxRootsMap>::compute(

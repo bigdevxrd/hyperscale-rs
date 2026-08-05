@@ -4,10 +4,7 @@
 
 use std::fmt::Write;
 
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
-use radix_common::prelude::AddressBech32Encoder;
-use radix_common::types::ComponentAddress;
+use hex::encode as hex_encode;
 
 use crate::accounts::{AccountPool, AccountPoolError};
 
@@ -19,8 +16,8 @@ use crate::accounts::{AccountPool, AccountPoolError};
 ///
 /// Output format:
 /// ```toml
-/// [[genesis.xrd_balances]]
-/// address = "account_sim1..."
+/// [[genesis.accounts]]
+/// address = "0f1e2d..."
 /// balance = "1000000"
 /// ```
 ///
@@ -31,25 +28,21 @@ use crate::accounts::{AccountPool, AccountPoolError};
 pub fn generate_genesis_toml(
     num_shards: u64,
     accounts_per_shard: usize,
-    balance: Decimal,
+    balance: u128,
 ) -> Result<String, GenesisError> {
     let pool = AccountPool::generate(num_shards, accounts_per_shard)?;
-    let balances = pool.all_genesis_balances(balance);
-
-    Ok(format_balances_toml(&balances))
+    Ok(format_balances_toml(&pool.all_genesis_balances(balance)))
 }
 
-/// Format a list of (address, balance) pairs as genesis TOML. Every account is
-/// funded on the ROOT shard.
+/// Format a list of `(address, balance)` pairs as genesis TOML. Every account
+/// is funded on the ROOT shard.
 ///
 /// # Panics
 ///
-/// Panics if `writeln!` to a `String` or `Bech32` address encoding fails — both
-/// are unreachable for valid `ComponentAddress` inputs.
+/// Panics if `writeln!` to a `String` fails, which it cannot.
 #[must_use]
-pub fn format_balances_toml(balances: &[(ComponentAddress, Decimal)]) -> String {
+pub fn format_balances_toml(balances: &[([u8; 16], u128)]) -> String {
     let mut output = String::new();
-    let encoder = AddressBech32Encoder::new(&NetworkDefinition::simulator());
 
     writeln!(output, "# Generated genesis balances for spammer accounts").unwrap();
     writeln!(
@@ -61,9 +54,8 @@ pub fn format_balances_toml(balances: &[(ComponentAddress, Decimal)]) -> String 
     writeln!(output).unwrap();
 
     for (address, balance) in balances {
-        let address_str = encoder.encode(address.as_node_id().as_bytes()).unwrap();
-        writeln!(output, "[[genesis.xrd_balances]]").unwrap();
-        writeln!(output, "address = \"{address_str}\"").unwrap();
+        writeln!(output, "[[genesis.accounts]]").unwrap();
+        writeln!(output, "address = \"{}\"", hex_encode(address)).unwrap();
         writeln!(output, "balance = \"{balance}\"").unwrap();
         writeln!(output).unwrap();
     }
@@ -85,14 +77,13 @@ mod tests {
 
     #[test]
     fn test_generate_genesis_toml() {
-        let toml = generate_genesis_toml(2, 2, Decimal::from(1000u32)).unwrap();
+        let toml = generate_genesis_toml(2, 2, 1_000).unwrap();
 
-        assert!(toml.contains("[[genesis.xrd_balances]]"));
-        assert!(toml.contains("address = \"account_"));
+        assert!(toml.contains("[[genesis.accounts]]"));
         assert!(toml.contains("balance = \"1000\""));
         assert!(toml.contains("all funded on ROOT"));
         // Every account is funded regardless of which prefix it routes to: 4
         // accounts (2 shards * 2 accounts).
-        assert_eq!(toml.matches("[[genesis.xrd_balances]]").count(), 4);
+        assert_eq!(toml.matches("[[genesis.accounts]]").count(), 4);
     }
 }

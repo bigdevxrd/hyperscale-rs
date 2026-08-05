@@ -231,6 +231,13 @@ fn transfers_reach_a_terminal_outcome_on_either_side_of_a_split() {
         }
         events.extend(session.step(500));
     }
+    // A settle tail for the last submission. A cross-shard transfer's payer
+    // shard waits for every counterpart's engagement echo before it votes,
+    // so the last one needs more than the gap between submissions to reach
+    // a terminal outcome.
+    for _ in 0..100 {
+        events.extend(session.step(500));
+    }
 
     let mut outcome: BTreeMap<String, String> = BTreeMap::new();
     for event in &events {

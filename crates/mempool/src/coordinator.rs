@@ -115,12 +115,6 @@ pub struct MempoolConfig {
     #[serde(default = "default_quiesce_single_shard_margin")]
     pub quiesce_single_shard_margin: Duration,
 
-    /// Whether the wiring layer injects a [`RoutingObserver`] at node
-    /// construction. Observability only — no admission decision keys on
-    /// it. Off by default; the test harnesses turn it on.
-    #[serde(default)]
-    pub routing_overlay: bool,
-
     /// Whether admission shares declared reads: readers stack on a node
     /// while writers exclude everyone, instead of every declared node
     /// being exclusive. Mempool admission policy only — the track layer's
@@ -153,22 +147,9 @@ impl Default for MempoolConfig {
             min_dwell_time: DEFAULT_MIN_DWELL_TIME,
             quiesce_cross_shard_margin: Duration::ZERO,
             quiesce_single_shard_margin: Duration::ZERO,
-            routing_overlay: false,
             share_declared_reads: false,
         }
     }
-}
-
-/// Observer port for the routing overlay: notified once per newly
-/// admitted transaction, with the topology the admission decision used.
-///
-/// The mempool defines this seam and never sees what the observer
-/// derives — implementations live at the wiring layer, and absence of an
-/// observer is the off path. Purely observational: nothing the observer
-/// does can influence admission, selection, or any consensus value.
-pub trait RoutingObserver: Send + Sync {
-    /// A transaction was newly admitted to the pool.
-    fn on_admitted(&self, tx: &RoutableTransaction, topology: &TopologySnapshot);
 }
 
 /// Lock contention statistics from the mempool.
@@ -326,10 +307,6 @@ pub struct MempoolCoordinator {
     /// take locks, and stall on fenced provisions.
     fork_fence: ForkFence,
 
-    /// The routing-overlay observer, when the wiring layer injected one.
-    /// `None` is the off path.
-    routing_observer: Option<Arc<dyn RoutingObserver>>,
-
     /// The dispatch seam's clock reading, pushed by [`Self::set_time`]
     /// before each handler runs. Consumed by the deferral statistics only;
     /// admission and selection read the timestamps their handlers receive.
@@ -389,7 +366,6 @@ impl MempoolCoordinator {
             config,
             local_shard,
             fork_fence: ForkFence::new(),
-            routing_observer: None,
             now: LocalTimestamp::ZERO,
         }
     }
@@ -403,12 +379,6 @@ impl MempoolCoordinator {
     #[must_use]
     pub const fn deferral_stats(&self) -> DeferralStats {
         self.ready.deferral_stats()
-    }
-
-    /// Install the routing-overlay observer. Wiring-layer only, driven by
-    /// [`MempoolConfig::routing_overlay`].
-    pub fn set_routing_observer(&mut self, observer: Arc<dyn RoutingObserver>) {
-        self.routing_observer = Some(observer);
     }
 
     /// Reference to the shared body store. Callers that need to read
@@ -489,10 +459,6 @@ impl MempoolCoordinator {
         // Tx is in the pool — any pending cross-shard expectation is satisfied,
         // regardless of which source originally signaled it.
         self.expected_txs.forget(&hash);
-
-        if let Some(observer) = &self.routing_observer {
-            observer.on_admitted(tx, topology_snapshot);
-        }
 
         Some(cross_shard)
     }
@@ -1063,10 +1029,9 @@ impl MempoolCoordinator {
         if !cross_shard {
             return None;
         }
-        let vm = tx.vm()?;
         let payer_shard = topology_snapshot
             .shard_trie()
-            .shard_for_prefix(vm.fee_payer);
+            .shard_for_prefix(tx.body().fee_payer);
         if payer_shard == self.local_shard {
             return None;
         }
@@ -1485,10 +1450,10 @@ mod tests {
     use hyperscale_metrics_memory::MemoryRecorder;
     use hyperscale_types::test_utils::{
         TestCommittee, certify, install_stub_vm_statics, make_finalized_wave, make_live_block,
-        stub_vm_transaction, test_node, test_transaction, test_transaction_with_nodes,
+        stub_vm_transaction, test_prefix, test_transaction, test_transaction_with_prefixes,
         test_validity_range,
     };
-    use hyperscale_types::{NodeId, RevealChain, Verified, WitnessSources};
+    use hyperscale_types::{RevealChain, Verified, WitnessSources};
 
     /// Test-only convenience: wrap any `RoutableTransaction` in a
     /// `Verified` witness via the test-only gate.
@@ -2087,7 +2052,7 @@ mod tests {
         let topology_snapshot = make_test_topology();
         let mut mempool = MempoolCoordinator::new(ShardId::ROOT);
 
-        let tx = test_transaction_with_nodes(b"straddler", vec![test_node(7)], vec![test_node(8)]);
+        let tx = test_transaction_with_prefixes(b"straddler", &[test_prefix(7)], &[test_prefix(8)]);
         let tx_hash = tx.hash();
 
         // Commit the tx with no deciding wave certificate: in flight,
@@ -2127,9 +2092,10 @@ mod tests {
         let topology_snapshot = make_test_topology();
         let mut mempool = MempoolCoordinator::new(ShardId::ROOT);
 
-        let doomed = test_transaction_with_nodes(b"doomed", vec![test_node(7)], vec![test_node(8)]);
+        let doomed =
+            test_transaction_with_prefixes(b"doomed", &[test_prefix(7)], &[test_prefix(8)]);
         let doomed_hash = doomed.hash();
-        let kept = test_transaction_with_nodes(b"kept", vec![test_node(9)], vec![test_node(10)]);
+        let kept = test_transaction_with_prefixes(b"kept", &[test_prefix(9)], &[test_prefix(10)]);
         let kept_hash = kept.hash();
 
         // Both commit with no deciding wave certificate: in flight, holding
@@ -2297,13 +2263,13 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// Build a `RoutableTransaction` whose write set is a single
-    /// index-derived `NodeId`, so callers can mint up to `MAX_TX_IN_FLIGHT`
+    /// index-derived prefix, so callers can mint up to `MAX_TX_IN_FLIGHT`
     /// distinct, non-conflicting txs by feeding sequential indices.
     fn unique_test_tx(idx: usize) -> RoutableTransaction {
         let seed = idx.to_le_bytes();
-        let mut node = [0u8; 30];
-        node[..seed.len()].copy_from_slice(&seed);
-        test_transaction_with_nodes(&seed, vec![], vec![NodeId(node)])
+        let mut prefix = [0u8; 16];
+        prefix[..seed.len()].copy_from_slice(&seed);
+        test_transaction_with_prefixes(&seed, &[], &[prefix])
     }
 
     /// Fill a mempool to [`MAX_TX_IN_FLIGHT`] by submitting that many
@@ -2347,36 +2313,30 @@ mod tests {
         TestCommittee::new(8, 42).topology_snapshot(2)
     }
 
-    /// Create a cross-shard transaction (writes to nodes in different shards)
+    /// Create a cross-shard transaction (writes prefixes in different shards)
     fn test_cross_shard_transaction(seed: u8) -> RoutableTransaction {
-        use hyperscale_types::test_utils::test_node;
-        use hyperscale_types::uniform_shard_for_node;
+        use hyperscale_types::ShardTrie;
+        use hyperscale_types::test_utils::test_prefix;
 
-        // Find two seeds that map to different shards with 2 shards
-        // We'll search for a pair starting from the given seed
-        let node1 = test_node(seed);
-        let shard1 = uniform_shard_for_node(&node1, 2);
+        let trie = ShardTrie::uniform_from_count(2);
+        let shard1 = trie.shard_for_prefix(test_prefix(seed));
 
-        // Find a different shard
-        let mut node2_seed = seed.wrapping_add(1);
+        let mut other_seed = seed.wrapping_add(1);
         loop {
-            let node2 = test_node(node2_seed);
-            let shard2 = uniform_shard_for_node(&node2, 2);
-            if shard1 != shard2 {
+            if trie.shard_for_prefix(test_prefix(other_seed)) != shard1 {
                 break;
             }
-            node2_seed = node2_seed.wrapping_add(1);
+            other_seed = other_seed.wrapping_add(1);
             assert!(
-                node2_seed != seed,
-                "Could not find nodes in different shards"
+                other_seed != seed,
+                "Could not find prefixes in different shards"
             );
         }
 
-        // Create cross-shard transaction
-        test_transaction_with_nodes(
+        test_transaction_with_prefixes(
             &[seed, seed + 1, seed + 2],
-            vec![test_node(seed)],                        // read from one shard
-            vec![test_node(seed), test_node(node2_seed)], // write to both shards
+            &[test_prefix(seed)],                          // read from one shard
+            &[test_prefix(seed), test_prefix(other_seed)], // write to both shards
         )
     }
 
@@ -2732,16 +2692,18 @@ mod tests {
     // ─── validity-window admission + pending sweep ──────────────────────
 
     fn tx_with_end(seed: u8, end_ms: u64) -> Arc<Verified<RoutableTransaction>> {
-        use hyperscale_types::test_utils::test_notarized_transaction_v1;
-        use hyperscale_types::{TimestampRange, routable_from_notarized_v1};
-        let notarized = test_notarized_transaction_v1(&[seed]);
+        use hyperscale_types::TimestampRange;
+        use hyperscale_types::test_utils::{stub_vm_transaction, test_prefix};
         let range = TimestampRange::new(
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(end_ms),
         );
-        Arc::new(verified(
-            routable_from_notarized_v1(notarized, range).expect("valid notarized fixture"),
-        ))
+        Arc::new(verified(stub_vm_transaction(
+            test_prefix(seed),
+            &[test_prefix(seed)],
+            1_000,
+            range,
+        )))
     }
 
     /// Force-set `current_ts` for tests that need to control the admission /
@@ -2857,9 +2819,9 @@ mod tests {
         let mut mempool = MempoolCoordinator::new(ShardId::leaf(1, 0));
 
         // A tx writing to a node, and that node's shard.
-        let node = test_node(7);
-        let fenced_shard = topology_snapshot.shard_for_node_id(&node);
-        let tx = test_transaction_with_nodes(&[7], vec![], vec![node]);
+        let prefix = test_prefix(7);
+        let fenced_shard = topology_snapshot.shard_for_prefix(prefix);
+        let tx = test_transaction_with_prefixes(&[7], &[], &[prefix]);
         let hash = tx.hash();
 
         // With the fence engaged for that shard, admission is rejected — no
@@ -2878,14 +2840,14 @@ mod tests {
         // A tx on a different, unfenced shard admits normally.
         let mut seed = 8u8;
         let other = loop {
-            let n = test_node(seed);
-            if topology_snapshot.shard_for_node_id(&n) != fenced_shard {
-                break n;
+            let p = test_prefix(seed);
+            if topology_snapshot.shard_for_prefix(p) != fenced_shard {
+                break p;
             }
             seed = seed.wrapping_add(1);
-            assert!(seed != 7, "could not find a node off the fenced shard");
+            assert!(seed != 7, "could not find a prefix off the fenced shard");
         };
-        let tx2 = test_transaction_with_nodes(&[seed], vec![], vec![other]);
+        let tx2 = test_transaction_with_prefixes(&[seed], &[], &[other]);
         let hash2 = tx2.hash();
         mempool.on_submit_transaction(
             &topology_snapshot,
@@ -2905,12 +2867,12 @@ mod tests {
         let topology_snapshot = make_cross_shard_topology();
         let mut mempool = MempoolCoordinator::new(ShardId::leaf(1, 0));
 
-        let node = test_node(7);
-        let fenced_shard = topology_snapshot.shard_for_node_id(&node);
+        let prefix = test_prefix(7);
+        let fenced_shard = topology_snapshot.shard_for_prefix(prefix);
         mempool.engage_fork_fence(fenced_shard, BlockHeight::new(5), &BTreeMap::new());
 
         let submit = |mempool: &mut MempoolCoordinator, seed: u8| {
-            let tx = test_transaction_with_nodes(&[seed], vec![], vec![node]);
+            let tx = test_transaction_with_prefixes(&[seed], &[], &[prefix]);
             let hash = tx.hash();
             mempool.on_submit_transaction(
                 &topology_snapshot,

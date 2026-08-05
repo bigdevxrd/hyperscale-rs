@@ -11,9 +11,7 @@
 use std::sync::Arc;
 
 use hyperscale_core::{Action, ActionContext, CrossShardExecutionRequest, ProtocolEvent};
-use hyperscale_engine::{
-    CrossShardTxInput, DynSnapshot, ExecutedTx, Executor as _, WaveBatchContext,
-};
+use hyperscale_engine::{CrossShardTxInput, DynSnapshot, ExecutedTx, WaveBatchContext};
 use hyperscale_metrics::record_execution_latency;
 use hyperscale_network::Network;
 use hyperscale_storage::{ShardStorage, SubstateStore, SubstateView};
@@ -166,21 +164,8 @@ where
                 wave_start_ts,
                 wave_start_reveal,
             };
-            // Engine dispatch is typed: the block splits into per-variant
-            // sub-batches, each engine executes its own, and the receipts
-            // merge back in canonical transaction-hash order.
-            let (vm_txs, radix_txs): (Vec<_>, Vec<_>) = transactions
-                .iter()
-                .map(Arc::clone)
-                .partition(|tx| tx.is_vm());
-            let mut executed = ctx
-                .executor
-                .execute_wave_batch(&wave_ctx, &snapshot, &radix_txs);
-            executed.extend(
-                ctx.vm_executor
-                    .execute_wave_batch(&wave_ctx, &snapshot, &vm_txs),
-            );
-            executed.sort_by_key(|tx| tx.tx_hash);
+            let txs: Vec<_> = transactions.iter().map(Arc::clone).collect();
+            let executed = ctx.executor.execute_wave_batch(&wave_ctx, &snapshot, &txs);
             let ExecutionOutputs {
                 outcomes: tx_outcomes,
                 results,
@@ -209,7 +194,6 @@ where
                     .map(|r| CrossShardTxInput {
                         transaction: &r.transaction,
                         provisions: &r.provisions,
-                        ownership: &r.ownership,
                         clock: r.clock,
                         randomness: r.randomness,
                     })
@@ -229,23 +213,10 @@ where
                 wave_start_ts,
                 wave_start_reveal,
             };
-            // Engine dispatch is typed, exactly like the single-shard arm:
-            // per-variant sub-batches, receipts merged back in canonical
-            // transaction-hash order.
-            let (vm_requests, radix_requests): (Vec<_>, Vec<_>) = requests
-                .iter()
-                .partition::<Vec<_>, _>(|r| r.transaction.is_vm());
-            let mut executed = ctx.executor.execute_cross_shard_batch(
-                &wave_ctx,
-                &snapshot,
-                &inputs(&radix_requests),
-            );
-            executed.extend(ctx.vm_executor.execute_cross_shard_batch(
-                &wave_ctx,
-                &snapshot,
-                &inputs(&vm_requests),
-            ));
-            executed.sort_by_key(|tx| tx.tx_hash);
+            let all: Vec<&CrossShardExecutionRequest> = requests.iter().collect();
+            let executed =
+                ctx.executor
+                    .execute_cross_shard_batch(&wave_ctx, &snapshot, &inputs(&all));
             let ExecutionOutputs {
                 outcomes: tx_outcomes,
                 results,

@@ -13,11 +13,9 @@ path = "src/bin/spammer.rs"
 
 [dependencies]
 # Workspace dependencies
+hyperscale-effects-bridge.workspace = true
 hyperscale-types.workspace = true
 
-# Radix dependencies
-radix-common.workspace = true
-radix-transactions.workspace = true
 sbor.workspace = true
 
 # Async runtime

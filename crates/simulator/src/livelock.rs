@@ -30,8 +30,7 @@ use std::collections::{HashMap, HashSet};
 
 use hyperscale_simulation::SimulationRunner;
 use hyperscale_types::{
-    NodeId, RoutableTransaction, ShardId, TransactionStatus, TxHash, Verified,
-    uniform_shard_for_node,
+    DeclaredKey, RoutableTransaction, ShardId, ShardTrie, TransactionStatus, TxHash, Verified,
 };
 
 /// Information about a stuck transaction.
@@ -58,8 +57,8 @@ pub struct StuckTransaction {
 pub struct LivelockCycle {
     /// Transactions involved in the potential cycle
     pub transactions: Vec<TxHash>,
-    /// Addresses (`NodeIds`) that form the contention
-    pub contended_addresses: Vec<NodeId>,
+    /// Admission keys that form the contention.
+    pub contended_addresses: Vec<DeclaredKey>,
     /// Shards involved in the cycle
     pub involved_shards: Vec<ShardId>,
 }
@@ -78,7 +77,7 @@ pub struct LivelockReport {
     /// Cross-shard transactions that are stuck
     pub cross_shard_stuck: Vec<StuckTransaction>,
     /// Address contention map: address -> list of transactions holding/waiting
-    pub address_contention: HashMap<NodeId, Vec<TxHash>>,
+    pub address_contention: HashMap<DeclaredKey, Vec<TxHash>>,
 }
 
 impl LivelockReport {
@@ -195,18 +194,19 @@ impl LivelockAnalyzer {
                 for (hash, status, tx) in incomplete {
                     // Avoid duplicates (same transaction may appear on multiple shards)
                     if seen_hashes.insert(hash) {
+                        let trie = ShardTrie::uniform_from_count(num_shards);
                         let write_shards: Vec<_> = tx
-                            .declared_writes()
+                            .admission_write_keys()
                             .iter()
-                            .map(|node_id| uniform_shard_for_node(node_id, num_shards))
+                            .map(|key| trie.shard_for_prefix(key.owner))
                             .collect::<HashSet<_>>()
                             .into_iter()
                             .collect();
 
                         let read_shards: Vec<_> = tx
-                            .declared_reads()
+                            .admission_read_keys()
                             .iter()
-                            .map(|node_id| uniform_shard_for_node(node_id, num_shards))
+                            .map(|key| trie.shard_for_prefix(key.owner))
                             .collect::<HashSet<_>>()
                             .into_iter()
                             .filter(|s| !write_shards.contains(s))
@@ -259,10 +259,10 @@ impl LivelockAnalyzer {
             .collect();
 
         // Build address contention map
-        let mut address_contention: HashMap<NodeId, Vec<TxHash>> = HashMap::new();
+        let mut address_contention: HashMap<DeclaredKey, Vec<TxHash>> = HashMap::new();
         for tx in &self.stuck_transactions {
-            for addr in tx.transaction.declared_writes().iter() {
-                address_contention.entry(*addr).or_default().push(tx.hash);
+            for key in tx.transaction.admission_write_keys() {
+                address_contention.entry(key).or_default().push(tx.hash);
             }
         }
 
@@ -285,7 +285,7 @@ impl LivelockAnalyzer {
     /// other transactions need, forming a circular dependency.
     fn detect_cycles(
         &self,
-        _address_contention: &HashMap<NodeId, Vec<TxHash>>,
+        _address_contention: &HashMap<DeclaredKey, Vec<TxHash>>,
     ) -> Vec<LivelockCycle> {
         let mut cycles = Vec::new();
 
@@ -304,10 +304,20 @@ impl LivelockAnalyzer {
                 }
 
                 // Check if tx_a's writes conflict with tx_b's reads and vice versa
-                let a_writes: HashSet<_> = tx_a.transaction.declared_writes().iter().collect();
-                let b_writes: HashSet<_> = tx_b.transaction.declared_writes().iter().collect();
-                let a_reads: HashSet<_> = tx_a.transaction.declared_reads().iter().collect();
-                let b_reads: HashSet<_> = tx_b.transaction.declared_reads().iter().collect();
+                let a_writes: HashSet<_> = tx_a
+                    .transaction
+                    .admission_write_keys()
+                    .into_iter()
+                    .collect();
+                let b_writes: HashSet<_> = tx_b
+                    .transaction
+                    .admission_write_keys()
+                    .into_iter()
+                    .collect();
+                let a_reads: HashSet<_> =
+                    tx_a.transaction.admission_read_keys().into_iter().collect();
+                let b_reads: HashSet<_> =
+                    tx_b.transaction.admission_read_keys().into_iter().collect();
 
                 // Check for bidirectional dependency
                 let a_blocks_b = a_writes.intersection(&b_reads).count() > 0
@@ -322,7 +332,6 @@ impl LivelockAnalyzer {
                         .chain(a_writes.intersection(&b_writes))
                         .chain(b_writes.intersection(&a_reads))
                         .chain(b_writes.intersection(&a_writes))
-                        .copied()
                         .copied()
                         .collect::<HashSet<_>>()
                         .into_iter()

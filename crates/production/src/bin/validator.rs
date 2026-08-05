@@ -529,6 +529,22 @@ pub struct GenesisConfig {
     /// Initial XRD balances for accounts
     #[serde(default)]
     pub xrd_balances: Vec<XrdBalanceEntry>,
+
+    /// Initial balances for funded accounts, keyed by their 16-byte
+    /// address. This is what genesis actually seeds: an account's address
+    /// *is* its shard placement, so the list needs no routing metadata.
+    #[serde(default)]
+    pub accounts: Vec<AccountBalanceEntry>,
+}
+
+/// A funded-account entry for genesis configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccountBalanceEntry {
+    /// Hex-encoded 16-byte account address.
+    pub address: String,
+
+    /// Balance as a string, parsed as `u128`.
+    pub balance: String,
 }
 
 /// An XRD balance entry for genesis configuration.
@@ -771,9 +787,22 @@ fn build_engine_genesis_config(config: &GenesisConfig) -> Result<EngineGenesisCo
         engine_config.xrd_balances.push((address, balance));
     }
 
+    for entry in &config.accounts {
+        let bytes = hex_decode(&entry.address)
+            .map_err(|e| anyhow::anyhow!("Invalid address '{}': {e}", entry.address))?;
+        let address = <[u8; 16]>::try_from(bytes.as_slice())
+            .map_err(|_| anyhow::anyhow!("Address '{}' is not 16 bytes", entry.address))?;
+        let balance = entry
+            .balance
+            .parse::<u128>()
+            .map_err(|e| anyhow::anyhow!("Invalid balance '{}': {e}", entry.balance))?;
+        engine_config.vm_accounts.push((address, balance));
+    }
+
     info!(
         xrd_balances = engine_config.xrd_balances.len(),
-        "Parsed genesis XRD balances"
+        accounts = engine_config.vm_accounts.len(),
+        "Parsed genesis balances"
     );
 
     Ok(engine_config)

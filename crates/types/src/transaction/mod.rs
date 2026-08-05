@@ -1,22 +1,15 @@
 //! Transaction types for consensus.
 //!
-//! - [`routable`]: [`RoutableTransaction`] (the network-routing wrapper around a Radix `NotarizedTransactionV1`/`V2`).
+//! - [`routable`]: [`RoutableTransaction`], the network-routing wrapper
+//!   around a signed manifest envelope.
 //! - [`status`]: [`TransactionDecision`], [`TransactionStatus`], [`TransactionError`],
 //!   and the RPC-string parser.
-//! - [`constructors`]: `routable_from_*` constructors that derive read/write sets
-//!   from notarized Radix transactions.
-//! - [`manifest_analysis`]: read/write set extraction from Radix manifest instructions
-//!   (private helpers used by [`constructors`]).
-//! - [`notarize`]: helpers for signing and notarizing a `TransactionManifestV1`.
+//! - [`declared_key`]: the substate-granular admission key.
 //! - [`limits`]: per-transaction wire-limit constants.
-//! - [`transfer`]: the XRD transfer manifest every client sends.
+//! - [`vm`]: the signed envelope and the derivation seam that routes it.
 
-pub mod constructors;
 pub mod declared_key;
 pub mod limits;
-mod manifest_analysis;
-pub mod notarize;
 pub mod routable;
 pub mod status;
-pub mod transfer;
 pub mod vm;

@@ -407,15 +407,12 @@ pub fn validate_vm_engagement(
     dedup_index: &CommitDedupIndex,
 ) -> Result<(), String> {
     for tx in block.transactions().iter() {
-        let Some(vm) = tx.vm() else {
-            continue;
-        };
         if topology_snapshot.is_single_shard_transaction(tx) {
             continue;
         }
         let payer_shard = topology_snapshot
             .shard_trie()
-            .shard_for_prefix(vm.fee_payer);
+            .shard_for_prefix(tx.body().fee_payer);
         if payer_shard == local_shard {
             continue;
         }

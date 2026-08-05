@@ -15,7 +15,7 @@ use hyperscale_types::{
     ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR,
     NetworkParams, NodeId, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
     TimestampRange, ValidatorId, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
-    build_transfer_tx as build_transfer, ed25519_keypair_from_seed, uniform_shard_for_node,
+    ed25519_keypair_from_seed, uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -23,7 +23,6 @@ use hyperscale_vm_effects::{
 };
 use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
 use radix_common::types::ComponentAddress;
 
 /// A deterministic Ed25519 signer from a one-byte seed. A faucet transaction's
@@ -725,7 +724,7 @@ pub fn build_vm_fan_out_tx(
             }],
         });
     }
-    RoutableTransaction::new_vm(vm_envelope(ManifestGraph { nodes }, payer, validity))
+    RoutableTransaction::new(vm_envelope(ManifestGraph { nodes }, payer, validity))
 }
 
 /// The accounts the participant sweep fans out across: one payer on the
@@ -1099,7 +1098,7 @@ pub fn build_vm_stamp_tx(
         signature: [0; 64],
     }
     .sign(payer);
-    RoutableTransaction::new_vm(vm)
+    RoutableTransaction::new(vm)
 }
 
 /// Build a VM transfer: the account guest's withdraw+deposit graph over
@@ -1140,7 +1139,7 @@ pub fn build_vm_transfer_tx(
             },
         ],
     };
-    RoutableTransaction::new_vm(vm_envelope(graph, payer, validity))
+    RoutableTransaction::new(vm_envelope(graph, payer, validity))
 }
 
 /// Every VM account address any scenario in this crate transacts with.
@@ -1242,7 +1241,7 @@ pub fn build_vm_publish_tx(
     artifact: Vec<u8>,
     validity: TimestampRange,
 ) -> RoutableTransaction {
-    RoutableTransaction::new_vm(
+    RoutableTransaction::new(
         VmTransaction {
             body: VmBody::Publish(artifact.into()),
             subintent_sigs: Vec::new(),
@@ -1415,7 +1414,7 @@ pub fn build_vm_operator_tx(
             args,
         }],
     };
-    RoutableTransaction::new_vm(vm_envelope(graph, operator, validity))
+    RoutableTransaction::new(vm_envelope(graph, operator, validity))
 }
 
 /// Return `amount` worth of stake units to `pool`, moving that much of
@@ -1455,7 +1454,7 @@ pub fn build_vm_unstake_tx(
             },
         ],
     };
-    RoutableTransaction::new_vm(vm_envelope(graph, delegator, validity))
+    RoutableTransaction::new(vm_envelope(graph, delegator, validity))
 }
 
 /// The principal the staking scenario's pool admits on its operator
@@ -1515,7 +1514,7 @@ pub fn build_vm_stake_tx(
             },
         ],
     };
-    RoutableTransaction::new_vm(vm_envelope(graph, delegator, validity))
+    RoutableTransaction::new(vm_envelope(graph, delegator, validity))
 }
 
 /// The one-time payment request `signer` puts their name to: whoever
@@ -1610,7 +1609,7 @@ pub fn build_vm_composed_tx(
         signature: [0; 64],
     }
     .sign(composer);
-    RoutableTransaction::new_vm(vm)
+    RoutableTransaction::new(vm)
 }
 
 /// The fee ceiling every built call envelope signs.
@@ -1649,26 +1648,6 @@ fn vm_envelope(
         signature: [0; 64],
     }
     .sign(payer)
-}
-
-/// Build a withdraw-from-`from`, deposit-to-`to` XRD transfer, signed and
-/// notarized by `payer` and valid across `validity`.
-///
-/// # Panics
-///
-/// Panics if signing or the routability conversion fails — both fire only on a
-/// malformed manifest (programmer error).
-#[must_use]
-pub fn build_transfer_tx(
-    payer: &Ed25519PrivateKey,
-    from: ComponentAddress,
-    to: ComponentAddress,
-    amount: Decimal,
-    network: &NetworkDefinition,
-    nonce: u32,
-    validity: TimestampRange,
-) -> RoutableTransaction {
-    build_transfer(payer, from, to, amount, network, nonce, validity).expect("transfer builds")
 }
 
 /// Cast the founding pool's vote to retune the reshape `split_bytes`,

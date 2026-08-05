@@ -6,16 +6,9 @@ use std::sync::Arc;
 use hyperscale_crypto::{Signer, Verifier};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use radix_common::constants::PACKAGE_PACKAGE;
-use radix_common::crypto::{Ed25519PrivateKey, IsHash, PublicKey as RadixPublicKey};
-use radix_common::prelude::Epoch;
+use radix_common::crypto::Ed25519PrivateKey;
 use radix_common::types::BlueprintId;
 use radix_engine_interface::types::{Emitter, EventTypeIdentifier};
-use radix_transactions::model::{
-    BlobsV1, HasSignedTransactionIntentHash, InstructionsV1, IntentSignaturesV1, IntentV1,
-    MessageV1, NotarizedTransactionV1, NotarySignatureV1, SignatureV1, SignedIntentV1,
-    TransactionHeaderV1, TransactionPayload, UserTransaction,
-};
-use radix_transactions::prelude::PreparationSettings;
 
 use crate::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
@@ -54,88 +47,26 @@ pub fn test_event_type_identifier(seed: u8) -> EventTypeIdentifier {
     )
 }
 
-/// Fixed Ed25519 keypair used as the notary for every fixture-built
-/// transaction. Deterministic across runs so test fixtures produce
-/// repeatable tx hashes.
-fn test_notary_key() -> Ed25519PrivateKey {
-    // 32 bytes of 0x42, fixed and unprivileged.
-    Ed25519PrivateKey::from_bytes(&[0x42u8; 32]).expect("static 32-byte seed is valid")
-}
-
-/// Create a minimal test `NotarizedTransactionV1` from seed bytes.
+/// Create a test transaction the [`StubVmStatics`] derivation routes to
+/// `read_prefixes` as shared keys and `write_prefixes` as exclusive ones.
 ///
-/// The resulting transaction has a properly-computed notary signature
-/// against the intent hash (using a fixed test keypair) and no intent
-/// signatures, so Radix's `prepare_and_validate` accepts it. The
-/// transaction won't execute successfully — its manifest is empty —
-/// but admission-time validation passes, which is what test fixtures
-/// downstream of the validation pool need.
-///
-/// # Panics
-///
-/// Panics if intent or signed-intent preparation fails. Both are
-/// deterministic over the fixture's constant header / empty
-/// instructions, so a panic here indicates a Radix-side breaking
-/// change to preparation rather than a runtime condition.
+/// `seed_bytes` varies the fee payer, so transactions differing only in
+/// seed are distinct by hash while routing identically.
 #[must_use]
-pub fn test_notarized_transaction_v1(seed_bytes: &[u8]) -> NotarizedTransactionV1 {
-    let notary = test_notary_key();
-    let header = TransactionHeaderV1 {
-        network_id: NetworkDefinition::simulator().id,
-        start_epoch_inclusive: Epoch::of(0),
-        end_epoch_exclusive: Epoch::of(100),
-        nonce: {
-            let mut nonce_bytes = [0u8; 4];
-            for (i, &b) in seed_bytes.iter().take(4).enumerate() {
-                nonce_bytes[i] = b;
-            }
-            u32::from_le_bytes(nonce_bytes)
-        },
-        notary_public_key: RadixPublicKey::Ed25519(notary.public_key()),
-        notary_is_signatory: true,
-        tip_percentage: 0,
-    };
-
-    let intent = IntentV1 {
-        header,
-        instructions: InstructionsV1(vec![]),
-        blobs: BlobsV1 { blobs: vec![] },
-        message: MessageV1::None,
-    };
-
-    let signed_intent = SignedIntentV1 {
-        intent,
-        intent_signatures: IntentSignaturesV1 { signatures: vec![] },
-    };
-
-    let prepared_signed = signed_intent
-        .prepare(&PreparationSettings::latest())
-        .expect("test signed intent always prepares");
-    let signed_intent_hash = *prepared_signed
-        .signed_transaction_intent_hash()
-        .as_hash()
-        .as_bytes();
-
-    let notary_signature = SignatureV1::Ed25519(notary.sign(signed_intent_hash));
-
-    NotarizedTransactionV1 {
-        signed_intent,
-        notary_signature: NotarySignatureV1(notary_signature),
-    }
-}
-
-/// Create a test transaction with specific read/write nodes.
-#[must_use]
-pub fn test_transaction_with_nodes(
+pub fn test_transaction_with_prefixes(
     seed_bytes: &[u8],
-    read_nodes: Vec<NodeId>,
-    write_nodes: Vec<NodeId>,
+    read_prefixes: &[[u8; 16]],
+    write_prefixes: &[[u8; 16]],
 ) -> RoutableTransaction {
-    let tx = test_notarized_transaction_v1(seed_bytes);
-    RoutableTransaction::new(
-        UserTransaction::V1(tx),
-        read_nodes,
-        write_nodes,
+    let mut payer = [0u8; 16];
+    for (slot, &byte) in payer.iter_mut().zip(seed_bytes) {
+        *slot = byte;
+    }
+    stub_vm_transaction_with_reads(
+        payer,
+        read_prefixes,
+        write_prefixes,
+        1_000,
         test_validity_range(),
     )
 }
@@ -154,13 +85,19 @@ pub fn test_validity_range() -> TimestampRange {
     )
 }
 
+/// Create a test owner prefix from a seed byte.
+#[must_use]
+pub const fn test_prefix(seed: u8) -> [u8; 16] {
+    [seed; 16]
+}
+
 /// Create a simple test transaction.
 #[must_use]
 pub fn test_transaction(seed: u8) -> RoutableTransaction {
-    test_transaction_with_nodes(
-        &[seed, seed + 1, seed + 2],
-        vec![test_node(seed)],
-        vec![test_node(seed + 10)],
+    test_transaction_with_prefixes(
+        &[seed, seed.wrapping_add(1), seed.wrapping_add(2)],
+        &[test_prefix(seed)],
+        &[test_prefix(seed.wrapping_add(10))],
     )
 }
 
@@ -950,41 +887,59 @@ pub fn make_finalized_wave(
 /// A deterministic [`VmStatics`](crate::VmStatics) stub for consensus-crate
 /// tests.
 ///
-/// The envelope's tree bytes are read as concatenated 16-byte owner
-/// prefixes, each contributing an exclusive admission key and a
-/// participant prefix. Routing is thus fully controlled per transaction by
+/// The envelope's tree is a leading read count followed by that many
+/// 16-byte shared-mode owner prefixes and then the exclusive ones.
+/// Routing is thus fully controlled per transaction by
 /// [`stub_vm_transaction`], with no effects-bridge dependency.
 struct StubVmStatics;
 
 impl VmStatics for StubVmStatics {
     fn derive(&self, vm: &VmTransaction) -> Result<VmDerived, VmStaticsError> {
         let tree = vm.call_tree().unwrap_or_default();
-        if !tree.len().is_multiple_of(16) {
+        let Some((&read_count, prefixes)) = tree.split_first() else {
+            return Err(VmStaticsError("stub tree is empty".into()));
+        };
+        if !prefixes.len().is_multiple_of(16) || usize::from(read_count) * 16 > prefixes.len() {
             return Err(VmStaticsError(
-                "stub tree must be concatenated 16-byte owner prefixes".into(),
+                "stub tree must be a read count then 16-byte owner prefixes".into(),
             ));
         }
-        let mut write_prefixes: Vec<[u8; 16]> = tree
-            .chunks_exact(16)
-            .map(|chunk| {
-                let mut owner = [0u8; 16];
-                owner.copy_from_slice(chunk);
-                owner
-            })
-            .collect();
-        write_prefixes.sort_unstable();
-        write_prefixes.dedup();
+        let canonical = |chunks: &[u8]| {
+            let mut prefixes: Vec<[u8; 16]> = chunks
+                .chunks_exact(16)
+                .map(|chunk| {
+                    let mut owner = [0u8; 16];
+                    owner.copy_from_slice(chunk);
+                    owner
+                })
+                .collect();
+            prefixes.sort_unstable();
+            prefixes.dedup();
+            prefixes
+        };
+        let (reads, writes) = prefixes.split_at(usize::from(read_count) * 16);
+        let read_prefixes = canonical(reads);
+        let write_prefixes = canonical(writes);
         Ok(VmDerived {
             routing: VmRouting {
-                read_keys: Vec::new(),
+                read_keys: read_prefixes
+                    .iter()
+                    .copied()
+                    .map(DeclaredKey::prefix)
+                    .collect(),
                 write_keys: write_prefixes
                     .iter()
-                    .map(|&owner| DeclaredKey::prefix(owner))
+                    .copied()
+                    .map(DeclaredKey::prefix)
                     .collect(),
-                read_prefixes: Vec::new(),
+                provision_keys: read_prefixes
+                    .iter()
+                    .copied()
+                    .map(DeclaredKey::prefix)
+                    .collect(),
+                provision_prefixes: read_prefixes.clone(),
+                read_prefixes,
                 write_prefixes,
-                provision_keys: Vec::new(),
-                provision_prefixes: Vec::new(),
             },
             subintent_hashes: Vec::new(),
             fee_vault_local: [0xEE; 16],
@@ -1001,15 +956,8 @@ pub fn install_stub_vm_statics() {
     }
 }
 
-/// Build a signed VM transaction the [`StubVmStatics`] derivation routes
-/// to exactly `owner_prefixes`, paying from `fee_payer`.
-///
-/// The envelope's tree is the concatenated prefixes; `max_fee` is the
-/// signed ceiling.
-///
-/// # Panics
-///
-/// Panics if the fixture signing key fails to construct.
+/// Build a signed transaction the [`StubVmStatics`] derivation routes to
+/// exactly `owner_prefixes` as exclusive keys, paying from `fee_payer`.
 #[must_use]
 pub fn stub_vm_transaction(
     fee_payer: [u8; 16],
@@ -1017,9 +965,34 @@ pub fn stub_vm_transaction(
     max_fee: u128,
     validity: TimestampRange,
 ) -> RoutableTransaction {
+    stub_vm_transaction_with_reads(fee_payer, &[], owner_prefixes, max_fee, validity)
+}
+
+/// Build a signed transaction the [`StubVmStatics`] derivation routes to
+/// `read_prefixes` as shared keys and `write_prefixes` as exclusive ones.
+///
+/// The envelope's tree is the read count followed by both prefix runs;
+/// `max_fee` is the signed ceiling.
+///
+/// # Panics
+///
+/// Panics if the fixture signing key fails to construct, or if the read
+/// set exceeds what a one-byte count can name.
+#[must_use]
+pub fn stub_vm_transaction_with_reads(
+    fee_payer: [u8; 16],
+    read_prefixes: &[[u8; 16]],
+    write_prefixes: &[[u8; 16]],
+    max_fee: u128,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    install_stub_vm_statics();
     let key = Ed25519PrivateKey::from_bytes(&[0x5A; 32]).expect("fixture key");
+    let mut tree = vec![u8::try_from(read_prefixes.len()).expect("stub read set fits a byte")];
+    tree.extend_from_slice(&read_prefixes.concat());
+    tree.extend_from_slice(&write_prefixes.concat());
     let vm = VmTransaction {
-        body: VmBody::Call(owner_prefixes.concat().into()),
+        body: VmBody::Call(tree.into()),
         subintent_sigs: Vec::new(),
         fee_payer,
         max_fee,
@@ -1031,7 +1004,7 @@ pub fn stub_vm_transaction(
         signature: [0; 64],
     }
     .sign(&key);
-    RoutableTransaction::new_vm(vm)
+    RoutableTransaction::new(vm)
 }
 
 #[cfg(test)]

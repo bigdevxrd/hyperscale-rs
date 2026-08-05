@@ -19,7 +19,6 @@ use hyperscale_beacon::genesis::build_genesis_beacon_state;
 use hyperscale_core::{ProtocolEvent, TimerId};
 use hyperscale_crypto_bls::BlsVerifier;
 use hyperscale_dispatch_sync::SyncDispatch;
-use hyperscale_engine::{RadixExecutor, TransactionValidation};
 use hyperscale_engine_vm::{ExecutionMode, VmExecutor};
 use hyperscale_mempool::MempoolConfig;
 use hyperscale_network::HandlerRegistry;
@@ -164,7 +163,6 @@ impl Fixture {
             HashMap::<ShardId, SimShardStorage>::new(),
             Arc::clone(&self.beacon_storage),
             NetworkDefinition::simulator(),
-            RadixExecutor::new(NetworkDefinition::simulator()),
             Arc::new(VmExecutor::new(&[], ExecutionMode::Serial)),
             network,
             SyncDispatch,
@@ -172,7 +170,6 @@ impl Fixture {
             event_tx,
             Arc::new(ArcSwap::from(Arc::clone(&self.topology_snapshot))),
             NodeConfig::default(),
-            Arc::new(TransactionValidation::new(NetworkDefinition::simulator())),
         );
         (host, registry, event_rx)
     }

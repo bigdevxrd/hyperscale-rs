@@ -20,11 +20,11 @@ use std::time::Duration;
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::tx::{
     build_vm_transfer_tx, validity_around, vm_cross_shard_cast, vm_cross_shard_genesis_accounts,
+    vm_genesis_accounts, vm_recipient, vm_sender,
 };
 use hyperscale_scenarios::{Cluster, ScenarioConfig, epochs, grow_to};
 use hyperscale_simulation::{SimConfig, SimulationRunner};
 use hyperscale_storage::SubstateStore;
-use hyperscale_types::test_utils::test_transaction;
 use hyperscale_types::{
     BeaconBlockHash, BlockHeight, Round, ShardId, StateRoot, TransactionStatus,
 };
@@ -36,9 +36,14 @@ fn base_config() -> SimConfig {
     SimConfig {
         shard_size: 4,
         jitter_fraction: 0.1,
+        vm_accounts: vm_genesis_accounts(DETERMINISM_TXS, DETERMINISM_TXS),
         ..Default::default()
     }
 }
+
+/// Transactions the determinism run submits, one payer and payee apiece so
+/// nothing contends and the run's divergence is the network's.
+const DETERMINISM_TXS: u8 = 3;
 
 /// The determinism guard's config: the base network plus a lossy delivery path,
 /// so a replay exercises the packet-loss RNG stream as well as consensus.
@@ -75,7 +80,15 @@ fn run_once(seed: u64, install_faults: impl FnOnce(&mut SimulationRunner)) -> Ru
     install_faults(&mut runner);
 
     for (i, delay_ms) in [50u64, 51, 52].into_iter().enumerate() {
-        let tx = test_transaction(u8::try_from(i).unwrap() + 1);
+        let index = u8::try_from(i).expect("three transactions fit a byte");
+        let (payer, from) = vm_sender(index);
+        let tx = build_vm_transfer_tx(
+            &payer,
+            from,
+            vm_recipient(index),
+            100,
+            validity_around(runner.now()),
+        );
         runner.schedule_initial_event(
             0,
             Duration::from_millis(delay_ms),

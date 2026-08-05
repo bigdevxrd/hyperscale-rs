@@ -343,17 +343,17 @@ impl ReadySet {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::test_utils::{test_node, test_transaction_with_nodes};
+    use hyperscale_types::test_utils::{test_prefix, test_transaction_with_prefixes};
 
     fn key(seed: u8) -> DeclaredKey {
-        DeclaredKey::node(test_node(seed))
+        DeclaredKey::prefix(test_prefix(seed))
     }
 
     use super::*;
 
     fn tx_with(seed: u8, nodes: &[u8]) -> (TxHash, Arc<Verified<RoutableTransaction>>) {
-        let nodes: Vec<_> = nodes.iter().map(|n| test_node(*n)).collect();
-        let tx = test_transaction_with_nodes(&[seed], nodes.clone(), nodes);
+        let prefixes: Vec<_> = nodes.iter().map(|n| test_prefix(*n)).collect();
+        let tx = test_transaction_with_prefixes(&[seed], &prefixes, &prefixes);
         let hash = tx.hash();
         (hash, Arc::new(Verified::new_unchecked_for_test(tx)))
     }
@@ -363,10 +363,10 @@ mod tests {
         reads: &[u8],
         writes: &[u8],
     ) -> (TxHash, Arc<Verified<RoutableTransaction>>) {
-        let tx = test_transaction_with_nodes(
+        let tx = test_transaction_with_prefixes(
             &[seed],
-            reads.iter().map(|n| test_node(*n)).collect(),
-            writes.iter().map(|n| test_node(*n)).collect(),
+            &reads.iter().map(|n| test_prefix(*n)).collect::<Vec<_>>(),
+            &writes.iter().map(|n| test_prefix(*n)).collect::<Vec<_>>(),
         );
         let hash = tx.hash();
         (hash, Arc::new(Verified::new_unchecked_for_test(tx)))

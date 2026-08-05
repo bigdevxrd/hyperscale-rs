@@ -64,16 +64,12 @@
 //! that execute at different committed heights see different vault balances,
 //! producing different DatabaseUpdates and divergent state roots.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::hash::BuildHasher;
+use std::collections::HashMap;
 
-use hyperscale_storage::{
-    DatabaseUpdates, DbPartitionKey, PartitionDatabaseUpdates, SubstateDatabase, SubstateStore,
-};
+use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates, SubstateStore};
 pub use hyperscale_types::state_key::db_node_key_to_node_id;
 use hyperscale_types::state_key::vm_db_node_key_owner;
-use hyperscale_types::{BlockHeight, NodeId, OwnershipRoot, ShardId, ShardTrie, WritesRoot};
+use hyperscale_types::{BlockHeight, NodeId, ShardId, ShardTrie, WritesRoot};
 use radix_common::prelude::{DatabaseUpdate, basic_encode};
 use radix_common::types::NodeId as RadixNodeId;
 
@@ -106,44 +102,6 @@ const SBOR_OWN_TAG: u8 = 0x90;
 // ============================================================================
 // Stage 1: Ownership Resolution
 // ============================================================================
-
-/// Maps internal `NodeId`s (vaults, KV stores) to their owning declared account.
-///
-/// For each declared account, scans all partition substates looking for
-/// SBOR-encoded `Own(NodeId)` references. Returns a map from internal `NodeId`
-/// to the account that owns it.
-///
-/// This is the "walk down" from accounts to vaults. It's necessary because
-/// vaults have no back-pointer to their owning account — `outer_object` points
-/// to the resource manager, not the account.
-pub fn resolve_owned_nodes<S: SubstateDatabase>(
-    storage: &S,
-    declared_nodes: &[NodeId],
-) -> HashMap<NodeId, NodeId> {
-    use radix_substate_store_interface::db_key_mapper::{DatabaseKeyMapper, SpreadPrefixKeyMapper};
-
-    let mut ownership: HashMap<NodeId, NodeId> = HashMap::new();
-
-    for account in declared_nodes {
-        let radix_node_id = RadixNodeId(account.0);
-        let db_node_key = SpreadPrefixKeyMapper::to_db_node_key(&radix_node_id);
-
-        // Scan all 256 partitions. Global entities use:
-        //   0..63 — module partitions (metadata, royalties, etc.)
-        //   64+   — main state partitions (fields, KV stores)
-        for partition_num in 0..=255u8 {
-            let pk = DbPartitionKey {
-                node_key: db_node_key.clone(),
-                partition_num,
-            };
-            for (_sort_key, value) in storage.list_raw_values_from_db_key(&pk, None) {
-                extract_owned_node_ids(&value, *account, &mut ownership);
-            }
-        }
-    }
-
-    ownership
-}
 
 /// Resolve `internal_node → owning_global_ancestor` directly from a
 /// [`DatabaseUpdates`] by scanning every node's written substate values for
@@ -182,98 +140,6 @@ pub fn resolve_owned_nodes_from_updates(merged: &DatabaseUpdates) -> HashMap<Nod
         }
     }
     ownership
-}
-
-/// Build the per-vnode merged `vault → owning_account` map for a
-/// cross-shard transaction.
-///
-/// Each entry is sourced from the shard whose account owns the vault:
-/// provisions for remote-shard owners (the source shard's BFT-attested
-/// map) and a local-snapshot walk for local-shard owners. Healthy state
-/// produces disjoint contributions.
-///
-/// Returns `Err(conflicts)` if the same vault is claimed by accounts on
-/// both shards. Each vault is owned by exactly one account, so healthy
-/// execution never reaches this: genesis runs the engine's id allocation
-/// once on ROOT (no per-shard duplicate that hands one vault to two
-/// accounts), and runtime vault `NodeId`s are unique and never re-parent.
-/// The path left open is a remote shard's provisions claiming a vault the
-/// local shard owns — a bogus `owned_nodes` the interim trust model can't
-/// reject at intake, since `provision_tx_roots` attests only the source tx
-/// hash, not the ownership itself. The guard stays as a deterministic
-/// safety net: each shard's
-/// [`crate::provisioned_snapshot::ProvisionedSnapshot`] overlays the other
-/// shard's provision on top of its own local state with "provisions win"
-/// precedence, so a contested vault would give the two committees divergent
-/// substates and split the global receipt root. Aborting on `Err` — an
-/// outcome both shards derive locally and identically — keeps them in
-/// agreement rather than executing a divergent VM view.
-///
-/// Deterministic across same-shard validators: identical declared set +
-/// identical local state + identical BFT-attested provisions ⇒ identical
-/// merged map (or identical conflict set). Not cached — cross-shard
-/// packed vnodes that share a [`crate::ProcessExecutionCache`] entry see
-/// different remote provisions, so callers must invoke this per call
-/// before [`crate::project_to_shard`].
-///
-/// # Errors
-///
-/// Returns the sorted list of conflicting vault `NodeId`s — same vault
-/// owned by accounts on both shards — so the caller can attribute the
-/// abort in logs.
-#[allow(clippy::implicit_hasher)]
-pub fn build_cross_shard_ownership<S: SubstateDatabase>(
-    snapshot: &S,
-    declared: &[NodeId],
-    provisions_ownership: &HashMap<NodeId, NodeId>,
-    local_shard: ShardId,
-    shard_trie: &ShardTrie,
-) -> Result<HashMap<NodeId, NodeId>, Vec<NodeId>> {
-    let mut merged: HashMap<NodeId, NodeId> = HashMap::new();
-    for (vault, owner) in provisions_ownership {
-        if shard_trie.shard_for(owner) != local_shard {
-            merged.insert(*vault, *owner);
-        }
-    }
-    let local_declared: Vec<NodeId> = declared
-        .iter()
-        .filter(|n| shard_trie.shard_for(n) == local_shard)
-        .copied()
-        .collect();
-    if local_declared.is_empty() {
-        return Ok(merged);
-    }
-    let local_ownership = resolve_owned_nodes(snapshot, &local_declared);
-    let mut conflicts: Vec<NodeId> = Vec::new();
-    for (vault, local_owner) in local_ownership {
-        if shard_trie.shard_for(&local_owner) != local_shard {
-            continue;
-        }
-        match merged.entry(vault) {
-            Entry::Vacant(slot) => {
-                slot.insert(local_owner);
-            }
-            Entry::Occupied(slot) => {
-                let remote_owner = *slot.get();
-                tracing::warn!(
-                    ?vault,
-                    ?remote_owner,
-                    ?local_owner,
-                    "Cross-shard ownership conflict — aborting transaction. \
-                     A vault is claimed by accounts on both shards; healthy state \
-                     holds one owner per vault, so a remote provision is claiming a \
-                     vault the local shard owns. Aborting deterministically."
-                );
-                conflicts.push(vault);
-            }
-        }
-    }
-    if conflicts.is_empty() {
-        Ok(merged)
-    } else {
-        conflicts.sort();
-        Err(conflicts)
-    }
 }
 
 /// Scan raw SBOR bytes for `Own(NodeId)` references to internal entities.
@@ -398,133 +264,25 @@ pub fn filter_genesis_updates_for_shard(
 
 /// Filter `DatabaseUpdates` for a single shard.
 ///
-/// Keeps only writes that:
-/// 1. Are not system entities (`ConsensusManager`, `TransactionTracker`, Validator)
-/// 2. Belong to a declared account (directly or as an owned internal node)
-/// 3. Are assigned to `local_shard` based on the owning account's hash
-///
-/// `declared_set` carries the transaction's declared reads/writes; `ownership`
-/// maps each internal node discovered under those accounts to its owner. Both
-/// are produced once per build via [`resolve_owned_nodes`] and shared with
-/// [`filter_updates_for_global_receipt`].
+/// An entity key carries its owner prefix — the identity leaves' routing
+/// half — so shard assignment is a prefix walk and nothing else.
 #[must_use]
-pub fn filter_updates_for_shard<H1: BuildHasher, H2: BuildHasher>(
+pub fn filter_updates_for_shard(
     updates: &DatabaseUpdates,
     local_shard: ShardId,
     shard_trie: &ShardTrie,
-    declared_set: &HashSet<NodeId, H1>,
-    ownership: &HashMap<NodeId, NodeId, H2>,
 ) -> DatabaseUpdates {
     let mut filtered = DatabaseUpdates::default();
-
     for (db_node_key, node_updates) in &updates.node_updates {
-        // A VM entity key carries its owner prefix — the identity
-        // leaves' routing half — so shard assignment is a prefix walk;
-        // the declared set and ownership map are Radix-only inputs.
-        if let Some(owner) = vm_db_node_key_owner(db_node_key) {
-            if shard_trie.shard_for_prefix(owner) == local_shard {
-                filtered
-                    .node_updates
-                    .insert(db_node_key.clone(), node_updates.clone());
-            }
-            continue;
-        }
-        let Some(node_id) = db_node_key_to_node_id(db_node_key) else {
+        let Some(owner) = vm_db_node_key_owner(db_node_key) else {
             continue;
         };
-
-        let entity_type = node_id.0[0];
-
-        // Drop system entities.
-        if SYSTEM_ENTITY_TYPES.contains(&entity_type) {
-            continue;
-        }
-
-        // Determine which account this node belongs to, for both
-        // ownership checking and shard assignment.
-        let shard_node_id = if declared_set.contains(&node_id) {
-            // This IS a declared account — use itself for shard assignment.
-            node_id
-        } else if let Some(&owner) = ownership.get(&node_id) {
-            // Internal node owned by a declared account — use the owner.
-            owner
-        } else {
-            // Not declared, not owned by any declared account.
-            // This is an undeclared write (fee vault, etc.) — drop it.
-            continue;
-        };
-
-        // Shard assignment based on the owning account.
-        let node_shard = shard_trie.shard_for(&shard_node_id);
-        if node_shard != local_shard {
-            continue;
-        }
-
-        filtered
-            .node_updates
-            .insert(db_node_key.clone(), node_updates.clone());
-    }
-
-    filtered
-}
-
-// ============================================================================
-// Stage 3: Global Receipt Filtering
-// ============================================================================
-
-/// Filter `DatabaseUpdates` for cross-shard agreement (`GlobalReceipt`).
-///
-/// Like [`filter_updates_for_shard`] but WITHOUT shard assignment — keeps
-/// declared writes across ALL shards. This produces a deterministic set of
-/// writes that is identical on every shard executing the same transaction,
-/// enabling cross-shard agreement via `writes_root` in the `GlobalReceipt`.
-///
-/// Filters applied:
-/// 1. Drop system entities (`ConsensusManager`, `TransactionTracker`, Validator)
-/// 2. Drop undeclared writes (not in `declared_reads`/`declared_writes` or their owned vaults)
-/// 3. (Omitted: no shard filtering — keep writes for all shards.)
-///
-/// Shares `declared_set` and `ownership` with [`filter_updates_for_shard`];
-/// see that function's docs for how the inputs are produced.
-#[must_use]
-pub fn filter_updates_for_global_receipt<H1: BuildHasher, H2: BuildHasher>(
-    updates: &DatabaseUpdates,
-    declared_set: &HashSet<NodeId, H1>,
-    ownership: &HashMap<NodeId, NodeId, H2>,
-) -> DatabaseUpdates {
-    let mut filtered = DatabaseUpdates::default();
-
-    for (db_node_key, node_updates) in &updates.node_updates {
-        // A VM update only ever touches declared cells (handles exist
-        // for nothing else), so every VM entity key is kept.
-        if vm_db_node_key_owner(db_node_key).is_some() {
+        if shard_trie.shard_for_prefix(owner) == local_shard {
             filtered
                 .node_updates
                 .insert(db_node_key.clone(), node_updates.clone());
-            continue;
         }
-        let Some(node_id) = db_node_key_to_node_id(db_node_key) else {
-            continue;
-        };
-
-        let entity_type = node_id.0[0];
-
-        // Drop system entities.
-        if SYSTEM_ENTITY_TYPES.contains(&entity_type) {
-            continue;
-        }
-
-        // Drop undeclared writes.
-        if !declared_set.contains(&node_id) && !ownership.contains_key(&node_id) {
-            continue;
-        }
-
-        // No shard filtering — keep writes for all shards.
-        filtered
-            .node_updates
-            .insert(db_node_key.clone(), node_updates.clone());
     }
-
     filtered
 }
 
@@ -555,58 +313,6 @@ pub fn compute_writes_root(updates: &DatabaseUpdates) -> WritesRoot {
     WritesRoot::from_raw(Hash::from_bytes(&encoded))
 }
 
-/// Extract the `(internal_node, owning_global_ancestor)` pairs for every
-/// internal node appearing in `updates`, in canonical key order.
-///
-/// The per-shard / global filters keep only declared globals and owned
-/// internal nodes, so every internal node in `updates` is present in
-/// `ownership`; globals are absent (they key under themselves at JMT build).
-/// The result is what a receipt carries (per-shard `database_updates`) or
-/// what [`compute_ownership_root`] commits (global filtered updates).
-#[must_use]
-pub fn owned_nodes_in_updates<H: BuildHasher>(
-    updates: &DatabaseUpdates,
-    ownership: &HashMap<NodeId, NodeId, H>,
-) -> Vec<(NodeId, NodeId)> {
-    let mut owned: Vec<(NodeId, NodeId)> = updates
-        .node_updates
-        .keys()
-        .filter_map(|db_node_key| {
-            let node_id = db_node_key_to_node_id(db_node_key)?;
-            ownership.get(&node_id).map(|owner| (node_id, *owner))
-        })
-        .collect();
-    owned.sort_by_key(|(k, _)| *k);
-    owned.dedup_by_key(|(k, _)| *k);
-    owned
-}
-
-/// Commit a transaction's globally-filtered ownership map to an
-/// [`OwnershipRoot`].
-///
-/// Hashes the SBOR-encoded `(internal_node, owner)` pairs in canonical key
-/// order, so two validators resolving the same ownership produce a byte-equal
-/// root. Empty map → [`OwnershipRoot::ZERO`]. Folded into the
-/// [`GlobalReceipt`](hyperscale_types::GlobalReceipt) hash so the execution
-/// committee agrees on the keying before a wave finalizes.
-///
-/// # Panics
-///
-/// Panics if SBOR encoding of the ownership pairs fails — `NodeId` is a closed
-/// SBOR type and encoding is infallible in practice.
-#[must_use]
-pub fn compute_ownership_root(owned: &[(NodeId, NodeId)]) -> OwnershipRoot {
-    use hyperscale_types::Hash;
-
-    if owned.is_empty() {
-        return OwnershipRoot::ZERO;
-    }
-    let mut sorted = owned.to_vec();
-    sorted.sort_by_key(|(k, _)| *k);
-    let encoded = basic_encode(&sorted).expect("ownership pairs encoding should not fail");
-    OwnershipRoot::from_raw(Hash::from_bytes(&encoded))
-}
-
 /// Sort every `IndexMap` inside `updates` by key, in-place.
 pub fn sort_database_updates(updates: &mut DatabaseUpdates) {
     updates.node_updates.sort_keys();
@@ -631,12 +337,6 @@ pub fn sort_database_updates(updates: &mut DatabaseUpdates) {
 // Utilities
 // ============================================================================
 
-/// Check if an entity type byte is an internal (child) entity.
-#[must_use]
-pub fn is_internal_entity(entity_type: u8) -> bool {
-    INTERNAL_ENTITY_TYPES.contains(&entity_type)
-}
-
 /// Compute the `SpreadPrefixKeyMapper` `db_node_key` for a `NodeId`.
 ///
 /// Returns the 50-byte key: 20-byte hash prefix + 30-byte `NodeId`.
@@ -653,9 +353,9 @@ mod tests {
         DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, NodeDatabaseUpdates,
         PartitionDatabaseUpdates, SubstateDatabase, SubstateStore,
     };
+    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
     use hyperscale_types::{
         BlockHeight, MerkleInclusionProof, NodeId, ShardTrie, StateRoot, WritesRoot,
-        uniform_shard_for_node,
     };
     use radix_substate_store_interface::db_key_mapper::{DatabaseKeyMapper, SpreadPrefixKeyMapper};
 
@@ -692,18 +392,6 @@ mod tests {
         bytes
     }
 
-    /// Pick a second seed whose account hashes to a different shard than `a`.
-    fn pick_other_shard_seed(a: NodeId, num_shards: u64) -> NodeId {
-        let target = uniform_shard_for_node(&a, num_shards);
-        for seed in 2u8..=255 {
-            let candidate = account_id(seed);
-            if candidate != a && uniform_shard_for_node(&candidate, num_shards) != target {
-                return candidate;
-            }
-        }
-        panic!("no other-shard seed found for num_shards={num_shards}");
-    }
-
     fn make_set_update(
         node: NodeId,
         partition: u8,
@@ -732,60 +420,6 @@ mod tests {
             a.node_updates.insert(k, v);
         }
         a
-    }
-
-    /// Build the `(declared_set, ownership)` pair the filters require,
-    /// matching what `build_executed_tx` does at the real call site.
-    fn filter_inputs<S: SubstateDatabase>(
-        storage: &S,
-        declared: &[NodeId],
-    ) -> (HashSet<NodeId>, HashMap<NodeId, NodeId>) {
-        let set = declared.iter().copied().collect();
-        let ownership = resolve_owned_nodes(storage, declared);
-        (set, ownership)
-    }
-
-    // ── MockDb: SubstateDatabase backed by an in-memory map ─────────────────
-
-    type PartitionEntries = Vec<(DbSortKey, Vec<u8>)>;
-    type PartitionMap = HashMap<(Vec<u8>, u8), PartitionEntries>;
-
-    #[derive(Clone, Default)]
-    struct MockDb {
-        partitions: PartitionMap,
-    }
-
-    impl MockDb {
-        fn insert(&mut self, owner: &NodeId, partition: u8, sort: Vec<u8>, value: Vec<u8>) {
-            let radix_node_id = RadixNodeId(owner.0);
-            let db_node_key = SpreadPrefixKeyMapper::to_db_node_key(&radix_node_id);
-            self.partitions
-                .entry((db_node_key, partition))
-                .or_default()
-                .push((DbSortKey(sort), value));
-        }
-    }
-
-    impl SubstateDatabase for MockDb {
-        fn get_raw_substate_by_db_key(
-            &self,
-            _partition_key: &DbPartitionKey,
-            _sort_key: &DbSortKey,
-        ) -> Option<Vec<u8>> {
-            None
-        }
-
-        fn list_raw_values_from_db_key(
-            &self,
-            partition_key: &DbPartitionKey,
-            _from_sort_key: Option<&DbSortKey>,
-        ) -> Box<dyn Iterator<Item = (DbSortKey, Vec<u8>)> + '_> {
-            let key = (partition_key.node_key.clone(), partition_key.partition_num);
-            match self.partitions.get(&key) {
-                Some(values) => Box::new(values.clone().into_iter()),
-                None => Box::new(std::iter::empty()),
-            }
-        }
     }
 
     // ── extract_owned_node_ids ───────────────────────────────────────────────
@@ -880,19 +514,6 @@ mod tests {
     // ── is_internal_entity ───────────────────────────────────────────────────
 
     #[test]
-    fn is_internal_entity_matches_internal_table() {
-        for &b in INTERNAL_ENTITY_TYPES {
-            assert!(is_internal_entity(b));
-        }
-        assert!(!is_internal_entity(0x51));
-        for &b in SYSTEM_ENTITY_TYPES {
-            assert!(!is_internal_entity(b));
-        }
-    }
-
-    // ── node_entity_key ──────────────────────────────────────────────────────
-
-    #[test]
     fn node_entity_key_has_node_id_suffix() {
         let node = fungible_vault_id(7);
         let key = node_entity_key(&node);
@@ -937,312 +558,55 @@ mod tests {
         assert_ne!(compute_writes_root(&a), compute_writes_root(&b));
     }
 
-    // ── resolve_owned_nodes ──────────────────────────────────────────────────
-
-    #[test]
-    fn resolve_owned_walks_account_to_vault() {
-        let account = account_id(1);
-        let vault = fungible_vault_id(2);
-        let mut db = MockDb::default();
-        db.insert(&account, 64, vec![0], own_bytes(&vault));
-        let ownership = resolve_owned_nodes(&db, &[account]);
-        assert_eq!(ownership.get(&vault), Some(&account));
-    }
-
-    #[test]
-    fn resolve_owned_empty_when_no_substates() {
-        let db = MockDb::default();
-        let ownership = resolve_owned_nodes(&db, &[account_id(1)]);
-        assert!(ownership.is_empty());
-    }
-
-    #[test]
-    fn resolve_owned_scans_all_partitions() {
-        // Substate placed in a non-default partition is still discovered —
-        // the scan covers 0..=255.
-        let account = account_id(1);
-        let vault = fungible_vault_id(2);
-        let mut db = MockDb::default();
-        db.insert(&account, 200, vec![0], own_bytes(&vault));
-        let ownership = resolve_owned_nodes(&db, &[account]);
-        assert_eq!(ownership.get(&vault), Some(&account));
-    }
-
-    // ── build_cross_shard_ownership ──────────────────────────────────────────
-
-    #[test]
-    fn cross_shard_ownership_merges_disjoint_contributions() {
-        let local = account_id(1);
-        let remote = pick_other_shard_seed(local, 2);
-        let local_vault = fungible_vault_id(10);
-        let remote_vault = fungible_vault_id(20);
-        let local_shard = uniform_shard_for_node(&local, 2);
-
-        let mut db = MockDb::default();
-        db.insert(&local, 64, vec![0], own_bytes(&local_vault));
-
-        let mut provisions = HashMap::new();
-        provisions.insert(remote_vault, remote);
-
-        let merged = build_cross_shard_ownership(
-            &db,
-            &[local, remote],
-            &provisions,
-            local_shard,
-            &ShardTrie::uniform_from_count(2),
-        )
-        .expect("disjoint inputs should not conflict");
-
-        assert_eq!(merged.get(&local_vault), Some(&local));
-        assert_eq!(merged.get(&remote_vault), Some(&remote));
-        assert_eq!(merged.len(), 2);
-    }
-
-    #[test]
-    fn cross_shard_ownership_conflict_returns_err() {
-        // A vault contested across shards: the same internal vault is claimed
-        // by accounts on both shards. Healthy state holds one owner per vault
-        // (single-shard genesis removed the colliding-genesis case), so this
-        // stands in for a remote provision claiming a vault the local shard
-        // owns. Both shards see the conflict from opposite perspectives
-        // (local-walk on one side, provision on the other), so each
-        // independently returns Err — the caller fast-aborts the transaction,
-        // producing a deterministic outcome across shards.
-        let a = account_id(1);
-        let b = pick_other_shard_seed(a, 2);
-        let shared_vault = fungible_vault_id(99);
-
-        // Run on shard(a): local owner is a, provisions claim b.
-        let shard_a = uniform_shard_for_node(&a, 2);
-        let mut db_a = MockDb::default();
-        db_a.insert(&a, 64, vec![0], own_bytes(&shared_vault));
-        let mut prov_a = HashMap::new();
-        prov_a.insert(shared_vault, b);
-        let err_a = build_cross_shard_ownership(
-            &db_a,
-            &[a, b],
-            &prov_a,
-            shard_a,
-            &ShardTrie::uniform_from_count(2),
-        )
-        .expect_err("contested vault should produce Err");
-
-        // Run on shard(b): local owner is b, provisions claim a.
-        let shard_b = uniform_shard_for_node(&b, 2);
-        let mut db_b = MockDb::default();
-        db_b.insert(&b, 64, vec![0], own_bytes(&shared_vault));
-        let mut prov_b = HashMap::new();
-        prov_b.insert(shared_vault, a);
-        let err_b = build_cross_shard_ownership(
-            &db_b,
-            &[a, b],
-            &prov_b,
-            shard_b,
-            &ShardTrie::uniform_from_count(2),
-        )
-        .expect_err("contested vault should produce Err");
-
-        assert_eq!(err_a, vec![shared_vault]);
-        assert_eq!(err_b, vec![shared_vault]);
-    }
-
-    #[test]
-    fn cross_shard_ownership_ignores_provisions_for_local_owners() {
-        // A provision entry pointing at a local-shard owner is dropped — the
-        // local walk is authoritative for local-shard vaults.
-        let local = account_id(1);
-        let local_shard = uniform_shard_for_node(&local, 2);
-        let vault = fungible_vault_id(5);
-
-        let mut provisions = HashMap::new();
-        provisions.insert(vault, local);
-
-        let merged = build_cross_shard_ownership(
-            &MockDb::default(),
-            &[local],
-            &provisions,
-            local_shard,
-            &ShardTrie::uniform_from_count(2),
-        )
-        .expect("provision entries for local owners are dropped, not conflicts");
-        assert!(merged.is_empty());
-    }
-
     // ── filter_updates_for_shard ─────────────────────────────────────────────
 
+    /// A `DatabaseUpdates` holding one cell under `owner`.
+    fn vm_set_update(owner: [u8; 16], local: [u8; 16], value: Vec<u8>) -> DatabaseUpdates {
+        let mut updates = DatabaseUpdates::default();
+        let nu = updates
+            .node_updates
+            .entry(vm_db_node_key(owner))
+            .or_insert_with(NodeDatabaseUpdates::default);
+        nu.partition_updates.insert(
+            VM_PARTITION,
+            PartitionDatabaseUpdates::Delta {
+                substate_updates: std::iter::once((
+                    DbSortKey(local.to_vec()),
+                    DatabaseUpdate::Set(value),
+                ))
+                .collect(),
+            },
+        );
+        updates
+    }
+
     #[test]
-    fn filter_for_shard_drops_system_entities() {
-        let account = account_id(1);
-        let consensus = id_with_type(0x86, 7);
+    fn filter_for_shard_keeps_only_this_shard_prefixes() {
+        let trie = ShardTrie::uniform_from_count(2);
+        let left = [0x00; 16];
+        let right = [0xFF; 16];
+        assert_ne!(trie.shard_for_prefix(left), trie.shard_for_prefix(right));
         let updates = merge(
-            make_set_update(account, 64, vec![0], vec![1]),
-            make_set_update(consensus, 64, vec![0], vec![1]),
+            vm_set_update(left, [1; 16], vec![1]),
+            vm_set_update(right, [1; 16], vec![2]),
         );
-        let local = uniform_shard_for_node(&account, 4);
-        let (set, own) = filter_inputs(&MockDb::default(), &[account]);
-        let filtered = filter_updates_for_shard(
-            &updates,
-            local,
-            &ShardTrie::uniform_from_count(4),
-            &set,
-            &own,
-        );
+
+        let filtered = filter_updates_for_shard(&updates, trie.shard_for_prefix(left), &trie);
         assert_eq!(filtered.node_updates.len(), 1);
-        let only = filtered.node_updates.keys().next().unwrap();
-        assert_eq!(db_node_key_to_node_id(only), Some(account));
+        assert_eq!(
+            vm_db_node_key_owner(filtered.node_updates.keys().next().unwrap()),
+            Some(left)
+        );
     }
 
     #[test]
-    fn filter_for_shard_drops_undeclared_writes() {
-        // num_shards=1 isolates this from shard-routing concerns.
-        let account = account_id(1);
-        let stranger = account_id(2);
-        let updates = merge(
-            make_set_update(account, 64, vec![0], vec![1]),
-            make_set_update(stranger, 64, vec![0], vec![1]),
-        );
-        let local = uniform_shard_for_node(&account, 1);
-        let (set, own) = filter_inputs(&MockDb::default(), &[account]);
-        let filtered = filter_updates_for_shard(
-            &updates,
-            local,
-            &ShardTrie::uniform_from_count(1),
-            &set,
-            &own,
-        );
-        assert_eq!(filtered.node_updates.len(), 1);
-    }
-
-    #[test]
-    fn filter_for_shard_drops_other_shard_writes() {
-        let a = account_id(1);
-        let b = pick_other_shard_seed(a, 4);
-        let local = uniform_shard_for_node(&a, 4);
-        let updates = merge(
-            make_set_update(a, 64, vec![0], vec![1]),
-            make_set_update(b, 64, vec![0], vec![1]),
-        );
-        let (set, own) = filter_inputs(&MockDb::default(), &[a, b]);
-        let filtered = filter_updates_for_shard(
-            &updates,
-            local,
-            &ShardTrie::uniform_from_count(4),
-            &set,
-            &own,
-        );
-        assert_eq!(filtered.node_updates.len(), 1);
-        let only = filtered.node_updates.keys().next().unwrap();
-        assert_eq!(db_node_key_to_node_id(only), Some(a));
-    }
-
-    #[test]
-    fn filter_for_shard_keeps_owned_vault_with_owner() {
-        let account = account_id(1);
-        let vault = fungible_vault_id(2);
-        let mut db = MockDb::default();
-        db.insert(&account, 64, vec![0], own_bytes(&vault));
-        let updates = merge(
-            make_set_update(account, 64, vec![0], vec![1]),
-            make_set_update(vault, 0, vec![0], vec![1]),
-        );
-        let local = uniform_shard_for_node(&account, 1);
-        let (set, own) = filter_inputs(&db, &[account]);
-        let filtered = filter_updates_for_shard(
-            &updates,
-            local,
-            &ShardTrie::uniform_from_count(1),
-            &set,
-            &own,
-        );
-        assert_eq!(filtered.node_updates.len(), 2);
-    }
-
-    #[test]
-    fn filter_for_shard_routes_owned_vault_by_owner_shard() {
-        // The vault hashes to whatever shard its random NodeId points at,
-        // but for routing we use the owning account's shard. Pick a vault
-        // whose own hash differs from its owner's shard, then verify the
-        // vault is kept iff we filter for the owner's shard.
-        let account = account_id(1);
-        let owner_shard = uniform_shard_for_node(&account, 4);
-        let mut vault_seed = 2u8;
-        let mut vault = fungible_vault_id(vault_seed);
-        while uniform_shard_for_node(&vault, 4) == owner_shard {
-            vault_seed = vault_seed.wrapping_add(1);
-            vault = fungible_vault_id(vault_seed);
-            assert_ne!(vault_seed, 1, "no diverging vault seed found");
-        }
-        let mut db = MockDb::default();
-        db.insert(&account, 64, vec![0], own_bytes(&vault));
-        let updates = make_set_update(vault, 0, vec![0], vec![1]);
-        let (set, own) = filter_inputs(&db, &[account]);
-        // Filter at owner's shard — vault must be kept.
-        let kept = filter_updates_for_shard(
-            &updates,
-            owner_shard,
-            &ShardTrie::uniform_from_count(4),
-            &set,
-            &own,
-        );
-        assert_eq!(kept.node_updates.len(), 1);
-        // Filter at the vault's "natural" shard — must drop.
-        let dropped = filter_updates_for_shard(
-            &updates,
-            uniform_shard_for_node(&vault, 4),
-            &ShardTrie::uniform_from_count(4),
-            &set,
-            &own,
-        );
-        assert!(dropped.node_updates.is_empty());
-    }
-
-    // ── filter_updates_for_global_receipt ────────────────────────────────────
-
-    #[test]
-    fn filter_for_global_receipt_keeps_writes_across_shards() {
-        let a = account_id(1);
-        let b = pick_other_shard_seed(a, 4);
-        let updates = merge(
-            make_set_update(a, 64, vec![0], vec![1]),
-            make_set_update(b, 64, vec![0], vec![1]),
-        );
-        let (set, own) = filter_inputs(&MockDb::default(), &[a, b]);
-        let filtered = filter_updates_for_global_receipt(&updates, &set, &own);
-        assert_eq!(filtered.node_updates.len(), 2);
-    }
-
-    #[test]
-    fn filter_for_global_receipt_drops_system_and_undeclared() {
-        let account = account_id(1);
-        let stranger = account_id(2);
-        let consensus = id_with_type(0x86, 7);
-        let updates = merge(
-            merge(
-                make_set_update(account, 64, vec![0], vec![1]),
-                make_set_update(stranger, 64, vec![0], vec![1]),
-            ),
-            make_set_update(consensus, 64, vec![0], vec![1]),
-        );
-        let (set, own) = filter_inputs(&MockDb::default(), &[account]);
-        let filtered = filter_updates_for_global_receipt(&updates, &set, &own);
-        assert_eq!(filtered.node_updates.len(), 1);
-        let only = filtered.node_updates.keys().next().unwrap();
-        assert_eq!(db_node_key_to_node_id(only), Some(account));
-    }
-
-    #[test]
-    fn filter_for_global_receipt_keeps_owned_vault() {
-        let account = account_id(1);
-        let vault = fungible_vault_id(2);
-        let mut db = MockDb::default();
-        db.insert(&account, 64, vec![0], own_bytes(&vault));
-        let updates = merge(
-            make_set_update(account, 64, vec![0], vec![1]),
-            make_set_update(vault, 0, vec![0], vec![1]),
-        );
-        let (set, own) = filter_inputs(&db, &[account]);
-        let filtered = filter_updates_for_global_receipt(&updates, &set, &own);
-        assert_eq!(filtered.node_updates.len(), 2);
+    fn filter_for_shard_drops_keys_outside_the_namespace() {
+        // A Radix entity key survives genesis but is nobody's receipt
+        // update, and the filter is the place that says so.
+        let updates = make_set_update(account_id(1), 64, vec![0], vec![1]);
+        let filtered =
+            filter_updates_for_shard(&updates, ShardId::ROOT, &ShardTrie::uniform_from_count(1));
+        assert!(filtered.node_updates.is_empty());
     }
 
     // ── expand_nodes_with_owned_at_height ────────────────────────────────────
@@ -1354,95 +718,5 @@ mod tests {
                 .expect("present");
         assert_eq!(expanded, vec![account]);
         assert!(ownership.is_empty());
-    }
-
-    // ── Cross-shard merged-view invariance ───────────────────────────────────
-    //
-    // `compute_vm_output` advertises shard-invariance: the same `(tx, vm_receipt)`
-    // must produce a byte-equal `CachedVmOutput` regardless of which shard
-    // constructed the merged view. That guarantee propagates down to
-    // `writes_root` (and therefore `GlobalReceiptHash`), which is the
-    // proper consensus surface.
-    //
-    // The contract is statable at this layer: equivalent inputs must
-    // produce equivalent `(ownership, global_updates, writes_root)`.
-
-    /// Pins the cross-shard `writes_root` contract: when shard 1 sources
-    /// ownership from the authoritative map shipped in `ProvisionEntry::
-    /// owned_nodes` (rather than rediscovering it by walking a partial
-    /// merged view), both shards arrive at the same `writes_root` for the
-    /// same `(tx, vm_receipt)`.
-    ///
-    /// The asymmetry the test exercises: shard 0 ships only one of `A_0`'s
-    /// substate partitions in its provision (the partition the tx reads).
-    /// The other partition still contains a load-bearing `Own(_)` ref. A
-    /// receiver that walks its merged view would miss that vault — but
-    /// the authoritative ownership map carried in the provision sees it,
-    /// matching what shard 0 computes locally.
-    #[test]
-    fn writes_root_is_shard_invariant_with_authoritative_ownership() {
-        // Cross-shard tx declares one account; that account owns two
-        // vaults via `Own(_)` refs in two different partitions.
-        let a_0 = account_id(1);
-        let v_main = fungible_vault_id(2); // referenced from partition 64
-        let v_meta = nonfungible_vault_id(3); // referenced from partition 0
-
-        // Shard 0 holds A_0 locally with the full substate set.
-        let mut shard_0_local = MockDb::default();
-        shard_0_local.insert(&a_0, 0, vec![0], own_bytes(&v_meta));
-        shard_0_local.insert(&a_0, 64, vec![0], own_bytes(&v_main));
-
-        // Shard 0's local walk gives the complete authoritative ownership
-        // for A_0 — both V_main and V_meta. This is what the source
-        // serializes into `ProvisionEntry::owned_nodes` at provision
-        // generation time.
-        let shard_0_authoritative = resolve_owned_nodes(&shard_0_local, &[a_0]);
-
-        // Shard 1 doesn't hold A_0, so its local walk for A_0 finds
-        // nothing. It must rely on the source-shipped ownership map.
-        let shard_1_local = MockDb::default();
-        let shard_1_local_walk = resolve_owned_nodes(&shard_1_local, &[a_0]);
-        assert!(
-            shard_1_local_walk.is_empty(),
-            "shard 1 has no local substates for A_0"
-        );
-
-        // The receiver assembles the cross-shard ownership by merging
-        // each source shard's authoritative map. Here only shard 0
-        // contributes (A_0 is shard-0-owned).
-        let mut shard_1_assembled: HashMap<NodeId, NodeId> = shard_1_local_walk;
-        for (vault, owner) in &shard_0_authoritative {
-            shard_1_assembled.insert(*vault, *owner);
-        }
-
-        // Both validators now hold identical ownership maps.
-        assert_eq!(shard_0_authoritative, shard_1_assembled);
-
-        // Same VM-produced raw writes on both sides — what the VM would
-        // have emitted given identical inputs.
-        let raw_updates = merge(
-            merge(
-                make_set_update(a_0, 64, vec![0], vec![1]),
-                make_set_update(v_main, 0, vec![0], vec![1]),
-            ),
-            make_set_update(v_meta, 0, vec![0], vec![1]),
-        );
-
-        let declared_set: HashSet<NodeId> = std::iter::once(a_0).collect();
-        let global_0 =
-            filter_updates_for_global_receipt(&raw_updates, &declared_set, &shard_0_authoritative);
-        let global_1 =
-            filter_updates_for_global_receipt(&raw_updates, &declared_set, &shard_1_assembled);
-
-        let writes_root_0 = compute_writes_root(&global_0);
-        let writes_root_1 = compute_writes_root(&global_1);
-
-        assert_eq!(
-            writes_root_0, writes_root_1,
-            "writes_root must be shard-invariant when both shards source \
-             ownership from the same authoritative map; \
-             shard-0={shard_0_authoritative:?}, \
-             shard-1={shard_1_assembled:?}",
-        );
     }
 }

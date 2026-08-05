@@ -350,13 +350,6 @@ const fn admission_key(target: &EffectTarget) -> DeclaredKey {
     }
 }
 
-fn key_owner(key: &DeclaredKey) -> [u8; 16] {
-    match key {
-        DeclaredKey::Prefix { owner, .. } => *owner,
-        DeclaredKey::Node { .. } => unreachable!("VM derivation emits prefix keys only"),
-    }
-}
-
 /// The envelope's identity: its signing hash through the workspace's
 /// protocol hash, as the vocabulary's hash type.
 #[must_use]
@@ -651,7 +644,7 @@ impl VmStatics for BridgeStatics {
         }
         let prefixes = |keys: &BTreeSet<DeclaredKey>| -> Vec<[u8; 16]> {
             keys.iter()
-                .map(key_owner)
+                .map(|key| key.owner)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect()

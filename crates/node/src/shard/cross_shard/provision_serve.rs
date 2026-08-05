@@ -8,7 +8,7 @@ use hyperscale_provisions::build_provisions;
 use hyperscale_storage::{PendingChain, ShardStorage};
 use hyperscale_types::network::request::GetProvisionsRequest;
 use hyperscale_types::network::response::GetProvisionResponse;
-use hyperscale_types::{DeclaredKey, NodeId, ShardId, ShardTrie};
+use hyperscale_types::{ShardId, ShardTrie};
 use tracing::warn;
 
 /// Serve an inbound provision request from a target shard needing our state.
@@ -45,74 +45,40 @@ pub fn serve_provision_request<S: ShardStorage>(
 
     let mut requests: Vec<ProvisionsRequest> = Vec::new();
     for tx in block.transactions().iter() {
-        // VM arm: the same read-set keys the gossip emit path serves,
-        // re-derived from the envelope.
-        if let Some(routing) = tx.vm_routing() {
-            let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
-                .provision_keys
-                .iter()
-                .filter_map(|key| match key {
-                    DeclaredKey::Prefix {
-                        owner,
-                        local: Some(local),
-                    } if shard_trie.shard_for_prefix(*owner) == local_shard => {
-                        Some((*owner, *local))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let targets_requester = routing
-                .all_prefixes()
-                .iter()
-                .any(|prefix| shard_trie.shard_for_prefix(*prefix) == req.target_shard);
-            // The payer shard serves its bundle even with nothing owned
-            // — the engagement evidence — and a counterpart with
-            // nothing owned serves its empty bundle to the payer alone:
-            // the engagement echo. Both mirror the emit path.
-            let payer_shard = tx.vm().map(|vm| shard_trie.shard_for_prefix(vm.fee_payer));
-            let is_payer_shard = payer_shard == Some(local_shard);
-            if vm_local_keys.is_empty() && !is_payer_shard {
-                if payer_shard != Some(req.target_shard) {
-                    continue;
-                }
-            } else if !targets_requester {
+        // The same read-set keys the gossip emit path serves, re-derived
+        // from the envelope.
+        let routing = tx.routing();
+        let vm_local_keys: Vec<([u8; 16], [u8; 16])> = routing
+            .provision_keys
+            .iter()
+            .filter_map(|key| {
+                key.local
+                    .filter(|_| shard_trie.shard_for_prefix(key.owner) == local_shard)
+                    .map(|local| (key.owner, local))
+            })
+            .collect();
+        let targets_requester = routing
+            .all_prefixes()
+            .iter()
+            .any(|prefix| shard_trie.shard_for_prefix(*prefix) == req.target_shard);
+        // The payer shard serves its bundle even with nothing owned
+        // — the engagement evidence — and a counterpart with
+        // nothing owned serves its empty bundle to the payer alone:
+        // the engagement echo. Both mirror the emit path.
+        let payer_shard = shard_trie.shard_for_prefix(tx.body().fee_payer);
+        if vm_local_keys.is_empty() && payer_shard != local_shard {
+            if payer_shard != req.target_shard {
                 continue;
             }
-            requests.push(ProvisionsRequest {
-                tx_hash: tx.hash(),
-                local_nodes: Vec::new(),
-                target_nodes: vec![(req.target_shard, Vec::new())],
-                vm_local_keys,
-                vm: true,
-            });
-            continue;
-        }
-        let local_nodes: Vec<NodeId> = tx
-            .declared_reads()
-            .iter()
-            .chain(tx.declared_writes().iter())
-            .filter(|&n| shard_trie.shard_for(n) == local_shard)
-            .copied()
-            .collect();
-        if local_nodes.is_empty() {
-            continue;
-        }
-        let target_nodes: Vec<NodeId> = tx
-            .declared_reads()
-            .iter()
-            .chain(tx.declared_writes().iter())
-            .filter(|&n| shard_trie.shard_for(n) == req.target_shard)
-            .copied()
-            .collect();
-        if target_nodes.is_empty() {
+        } else if !targets_requester {
             continue;
         }
         requests.push(ProvisionsRequest {
             tx_hash: tx.hash(),
-            local_nodes,
-            target_nodes: vec![(req.target_shard, target_nodes)],
-            vm_local_keys: Vec::new(),
-            vm: false,
+            local_nodes: Vec::new(),
+            target_nodes: vec![(req.target_shard, Vec::new())],
+            vm_local_keys,
+            vm: true,
         });
     }
 

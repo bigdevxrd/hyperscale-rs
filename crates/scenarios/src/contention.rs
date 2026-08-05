@@ -15,11 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hyperscale_mempool::DeferralStats;
-use hyperscale_types::test_utils::{test_node, test_notarized_transaction_v1};
-use hyperscale_types::{
-    RoutableTransaction, ShardId, TransactionDecision, TransactionStatus, TxHash,
-};
-use radix_transactions::model::UserTransaction;
+use hyperscale_types::{ShardId, TransactionDecision, TransactionStatus, TxHash};
 
 use crate::reshape::split_lifecycle;
 use crate::support::tx::{
@@ -250,35 +246,4 @@ pub fn participant_count_sweep(
         latencies.push((participants, report.latency_p50));
     }
     latencies
-}
-
-/// The read-share probe: `txs` transactions, each writing its own private
-/// node and reading one shared node.
-///
-/// The declared sets are synthetic (`test_utils` notarized bodies with
-/// explicit read/write nodes) because the wire's worktop-conservative
-/// manifest analysis cannot declare a shared component read — every
-/// `CallMethod` target lands read+write. Under exclusive admission the
-/// shared read serializes the batch; under read-share admission the whole
-/// batch admits at once. The bodies reject at execution, which the probe
-/// tolerates: every observable it reports is admission-side.
-///
-/// # Panics
-///
-/// Panics if any probe transaction misses its terminal budget.
-pub fn shared_read_payments(c: &mut impl Cluster, txs: u8) -> ContentionReport {
-    let shared = test_node(200);
-    let mut submissions = Vec::with_capacity(txs as usize);
-    for index in 0..txs {
-        let notarized = test_notarized_transaction_v1(&[index, 0xA5]);
-        let tx = RoutableTransaction::new(
-            UserTransaction::V1(notarized),
-            vec![shared],
-            vec![test_node(index + 1)],
-            validity_around(c.now()),
-        );
-        submissions.push((tx.hash(), c.now()));
-        c.submit(Arc::new(tx));
-    }
-    settle_terminal(c, &submissions, epochs(16))
 }

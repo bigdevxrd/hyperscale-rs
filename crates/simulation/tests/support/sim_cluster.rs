@@ -92,17 +92,6 @@ impl SimCluster {
         Self::build(config, seed, balances, false, false)
     }
 
-    /// Build a genesis cluster whose mempools admit under the read-share
-    /// discipline — the flag-on side of the read-share A/B.
-    #[must_use]
-    pub fn with_read_share(
-        config: &ScenarioConfig,
-        seed: u64,
-        balances: &[(ComponentAddress, Decimal)],
-    ) -> Self {
-        Self::build(config, seed, balances, false, true)
-    }
-
     /// [`Self::with_vm_accounts`] with declared reads shared rather than
     /// exclusive — the share side of the read-share A/B.
     #[must_use]

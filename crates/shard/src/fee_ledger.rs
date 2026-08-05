@@ -48,9 +48,7 @@ impl FeeReservationLedger {
         payer_local: impl Fn([u8; 16]) -> bool,
     ) {
         for tx in transactions {
-            let Some(vm) = tx.vm() else {
-                continue;
-            };
+            let vm = tx.body();
             if !payer_local(vm.fee_payer) {
                 continue;
             }

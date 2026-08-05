@@ -2,9 +2,6 @@
 
 use std::time::Duration;
 
-use radix_common::math::Decimal;
-use radix_common::network::NetworkDefinition;
-
 use crate::accounts::SelectionMode;
 
 /// Configuration for the transaction spammer.
@@ -49,10 +46,7 @@ pub struct SpammerConfig {
     pub selection_mode: SelectionMode,
 
     /// Initial account balance for genesis.
-    pub initial_balance: Decimal,
-
-    /// Network definition (mainnet/testnet/simulator).
-    pub network: NetworkDefinition,
+    pub initial_balance: u128,
 
     /// Batch size for transaction generation.
     pub batch_size: usize,
@@ -93,8 +87,7 @@ impl Default for SpammerConfig {
             target_tps: 1000,
             cross_shard_ratio: 0.3,
             selection_mode: SelectionMode::Random,
-            initial_balance: Decimal::from(1_000_000u32),
-            network: NetworkDefinition::simulator(),
+            initial_balance: 1_000_000,
             batch_size: 100,
             progress_interval: Duration::from_secs(10),
             latency_tracking: false,
@@ -189,15 +182,8 @@ impl SpammerConfig {
 
     /// Set initial balance.
     #[must_use]
-    pub const fn with_initial_balance(mut self, balance: Decimal) -> Self {
+    pub const fn with_initial_balance(mut self, balance: u128) -> Self {
         self.initial_balance = balance;
-        self
-    }
-
-    /// Set network definition.
-    #[must_use]
-    pub fn with_network(mut self, network: NetworkDefinition) -> Self {
-        self.network = network;
         self
     }
 

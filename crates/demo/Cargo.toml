@@ -8,6 +8,7 @@ description = "Browser session over the deterministic simulation"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+hyperscale-effects-bridge.workspace = true
 hyperscale-node.workspace = true
 hyperscale-simulation.workspace = true
 hyperscale-storage.workspace = true

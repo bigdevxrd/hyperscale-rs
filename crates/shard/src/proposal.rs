@@ -252,15 +252,12 @@ pub fn filter_engaged_vm_transactions(
     transactions
         .into_iter()
         .filter(|tx| {
-            let Some(vm) = tx.vm() else {
-                return true;
-            };
             if topology_snapshot.is_single_shard_transaction(tx.as_ref()) {
                 return true;
             }
             let payer_shard = topology_snapshot
                 .shard_trie()
-                .shard_for_prefix(vm.fee_payer);
+                .shard_for_prefix(tx.body().fee_payer);
             if payer_shard == local_shard {
                 return true;
             }
@@ -511,8 +508,8 @@ pub fn dispatch_or_defer(
 mod tests {
     use std::time::Duration;
 
-    use hyperscale_types::test_utils::test_notarized_transaction_v1;
-    use hyperscale_types::{TimestampRange, routable_from_notarized_v1};
+    use hyperscale_types::TimestampRange;
+    use hyperscale_types::test_utils::{install_stub_vm_statics, stub_vm_transaction, test_prefix};
 
     use super::*;
 
@@ -615,9 +612,9 @@ mod tests {
     }
 
     fn tx_with_range(seed: u8, range: TimestampRange) -> Arc<Verified<RoutableTransaction>> {
-        let notarized = test_notarized_transaction_v1(&[seed]);
+        install_stub_vm_statics();
         Arc::new(Verified::<RoutableTransaction>::from_persisted(
-            routable_from_notarized_v1(notarized, range).expect("valid notarized"),
+            stub_vm_transaction(test_prefix(seed), &[test_prefix(seed)], 1_000, range),
         ))
     }
 

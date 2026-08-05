@@ -1969,9 +1969,9 @@ impl ShardCoordinator {
             ProposalKind::Normal { transactions, .. } => {
                 let payer_seeds = self.local_payer_fees(
                     committee,
-                    transactions.iter().filter_map(|tx| {
-                        let (owner, local) = tx.vm_fee_vault()?;
-                        Some((owner, local, 0u128))
+                    transactions.iter().map(|tx| {
+                        let (owner, local) = tx.fee_vault();
+                        (owner, local, 0u128)
                     }),
                 );
                 self.vm_fee_demands(&payer_seeds, parent_block_hash)
@@ -2944,9 +2944,9 @@ impl ShardCoordinator {
             }
             let block_fees = self.local_payer_fees(
                 committee,
-                block.transactions().iter().filter_map(|tx| {
-                    let (owner, local) = tx.vm_fee_vault()?;
-                    Some((owner, local, tx.vm().map_or(0, |vm| vm.max_fee)))
+                block.transactions().iter().map(|tx| {
+                    let (owner, local) = tx.fee_vault();
+                    (owner, local, tx.body().max_fee)
                 }),
             );
             let vm_fee_demands =
@@ -3049,11 +3049,9 @@ impl ShardCoordinator {
             }
             if let Some(block) = pending.block() {
                 for tx in block.transactions().iter() {
-                    let Some((owner, _)) = tx.vm_fee_vault() else {
-                        continue;
-                    };
+                    let (owner, _) = tx.fee_vault();
                     if let Some(entry) = demands.get_mut(&owner) {
-                        let fee = tx.vm().map_or(0, |vm| vm.max_fee);
+                        let fee = tx.body().max_fee;
                         entry.1 = entry.1.saturating_add(fee);
                     }
                 }

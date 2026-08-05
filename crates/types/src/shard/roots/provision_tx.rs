@@ -82,32 +82,27 @@ impl Verified<ProvisionTxRootsMap> {
             if topology_snapshot.is_single_shard_transaction(tx) {
                 continue;
             }
-            // A VM transaction's fan-out is role-shaped. The payer shard
-            // and the shards owning part of its read set attest toward
-            // every participant: the payer's bundle is the engagement
-            // evidence and flows even with no state, an owner's carries
-            // its read-set values. Every other participant owes exactly
-            // one edge — the engagement echo toward the payer: its
-            // commitment of the transaction is what the payer's vote
-            // waits for, and nobody else consumes anything from it.
-            // Radix transactions fan out from every participant to every
-            // participant, which all hold declared state for each other.
-            if let Some(vm) = tx.vm() {
-                let trie = topology_snapshot.shard_trie();
-                let payer_shard = trie.shard_for_prefix(vm.fee_payer);
-                let owns_read_set = tx.vm_routing().is_some_and(|routing| {
-                    routing
-                        .provision_prefixes
-                        .iter()
-                        .any(|prefix| trie.shard_for_prefix(*prefix) == local_shard)
-                });
-                if payer_shard != local_shard && !owns_read_set {
-                    per_target
-                        .entry(payer_shard)
-                        .or_default()
-                        .push(tx.hash().into_raw());
-                    continue;
-                }
+            // A transaction's fan-out is role-shaped. The payer shard and
+            // the shards owning part of its read set attest toward every
+            // participant: the payer's bundle is the engagement evidence
+            // and flows even with no state, an owner's carries its
+            // read-set values. Every other participant owes exactly one
+            // edge — the engagement echo toward the payer: its commitment
+            // of the transaction is what the payer's vote waits for, and
+            // nobody else consumes anything from it.
+            let trie = topology_snapshot.shard_trie();
+            let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
+            let owns_read_set = tx
+                .routing()
+                .provision_prefixes
+                .iter()
+                .any(|prefix| trie.shard_for_prefix(*prefix) == local_shard);
+            if payer_shard != local_shard && !owns_read_set {
+                per_target
+                    .entry(payer_shard)
+                    .or_default()
+                    .push(tx.hash().into_raw());
+                continue;
             }
             for shard in topology_snapshot.all_shards_for_transaction(tx) {
                 if shard == local_shard {

@@ -97,19 +97,19 @@ mod tests {
     use sbor::{basic_decode, basic_encode};
 
     use super::*;
-    use crate::test_utils::{test_node, test_transaction_with_nodes};
+    use crate::test_utils::{test_prefix, test_transaction_with_prefixes};
 
     #[test]
     fn new_carries_transactions() {
-        let tx1 = Arc::new(test_transaction_with_nodes(
+        let tx1 = Arc::new(test_transaction_with_prefixes(
             &[1, 2, 3],
-            vec![test_node(1)],
-            vec![test_node(2)],
+            &[test_prefix(1)],
+            &[test_prefix(2)],
         ));
-        let tx2 = Arc::new(test_transaction_with_nodes(
+        let tx2 = Arc::new(test_transaction_with_prefixes(
             &[4, 5, 6],
-            vec![test_node(3)],
-            vec![test_node(4)],
+            &[test_prefix(3)],
+            &[test_prefix(4)],
         ));
 
         let gossip = TransactionGossip::new(vec![Arc::clone(&tx1), Arc::clone(&tx2)]);
@@ -130,10 +130,10 @@ mod tests {
     fn sbor_roundtrip_multi_tx() {
         let txs: Vec<Arc<RoutableTransaction>> = (0..5)
             .map(|i| {
-                Arc::new(test_transaction_with_nodes(
+                Arc::new(test_transaction_with_prefixes(
                     &[i, i + 1, i + 2],
-                    vec![test_node(i)],
-                    vec![test_node(i + 1)],
+                    &[test_prefix(i)],
+                    &[test_prefix(i + 1)],
                 ))
             })
             .collect();

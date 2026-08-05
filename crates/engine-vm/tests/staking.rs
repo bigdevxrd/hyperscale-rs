@@ -171,7 +171,7 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> RoutableTransaction {
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    RoutableTransaction::new_vm(
+    RoutableTransaction::new(
         VmTransaction {
             body: VmBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
@@ -289,7 +289,7 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    let tx = RoutableTransaction::new_vm(
+    let tx = RoutableTransaction::new(
         VmTransaction {
             body: VmBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
@@ -333,7 +333,7 @@ fn signed_registration(pool: [u8; 16], seed: u8) -> RoutableTransaction {
         root_bindings: Vec::new(),
         subintents: Vec::new(),
     };
-    RoutableTransaction::new_vm(
+    RoutableTransaction::new(
         VmTransaction {
             body: VmBody::Call(encode_tree(&tree).into()),
             subintent_sigs: Vec::new(),
@@ -363,9 +363,9 @@ fn only_the_configured_operator_may_register_a_validator() {
     );
 
     let outsider = signed_registration(POOL, OUTSIDER);
-    assert!(outsider.vm().expect("a VM envelope").signature_is_valid());
+    assert!(outsider.body().signature_is_valid());
     let refused = outsider
-        .try_vm_derived()
+        .try_derived()
         .expect_err("an outsider's registration refuses");
     assert!(refused.0.contains("register-validator"), "{}", refused.0);
     assert!(
@@ -377,7 +377,7 @@ fn only_the_configured_operator_may_register_a_validator() {
     // The control: the same manifest, the same fee, one signature
     // different. What bites is whose key signed it and not the shape.
     assert!(
-        signed_registration(POOL, OPERATOR).try_vm_derived().is_ok(),
+        signed_registration(POOL, OPERATOR).try_derived().is_ok(),
         "the configured operator's own registration admits",
     );
 }
@@ -391,5 +391,5 @@ fn a_delegation_needs_no_operator() {
         &[seat(POOL, POOL_ID)],
         ExecutionMode::Serial,
     );
-    assert!(signed_stake(POOL, 500).try_vm_derived().is_ok());
+    assert!(signed_stake(POOL, 500).try_derived().is_ok());
 }
