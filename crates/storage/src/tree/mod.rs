@@ -1,13 +1,13 @@
 //! Binary Jellyfish Merkle Tree (Blake3) state tree — flat single-tree design.
 //!
-//! All substates across all entities and partitions live in a single JMT.
-//! Storage keys are BLAKE3-hashed to 32-byte JMT keys for compact paths.
+//! All substates across all owners live in a single JMT.
 //!
 //! # Key mapping
 //!
-//! Radix keys: `jmt_key = BLAKE3(entity_key || partition_num || sort_key)` →
-//! `[u8; 32]`. VM flat keys read as the identity leaf `[owner | local]` with
-//! no hashing (see `hyperscale_types::state_key`).
+//! A flat storage key's two halves *are* its 32-byte JMT key — the leaf
+//! is read off the key with no hashing, so one owner's substates form a
+//! contiguous subtree under the prefix its own bits name (see
+//! `hyperscale_types::state_key`).
 //!
 //! # Value encoding
 //!

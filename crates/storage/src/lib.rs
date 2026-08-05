@@ -1,6 +1,6 @@
 //! Storage traits and shared types.
 //!
-//! This crate defines the storage abstraction used by runners to persist Radix state,
+//! This crate defines the storage abstraction used by runners to persist substate state,
 //! along with shared types and utilities that both in-memory and `RocksDB` storage
 //! implementations need.
 //!

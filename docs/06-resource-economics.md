@@ -76,7 +76,7 @@ The stake price governs *who may* operate seats; vnodes govern what a seat *cost
 |---|---|---|
 | Signing key, consensus state, votes/proposals, miss counters | **Per vnode** | Identity is never shared; each vnode is independently accountable |
 | Storage, mempool, commit pipeline, per-shard stores | **Per shard** | Co-hosted same-shard vnodes share one store and one deterministic mempool — state does not double |
-| Execution cache, tx validation verdicts, tx status, topology snapshot, network peer, thread pools | **Per host** | One Radix execution per transaction per process; one signature/SBOR validation per transaction; one libp2p identity |
+| Execution cache, tx validation verdicts, tx status, topology snapshot, network peer, thread pools | **Per host** | One execution per transaction per process; one signature/SBOR validation per transaction; one libp2p identity |
 
 Two vnodes seated in the same shard on one host therefore cost roughly one shard's storage, one shard's execution work, and two signatures — not two of everything. Cross-shard co-hosting shares the process layer (network, dispatch, caches) while keeping per-shard state independent. This is the multi-vnode architecture described in [07-determinism-and-testing.md](07-determinism-and-testing.md) §3, read through an economic lens: **the marginal cost of an additional seat approaches its stake**. That shape is the intended one — stake is the security parameter the protocol prices ([05-byzantine-safety.md](05-byzantine-safety.md) §1); hardware is not. Making seats hardware-cheap lets the validator supply track an elastic topology without capital expenditure tracking it too.
 

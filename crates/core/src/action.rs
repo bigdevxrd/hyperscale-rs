@@ -1648,7 +1648,7 @@ impl Action {
             | Self::VerifySpcEmptyView { .. } => Some(DispatchPool::Consensus),
 
             // Throughput-bound: provision/cert/wave verification,
-            // execution-vote crypto, and Radix Engine execution.
+            // execution-vote crypto, and engine execution.
             Self::AggregateExecutionCertificate { .. }
             | Self::VerifyAndAggregateExecutionVotes { .. }
             | Self::VerifyExecutionCertificateSignature { .. }

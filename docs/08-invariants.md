@@ -65,13 +65,13 @@ The consolidated register of the system's safety and liveness properties, with s
 |---|---|---|
 | **INV-EXEC-1** | Safety | **Atomic commitment.** A cross-shard transaction reaches the same terminal outcome (succeeded / aborted / rejected) on every participating shard. Finalization is per transaction: success requires success outcomes (identical receipt hashes, by deterministic execution) from every participant's EC; any participant's abort outcome is terminal — abort dominant, success unanimous. Abort paths are deterministic functions of committed state. |
 | **INV-EXEC-2** | Safety | **Certificate soundness.** An EC's receipt root is recomputed from its outcome vector at decode and must match; quorum power and aggregate signature verify against the WT-resolved committee. A valid-looking EC with divergent content cannot exist. |
-| **INV-EXEC-3** | Safety | **Partial coupling.** No two transactions simultaneously in flight or ready share any declared node; locks persist from commit to wave finalization. Local deadlock is structurally impossible. Mempool admission note: the conflict domain is the *declared key* — a node, optionally narrowed to one substate slot — always derived locally from the transaction (node-granular from manifest analysis today, finer once published effect metadata drives the derivation; nothing key-granular travels on the wire). Under the `share_declared_reads` mempool flag, admission relaxes read-read overlap on a key while writes stay exclusive; the track layer's lock discipline is unchanged either way, and the safety backstop for shared reads is INV-EXEC-9's write filter. |
-| **INV-EXEC-4** | Determinism | **Conflict verdicts.** Cross-shard conflict detection reads only committed chain state; ties break by transaction hash; every replica on every shard derives the identical abort set. |
+| **INV-EXEC-3** | Safety | **Partial coupling.** No two transactions simultaneously in flight or ready share any declared node; locks persist from commit to wave finalization. Local deadlock is structurally impossible. Mempool admission note: the conflict domain is the *declared key* — an owner prefix, optionally narrowed to one substate slot — always derived locally from the signed envelope through the effect DSL, never carried on the wire. Under the `share_declared_reads` mempool flag, admission relaxes read-read overlap on a key while writes stay exclusive; the track layer's lock discipline is unchanged either way, and the safety backstop for shared reads is INV-EXEC-9's write filter. |
+| **INV-EXEC-4** | *Retired* | **Conflict verdicts.** Held while a deterministic detector aborted true cross-shard cycles by hash order. No cycle detector exists: what breaks a cycle is the wave deadline (INV-EXEC-5), which is deterministic for the same reason. See *Retired invariants*. |
 | **INV-EXEC-5** | Liveness | **Termination.** Every wave reaches a terminal outcome by its deadline (source WT + `WAVE_TIMEOUT`); a wave unprovisioned at deadline all-aborts identically everywhere. No lock is held past a computable bound. |
-| **INV-EXEC-6** | Determinism | **Ownership merge (Radix engine only).** The cross-shard ownership map is merged by fixed rule (remote claims from provisions, local claims from the local snapshot; a vault claimed by both ⇒ deterministic abort); write placement cannot diverge across shards. The effect-typed engine has no ownership map to merge: a substate key carries its owner's prefix, so placement is a property of the key rather than a claim. The invariant is scoped to the engine that needs it and retires with it. |
+| **INV-EXEC-6** | *Retired* | **Ownership merge.** Held while ownership was resolved at execution time and had to be claimed across a shard boundary. A substate key carries its owner's prefix, so placement is a property of the key: there is no map to merge and no contested claim to arbitrate. See *Retired invariants*. |
 | **INV-EXEC-7** | Safety | **Attested retention.** Every DA retention/eviction decision keys on BFT-attested weighted time; before the horizon, eviction requires positive EC coverage or provable expiry. |
 | **INV-EXEC-8** | Safety | **Divergence containment.** A replica whose local execution disagrees with its shard's admitted EC never finalizes or serves its own result; it recovers the canonical wave via sync. |
-| **INV-EXEC-9** | Determinism | **Declared bounds.** Engine writes outside the declared/derived node set are dropped by identical rule on all replicas. |
+| **INV-EXEC-9** | Determinism | **Declared bounds.** A transaction writes only what its declared effects reach. Enforced by construction rather than by a post-filter: a guest touches a cell only through a capability the derivation granted for a declared effect, so an undeclared write is unreachable rather than dropped. |
 | **INV-EXEC-10** | Safety | **Artifact-only trust.** Cross-shard inputs (headers, provisions, ECs, settled sets) are accepted only as proofs against QC- or beacon-attested content, never on peer authority. |
 
 ## Dynamic sharding — [02](02-dynamic-sharding.md)
@@ -139,9 +139,27 @@ The consolidated register of the system's safety and liveness properties, with s
 
 ---
 
+## Retired invariants
+
+IDs are never reused or renumbered — a retired entry keeps its row above,
+reclassified, so cross-references from [specs/](../specs) and from earlier
+analysis still resolve to the property they were written about.
+
+- **INV-EXEC-4 (Conflict verdicts).** Retired with the cross-shard conflict
+  detector. It was node-shaped, and the only thing it could ever have fired
+  on was a cycle formed by two transactions each holding what the other
+  needs. No stdlib method declares a read effect, so no such cycle can form
+  today; when one can, what breaks it is the payer's deadline abort
+  (INV-EXEC-5) rather than a hash-order tiebreak. The cost of the change is
+  a floor: the tiebreak settled one side of a cycle, the deadline settles
+  neither.
+- **INV-EXEC-6 (Ownership merge).** Retired with the engine that resolved
+  ownership at execution time. Its replacement is structural rather than
+  another rule: placement is read off the key.
+
 ## Notes for the verification effort
 
 - **The five-property core** (see [00-overview.md](00-overview.md)): INV-SHARD-1, INV-EXEC-1, INV-RESHAPE-5, INV-BEACON-3/4, INV-RESHAPE-2/3. Everything else either supports these or bounds resources.
-- **Reduction structure.** Most safety properties reduce to determinism properties plus quorum intersection. For example, INV-EXEC-1 = (INV-DET-1 execution determinism) + (INV-EXEC-2 certificate content binding) + (INV-EXEC-4/5 deterministic aborts) + (INV-SEC-1 per-committee honesty). Modeling the determinism layer as given and proving the quorum arguments is the highest-leverage split.
+- **Reduction structure.** Most safety properties reduce to determinism properties plus quorum intersection. For example, INV-EXEC-1 = (INV-DET-1 execution determinism) + (INV-EXEC-2 certificate content binding) + (INV-EXEC-5 deterministic aborts) + (INV-SEC-1 per-committee honesty). Modeling the determinism layer as given and proving the quorum arguments is the highest-leverage split.
 - **Known deliberate gaps** (verification should treat these as documented caveats, not discoveries): INV-SEC-1 is an assumption, not a theorem — its statistical parameters (committee size vs. pool corruption) are treated in [05 §1](05-byzantine-safety.md); committee selection is identity-only, so co-hosted vnodes share a fault domain — host-spread is deferred to deployment tooling ([06 §5](06-resource-economics.md)).
 - **Existing mechanized anchors.** The `fork_safety` adversarial harness (asserts no committable fork, crash-restart included), the determinism replay test (asserts INV-DET-4), and the straddler-atomicity scenarios (assert INV-RESHAPE-5 end to end on both harnesses) are the executable counterparts to start cross-validating models against.

@@ -18,30 +18,22 @@ The state root in every shard block header is the shard's subtree root at that b
 
 ## 2. Mapping the keyspace to shards
 
-**Shards are prefixes.** A `ShardId` denotes a bit-path; the shard owns every key under that prefix. The global address space is partitioned by the **shard trie** (`ShardTrie` in `crates/types`), whose leaves are the live shards. Data routing is `shard_for(node_id)`: walk the trie by the top bits of the node's routing hash.
+**Shards are prefixes.** A `ShardId` denotes a bit-path; the shard owns every key under that prefix. The global address space is partitioned by the **shard trie** (`ShardTrie` in `crates/types`), whose leaves are the live shards. Data routing is a walk down the trie by the top bits of a key's owner prefix (`shard_for_prefix`).
 
-**Owner-prefixed keying** is the rule that keeps this partition meaningful. Radix Engine internal objects (vaults, key-value stores) have random NodeIds with no structural relation to the account that owns them, so naive keying would scatter an account's assets across all shards. Instead, every substate's JMT leaf key is built as:
-
-```
-[ blake3(routing_node)[..16] | blake3(full_storage_key)[16..] ]
-```
-
-where `routing_node` is the substate's *owner* — its global ancestor, the account — for owned internal objects, or the node itself for globals. The high half places all of an owner's state contiguously under the owner's prefix. The low half disambiguates the owner's individual substates and binds the full storage key. Three consequences follow:
-
-- An account and everything it owns live in **one** shard, always.
-- An engine object never changes owner once committed (validated against Radix Engine semantics), so keys are stable forever: nothing ever needs re-keying, including across splits and merges (INV-STATE-2).
-- A snap-sync verifier can check the owner-binding of every shipped leaf from the leaf key alone, without possessing the engine's ownership map.
-
-This keying is why the central identity of [02-dynamic-sharding.md](02-dynamic-sharding.md), `hash_internal(left_child_root, right_child_root) == parent_root`, is a complete description of resharding state: split and merge move subtree *roots*, never leaves.
-
-**The VM keyspace is the native leaf-key form.** VM-engine substates share the store under their own flat-key namespace (`state_key` in `crates/types`):
+**Owner-prefixed keying** is the rule that keeps this partition meaningful. Every substate's flat storage key is an owner prefix and a local half, both fixed-width, and its JMT leaf key is those two halves by identity:
 
 ```
-flat key:  VM_BODY_TAG || owner(16) || partition || local(16)
+flat key:  tag || owner(16) || partition || local(16)
 leaf key:  [ owner | local ]
 ```
 
-The leaf is read directly off the key — no hashing, no ownership map — because a VM substate key *is* an owner prefix and a local half by construction: the effect DSL computes placement, so the storage keying has nothing left to derive (INV-VM-4 holds structurally). Routing is the same prefix walk as everything else (`shard_for_prefix`), so a VM owner's footprint is a contiguous subtree under the shard its own bits name. VM flat keys are fixed-width and shorter than any `db_node_key`-prefixed Radix key, so the two namespaces are disjoint by length alone and every key-classifying path fails closed on malformed shapes.
+The leaf is read straight off the key — no hashing, no ownership map — because the effect DSL computes placement when it derives the transaction's access, so the storage layer has nothing left to derive (INV-VM-4 holds structurally rather than by validation). Routing is the same prefix walk as everything else (`shard_for_prefix`), and every key-classifying path fails closed on a shape that is not exactly this one. Three consequences follow:
+
+- An account and everything it owns live in **one** shard, always: an owned object's key is minted under its creator's prefix, so it is placed at creation rather than resolved afterward.
+- An object never changes owner, so keys are stable forever: nothing ever needs re-keying, including across splits and merges (INV-STATE-2).
+- A snap-sync verifier checks a shipped leaf's owner binding from the leaf key alone, with no ownership map to consult and nothing to trust the sender for.
+
+This keying is why the central identity of [02-dynamic-sharding.md](02-dynamic-sharding.md), `hash_internal(left_child_root, right_child_root) == parent_root`, is a complete description of resharding state: split and merge move subtree *roots*, never leaves.
 
 ## 3. The storage stack
 

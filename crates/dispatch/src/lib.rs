@@ -18,7 +18,7 @@
 //!   state root, proposal building). Routes to a small dedicated pool so
 //!   long execution batches can't queue ahead of it.
 //! - **Throughput**: throughput-bound CPU work — general crypto
-//!   verification, transaction signature validation, Radix Engine
+//!   verification, transaction signature validation, engine
 //!   execution. Routes to one shared work-stealing pool; in-handler
 //!   `par_iter` fans batches across the whole pool's workers.
 //! - **I/O**: network sends, filesystem, GC. Routes to tokio.
@@ -34,7 +34,7 @@ pub enum DispatchPool {
     Consensus,
     /// Throughput-bound CPU work: general crypto verification (provisions,
     /// execution votes, cert aggregation), transaction signature
-    /// validation, and Radix Engine execution. Shared work-stealing pool.
+    /// validation, and engine execution. Shared work-stealing pool.
     Throughput,
     /// Network I/O and other non-CPU work. Production routes to the tokio
     /// runtime; simulation runs inline. Use for broadcasts, request sends,

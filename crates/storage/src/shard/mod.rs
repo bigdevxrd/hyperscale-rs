@@ -1,5 +1,5 @@
 //! Shard-side storage abstractions: per-shard chain reader/writer,
-//! pending-chain overlay, Radix substate plumbing.
+//! pending-chain overlay, substate plumbing.
 //!
 //! Sibling [`crate::beacon`](crate::beacon) hosts the parallel
 //! beacon-chain storage tier — independent traits, independent

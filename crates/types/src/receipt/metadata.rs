@@ -208,12 +208,10 @@ impl ExecutionMetadata {
     /// All-zero metadata: empty fees, no logs, no error.
     ///
     /// Used by the engine's synthetic-failure path (`ExecutedTx::failure`
-    /// in the `hyperscale_engine` crate) when no Radix-produced
-    /// diagnostic exists — the executor never reached the VM and has
-    /// nothing meaningful to populate. Real failed receipts come from
-    /// `build_execution_metadata` and populate `error_message`,
-    /// `log_messages`, and `fee_summary` directly from the Radix
-    /// transaction receipt.
+    /// in the `hyperscale_engine` crate) when the executor never reached
+    /// the guest and so has no diagnostic to report. Real failed receipts
+    /// carry `error_message`, `log_messages` and `fee_summary` from the
+    /// kernel's own receipt.
     #[must_use]
     pub const fn empty() -> Self {
         Self {
