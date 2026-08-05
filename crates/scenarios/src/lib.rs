@@ -28,8 +28,7 @@ mod vm;
 mod witnesses;
 
 pub use contention::{
-    ContentionReport, cross_shard_fraction, hot_component_saturation, participant_count_sweep,
-    shared_read_payments, zipf_payments,
+    ContentionReport, cross_shard_fraction, participant_count_sweep, shared_read_payments,
 };
 pub use faults::{
     beacon_lag_drops_skipped_epochs_reveal_chains, beacon_pool_partition_stalls_epoch_production,

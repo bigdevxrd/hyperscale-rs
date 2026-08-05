@@ -731,6 +731,51 @@ pub fn build_probe_transfer_tx(validity: TimestampRange) -> RoutableTransaction 
 /// several.
 pub const PROBE_PAYMENT: u128 = 100;
 
+/// `count` VM accounts routing to `shard` under a `num_shards`-wide trie,
+/// each drawing a fresh seed.
+#[must_use]
+pub fn vm_accounts_routing_to(
+    shard: ShardId,
+    num_shards: u64,
+    count: usize,
+    taken: &mut Vec<u8>,
+) -> Vec<(Ed25519PrivateKey, [u8; 16])> {
+    (0..count)
+        .map(|_| vm_account_routing_to_n(shard, num_shards, taken))
+        .collect()
+}
+
+/// How many senders the cross-shard fraction sweep runs with. Named so
+/// the world's registration and the scenario's own funding cannot drift.
+pub const CROSS_FRACTION_SENDERS: usize = 16;
+
+/// Genesis VM funding for the cross-shard fraction sweep: `senders`
+/// payers on the left child, and a payee for each on whichever child the
+/// sweep sends it to.
+///
+/// Every account a transfer names has to exist at genesis — an instance
+/// the registry does not know cannot be a deposit target — so the walk
+/// here is the sweep's own, in the same order.
+#[must_use]
+pub fn vm_cross_fraction_genesis_accounts(senders: usize) -> Vec<([u8; 16], u128)> {
+    let (left, right) = (ShardId::leaf(1, 0), ShardId::leaf(1, 1));
+    let mut taken = Vec::new();
+    let mut accounts: Vec<([u8; 16], u128)> = vm_accounts_routing_to(left, 2, senders, &mut taken)
+        .into_iter()
+        .map(|(_, account)| (account, 10_000u128))
+        .collect();
+    // Both recipient walks in full, so any cross fraction the sweep is
+    // run at finds its payees funded.
+    for shard in [left, right] {
+        accounts.extend(
+            vm_accounts_routing_to(shard, 2, senders, &mut taken)
+                .into_iter()
+                .map(|(_, account)| (account, 10u128)),
+        );
+    }
+    accounts
+}
+
 /// Grind a signing key whose VM account routes to `shard` under the
 /// depth-1 partition. Seeds in `taken` are skipped, so successive calls
 /// yield distinct accounts.
@@ -1049,6 +1094,8 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
     all.extend(halt_straddler_setup().vm_accounts);
     all.extend(cross_shard_fault_genesis_accounts());
     all.extend(vm_staking_genesis_accounts());
+    all.extend(vm_livelock_genesis_accounts());
+    all.extend(vm_cross_fraction_genesis_accounts(CROSS_FRACTION_SENDERS));
     all.sort_unstable_by_key(|(address, _)| *address);
     all.dedup_by_key(|(address, _)| *address);
     all

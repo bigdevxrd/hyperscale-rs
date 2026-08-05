@@ -11,10 +11,10 @@ use std::time::Duration;
 use hyperscale_core::ProtocolEvent;
 use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
-    contention_genesis_balances, cross_contention_genesis_balances,
-    cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances, halt_straddler_setup,
-    intershard_partition_genesis_balances, merge_straddler_setup, split_straddler_setup,
-    straddler_genesis_balances, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
+    CROSS_FRACTION_SENDERS, cross_contention_genesis_balances, cross_shard_fault_genesis_accounts,
+    halt_recovery_genesis_balances, halt_straddler_setup, intershard_partition_genesis_balances,
+    merge_straddler_setup, split_straddler_setup, straddler_genesis_balances,
+    vm_cross_fraction_genesis_accounts, vm_cross_shard_genesis_accounts, vm_genesis_accounts,
     vm_insolvent_genesis_accounts, vm_livelock_genesis_accounts,
     vm_nullifier_race_genesis_accounts, vm_staking_genesis_accounts, vm_staking_pools,
     vm_storm_genesis_accounts, witness_genesis_balances,
@@ -29,9 +29,9 @@ use hyperscale_scenarios::{
     cross_shard_transaction_da_fetch_fallback, epochs, gossip_drop_engages_fetch_fallback,
     grow_reaches_four_shard_topology, grow_reaches_two_shard_topology,
     halted_shard_recovers_by_committee_redraw, halted_shard_straddler_atomic,
-    hot_component_saturation, inter_shard_partition_strands_waves_until_it_heals,
-    isolated_validator_still_settles, livelock_resolves_promptly, liveness_baseline,
-    merge_lifecycle, merge_seats_full_keeper_committee, merge_straddler_atomic,
+    inter_shard_partition_strands_waves_until_it_heals, isolated_validator_still_settles,
+    livelock_resolves_promptly, liveness_baseline, merge_lifecycle,
+    merge_seats_full_keeper_committee, merge_straddler_atomic,
     minority_fragment_rejoins_after_partition, multi_vnode_progress, participant_count_sweep,
     partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
@@ -46,7 +46,7 @@ use hyperscale_scenarios::{
     vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
     vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,
     vm_reads_the_committed_baseline, vm_single_transfer, vm_zipf_payments,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
 };
 use hyperscale_simulation::ExecutionMode;
 use hyperscale_storage::ShardChainReader;
@@ -342,30 +342,13 @@ fn vm_serial_parallel_state_roots_agree_sim() {
 // sweeps for workstation runs. Reports print for the phase record.
 
 #[test]
-fn zipf_payments_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&liveness_config(), 42, &contention_genesis_balances(24, 6));
-    let report = cluster.run_faultable(|c| zipf_payments(c, 24, 6, 1.0));
-    let executed = cluster.metric("transactions_executed", None);
-    println!("zipf_payments s=1.0 senders=24 recipients=6 executed={executed}: {report:?}");
-}
-
-#[test]
-fn hot_component_saturation_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&liveness_config(), 42, &contention_genesis_balances(12, 1));
-    let (report, height_span) = cluster.run_faultable(|c| hot_component_saturation(c, 12));
-    let executed = cluster.metric("transactions_executed", None);
-    println!(
-        "hot_component_saturation senders=12 height_span={height_span} executed={executed}: {report:?}"
-    );
-}
-
-#[test]
 fn cross_shard_fraction_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&split_config(), 11, &cross_contention_genesis_balances(16));
-    let report = cluster.run_faultable(|c| cross_shard_fraction(c, 16, 500));
+    let mut cluster = SimCluster::with_vm_accounts(
+        &split_config(),
+        11,
+        &vm_cross_fraction_genesis_accounts(CROSS_FRACTION_SENDERS),
+    );
+    let report = cluster.run_faultable(|c| cross_shard_fraction(c, CROSS_FRACTION_SENDERS, 500));
     let executed = cluster.metric("transactions_executed", None);
     println!("cross_shard_fraction total=16 cross=50% executed={executed}: {report:?}");
 }
@@ -412,14 +395,14 @@ fn read_share_admits_shared_reads_sim() {
 #[test]
 fn read_share_leaves_write_traffic_decisions_unchanged_sim() {
     let run = |share: bool| {
-        let balances = contention_genesis_balances(24, 6);
+        let accounts = vm_genesis_accounts(24, 6);
         let mut cluster = if share {
-            SimCluster::with_read_share(&liveness_config(), 42, &balances)
+            SimCluster::with_vm_accounts_and_read_share(&liveness_config(), 42, &accounts)
         } else {
-            SimCluster::with_balances(&liveness_config(), 42, &balances)
+            SimCluster::with_vm_accounts(&liveness_config(), 42, &accounts)
         };
         cluster
-            .run_faultable(|c| zipf_payments(c, 24, 6, 1.0))
+            .run_faultable(|c| vm_zipf_payments(c, 24, 6, 1.0))
             .deferral
             .expect("sim exposes deferral stats")
     };

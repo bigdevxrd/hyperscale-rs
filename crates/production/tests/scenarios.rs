@@ -12,10 +12,10 @@ mod support;
 use std::time::Duration;
 
 use hyperscale_scenarios::tx::{
-    contention_genesis_balances, cross_contention_genesis_balances,
-    cross_shard_fault_genesis_accounts, halt_recovery_genesis_balances, halt_straddler_setup,
-    intershard_partition_genesis_balances, merge_straddler_setup, split_straddler_setup,
-    straddler_genesis_balances, vm_genesis_accounts, vm_livelock_genesis_accounts,
+    CROSS_FRACTION_SENDERS, cross_contention_genesis_balances, cross_shard_fault_genesis_accounts,
+    halt_recovery_genesis_balances, halt_straddler_setup, intershard_partition_genesis_balances,
+    merge_straddler_setup, split_straddler_setup, straddler_genesis_balances,
+    vm_cross_fraction_genesis_accounts, vm_genesis_accounts, vm_livelock_genesis_accounts,
     vm_staking_genesis_accounts, vm_staking_pools, witness_genesis_balances,
 };
 use hyperscale_scenarios::{
@@ -27,9 +27,9 @@ use hyperscale_scenarios::{
     cross_shard_transaction_da_fetch_fallback, gossip_drop_engages_fetch_fallback,
     grow_reaches_four_shard_topology, grow_reaches_two_shard_topology,
     halted_shard_recovers_by_committee_redraw, halted_shard_straddler_atomic,
-    hot_component_saturation, inter_shard_partition_strands_waves_until_it_heals,
-    isolated_validator_still_settles, livelock_resolves_promptly, liveness_baseline,
-    merge_lifecycle, merge_seats_full_keeper_committee, merge_straddler_atomic,
+    inter_shard_partition_strands_waves_until_it_heals, isolated_validator_still_settles,
+    livelock_resolves_promptly, liveness_baseline, merge_lifecycle,
+    merge_seats_full_keeper_committee, merge_straddler_atomic,
     minority_fragment_rejoins_after_partition, multi_vnode_progress, participant_count_sweep,
     partition_halts_and_heals, partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
@@ -38,7 +38,7 @@ use hyperscale_scenarios::{
     split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
     surviving_sibling_split_seats_full_committees, vm_abort_converges,
     vm_delegation_folds_into_beacon_state, vm_hot_recipient, vm_single_transfer, vm_zipf_payments,
-    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
 };
 use serial_test::serial;
 use support::ProdCluster;
@@ -250,40 +250,6 @@ fn split_lifecycle_prod() {
     not(feature = "ci"),
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
-fn zipf_payments_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
-        &liveness_config(),
-        42,
-        EPOCH_MS,
-        contention_genesis_balances(24, 6),
-    );
-    let report = zipf_payments(&mut cluster, 24, 6, 1.0);
-    println!("zipf_payments s=1.0 senders=24 recipients=6: {report:?}");
-}
-
-#[test]
-#[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
-fn hot_component_saturation_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
-        &liveness_config(),
-        42,
-        EPOCH_MS,
-        contention_genesis_balances(12, 1),
-    );
-    let (report, height_span) = hot_component_saturation(&mut cluster, 12);
-    println!("hot_component_saturation senders=12 height_span={height_span}: {report:?}");
-}
-
-#[test]
-#[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
 fn vm_zipf_payments_prod() {
     let mut cluster = ProdCluster::start_with_vm_accounts(
         &liveness_config(),
@@ -321,13 +287,14 @@ fn vm_hot_recipient_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn cross_shard_fraction_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_accounts(
         &split_config(),
         11,
         EPOCH_MS,
-        cross_contention_genesis_balances(16),
+        straddler_genesis_balances(),
+        vm_cross_fraction_genesis_accounts(CROSS_FRACTION_SENDERS),
     );
-    let report = cross_shard_fraction(&mut cluster, 16, 500);
+    let report = cross_shard_fraction(&mut cluster, CROSS_FRACTION_SENDERS, 500);
     println!("cross_shard_fraction total=16 cross=50%: {report:?}");
 }
 

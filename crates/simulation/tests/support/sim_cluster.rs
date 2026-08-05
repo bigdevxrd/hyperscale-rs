@@ -103,6 +103,26 @@ impl SimCluster {
         Self::build(config, seed, balances, false, true)
     }
 
+    /// [`Self::with_vm_accounts`] with declared reads shared rather than
+    /// exclusive — the share side of the read-share A/B.
+    #[must_use]
+    pub fn with_vm_accounts_and_read_share(
+        config: &ScenarioConfig,
+        seed: u64,
+        vm_accounts: &[([u8; 16], u128)],
+    ) -> Self {
+        Self::build_full(&BuildArgs {
+            config,
+            seed,
+            balances: &straddler_genesis_balances(),
+            dedicated_pool_hosts: false,
+            share_declared_reads: true,
+            vm_accounts,
+            vm_execution_mode: ExecutionMode::Serial,
+            vm_pools: &[],
+        })
+    }
+
     /// Build a genesis cluster with funded VM accounts beside the default
     /// straddler balances, batch-scheduling VM waves serially.
     #[must_use]

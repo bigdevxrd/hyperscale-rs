@@ -26,8 +26,7 @@ use radix_transactions::model::UserTransaction;
 
 use crate::reshape::split_lifecycle;
 use crate::support::tx::{
-    accounts_routing_to, build_transfer_tx, contention_recipient, contention_sender,
-    validity_around,
+    accounts_routing_to, build_vm_transfer_tx, validity_around, vm_accounts_routing_to,
 };
 use crate::support::{Budget, Cluster, epochs, grow_to};
 
@@ -161,97 +160,6 @@ fn settle_terminal(
     }
 }
 
-/// Payment traffic with Zipf-skewed recipients.
-///
-/// `senders` distinct payers (no payer contention) each pay one of
-/// `recipients` payees drawn from a Zipf distribution at exponent `skew`
-/// — the contention is exactly the recipient-deposit overlap the skew
-/// induces.
-///
-/// # Panics
-///
-/// Panics if any payment misses its budget or does not accept.
-pub fn zipf_payments(
-    c: &mut impl Cluster,
-    senders: u8,
-    recipients: u8,
-    skew: f64,
-) -> ContentionReport {
-    let cdf = zipf_cdf(recipients as usize, skew);
-    let mut rng = Lcg(0x5eed_c0de ^ u64::from(senders) << 8 ^ u64::from(recipients));
-    let mut submissions = Vec::with_capacity(senders as usize);
-    for index in 0..senders {
-        let (payer, from) = contention_sender(index);
-        let draw = rng.unit();
-        let rank = cdf.iter().position(|&c| draw < c).unwrap_or(cdf.len() - 1);
-        let to = contention_recipient(u8::try_from(rank).expect("recipient rank fits"));
-        let tx = build_transfer_tx(
-            &payer,
-            from,
-            to,
-            Decimal::from(PAYMENT),
-            &NetworkDefinition::simulator(),
-            1,
-            validity_around(c.now()),
-        );
-        submissions.push((tx.hash(), c.now()));
-        c.submit(Arc::new(tx));
-    }
-    settle_and_report(c, &submissions, epochs(10))
-}
-
-/// One contended component driven to its serialization ceiling.
-///
-/// Every payer pays the same recipient, so the recipient's deposit write
-/// serializes the whole batch. Asserts the one-transaction-per-block
-/// bound directly — no two payments commit at the same height — and
-/// returns the report plus the height span the batch consumed.
-///
-/// # Panics
-///
-/// Panics if any payment misses its budget, does not accept, or two hot
-/// payments commit at one height.
-pub fn hot_component_saturation(c: &mut impl Cluster, senders: u8) -> (ContentionReport, u64) {
-    let hot = contention_recipient(0);
-    let mut submissions = Vec::with_capacity(senders as usize);
-    for index in 0..senders {
-        let (payer, from) = contention_sender(index);
-        let tx = build_transfer_tx(
-            &payer,
-            from,
-            hot,
-            Decimal::from(PAYMENT),
-            &NetworkDefinition::simulator(),
-            1,
-            validity_around(c.now()),
-        );
-        submissions.push((tx.hash(), c.now()));
-        c.submit(Arc::new(tx));
-    }
-    let report = settle_and_report(c, &submissions, epochs(16));
-
-    let mut heights = Vec::with_capacity(submissions.len());
-    for (hash, _) in &submissions {
-        let (committed, _) = c.chain_fate(ShardId::ROOT, *hash);
-        heights.push(committed.expect("accepted payment has a commit height"));
-    }
-    heights.sort_unstable();
-    let span = heights
-        .last()
-        .map_or(0, |last| last.inner() - heights[0].inner() + 1);
-    let distinct = {
-        let mut deduped = heights.clone();
-        deduped.dedup();
-        deduped.len()
-    };
-    assert_eq!(
-        distinct,
-        heights.len(),
-        "two hot payments committed at one height — the serialization bound is broken",
-    );
-    (report, span)
-}
-
 /// Fixed load at a varying cross-shard share.
 ///
 /// Grows the root into two shards, then submits `total` payments from
@@ -270,27 +178,26 @@ pub fn cross_shard_fraction(
     split_lifecycle(c);
     let (left, right) = (ShardId::leaf(1, 0), ShardId::leaf(1, 1));
 
-    // The same taken-walk as `cross_contention_genesis_balances`, so the
+    // The same taken-walk as `vm_cross_fraction_genesis_accounts`, so the
     // senders are exactly the genesis-funded accounts.
     let mut taken = Vec::new();
-    let senders = accounts_routing_to(left, 2, total, &mut taken);
+    let senders = vm_accounts_routing_to(left, 2, total, &mut taken);
     let cross_count = total * cross_permille as usize / 1000;
-    let local_recipients = accounts_routing_to(left, 2, total - cross_count, &mut taken);
-    let cross_recipients = accounts_routing_to(right, 2, cross_count, &mut taken);
+    let local_recipients = vm_accounts_routing_to(left, 2, total, &mut taken);
+    let cross_recipients = vm_accounts_routing_to(right, 2, total, &mut taken);
 
     let recipients = cross_recipients
         .iter()
-        .chain(local_recipients.iter())
+        .take(cross_count)
+        .chain(local_recipients.iter().take(total - cross_count))
         .map(|(_, account)| *account);
     let mut submissions = Vec::with_capacity(total);
     for ((payer, from), to) in senders.iter().zip(recipients) {
-        let tx = build_transfer_tx(
+        let tx = build_vm_transfer_tx(
             payer,
             *from,
             to,
-            Decimal::from(PAYMENT),
-            &NetworkDefinition::simulator(),
-            1,
+            u128::from(PAYMENT),
             validity_around(c.now()),
         );
         submissions.push((tx.hash(), c.now()));
