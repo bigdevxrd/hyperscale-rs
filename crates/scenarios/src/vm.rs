@@ -28,8 +28,8 @@ use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
     build_faucet_tx, build_vm_composed_tx, build_vm_publish_tx, build_vm_stamp_tx,
     build_vm_transfer_tx, contention_recipient, signer_from_seed, validity_around,
-    vm_cross_shard_cast, vm_nullifier_race_cast, vm_payment_request, vm_recipient, vm_sender,
-    vm_storm_artifact, vm_storm_publishers,
+    vm_cross_shard_cast, vm_cross_shard_keys, vm_nullifier_race_cast, vm_payment_request,
+    vm_recipient, vm_sender, vm_storm_artifact, vm_storm_publishers,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -616,8 +616,8 @@ fn recorded_bytes<C: Cluster>(c: &C, shard: ShardId) -> Option<u64> {
 /// shard's chain never commits it, either leaf is unstamped, or the two
 /// stamps differ.
 pub fn vm_randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
-    let (payer, left_owner, right_owner) = vm_cross_shard_cast();
-    let tx = build_vm_stamp_tx(&payer, left_owner, right_owner, validity_around(c.now()));
+    let (payer, left_owner, right_key, right_owner) = vm_cross_shard_keys();
+    let tx = build_vm_stamp_tx(&payer, left_owner, &right_key, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
 
@@ -960,7 +960,10 @@ pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
         .vm_preview(
             ShardId::ROOT,
             &candidate,
-            PreviewGrants { free_credit: true },
+            PreviewGrants {
+                free_credit: true,
+                ..PreviewGrants::default()
+            },
         )
         .expect("the root shard serves a preview");
     assert_eq!(credited.fee, report.fee, "the fee is priced either way");

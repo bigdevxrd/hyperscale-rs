@@ -22,9 +22,9 @@ use hyperscale_types::{
 };
 use hyperscale_vm_effects::stdlib::{ENTROPY, VAULT};
 use hyperscale_vm_effects::{
-    Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg, GraphNode,
-    Hash32, InstanceRegistry, IntentDecl, ManifestGraph, ManifestHash, MetadataCache, Mode,
-    PackageHash, PackageMetadata, PrefixShardResolver, RoleId, Subintent, SubstateKey, Value,
+    Accessibility, Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg,
+    GraphNode, Hash32, InstanceRegistry, IntentDecl, ManifestGraph, ManifestHash, MetadataCache,
+    Mode, PackageHash, PackageMetadata, PrefixShardResolver, RoleId, Subintent, SubstateKey, Value,
     YieldBinding, YieldParam, admit_tree, child_key, package_hash, route_tree,
 };
 use sbor::prelude::*;
@@ -462,6 +462,75 @@ impl BridgeStatics {
     }
 }
 
+/// Refuse a node whose target's method requires that target's own
+/// authority unless the intent that carries the node is the target's own.
+///
+/// One authority per intent: the composer's account covers the root
+/// intent's nodes, and a subintent's declared signer covers its own.
+/// Nothing crosses that line — a second party signs their own
+/// declaration and never the composer's, which is what the subintent
+/// primitive exists to express.
+///
+/// What this judges is the structural half — that each intent's declared
+/// authority covers the nodes it carries. The cryptographic half, that a
+/// declared authority is backed by a signature in the envelope, is the
+/// fee-payer and subintent-signer bindings in [`BridgeStatics::derive`].
+/// Together they are one rule, and it is a pure function of signed
+/// content: no state read, no rule evaluation, and a refusal that costs
+/// the sender nothing because the transaction never enters a block.
+///
+/// An account's address *is* the hash of the key that owns it, so the
+/// target's own signature is the only satisfier the rule could have. A
+/// gated method on a target no key derives — a component instance, say —
+/// is therefore uncallable rather than open, which is the safe direction
+/// for the degenerate case to fall.
+///
+/// # Errors
+///
+/// [`VmStaticsError`] naming the first node whose target the envelope
+/// does not reach.
+pub fn check_target_authority(
+    tree: &EnvelopeTree,
+    composer: Address,
+    packages: &MetadataCache,
+    instances: &InstanceRegistry,
+) -> Result<(), VmStaticsError> {
+    let root = std::iter::once((composer, &tree.root, None));
+    let bound = tree
+        .subintents
+        .iter()
+        .enumerate()
+        .map(|(index, subintent)| (subintent.signer, &subintent.decl, Some(index)));
+    for (authority, decl, subintent) in root.chain(bound) {
+        for (position, node) in decl.graph.nodes.iter().enumerate() {
+            // A target that resolves to nothing is admission's refusal to
+            // make, and admission makes it.
+            let Some(signature) = instances
+                .get(node.target)
+                .and_then(|meta| packages.get(meta.package))
+                .and_then(|package| package.methods.get(&node.method))
+            else {
+                continue;
+            };
+            if signature.accessibility != Accessibility::RequiresTargetAuth
+                || node.target == authority
+            {
+                continue;
+            }
+            let intent = subintent.map_or_else(
+                || "the root intent".to_owned(),
+                |index| format!("subintent {index}"),
+            );
+            return Err(VmStaticsError(format!(
+                "{intent} node {position} calls `{}` on an account whose authority the envelope \
+                 does not carry",
+                node.method
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl VmStatics for BridgeStatics {
     fn absorb_committed_cell(&self, owner: [u8; 16], local: [u8; 16], value: &[u8]) {
         self.cache.absorb_cell(owner, local, value);
@@ -504,6 +573,9 @@ impl VmStatics for BridgeStatics {
             }
         }
         let packages = self.cache.load();
+        // What the fee-payer binding above does for the one field that
+        // debits an account, generalised to every node that touches one.
+        check_target_authority(&tree, Address(vm.fee_payer), &packages, &self.instances)?;
         let admitted = admit_tree(
             &tree,
             envelope_identity(vm),
@@ -815,6 +887,90 @@ mod tests {
         // The composer paying from their own account is the admitted
         // case, so the check bites on ownership and not on fees at all.
         assert!(statics().derive(&envelope(&tree, &[])).is_ok());
+    }
+
+    /// The theft the gate closes: a manifest withdrawing from an account
+    /// the envelope carries no signature for.
+    #[test]
+    fn a_withdrawal_from_an_unsigned_account_is_refused() {
+        let tree = single_intent_tree(vec![
+            withdraw(bob_addr(), RES_X, 100),
+            deposit_edge(composer_addr(), 0, RES_X),
+        ]);
+        let refused = statics()
+            .derive(&envelope(&tree, &[]))
+            .expect_err("refuses");
+        assert!(
+            refused.0.contains("the root intent node 0"),
+            "{}",
+            refused.0
+        );
+        assert!(refused.0.contains("withdraw"), "{}", refused.0);
+
+        // Reversed, it is the ordinary transfer: the composer withdraws
+        // from their own account and Bob is credited without being asked.
+        // One signature, because only the spending side is gated.
+        let transfer = single_intent_tree(vec![
+            withdraw(composer_addr(), RES_X, 100),
+            deposit_edge(bob_addr(), 0, RES_X),
+        ]);
+        assert!(statics().derive(&envelope(&transfer, &[])).is_ok());
+    }
+
+    /// The stamp writes a leaf under its target's prefix and moves no
+    /// funds, which is exactly why it is easy to leave open.
+    #[test]
+    fn a_stamp_on_an_unsigned_account_is_refused() {
+        let stamp = |target: Address| {
+            single_intent_tree(vec![GraphNode {
+                target,
+                method: "stamp-entropy".into(),
+                args: vec![],
+            }])
+        };
+        let refused = statics()
+            .derive(&envelope(&stamp(bob_addr()), &[]))
+            .expect_err("refuses");
+        assert!(refused.0.contains("stamp-entropy"), "{}", refused.0);
+        assert!(
+            statics()
+                .derive(&envelope(&stamp(composer_addr()), &[]))
+                .is_ok()
+        );
+    }
+
+    /// A second party's funds are reachable exactly when that party
+    /// signed the node that touches them — which is the mechanism the
+    /// subintent primitive was built for.
+    #[test]
+    fn a_subintents_signature_covers_its_own_nodes_and_no_others() {
+        let bob = key(9);
+        // Both sides withdraw from themselves under their own signature.
+        assert!(
+            statics()
+                .derive(&envelope(&composed_tree(), &[&bob]))
+                .is_ok()
+        );
+
+        // The same envelope with Bob's withdrawal moved into the
+        // composer's intent: Bob signed a declaration, not this node, so
+        // his signature does not reach it.
+        let mut stolen = composed_tree();
+        stolen.root.graph.nodes[0] = withdraw(bob_addr(), RES_X, 100);
+        let refused = statics()
+            .derive(&envelope(&stolen, &[&bob]))
+            .expect_err("refuses");
+        assert!(refused.0.contains("the root intent"), "{}", refused.0);
+
+        // And the mirror: a subintent reaching into the composer's
+        // account. The composer signed the envelope, not this subintent's
+        // declaration, so the composer's key does not reach it either.
+        let mut reversed = composed_tree();
+        reversed.subintents[0].decl.graph.nodes[0] = withdraw(composer_addr(), RES_Y, 10);
+        let refused = statics()
+            .derive(&envelope(&reversed, &[&bob]))
+            .expect_err("refuses");
+        assert!(refused.0.contains("subintent 0"), "{}", refused.0);
     }
 
     #[test]

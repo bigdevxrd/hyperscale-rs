@@ -792,10 +792,19 @@ fn vm_leg(
 /// and the recipient's account on `leaf(1, 1)`.
 #[must_use]
 pub fn vm_cross_shard_cast() -> (Ed25519PrivateKey, [u8; 16], [u8; 16]) {
+    let (payer, from, key, _) = vm_cross_shard_keys();
+    (payer, from, vm_account_address(&key.public_key().0))
+}
+
+/// [`vm_cross_shard_cast`] with the recipient's key as well: what a
+/// scenario needs when the far side has to authorise something of its
+/// own rather than only be paid.
+#[must_use]
+pub fn vm_cross_shard_keys() -> (Ed25519PrivateKey, [u8; 16], Ed25519PrivateKey, [u8; 16]) {
     let mut taken = Vec::new();
     let (payer, from) = vm_account_routing_to(ShardId::leaf(1, 0), &mut taken);
-    let (_key, to) = vm_account_routing_to(ShardId::leaf(1, 1), &mut taken);
-    (payer, from, to)
+    let (recipient, to) = vm_account_routing_to(ShardId::leaf(1, 1), &mut taken);
+    (payer, from, recipient, to)
 }
 
 /// Genesis funding for the cross-shard VM cast: the payer funded, the
@@ -904,28 +913,57 @@ pub fn vm_insolvent_genesis_accounts() -> Vec<([u8; 16], u128)> {
 /// Each stamp is an exclusive write, so each shard owes the other the
 /// prior value of the leaf it owns — the read-set-provisioned shape, in
 /// both directions.
+///
+/// The two stamps sit in two intents because they write two accounts'
+/// leaves: a stamp is gated on its target's own authority, so the
+/// right-hand account signs its own. That is the composition it takes to
+/// touch a second party at all, and it costs the scenario nothing —
+/// admission still folds one manifest and one draw still covers both.
 #[must_use]
 pub fn build_vm_stamp_tx(
     payer: &Ed25519PrivateKey,
     left: [u8; 16],
-    right: [u8; 16],
+    right_key: &Ed25519PrivateKey,
     validity: TimestampRange,
 ) -> RoutableTransaction {
-    let graph = ManifestGraph {
-        nodes: vec![
-            GraphNode {
-                target: Address(left),
+    let stamp = |owner: [u8; 16]| IntentDecl {
+        graph: ManifestGraph {
+            nodes: vec![GraphNode {
+                target: Address(owner),
                 method: "stamp-entropy".into(),
                 args: vec![],
-            },
-            GraphNode {
-                target: Address(right),
-                method: "stamp-entropy".into(),
-                args: vec![],
-            },
-        ],
+            }],
+        },
+        params: Vec::new(),
     };
-    RoutableTransaction::new_vm(vm_envelope(graph, payer, validity))
+    let right = stamp(vm_account_address(&right_key.public_key().0));
+    let tree = EnvelopeTree {
+        root: stamp(left),
+        root_bindings: Vec::new(),
+        subintents: vec![Subintent {
+            decl: right.clone(),
+            signer: Address(vm_account_address(&right_key.public_key().0)),
+            bindings: Vec::new(),
+        }],
+    };
+    let signed = right_key.sign(right.hash(&ProtocolHasher).0.0);
+    let vm = VmTransaction {
+        body: VmBody::Call(encode_tree(&tree).into()),
+        subintent_sigs: vec![VmSubintentSig {
+            public_key: right_key.public_key().0,
+            signature: signed.0,
+        }],
+        fee_payer: vm_account_address(&payer.public_key().0),
+        max_fee: VM_MAX_FEE,
+        gas_limit: 1_000_000,
+        validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
+        validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
+        message: Vec::new().into(),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(payer);
+    RoutableTransaction::new_vm(vm)
 }
 
 /// Build a VM transfer: the account guest's withdraw+deposit graph over

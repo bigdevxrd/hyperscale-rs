@@ -31,8 +31,8 @@ use hyperscale_vm_kernel::{
 };
 
 use crate::executor::{
-    PayerFee, VmBase, abort_reason, charge_for, protocol_hash, publish_work, read_cell,
-    tx_randomness,
+    PayerFee, TargetAuthority, VmBase, abort_reason, charge_for, protocol_hash, publish_work,
+    read_cell, tx_randomness,
 };
 use crate::genesis::vault_key;
 use crate::{VM_XRD, VmExecutor};
@@ -40,17 +40,21 @@ use crate::{VM_XRD, VmExecutor};
 /// What a preview run is permitted that a committed execution is not.
 ///
 /// Grants are opt-in: the empty set is the default, and a preview under
-/// it answers exactly what the chain would answer. One grant is
-/// expressible today because one bypassable rule exists. A preview
-/// cannot be granted a bypass of something nothing enforces, so the
-/// grant that would carry an auth exemption joins this struct when the
-/// stdlib grows an auth surface for it to exempt.
+/// it answers exactly what the chain would answer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreviewGrants {
     /// Run on credit: the fee is still reported, but never reaches the
     /// payer's vault. This is what lets a wallet price an envelope whose
     /// payer could not cover the ceiling it names.
     pub free_credit: bool,
+    /// Treat every gated node as carrying its target's authority.
+    ///
+    /// A composition is priced and displayed before its counterparties
+    /// sign, so a wallet needs an answer about an envelope that is not
+    /// yet admissible — and refusing it would leave the wallet unable to
+    /// show the user what they are being asked to sign. Granting this is
+    /// the caller saying they know the difference.
+    pub assume_target_auth: bool,
 }
 
 /// The transaction environment a preview reads, supplied by the caller
@@ -261,7 +265,12 @@ impl VmExecutor {
             return preview_publish(snapshot, artifact, payer, inputs.grants);
         }
 
-        let prepared = match self.prepare(tx) {
+        let authority = if inputs.grants.assume_target_auth {
+            TargetAuthority::Assumed
+        } else {
+            TargetAuthority::Required
+        };
+        let prepared = match self.prepare_with_authority(tx, authority) {
             Ok(derived) => derived,
             Err(reason) => return PreviewReport::refused(reason),
         };

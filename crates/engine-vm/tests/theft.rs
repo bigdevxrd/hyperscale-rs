@@ -1,0 +1,251 @@
+//! The theft probe: a manifest moving an account's funds under someone
+//! else's signature, run through the whole real path — derivation, the
+//! verification gate, and the batch executor.
+//!
+//! Its own binary because the assertion is about what a signature reaches,
+//! and the VM statics install once per process: the victim has to be a
+//! funded, registered account in the world every executor here shares.
+//!
+//! The refusal is asserted at the admission gate rather than at execution.
+//! A verdict reachable from signed content alone belongs where the sender
+//! pays nothing for it, and nothing downstream re-derives its own opinion:
+//! routing runs through the same statics, so an envelope the gate refused
+//! cannot reach a block at all.
+
+use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
+
+use hyperscale_effects_bridge::{encode_tree, vm_account_address};
+use hyperscale_engine::{
+    DynSnapshot, ExecutedTx, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext,
+};
+use hyperscale_engine_vm::genesis::vault_key;
+use hyperscale_engine_vm::{ExecutionMode, VM_XRD, VmExecutor, vm_genesis_updates};
+use hyperscale_storage::{
+    DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,
+};
+use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+use hyperscale_types::{
+    BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, RoutableTransaction,
+    ShardId, ShardTrie, Verified, VmBody, VmTransaction, WeightedTimestamp,
+};
+use hyperscale_vm_effects::{
+    Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
+    Value,
+};
+use hyperscale_vm_kernel::encode_amount;
+use radix_common::prelude::DbSubstateValue;
+use radix_substate_store_interface::interface::{DbPartitionKey, PartitionEntry};
+
+/// A funded account whose key nothing in this binary holds — the address
+/// is all an attacker has, and the address is public.
+const VICTIM: [u8; 16] = [0x99; 16];
+/// The signing seed of the account that pays for the theft.
+const THIEF: u8 = 3;
+/// What both accounts hold at genesis.
+const FUNDED: u128 = 10_000;
+
+/// A snapshot over the flattened genesis updates.
+struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
+
+impl MapDb {
+    fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
+        let updates = vm_genesis_updates(accounts);
+        let mut map = BTreeMap::new();
+        for (node_key, node_updates) in &updates.node_updates {
+            for (partition, partition_updates) in &node_updates.partition_updates {
+                let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates else {
+                    panic!("genesis VM updates are Delta-only");
+                };
+                for (sort_key, update) in substate_updates {
+                    let DatabaseUpdate::Set(value) = update else {
+                        panic!("genesis VM updates are Set-only");
+                    };
+                    map.insert(
+                        (node_key.clone(), *partition, sort_key.0.clone()),
+                        value.clone(),
+                    );
+                }
+            }
+        }
+        Self(map)
+    }
+}
+
+impl SubstateDatabase for MapDb {
+    fn get_raw_substate_by_db_key(
+        &self,
+        partition_key: &DbPartitionKey,
+        sort_key: &DbSortKey,
+    ) -> Option<DbSubstateValue> {
+        self.0
+            .get(&(
+                partition_key.node_key.clone(),
+                partition_key.partition_num,
+                sort_key.0.clone(),
+            ))
+            .cloned()
+    }
+
+    fn list_raw_values_from_db_key(
+        &self,
+        _partition_key: &DbPartitionKey,
+        _from_sort_key: Option<&DbSortKey>,
+    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
+        Box::new(std::iter::empty())
+    }
+}
+
+fn thief() -> [u8; 16] {
+    let key = Ed25519PrivateKey::from_bytes(&[THIEF; 32]).unwrap();
+    vm_account_address(&key.public_key().0)
+}
+
+/// Every address any test in this binary transacts with.
+fn world_accounts() -> Vec<([u8; 16], u128)> {
+    vec![(VICTIM, FUNDED), (thief(), FUNDED)]
+}
+
+fn withdraw(target: [u8; 16], amount: u128) -> GraphNode {
+    GraphNode {
+        target: Address(target),
+        method: "withdraw".into(),
+        args: vec![
+            GraphArg::Literal(Value::Address(VM_XRD)),
+            GraphArg::Literal(Value::U128(amount)),
+        ],
+    }
+}
+
+fn deposit(target: [u8; 16], producer: u32) -> GraphNode {
+    GraphNode {
+        target: Address(target),
+        method: "deposit".into(),
+        args: vec![GraphArg::Edge {
+            edge: EdgeRef {
+                producer,
+                output: 0,
+            },
+            constraints: vec![Constraint::ResourceIs(VM_XRD)],
+        }],
+    }
+}
+
+/// `from.withdraw(XRD, amount) -> to.deposit(..)`, signed and paid for by
+/// the thief whatever `from` says.
+fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransaction {
+    let key = Ed25519PrivateKey::from_bytes(&[THIEF; 32]).unwrap();
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph: ManifestGraph {
+                nodes: vec![withdraw(from, amount), deposit(to, 0)],
+            },
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    RoutableTransaction::new_vm(
+        VmTransaction {
+            body: VmBody::Call(encode_tree(&tree).into()),
+            subintent_sigs: Vec::new(),
+            fee_payer: thief(),
+            max_fee: 1_000,
+            gas_limit: 1_000_000,
+            validity_start_ms: 0,
+            validity_end_ms: u64::MAX,
+            message: Vec::new().into(),
+            signer: [0; 32],
+            signature: [0; 64],
+        }
+        .sign(&key),
+    )
+}
+
+fn execute(executor: &VmExecutor, tx: RoutableTransaction) -> Vec<ExecutedTx> {
+    let store = MapDb::genesis(&world_accounts());
+    let snapshot = DynSnapshot(&store);
+    let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
+    let trie = ShardTrie::single();
+    let ctx = WaveBatchContext {
+        par: Parallelism::Sequential,
+        cache: &cache,
+        local_shard: ShardId::ROOT,
+        shard_trie: &trie,
+        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
+        wave_start_ts: WeightedTimestamp::from_millis(1_000),
+        wave_start_reveal: RevealChain::ZERO,
+    };
+    let verified = Arc::new(Verified::<RoutableTransaction>::from_persisted(tx));
+    executor.execute_wave_batch(&ctx, &snapshot, std::slice::from_ref(&verified))
+}
+
+/// An account's native vault as the batch left it.
+fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
+    let key = vault_key(owner, VM_XRD);
+    let node = updates.node_updates.get(&vm_db_node_key(owner))?;
+    let PartitionDatabaseUpdates::Delta { substate_updates } =
+        node.partition_updates.get(&VM_PARTITION)?
+    else {
+        return None;
+    };
+    match substate_updates.get(&DbSortKey(key.local.0.to_vec()))? {
+        DatabaseUpdate::Set(value) => Some(value.clone()),
+        DatabaseUpdate::Delete => None,
+    }
+}
+
+/// The defect, closed: an address is public, and knowing one buys nothing.
+#[test]
+fn draining_an_account_the_envelope_does_not_sign_for_is_refused() {
+    let _ = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let theft = signed_transfer(VICTIM, thief(), 5_000);
+
+    assert!(theft.vm().expect("a VM envelope").signature_is_valid());
+    let refused = theft.try_vm_derived().expect_err("derivation refuses");
+    assert!(refused.0.contains("withdraw"), "{}", refused.0);
+    assert!(
+        refused.0.contains("authority"),
+        "the refusal names its reason: {}",
+        refused.0
+    );
+
+    // The thief spending their own account is the admitted case, so what
+    // bites is whose account the node names and not the shape of the
+    // manifest.
+    assert!(
+        signed_transfer(thief(), VICTIM, 5_000)
+            .try_vm_derived()
+            .is_ok()
+    );
+}
+
+/// What the gate is holding back, stated as an amount.
+///
+/// The same two-node manifest with one address changed, settled end to
+/// end: a withdrawal moves whatever the node asks for, so what a target
+/// binding protects is a whole balance rather than a fee floor of it.
+#[test]
+fn the_gated_node_is_the_one_that_moves_the_balance() {
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    let executed = execute(&executor, signed_transfer(thief(), VICTIM, 5_000));
+    let ConsensusReceipt::Succeeded {
+        database_updates, ..
+    } = &executed[0].consensus
+    else {
+        panic!(
+            "the signed transfer must settle: {:?}",
+            executed[0].consensus
+        );
+    };
+    // Half the payer's balance in one node, less the fee they also pay,
+    // and the recipient credited without having signed anything.
+    assert_eq!(
+        vault_cell(database_updates, thief()),
+        Some(encode_amount(4_000).to_vec())
+    );
+    assert_eq!(
+        vault_cell(database_updates, VICTIM),
+        Some(encode_amount(15_000).to_vec())
+    );
+}

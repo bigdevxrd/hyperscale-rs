@@ -35,8 +35,28 @@ use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 use radix_common::prelude::DbSubstateValue;
 use radix_substate_store_interface::interface::{DbPartitionKey, PartitionEntry};
 
-const ALICE: [u8; 16] = [0x11; 16];
-const BOB: [u8; 16] = [0x22; 16];
+/// The two accounts the transfer cases move funds between, as signing
+/// seeds rather than as literal addresses: a withdrawing node admits only
+/// the signature its target's address derives from, so an account that
+/// spends has to be one a key here derives.
+const ALICE_SEED: u8 = 41;
+const BOB_SEED: u8 = 42;
+
+/// The ceiling the plain transfer cases name, and — being under what a
+/// transfer costs — the fee they are charged exactly.
+///
+/// Small enough to stay legible in the balance assertions, which matters
+/// now that a withdrawal's own account is also the one paying: the payer
+/// is the signer, and the signer is whoever the withdrawing node names.
+const TRANSFER_FEE: u128 = 100;
+
+fn alice() -> [u8; 16] {
+    fee_payer(ALICE_SEED)
+}
+
+fn bob() -> [u8; 16] {
+    fee_payer(BOB_SEED)
+}
 
 /// A snapshot over the flattened genesis updates.
 struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
@@ -142,7 +162,7 @@ fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGraph {
 }
 
 fn signed_transfer(seed: u8, from: [u8; 16], to: [u8; 16], amount: u128) -> RoutableTransaction {
-    signed_transfer_with_fee(seed, from, to, amount, 1_000_000)
+    signed_transfer_with_fee(seed, from, to, amount, TRANSFER_FEE)
 }
 
 /// A transfer whose recipient signs a floor the withdrawal cannot meet.
@@ -233,8 +253,8 @@ fn fee_payer(seed: u8) -> [u8; 16] {
 /// builds, which is separate from the world.
 fn world_accounts() -> Vec<([u8; 16], u128)> {
     vec![
-        (ALICE, 1_000),
-        (BOB, 50),
+        (alice(), 1_000),
+        (bob(), 50),
         (fee_payer(7), 1_000),
         (fee_payer(11), 110),
         (fee_payer(23), 1_000),
@@ -247,7 +267,7 @@ fn execute(
     executor: &VmExecutor,
     transactions: &[Arc<Verified<RoutableTransaction>>],
 ) -> Vec<ExecutedTx> {
-    execute_on(&[(ALICE, 1_000), (BOB, 50)], executor, transactions)
+    execute_on(&[(alice(), 1_000), (bob(), 50)], executor, transactions)
 }
 
 /// A signed single-node stamp: the account records the transaction's
@@ -290,7 +310,7 @@ fn execute_anchored(
     reveal: RevealChain,
     transactions: &[Arc<Verified<RoutableTransaction>>],
 ) -> Vec<ExecutedTx> {
-    let snapshot_store = MapDb::genesis(&[(ALICE, 1_000), (BOB, 50)]);
+    let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (bob(), 50)]);
     let snapshot = DynSnapshot(&snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
@@ -330,17 +350,17 @@ fn entropy_cell(executed: &ExecutedTx, owner: [u8; 16]) -> Option<Vec<u8>> {
 fn a_stamp_writes_the_draw_its_anchor_fixes() {
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_stamp(9, ALICE),
+        signed_stamp(ALICE_SEED, alice()),
     ));
     let anchor = RevealChain::from_raw(Hash::from_bytes(b"payer block"));
 
     let executed = execute_anchored(&executor, anchor, std::slice::from_ref(&tx));
-    let stamped = entropy_cell(&executed[0], ALICE).expect("the stamp wrote the entropy leaf");
+    let stamped = entropy_cell(&executed[0], alice()).expect("the stamp wrote the entropy leaf");
     assert_eq!(stamped.len(), 32);
 
     let again = execute_anchored(&executor, anchor, std::slice::from_ref(&tx));
     assert_eq!(
-        entropy_cell(&again[0], ALICE),
+        entropy_cell(&again[0], alice()),
         Some(stamped.clone()),
         "one anchor, one draw"
     );
@@ -351,7 +371,7 @@ fn a_stamp_writes_the_draw_its_anchor_fixes() {
         std::slice::from_ref(&tx),
     );
     assert_ne!(
-        entropy_cell(&elsewhere[0], ALICE),
+        entropy_cell(&elsewhere[0], alice()),
         Some(stamped),
         "a different anchor is a different draw"
     );
@@ -377,7 +397,7 @@ fn a_stamp_writes_the_draw_its_anchor_fixes() {
 fn a_batch_baseline_decides_whether_two_payments_both_land() {
     let payer_a = fee_payer(31);
     let payer_b = fee_payer(32);
-    let hot = BOB;
+    let hot = bob();
     let accounts = [(payer_a, 1_000), (payer_b, 1_000), (hot, 10)];
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
 
@@ -490,7 +510,7 @@ fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
 fn a_transfer_folds_to_identity_keyed_absolute_updates() {
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(7, ALICE, BOB, 100),
+        signed_transfer(ALICE_SEED, alice(), bob(), 100),
     ));
     let executed = execute(&executor, &[tx]);
     assert_eq!(executed.len(), 1);
@@ -505,14 +525,15 @@ fn a_transfer_folds_to_identity_keyed_absolute_updates() {
     };
     assert!(owned_nodes.is_empty());
     assert_ne!(receipt_hash.as_raw(), &Hash::ZERO);
-    // Withdraw settled 100 off the sender; deposit credited the
+    // Withdraw settled 100 off the sender and the fee another 100 —
+    // the sender signs, so the sender pays. Deposit credited the
     // recipient. Absolute values, identity-keyed.
     assert_eq!(
-        vault_cell(database_updates, ALICE),
-        Some(encode_amount(900).to_vec())
+        vault_cell(database_updates, alice()),
+        Some(encode_amount(1_000 - 100 - TRANSFER_FEE).to_vec())
     );
     assert_eq!(
-        vault_cell(database_updates, BOB),
+        vault_cell(database_updates, bob()),
         Some(encode_amount(150).to_vec())
     );
 }
@@ -521,10 +542,10 @@ fn a_transfer_folds_to_identity_keyed_absolute_updates() {
 fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let over = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(8, BOB, ALICE, 500),
+        signed_transfer(BOB_SEED, bob(), alice(), 500),
     ));
     let fine = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(9, ALICE, BOB, 25),
+        signed_transfer(ALICE_SEED, alice(), bob(), 25),
     ));
     let executed = execute(&executor, &[Arc::clone(&over), Arc::clone(&fine)]);
     assert_eq!(executed.len(), 2);
@@ -538,11 +559,11 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
         panic!("the covered transfer must succeed");
     };
     assert_eq!(
-        vault_cell(database_updates, ALICE),
-        Some(encode_amount(975).to_vec())
+        vault_cell(database_updates, alice()),
+        Some(encode_amount(1_000 - 25 - TRANSFER_FEE).to_vec())
     );
     assert_eq!(
-        vault_cell(database_updates, BOB),
+        vault_cell(database_updates, bob()),
         Some(encode_amount(75).to_vec())
     );
 }
@@ -551,10 +572,10 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
 fn serial_and_parallel_scheduling_produce_identical_receipts() {
     let serial = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let parallel = VmExecutor::new(&world_accounts(), ExecutionMode::Parallel);
-    let txs: Vec<Arc<Verified<RoutableTransaction>>> = (0..4)
+    let txs: Vec<Arc<Verified<RoutableTransaction>>> = (0..4u128)
         .map(|i| {
             Arc::new(Verified::<RoutableTransaction>::from_persisted(
-                signed_transfer(10 + i, ALICE, BOB, 10 + u128::from(i)),
+                signed_transfer(ALICE_SEED, alice(), bob(), 10 + i),
             ))
         })
         .collect();
@@ -585,7 +606,7 @@ fn serial_and_parallel_scheduling_produce_identical_receipts() {
 fn an_unapplied_attempt_still_attests_its_declaration() {
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let over = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(3, ALICE, BOB, 1_000_000),
+        signed_transfer(ALICE_SEED, alice(), bob(), 1_000_000),
     ));
     let executed = execute(&executor, &[over]);
     assert_eq!(executed.len(), 1);
@@ -602,7 +623,7 @@ fn an_unapplied_attempt_still_attests_its_declaration() {
     // A completed transfer of the same shape attests the same declaration
     // plus the compute it actually consumed.
     let fine = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(4, ALICE, BOB, 100),
+        signed_transfer(ALICE_SEED, alice(), bob(), 100),
     ));
     let executed = execute(&executor, &[fine]);
     assert_eq!(executed.len(), 1);
@@ -621,12 +642,12 @@ fn an_unapplied_attempt_still_attests_its_declaration() {
 #[test]
 fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
     let payer = fee_payer(7);
-    let accounts = [(payer, 1_000), (BOB, 50)];
+    let accounts = [(payer, 1_000), (bob(), 50)];
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     // A transfer's fuel far exceeds the tiny ceiling, so the burn is
     // exactly `max_fee` — the cap working.
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer_with_fee(7, payer, BOB, 100, 10),
+        signed_transfer_with_fee(7, payer, bob(), 100, 10),
     ));
     let executed = execute_on(&accounts, &executor, &[tx]);
     assert_eq!(executed.len(), 1);
@@ -641,7 +662,7 @@ fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
         Some(encode_amount(1_000 - 100 - 10).to_vec())
     );
     assert_eq!(
-        vault_cell(database_updates, BOB),
+        vault_cell(database_updates, bob()),
         Some(encode_amount(150).to_vec())
     );
 }
@@ -653,11 +674,11 @@ fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
 fn a_missed_edge_bound_charges_its_payer_the_floor() {
     let payer = fee_payer(23);
     let funded = 1_000;
-    let accounts = [(payer, funded), (BOB, 50)];
+    let accounts = [(payer, funded), (bob(), 50)];
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     // The withdrawal is covered and the guest is honest — it returns the
     // 100 it reserved. What fails is the recipient's signed floor.
-    let tx = signed_transfer_under_bound(23, payer, BOB, 100, 150, 1_000);
+    let tx = signed_transfer_under_bound(23, payer, bob(), 100, 150, 1_000);
     let floor = tx.vm().expect("a VM envelope").abort_floor();
     let executed = execute_on(
         &accounts,
@@ -687,7 +708,7 @@ fn a_missed_edge_bound_charges_its_payer_the_floor() {
         "the floor and nothing else"
     );
     assert_eq!(
-        vault_cell(database_updates, BOB),
+        vault_cell(database_updates, bob()),
         None,
         "the transfer's own effects are discarded"
     );
@@ -701,10 +722,10 @@ fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
     // that can never be refunded.
     let payer = fee_payer(11);
     // Exactly the transfer plus the ceiling: nothing survives the burn.
-    let accounts = [(payer, 110), (BOB, 50)];
+    let accounts = [(payer, 110), (bob(), 50)];
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer_with_fee(11, payer, BOB, 100, 10),
+        signed_transfer_with_fee(11, payer, bob(), 100, 10),
     ));
     let executed = execute_on(&accounts, &executor, &[tx]);
     let ConsensusReceipt::Succeeded {
@@ -721,7 +742,7 @@ fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
     );
     // The recipient is untouched by the rule.
     assert_eq!(
-        vault_cell(database_updates, BOB),
+        vault_cell(database_updates, bob()),
         Some(encode_amount(150).to_vec())
     );
 }
@@ -735,7 +756,7 @@ fn execute_on_shard(
     local_shard: ShardId,
     transactions: &[Arc<Verified<RoutableTransaction>>],
 ) -> Vec<ExecutedTx> {
-    let snapshot_store = MapDb::genesis(&[(ALICE, 1_000), (FAR, 50)]);
+    let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (FAR, 50)]);
     let snapshot = DynSnapshot(&snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([local_shard]));
     let trie = ShardTrie::uniform(1);
@@ -775,19 +796,19 @@ fn hash_of(executed: &ExecutedTx) -> Hash {
 /// storing the other's events.
 #[test]
 fn an_event_lands_only_on_its_emitters_home_shard() {
-    let world = vec![(ALICE, 1_000u128), (FAR, 50), (fee_payer(7), 1_000)];
+    let world = vec![(alice(), 1_000u128), (FAR, 50), (fee_payer(7), 1_000)];
     let executor = VmExecutor::new(&world, ExecutionMode::Serial);
     let trie = ShardTrie::uniform(1);
-    let (near, far) = (trie.shard_for_prefix(ALICE), trie.shard_for_prefix(FAR));
+    let (near, far) = (trie.shard_for_prefix(alice()), trie.shard_for_prefix(FAR));
     assert_ne!(near, far, "the two accounts must sit on different shards");
 
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(7, ALICE, FAR, 100),
+        signed_transfer(ALICE_SEED, alice(), FAR, 100),
     ));
     let sender_side = execute_on_shard(&executor, near, std::slice::from_ref(&tx));
     let recipient_side = execute_on_shard(&executor, far, &[tx]);
 
-    assert_eq!(events_of(&sender_side[0]), vec![(ALICE, 0)]);
+    assert_eq!(events_of(&sender_side[0]), vec![(alice(), 0)]);
     assert_eq!(events_of(&recipient_side[0]), vec![(FAR, 1)]);
     assert_eq!(
         hash_of(&sender_side[0]),
@@ -1023,8 +1044,8 @@ fn preview_fixture() -> PreviewFixture {
     let payer = fee_payer(7);
     PreviewFixture {
         payer,
-        accounts: vec![(payer, 1_000), (BOB, 50)],
-        tx: signed_transfer_with_fee(7, payer, BOB, 100, PREVIEW_CEILING),
+        accounts: vec![(payer, 1_000), (bob(), 50)],
+        tx: signed_transfer_with_fee(7, payer, bob(), 100, PREVIEW_CEILING),
     }
 }
 
@@ -1054,7 +1075,7 @@ fn a_preview_reports_the_resource_changes_a_transfer_would_make() {
         "a withdrawal leaves through its reservation's settle"
     );
 
-    let recipient = change_for(&report, BOB);
+    let recipient = change_for(&report, bob());
     assert_eq!((recipient.before, recipient.after), (50, 150));
     assert_eq!(
         (recipient.credit, recipient.debit, recipient.settled),
@@ -1091,7 +1112,7 @@ fn a_preview_agrees_with_the_wave_that_would_commit_it() {
         panic!("the transfer must succeed: {:?}", executed[0].consensus);
     };
 
-    for owner in [payer, BOB] {
+    for owner in [payer, bob()] {
         assert_eq!(
             vault_cell(database_updates, owner),
             Some(encode_amount(change_for(&report, owner).after).to_vec()),
@@ -1100,9 +1121,9 @@ fn a_preview_agrees_with_the_wave_that_would_commit_it() {
     }
 }
 
-/// Free credit is the one grant a preview can carry today: the fee is
-/// still priced and reported, but it never reaches the payer's vault, so
-/// a wallet can price an envelope its payer could not cover.
+/// Free credit: the fee is still priced and reported, but it never
+/// reaches the payer's vault, so a wallet can price an envelope its payer
+/// could not cover.
 #[test]
 fn free_credit_reports_the_fee_without_charging_it() {
     let PreviewFixture {
@@ -1116,7 +1137,10 @@ fn free_credit_reports_the_fee_without_charging_it() {
         &accounts,
         &executor,
         &tx,
-        PreviewGrants { free_credit: true },
+        PreviewGrants {
+            free_credit: true,
+            ..PreviewGrants::default()
+        },
     );
 
     assert_eq!(credited.fee, charged.fee, "the fee is priced either way");
@@ -1126,8 +1150,8 @@ fn free_credit_reports_the_fee_without_charging_it() {
         "credit keeps exactly the fee off the payer's vault"
     );
     assert_eq!(
-        change_for(&credited, BOB),
-        change_for(&charged, BOB),
+        change_for(&credited, bob()),
+        change_for(&charged, bob()),
         "a grant to the payer moves nobody else"
     );
 }
@@ -1138,9 +1162,9 @@ fn free_credit_reports_the_fee_without_charging_it() {
 #[test]
 fn a_preview_prices_an_abort_at_its_class_floor() {
     let payer = fee_payer(7);
-    let accounts = [(payer, 1_000), (BOB, 50)];
+    let accounts = [(payer, 1_000), (bob(), 50)];
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
-    let tx = signed_transfer_with_fee(7, payer, BOB, 5_000, PREVIEW_CEILING);
+    let tx = signed_transfer_with_fee(7, payer, bob(), 5_000, PREVIEW_CEILING);
     let report = preview_on(&accounts, &executor, &tx, PreviewGrants::default());
 
     let PreviewOutcome::Aborted { reason } = &report.outcome else {
@@ -1172,8 +1196,8 @@ fn a_preview_refuses_what_admission_would_refuse() {
         "the address must be outside the world"
     );
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
-    let tx = signed_transfer_with_fee(7, stranger, BOB, 10, PREVIEW_CEILING);
-    let report = preview_on(&[(BOB, 50)], &executor, &tx, PreviewGrants::default());
+    let tx = signed_transfer_with_fee(7, stranger, bob(), 10, PREVIEW_CEILING);
+    let report = preview_on(&[(bob(), 50)], &executor, &tx, PreviewGrants::default());
 
     assert!(
         matches!(report.outcome, PreviewOutcome::Refused { .. }),
@@ -1182,6 +1206,45 @@ fn a_preview_refuses_what_admission_would_refuse() {
     );
     assert_eq!(report.fee, 0);
     assert!(report.changes.is_empty());
+}
+
+/// A preview holds a node to its target's authority like the chain does,
+/// and the grant is what a wallet reaches for when it wants an answer
+/// about an envelope its counterparties have not signed yet.
+///
+/// Without it, a wallet composing a two-party trade would be told
+/// "refused" and have nothing to show the user. With it, the report is
+/// what the composition would do once signed — which is exactly the
+/// question being asked.
+#[test]
+fn a_preview_holds_a_node_to_its_targets_authority_unless_granted() {
+    let payer = fee_payer(7);
+    let accounts = [(payer, 1_000), (alice(), 1_000), (bob(), 50)];
+    let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
+    // Signed by 7, withdrawing from Alice: the shape the gate refuses.
+    let tx = signed_transfer_with_fee(7, alice(), bob(), 100, PREVIEW_CEILING);
+
+    let refused = preview_on(&accounts, &executor, &tx, PreviewGrants::default());
+    assert!(
+        matches!(refused.outcome, PreviewOutcome::Refused { .. }),
+        "outcome = {:?}",
+        refused.outcome
+    );
+    assert_eq!(refused.fee, 0);
+
+    let granted = preview_on(
+        &accounts,
+        &executor,
+        &tx,
+        PreviewGrants {
+            assume_target_auth: true,
+            ..PreviewGrants::default()
+        },
+    );
+    assert_eq!(granted.outcome, PreviewOutcome::Completed);
+    assert_eq!(change_for(&granted, alice()).debit, 0);
+    assert_eq!(change_for(&granted, alice()).settled, 100);
+    assert_eq!(change_for(&granted, bob()).credit, 100);
 }
 
 /// A publish previews too, and its price needs no state: judging an
@@ -1226,7 +1289,7 @@ fn a_committed_cell_that_is_not_a_package_is_ignored() {
     // accident, whatever it writes.
     let executor = VmExecutor::new(&world_accounts(), ExecutionMode::Serial);
     let tx = Arc::new(Verified::<RoutableTransaction>::from_persisted(
-        signed_transfer(7, ALICE, BOB, 100),
+        signed_transfer(ALICE_SEED, alice(), bob(), 100),
     ));
     let executed = execute(&executor, &[tx]);
     let bogus = package_hash(&ProtocolHasher, encode_amount(900).as_ref());

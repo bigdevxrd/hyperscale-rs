@@ -21,8 +21,8 @@ use std::sync::Arc;
 use blake3::hash as blake3_hash;
 use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
 use hyperscale_effects_bridge::{
-    BridgeStatics, PoolRegistry, ProtocolHasher, admit_package, decode_tree, envelope_identity,
-    witness_from_event,
+    BridgeStatics, PoolRegistry, ProtocolHasher, admit_package, check_target_authority,
+    decode_tree, envelope_identity, witness_from_event,
 };
 use hyperscale_engine::sharding::{compute_writes_root, sort_database_updates};
 use hyperscale_engine::{
@@ -52,6 +52,17 @@ use radix_substate_store_interface::interface::{DatabaseUpdates, DbPartitionKey}
 
 use crate::backend::EngineBackend;
 use crate::genesis::{VmWorld, genesis_world_with_pools};
+
+/// Whether a derivation holds a gated node to its target's authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetAuthority {
+    /// The rule as the chain applies it.
+    Required,
+    /// Every gated node is treated as authorised. A preview grant only,
+    /// for answering what an envelope would do before the accounts it
+    /// touches have signed for it.
+    Assumed,
+}
 
 /// One derived transaction, as the batch consumes it.
 ///
@@ -202,6 +213,20 @@ impl VmExecutor {
     /// means the transaction bypassed admission and fails
     /// deterministically.
     pub(crate) fn prepare(&self, tx: &RoutableTransaction) -> Result<PreparedVmTx, String> {
+        self.prepare_with_authority(tx, TargetAuthority::Required)
+    }
+
+    /// [`Self::prepare`] with the target-authority rule made optional.
+    ///
+    /// Only a preview waives it, and only when its caller asked to be
+    /// shown what an envelope would do before its counterparties have
+    /// signed. Nothing on the commit path reaches this with
+    /// [`TargetAuthority::Assumed`].
+    pub(crate) fn prepare_with_authority(
+        &self,
+        tx: &RoutableTransaction,
+        authority: TargetAuthority,
+    ) -> Result<PreparedVmTx, String> {
         let vm = tx
             .vm()
             .ok_or_else(|| "Radix body in a VM sub-batch".to_string())?;
@@ -211,6 +236,15 @@ impl VmExecutor {
                 .ok_or_else(|| "publish body in a call sub-batch".to_string())?,
         )
         .map_err(|error| error.to_string())?;
+        if authority == TargetAuthority::Required {
+            check_target_authority(
+                &tree,
+                Address(vm.fee_payer),
+                &packages,
+                &self.world.instances,
+            )
+            .map_err(|error| error.0)?;
+        }
         let admitted = admit_tree(
             &tree,
             envelope_identity(vm),

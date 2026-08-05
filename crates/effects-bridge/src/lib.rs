@@ -31,8 +31,8 @@ use hyperscale_vm_effects::{
 pub use staking::{PoolRegistry, witness_from_event};
 pub use vm_metadata::{MAX_PACKAGE_METADATA_BYTES, decode_metadata, encode_metadata};
 pub use vm_statics::{
-    BridgeStatics, VM_XRD, decode_tree, encode_tree, entropy_key, envelope_identity, vault_key,
-    vm_account_address,
+    BridgeStatics, VM_XRD, check_target_authority, decode_tree, encode_tree, entropy_key,
+    envelope_identity, vault_key, vm_account_address,
 };
 
 const DOMAIN_NODE_ADDRESS: &[u8] = b"hyperscale/effects-bridge/node-address";
