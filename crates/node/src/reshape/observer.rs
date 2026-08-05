@@ -765,7 +765,7 @@ mod tests {
     use hyperscale_storage::{BoundaryStore, SubstateStore, WitnessSeed};
     use hyperscale_storage_memory::SimShardStorage;
     use hyperscale_types::{
-        AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BoundedVec, CertificateRoot,
+        AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, CertificateRoot,
         CommitProofVerifyError, ElidedCertifiedBlock, Hash, InFlightCount, Inventory,
         LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardLoad,
         SignerBitfield, SplitChildRoots, TransactionRoot, VoteCount, WitnessSources,
@@ -900,11 +900,11 @@ mod tests {
                 if let Some(chunk) = &mut response.chunk
                     && !chunk.leaves.is_empty()
                 {
-                    let mut leaves: Vec<_> = chunk.leaves.iter().cloned().collect();
-                    let mut value = leaves[0].value.to_vec();
+                    let mut leaves: Vec<_> = chunk.leaves.clone();
+                    let mut value = leaves[0].value.clone();
                     value[0] ^= 1;
-                    leaves[0].value = value.into();
-                    chunk.leaves = leaves.into();
+                    leaves[0].value = value;
+                    chunk.leaves = leaves;
                     rejected = matches!(
                         bootstrap.on_state_range(id, &response),
                         StateRangeOutcome::Rejected(_),
@@ -993,9 +993,9 @@ mod tests {
         );
         Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }

@@ -11,7 +11,7 @@ use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
-    BlockHash, BlockHeight, BoundedVec, ConsensusPublicKey, ConsensusSignature, GlobalReceiptRoot,
+    BlockHash, BlockHeight, ConsensusPublicKey, ConsensusSignature, GlobalReceiptRoot,
     MAX_TXS_PER_BLOCK, NetworkDefinition, ShardId, TxOutcome, ValidatorId, Verified, Verify,
     WaveId, WeightedTimestamp, compute_global_receipt_root, exec_vote_message,
 };
@@ -30,7 +30,8 @@ pub struct ExecutionVote {
     shard_id: ShardId,
     global_receipt_root: GlobalReceiptRoot,
     tx_count: u32,
-    tx_outcomes: BoundedVec<TxOutcome, MAX_TXS_PER_BLOCK>,
+    #[hbor(max = MAX_TXS_PER_BLOCK)]
+    tx_outcomes: Vec<TxOutcome>,
     validator: ValidatorId,
     signature: ConsensusSignature,
 }
@@ -43,7 +44,7 @@ impl ExecutionVote {
     /// Panics if `tx_outcomes.len() > MAX_TXS_PER_BLOCK`.
     #[allow(clippy::too_many_arguments)] // mirrors the 10 stored fields
     #[must_use]
-    pub fn new(
+    pub const fn new(
         block_hash: BlockHash,
         block_height: BlockHeight,
         vote_anchor_ts: WeightedTimestamp,
@@ -63,7 +64,7 @@ impl ExecutionVote {
             shard_id,
             global_receipt_root,
             tx_count,
-            tx_outcomes: tx_outcomes.into(),
+            tx_outcomes,
             validator,
             signature,
         }
@@ -165,7 +166,7 @@ impl ExecutionVote {
             self.shard_id,
             self.global_receipt_root,
             self.tx_count,
-            self.tx_outcomes.into_inner(),
+            self.tx_outcomes,
             self.validator,
             self.signature,
         )

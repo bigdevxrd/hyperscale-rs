@@ -55,10 +55,7 @@ impl ShardChainReader for SimShardStorage {
             .cloned()
             .map(|certified| {
                 let (block, qc) = certified.into_parts();
-                let provision_hashes = BlockManifest::from_block(&block)
-                    .provision_hashes()
-                    .clone()
-                    .into_inner();
+                let provision_hashes = BlockManifest::from_block(&block).provision_hashes().clone();
                 BlockForSync {
                     block,
                     qc: qc.into_unverified(),

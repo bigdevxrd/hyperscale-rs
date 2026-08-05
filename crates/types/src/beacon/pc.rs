@@ -22,7 +22,7 @@ use crate::beacon::prefix_ops::{mce, mcp, qc1_certify};
 use crate::primitives::signer_bitfield::MAX_SIGNERS;
 use crate::signing::{DOMAIN_PC_VOTE2, DOMAIN_PC_VOTE2_LENGTH, DOMAIN_PC_VOTE3};
 use crate::{
-    AggregateSignature, BoundedVec, ConsensusPublicKey, ConsensusSignature, DOMAIN_PC_VOTE1, Epoch,
+    AggregateSignature, ConsensusPublicKey, ConsensusSignature, DOMAIN_PC_VOTE1, Epoch,
     MAX_PREFIX_SIGS, MAX_VOTE_VECTOR_LEN, NetworkDefinition, PcContext, PositionalBundle,
     SignerBitfield, SpcNewCommitMsg, SpcView, ValidatorId, Verifiable, Verified, Verify,
     byzantine_threshold, pc_context, pc_vote_signing_message, spc_context,
@@ -110,13 +110,13 @@ impl PcValueElement {
 /// arithmetic without having to fetch additional preimages.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 #[hbor(transparent)]
-pub struct PcVector(BoundedVec<PcValueElement, MAX_VOTE_VECTOR_LEN>);
+pub struct PcVector(#[hbor(max = MAX_VOTE_VECTOR_LEN)] Vec<PcValueElement>);
 
 impl PcVector {
     /// Empty vector.
     #[must_use]
     pub const fn empty() -> Self {
-        Self(BoundedVec::new())
+        Self(Vec::new())
     }
 
     /// Build a `PcVector` from an iterator of elements.
@@ -126,7 +126,7 @@ impl PcVector {
     /// Panics if the collected length exceeds [`MAX_VOTE_VECTOR_LEN`].
     #[must_use]
     pub fn new<I: IntoIterator<Item = PcValueElement>>(elements: I) -> Self {
-        Self(elements.into_iter().collect::<Vec<_>>().into())
+        Self(elements.into_iter().collect::<Vec<_>>())
     }
 
     /// Number of elements in the vector.
@@ -188,7 +188,8 @@ pub struct PcVote1 {
     v_in: PcVector,
     /// `prefix_sigs[k]` is the signer's signature over `v_in[..k]`.
     /// Length is `v_in.len() + 1`.
-    prefix_sigs: BoundedVec<ConsensusSignature, MAX_PREFIX_SIGS>,
+    #[hbor(max = MAX_PREFIX_SIGS)]
+    prefix_sigs: Vec<ConsensusSignature>,
 }
 
 impl PcVote1 {
@@ -198,7 +199,7 @@ impl PcVote1 {
     ///
     /// Panics if `prefix_sigs.len() > MAX_PREFIX_SIGS`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         validator: ValidatorId,
         v_in: PcVector,
         prefix_sigs: Vec<ConsensusSignature>,
@@ -206,7 +207,7 @@ impl PcVote1 {
         Self {
             validator,
             v_in,
-            prefix_sigs: prefix_sigs.into(),
+            prefix_sigs,
         }
     }
 
@@ -224,7 +225,7 @@ impl PcVote1 {
 
     /// Per-prefix signatures over `v_in[..k]`, indexed by prefix length.
     #[must_use]
-    pub const fn prefix_sigs(&self) -> &BoundedVec<ConsensusSignature, MAX_PREFIX_SIGS> {
+    pub const fn prefix_sigs(&self) -> &Vec<ConsensusSignature> {
         &self.prefix_sigs
     }
 }
@@ -342,7 +343,8 @@ pub struct PcVote2 {
     validator: ValidatorId,
     x: PcVector,
     /// `prefix_sigs[k]` is `sig_validator(x[..k])`. Length `|x| + 1`.
-    prefix_sigs: BoundedVec<ConsensusSignature, MAX_PREFIX_SIGS>,
+    #[hbor(max = MAX_PREFIX_SIGS)]
+    prefix_sigs: Vec<ConsensusSignature>,
     /// Embedded round-1 QC. Wire decode lands as `Verifiable::Unverified`;
     /// locally-signed votes from `Verified::<PcVote2>::sign_local` carry
     /// the marker so the round-2 verifier short-circuits the embedded
@@ -372,7 +374,7 @@ impl PcVote2 {
         Self {
             validator,
             x,
-            prefix_sigs: prefix_sigs.into(),
+            prefix_sigs,
             qc1: qc1.into(),
             length_attestation,
         }
@@ -392,7 +394,7 @@ impl PcVote2 {
 
     /// Per-prefix signatures over `x[..k]`, indexed by prefix length.
     #[must_use]
-    pub const fn prefix_sigs(&self) -> &BoundedVec<ConsensusSignature, MAX_PREFIX_SIGS> {
+    pub const fn prefix_sigs(&self) -> &Vec<ConsensusSignature> {
         &self.prefix_sigs
     }
 
@@ -619,7 +621,7 @@ pub enum PcSignerLengths {
     Uniform(u32),
     /// One `|x_p_i|` per signer, in the parent bundle's set-bit order.
     /// Length must equal the bitfield's `count_ones()`.
-    PerSigner(BoundedVec<u32, MAX_SIGNERS>),
+    PerSigner(#[hbor(max = MAX_SIGNERS)] Vec<u32>),
 }
 
 impl PcSignerLengths {
@@ -640,7 +642,7 @@ impl PcSignerLengths {
         if lens.iter().all(|l| *l == first) {
             Self::Uniform(first)
         } else {
-            Self::PerSigner(lens.into())
+            Self::PerSigner(lens)
         }
     }
 
@@ -2426,7 +2428,7 @@ mod tests {
             Some(high.clone()),
             Some(Verifiable::from(high_qc2.clone())),
             signers_bitfield(4, &[0, 1]),
-            PcSignerLengths::PerSigner(vec![2u32, 3].into()),
+            PcSignerLengths::PerSigner(vec![2u32, 3]),
             sample_agg(0xEE),
         );
         assert_eq!(qc.x_pe(), &high);
@@ -2441,7 +2443,7 @@ mod tests {
             Some(sample_vector(3)),
             None,
             signers_bitfield(4, &[0, 1]),
-            PcSignerLengths::PerSigner(vec![2u32, 3].into()),
+            PcSignerLengths::PerSigner(vec![2u32, 3]),
             sample_agg(0xEE),
         );
         let bytes = hbor_to_vec(&qc).unwrap();
@@ -2483,8 +2485,7 @@ mod tests {
 
     #[test]
     fn pc_vector_hbor_transparent() {
-        let inner: BoundedVec<PcValueElement, MAX_VOTE_VECTOR_LEN> =
-            (0..3u8).map(sample_value).collect::<Vec<_>>().into();
+        let inner: Vec<PcValueElement> = (0..3u8).map(sample_value).collect();
         let wrapped = PcVector(inner.clone());
         let inner_bytes = hbor_to_vec(&inner).unwrap();
         let wrapped_bytes = hbor_to_vec(&wrapped).unwrap();

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    BoundedBTreeMap, Hash, MAX_REMOTE_SHARDS_PER_WAVE, ProvisionTxRoot, ShardId, TopologySnapshot,
-    Transaction, Verifiable, Verified, Verify, compute_merkle_root,
+    Hash, ProvisionTxRoot, ShardId, TopologySnapshot, Transaction, Verifiable, Verified, Verify,
+    compute_merkle_root,
 };
 
 /// Inputs the provision-tx-roots verifier reads against.
@@ -24,12 +24,9 @@ pub struct ProvisionTxRootsContext<'a> {
     pub transactions: &'a [Arc<Verifiable<Transaction>>],
 }
 
-/// Provision-tx roots map type as carried by [`BlockHeader`](crate::BlockHeader).
-///
-/// Type alias rather than a separate newtype because the bound `MAX_REMOTE_SHARDS_PER_WAVE`
-/// is invariant across every site that touches this map.
-pub type ProvisionTxRootsMap =
-    BoundedBTreeMap<ShardId, ProvisionTxRoot, MAX_REMOTE_SHARDS_PER_WAVE>;
+/// Provision-tx roots map type as carried by [`BlockHeader`](crate::BlockHeader),
+/// which caps it at [`MAX_REMOTE_SHARDS_PER_WAVE`] entries on the wire.
+pub type ProvisionTxRootsMap = BTreeMap<ShardId, ProvisionTxRoot>;
 
 /// Failure modes of provision-tx-roots verification.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -64,12 +61,6 @@ impl Verified<ProvisionTxRootsMap> {
     /// a received `Provisions` carries the full set it was meant to
     /// receive. Only emits an entry for targets with ≥1 tx — empty for
     /// blocks with no cross-shard txs.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the computed map exceeds [`MAX_REMOTE_SHARDS_PER_WAVE`]
-    /// entries — that would require a single block to fan out across
-    /// more shards than the consensus configuration allows.
     #[must_use]
     pub fn compute(
         local_shard: ShardId,
@@ -124,7 +115,7 @@ impl Verified<ProvisionTxRootsMap> {
                 )
             })
             .collect();
-        Self::new_unchecked(map.into())
+        Self::new_unchecked(map)
     }
 }
 
@@ -135,16 +126,13 @@ impl Verify<&ProvisionTxRootsContext<'_>> for ProvisionTxRootsMap {
     type Error = ProvisionTxRootsVerifyError;
 
     fn verify(&self, ctx: &ProvisionTxRootsContext<'_>) -> Result<Verified<Self>, Self::Error> {
-        let computed = Verified::<ProvisionTxRootsMap>::compute(
-            ctx.local_shard,
-            ctx.topology_snapshot,
-            ctx.transactions,
-        );
+        let computed =
+            Verified::<Self>::compute(ctx.local_shard, ctx.topology_snapshot, ctx.transactions);
         if computed.as_ref() != self {
-            let expected: BTreeMap<_, _> = self.iter().map(|(k, v)| (*k, *v)).collect();
-            let computed: BTreeMap<_, _> =
-                computed.as_ref().iter().map(|(k, v)| (*k, *v)).collect();
-            return Err(ProvisionTxRootsVerifyError::Mismatch { expected, computed });
+            return Err(ProvisionTxRootsVerifyError::Mismatch {
+                expected: self.clone(),
+                computed: computed.into_inner(),
+            });
         }
         Ok(Verified::new_unchecked(self.clone()))
     }

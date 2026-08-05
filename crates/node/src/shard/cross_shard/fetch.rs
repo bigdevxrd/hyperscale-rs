@@ -70,9 +70,8 @@ impl FetchBinding for LocalProvisionBinding {
             class,
             Box::new(move |result| {
                 if let Ok(resp) = result {
-                    let split = partition_solicited(resp.entries.into_inner(), &hs, |entry| {
-                        entry.provisions.hash()
-                    });
+                    let split =
+                        partition_solicited(resp.entries, &hs, |entry| entry.provisions.hash());
                     // Push the bundled source header BEFORE the provisions
                     // so the verification pipeline has a chance to admit it
                     // first. The header is QC-self-authenticating; sender is
@@ -156,9 +155,8 @@ impl FetchBinding for FinalizedWaveBinding {
             class,
             Box::new(move |result| {
                 if let Ok(resp) = result {
-                    let split = partition_solicited(resp.waves.into_inner(), &requested_ids, |w| {
-                        w.wave_id().clone()
-                    });
+                    let split =
+                        partition_solicited(resp.waves, &requested_ids, |w| w.wave_id().clone());
                     if !split.kept.is_empty() {
                         // Refcount is 1 right after decode, so each unwrap moves.
                         let waves: Vec<Arc<Verifiable<FinalizedWave>>> = split

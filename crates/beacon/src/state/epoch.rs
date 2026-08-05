@@ -1267,13 +1267,13 @@ mod tests {
     use hyperscale_types::test_utils::TestCommittee;
     use hyperscale_types::{
         AggregateSignature, BeaconProposal, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash,
-        BlockHeader, BlockHeight, BoundedVec, CertificateRoot, ChainOrigin, Epoch, Hash,
-        InFlightCount, LocalReceiptRoot, MAX_WITNESSES_PER_SHARD, MIN_STAKE_FLOOR,
-        ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round, SettledWavesRoot,
-        ShardBoundary, ShardCommittee, ShardForkProof, ShardId, ShardLoad, ShardRecovery,
-        ShardWitnessPayload, SignerBitfield, SplitChildRoots, Stake, StakePool, StakePoolId,
-        StateRoot, TransactionRoot, TransitionCause, ValidatorId, VrfProof, WeightedTimestamp,
-        compute_merkle_root, compute_range_proof,
+        BlockHeader, BlockHeight, CertificateRoot, ChainOrigin, Epoch, Hash, InFlightCount,
+        LocalReceiptRoot, MAX_WITNESSES_PER_SHARD, MIN_STAKE_FLOOR, ProposerTimestamp,
+        ProvisionsRoot, QuorumCertificate, RevealChain, Round, SettledWavesRoot, ShardBoundary,
+        ShardCommittee, ShardForkProof, ShardId, ShardLoad, ShardRecovery, ShardWitnessPayload,
+        SignerBitfield, SplitChildRoots, Stake, StakePool, StakePoolId, StateRoot, TransactionRoot,
+        TransitionCause, ValidatorId, VrfProof, WeightedTimestamp, compute_merkle_root,
+        compute_range_proof,
     };
 
     use super::*;
@@ -1509,7 +1509,7 @@ mod tests {
             certificate_root,
             local_receipt_root,
             provision_root,
-            waves.iter().cloned().collect(),
+            waves,
             provision_tx_roots.iter().map(|(k, v)| (*k, *v)).collect(),
             in_flight,
             beacon_witness_root,
@@ -1550,8 +1550,8 @@ mod tests {
                     shard,
                     ShardEpochContribution {
                         boundary_header: header,
-                        payloads: payloads.into(),
-                        range_proof: range_proof.into(),
+                        payloads,
+                        range_proof,
                     },
                 ))
                 .collect();
@@ -1631,8 +1631,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b,
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         ))
         .collect();
@@ -1914,8 +1914,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b,
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         ))
         .collect();
@@ -2152,8 +2152,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b,
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         ))
         .collect();
@@ -2200,8 +2200,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b.clone(),
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         ))
         .collect();
@@ -2232,8 +2232,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b,
-                payloads: BoundedVec::new(),
-                range_proof: BoundedVec::new(),
+                payloads: Vec::new(),
+                range_proof: Vec::new(),
             },
         ))
         .collect();
@@ -2307,8 +2307,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: header,
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         ))
         .collect();
@@ -2407,8 +2407,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b,
-                payloads: BoundedVec::new(),
-                range_proof: BoundedVec::new(),
+                payloads: Vec::new(),
+                range_proof: Vec::new(),
             },
         ))
         .collect();
@@ -2475,8 +2475,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b,
-                payloads: BoundedVec::new(),
-                range_proof: BoundedVec::new(),
+                payloads: Vec::new(),
+                range_proof: Vec::new(),
             },
         ))
         .collect();
@@ -2538,8 +2538,8 @@ mod tests {
                     shard,
                     ShardEpochContribution {
                         boundary_header: b.clone(),
-                        payloads: chunk.into(),
-                        range_proof: range_proof.into(),
+                        payloads: chunk,
+                        range_proof,
                     },
                 ))
                 .collect()
@@ -2811,8 +2811,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b,
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         ))
         .collect();
@@ -3108,8 +3108,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: header,
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         ))
         .collect();
@@ -3749,16 +3749,16 @@ mod tests {
                 left,
                 ShardEpochContribution {
                     boundary_header: lh.clone(),
-                    payloads: lw.into(),
-                    range_proof: lw_proof.into(),
+                    payloads: lw,
+                    range_proof: lw_proof,
                 },
             ),
             (
                 right,
                 ShardEpochContribution {
                     boundary_header: rh.clone(),
-                    payloads: rw.into(),
-                    range_proof: rw_proof.into(),
+                    payloads: rw,
+                    range_proof: rw_proof,
                 },
             ),
         ]
@@ -3825,16 +3825,16 @@ mod tests {
                 left,
                 ShardEpochContribution {
                     boundary_header: span_header,
-                    payloads: span_witnesses.into(),
-                    range_proof: span_witnesses_proof.into(),
+                    payloads: span_witnesses,
+                    range_proof: span_witnesses_proof,
                 },
             ),
             (
                 right,
                 ShardEpochContribution {
                     boundary_header: rh.clone(),
-                    payloads: rw.into(),
-                    range_proof: rw_proof.into(),
+                    payloads: rw,
+                    range_proof: rw_proof,
                 },
             ),
         ]
@@ -3879,8 +3879,8 @@ mod tests {
             left,
             ShardEpochContribution {
                 boundary_header: coast_header.clone(),
-                payloads: coast_witnesses.into(),
-                range_proof: coast_witnesses_proof.into(),
+                payloads: coast_witnesses,
+                range_proof: coast_witnesses_proof,
             },
         ))
         .collect();
@@ -3933,16 +3933,16 @@ mod tests {
                     left,
                     ShardEpochContribution {
                         boundary_header: lh.clone(),
-                        payloads: lw.clone().into(),
-                        range_proof: lw_proof.clone().into(),
+                        payloads: lw.clone(),
+                        range_proof: lw_proof.clone(),
                     },
                 ),
                 (
                     right,
                     ShardEpochContribution {
                         boundary_header: rh.clone(),
-                        payloads: rw.clone().into(),
-                        range_proof: rw_proof.clone().into(),
+                        payloads: rw.clone(),
+                        range_proof: rw_proof.clone(),
                     },
                 ),
             ]

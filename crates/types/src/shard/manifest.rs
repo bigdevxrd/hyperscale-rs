@@ -4,9 +4,9 @@
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    BeaconWitnessLeafCount, Block, BlockHash, BlockHeader, BlockHeight, BoundedVec,
-    MAX_FINALIZED_TX_PER_BLOCK, MAX_PROVISIONS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProvisionHash,
-    QuorumCertificate, TxHash, Verifiable, WaveId, WitnessSources,
+    BeaconWitnessLeafCount, Block, BlockHash, BlockHeader, BlockHeight, MAX_FINALIZED_TX_PER_BLOCK,
+    MAX_PROVISIONS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProvisionHash, QuorumCertificate, TxHash,
+    Verifiable, WaveId, WitnessSources,
 };
 
 /// Hash-level description of a block's contents (transactions and certificates).
@@ -19,9 +19,12 @@ use crate::{
 /// hash-only projection of a `Block` and inherits its natural ceilings.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct BlockManifest {
-    tx_hashes: BoundedVec<TxHash, MAX_TXS_PER_BLOCK>,
-    cert_ids: BoundedVec<WaveId, MAX_FINALIZED_TX_PER_BLOCK>,
-    provision_hashes: BoundedVec<ProvisionHash, MAX_PROVISIONS_PER_BLOCK>,
+    #[hbor(max = MAX_TXS_PER_BLOCK)]
+    tx_hashes: Vec<TxHash>,
+    #[hbor(max = MAX_FINALIZED_TX_PER_BLOCK)]
+    cert_ids: Vec<WaveId>,
+    #[hbor(max = MAX_PROVISIONS_PER_BLOCK)]
+    provision_hashes: Vec<ProvisionHash>,
     /// The block's beacon-witness inputs, mirrored verbatim — the
     /// sync/reload path replays leaf derivation from the manifest under
     /// QC trust. See [`WitnessSources`].
@@ -34,9 +37,9 @@ impl Default for BlockManifest {
     /// the sentinel stays an explicit choice.
     fn default() -> Self {
         Self {
-            tx_hashes: BoundedVec::new(),
-            cert_ids: BoundedVec::new(),
-            provision_hashes: BoundedVec::new(),
+            tx_hashes: Vec::new(),
+            cert_ids: Vec::new(),
+            provision_hashes: Vec::new(),
             witness_sources: WitnessSources::empty(),
         }
     }
@@ -49,37 +52,37 @@ impl BlockManifest {
     ///
     /// Panics if any input vec exceeds its bounded cap.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         tx_hashes: Vec<TxHash>,
         cert_ids: Vec<WaveId>,
         provision_hashes: Vec<ProvisionHash>,
         witness_sources: WitnessSources,
     ) -> Self {
         Self {
-            tx_hashes: tx_hashes.into(),
-            cert_ids: cert_ids.into(),
-            provision_hashes: provision_hashes.into(),
+            tx_hashes,
+            cert_ids,
+            provision_hashes,
             witness_sources,
         }
     }
 
     /// Transaction hashes in block order.
     #[must_use]
-    pub const fn tx_hashes(&self) -> &BoundedVec<TxHash, MAX_TXS_PER_BLOCK> {
+    pub const fn tx_hashes(&self) -> &Vec<TxHash> {
         &self.tx_hashes
     }
 
     /// Wave identifiers in block order.
     /// Validators use these to match against their locally finalized waves.
     #[must_use]
-    pub const fn cert_ids(&self) -> &BoundedVec<WaveId, MAX_FINALIZED_TX_PER_BLOCK> {
+    pub const fn cert_ids(&self) -> &Vec<WaveId> {
         &self.cert_ids
     }
 
     /// Hashes of provisions included in this block.
     /// Used for provision data availability — validators fetch missing batches by hash.
     #[must_use]
-    pub const fn provision_hashes(&self) -> &BoundedVec<ProvisionHash, MAX_PROVISIONS_PER_BLOCK> {
+    pub const fn provision_hashes(&self) -> &Vec<ProvisionHash> {
         &self.provision_hashes
     }
 
@@ -107,9 +110,9 @@ impl BlockManifest {
     /// derivation reads it and must match every node.
     #[must_use]
     pub fn from_block(block: &Block) -> Self {
-        // The source `Block` collections are themselves `BoundedVec`s capped
-        // at the same limits, so `.into()` cannot panic — the iterator
-        // can't outproduce its source.
+        // The source `Block` collections are capped at the same limits by
+        // `Block`'s own decode validator, so the manifest cannot outgrow
+        // the caps its fields declare.
         let tx_hashes: Vec<_> = block.transactions().iter().map(|tx| tx.hash()).collect();
         let cert_ids: Vec<_> = block
             .certificates()

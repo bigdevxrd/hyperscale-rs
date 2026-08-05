@@ -89,7 +89,7 @@ pub(super) fn ingest_equivocations(
 ) -> WitnessOutcome {
     let mut outcome = WitnessOutcome::default();
     for (_, prop) in accepted {
-        for ev in prop.equivocations().iter() {
+        for ev in prop.equivocations() {
             let evidence = ev.as_unverified();
             let validator_id = evidence.validator;
             let Some(rec) = state.validators.get(&validator_id) else {
@@ -117,7 +117,7 @@ pub(super) fn ingest_equivocations(
                 .revoked
                 .extend(convict_pool(state, pool_id, state.current_epoch));
         }
-        for ev in prop.vote_equivocations().iter() {
+        for ev in prop.vote_equivocations() {
             let evidence = ev.as_unverified();
             let Some(rec) = state.validators.get(&evidence.validator) else {
                 continue;

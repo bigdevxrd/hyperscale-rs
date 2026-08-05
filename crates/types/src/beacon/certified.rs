@@ -255,7 +255,7 @@ pub fn verify_block_equivocations(
     signers: &[(ValidatorId, ConsensusPublicKey)],
 ) -> bool {
     for (_, proposal) in block.block().committed_proposals() {
-        for ev in proposal.equivocations().iter() {
+        for ev in proposal.equivocations() {
             if verify_vote_equivocation(verifier, ev.as_unverified(), network, signers).is_err() {
                 return false;
             }

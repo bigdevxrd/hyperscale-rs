@@ -299,8 +299,7 @@ pub fn build_proposal<S: ShardChainWriter>(
     let waves = compute_waves(local_shard, topology_snapshot, height, &transactions);
     let provision_tx_roots =
         Verified::<ProvisionTxRootsMap>::compute(local_shard, topology_snapshot, &transactions)
-            .into_inner()
-            .0;
+            .into_inner();
 
     // in_flight is deterministic from chain state:
     // parent's in_flight + new transactions committed - transactions finalized by certificates.
@@ -345,9 +344,9 @@ pub fn build_proposal<S: ShardChainWriter>(
 
     let block = Block::Live {
         header,
-        transactions: Arc::new(transactions.into()),
-        certificates: Arc::new(certificates.into()),
-        provisions: Arc::new(provisions.into()),
+        transactions: Arc::new(transactions),
+        certificates: Arc::new(certificates),
+        provisions: Arc::new(provisions),
         witness_sources,
     };
 

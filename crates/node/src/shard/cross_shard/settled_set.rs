@@ -236,12 +236,12 @@ mod tests {
     use hyperscale_storage_memory::SimShardStorage;
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block,
-        BlockHash, BlockHeader, BoundedVec, CertificateRoot, ExecutionCertificate,
-        ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
-        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        ShardId, ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome,
-        ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
-        WitnessSources, settled_waves_root_from_ids,
+        BlockHash, BlockHeader, CertificateRoot, ExecutionCertificate, ExecutionOutcome,
+        FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot,
+        ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId,
+        ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome, ValidatorId,
+        Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
+        settled_waves_root_from_ids,
     };
 
     use super::*;
@@ -316,9 +316,9 @@ mod tests {
             );
             let block = Block::Live {
                 header,
-                transactions: Arc::new(BoundedVec::new()),
-                certificates: Arc::new(certs.to_vec().into()),
-                provisions: Arc::new(BoundedVec::new()),
+                transactions: Arc::new(Vec::new()),
+                certificates: Arc::new(certs.to_vec()),
+                provisions: Arc::new(Vec::new()),
                 witness_sources: Arc::new(WitnessSources::empty()),
             };
             parent = block.hash();

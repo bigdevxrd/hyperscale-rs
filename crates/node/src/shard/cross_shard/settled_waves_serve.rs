@@ -14,9 +14,7 @@ use hyperscale_metrics::record_fetch_response_sent;
 use hyperscale_storage::{BlockForSync, PendingChain, ShardStorage};
 use hyperscale_types::network::request::GetSettledWavesRequest;
 use hyperscale_types::network::response::GetSettledWavesResponse;
-use hyperscale_types::{
-    BoundedVec, MAX_FINALIZED_TX_PER_BLOCK, WeightedTimestamp, local_settled_wave_ids,
-};
+use hyperscale_types::{MAX_FINALIZED_TX_PER_BLOCK, WeightedTimestamp, local_settled_wave_ids};
 
 /// Serve an inbound settled-waves window request from the local chain.
 ///
@@ -66,34 +64,29 @@ pub fn serve_settled_waves_request<S: ShardStorage>(
         own,
     );
 
-    // `try_from_vec` is the genuinely fallible conversion: a window
-    // exceeding the wire cap serves `not_found` rather than panicking on
-    // the bound (`From<Vec>` would). The set is the cross-shard settled
-    // waves only, so a within-cap window covers any realistic cross-shard
-    // load; an overflow means cross-shard throughput outran the single-shot
-    // transfer and the design must escalate to paged or JMT-absence-proof
-    // delivery (c2). Log it loudly rather than letting the requester read
-    // the overflow `not_found` as a plain "block not held" and rotate peers
-    // forever.
+    // A window exceeding the wire cap serves `not_found` rather than
+    // shipping a response the receiver would reject at decode. The set is
+    // the cross-shard settled waves only, so a within-cap window covers
+    // any realistic cross-shard load; an overflow means cross-shard
+    // throughput outran the single-shot transfer and the design must
+    // escalate to paged or JMT-absence-proof delivery (c2). Log it loudly
+    // rather than letting the requester read the overflow `not_found` as a
+    // plain "block not held" and rotate peers forever.
     let window = set.len();
-    BoundedVec::try_from_vec(set.into_iter().collect()).map_or_else(
-        |_| {
-            tracing::warn!(
-                shard = ?shard,
-                terminal_height = req.terminal_height.inner(),
-                window,
-                cap = MAX_FINALIZED_TX_PER_BLOCK,
-                "settled-waves window exceeds the wire cap; serving not_found — \
-                 cross-shard load outran the one-shot transfer (escalate to c2)"
-            );
-            record_fetch_response_sent("settled_waves", 0);
-            GetSettledWavesResponse::not_found()
-        },
-        |bounded| {
-            record_fetch_response_sent("settled_waves", 1);
-            GetSettledWavesResponse::found(bounded)
-        },
-    )
+    if window > MAX_FINALIZED_TX_PER_BLOCK {
+        tracing::warn!(
+            shard = ?shard,
+            terminal_height = req.terminal_height.inner(),
+            window,
+            cap = MAX_FINALIZED_TX_PER_BLOCK,
+            "settled-waves window exceeds the wire cap; serving not_found — \
+             cross-shard load outran the one-shot transfer (escalate to c2)"
+        );
+        record_fetch_response_sent("settled_waves", 0);
+        return GetSettledWavesResponse::not_found();
+    }
+    record_fetch_response_sent("settled_waves", 1);
+    GetSettledWavesResponse::found(set.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -106,7 +99,7 @@ mod tests {
     use hyperscale_storage_memory::SimShardStorage;
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block,
-        BlockHash, BlockHeader, BlockHeight, BoundedVec, CertificateRoot, ExecutionCertificate,
+        BlockHash, BlockHeader, BlockHeight, CertificateRoot, ExecutionCertificate,
         ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
         LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RETENTION_HORIZON,
         RevealChain, Round, ShardId, ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash,
@@ -190,9 +183,9 @@ mod tests {
         );
         let block = Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(certs.to_vec().into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(certs.to_vec()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let hash = block.hash();

@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 
 use crate::{
-    BeaconBlockHash, BeaconProposal, BlockHeader, BoundedBTreeMap, BoundedVec, Epoch, Hash,
-    MAX_BEACON_COMMITTEE, MAX_RANGE_PROOF_NODES, MAX_SHARDS, MAX_WITNESSES_PER_SHARD, ShardId,
-    ShardWitnessPayload, ValidatorId,
+    BeaconBlockHash, BeaconProposal, BlockHeader, Epoch, Hash, MAX_BEACON_COMMITTEE,
+    MAX_RANGE_PROOF_NODES, MAX_SHARDS, MAX_WITNESSES_PER_SHARD, ShardId, ShardWitnessPayload,
+    ValidatorId,
 };
 
 /// One shard's contribution to an epoch's beacon block: its canonical
@@ -46,10 +46,12 @@ pub struct ShardEpochContribution {
     pub boundary_header: BlockHeader,
     /// The witness payloads the boundary block appended, in leaf-index
     /// order.
-    pub payloads: BoundedVec<ShardWitnessPayload, MAX_WITNESSES_PER_SHARD>,
+    #[hbor(max = MAX_WITNESSES_PER_SHARD)]
+    pub payloads: Vec<ShardWitnessPayload>,
     /// Flanking merkle nodes lifting `payloads` to the boundary header's
     /// beacon-witness root.
-    pub range_proof: BoundedVec<Hash, MAX_RANGE_PROOF_NODES>,
+    #[hbor(max = MAX_RANGE_PROOF_NODES)]
+    pub range_proof: Vec<Hash>,
 }
 
 /// One epoch's committed-proposal record.
@@ -72,8 +74,10 @@ pub struct ShardEpochContribution {
 pub struct BeaconBlock {
     epoch: Epoch,
     prev_block_hash: BeaconBlockHash,
-    committed_proposals: BoundedVec<(ValidatorId, BeaconProposal), MAX_BEACON_COMMITTEE>,
-    shard_contributions: BoundedBTreeMap<ShardId, ShardEpochContribution, MAX_SHARDS>,
+    #[hbor(max = MAX_BEACON_COMMITTEE)]
+    committed_proposals: Vec<(ValidatorId, BeaconProposal)>,
+    #[hbor(max = MAX_SHARDS)]
+    shard_contributions: BTreeMap<ShardId, ShardEpochContribution>,
 }
 
 impl BeaconBlock {
@@ -83,7 +87,7 @@ impl BeaconBlock {
     ///
     /// Panics if `committed_proposals.len() > MAX_BEACON_COMMITTEE`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         epoch: Epoch,
         prev_block_hash: BeaconBlockHash,
         committed_proposals: Vec<(ValidatorId, BeaconProposal)>,
@@ -91,8 +95,8 @@ impl BeaconBlock {
         Self {
             epoch,
             prev_block_hash,
-            committed_proposals: committed_proposals.into(),
-            shard_contributions: BoundedBTreeMap::new(),
+            committed_proposals,
+            shard_contributions: BTreeMap::new(),
         }
     }
 
@@ -103,7 +107,7 @@ impl BeaconBlock {
     /// Panics if `committed_proposals.len() > MAX_BEACON_COMMITTEE` or
     /// `shard_contributions.len() > MAX_SHARDS`.
     #[must_use]
-    pub fn new_with_contributions(
+    pub const fn new_with_contributions(
         epoch: Epoch,
         prev_block_hash: BeaconBlockHash,
         committed_proposals: Vec<(ValidatorId, BeaconProposal)>,
@@ -112,8 +116,8 @@ impl BeaconBlock {
         Self {
             epoch,
             prev_block_hash,
-            committed_proposals: committed_proposals.into(),
-            shard_contributions: shard_contributions.into(),
+            committed_proposals,
+            shard_contributions,
         }
     }
 
@@ -125,8 +129,8 @@ impl BeaconBlock {
         Self {
             epoch: Epoch::GENESIS,
             prev_block_hash: BeaconBlockHash::ZERO,
-            committed_proposals: BoundedVec::new(),
-            shard_contributions: BoundedBTreeMap::new(),
+            committed_proposals: Vec::new(),
+            shard_contributions: BTreeMap::new(),
         }
     }
 
@@ -138,8 +142,8 @@ impl BeaconBlock {
         Self {
             epoch,
             prev_block_hash,
-            committed_proposals: BoundedVec::new(),
-            shard_contributions: BoundedBTreeMap::new(),
+            committed_proposals: Vec::new(),
+            shard_contributions: BTreeMap::new(),
         }
     }
 
@@ -166,7 +170,7 @@ impl BeaconBlock {
     /// Per-shard canonical boundary contributions for this epoch — one
     /// header per live shard. Empty for Genesis and Skip blocks.
     #[must_use]
-    pub fn shard_contributions(&self) -> &BTreeMap<ShardId, ShardEpochContribution> {
+    pub const fn shard_contributions(&self) -> &BTreeMap<ShardId, ShardEpochContribution> {
         &self.shard_contributions
     }
 

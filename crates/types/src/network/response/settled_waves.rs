@@ -2,7 +2,7 @@
 
 use hyperscale_hbor::Hbor;
 
-use crate::{BoundedVec, MAX_FINALIZED_TX_PER_BLOCK, MessageClass, NetworkMessage, WaveId};
+use crate::{MAX_FINALIZED_TX_PER_BLOCK, MessageClass, NetworkMessage, WaveId};
 
 /// The complete settled-wave window list of a terminated shard.
 ///
@@ -20,13 +20,15 @@ pub struct GetSettledWavesResponse {
     /// The terminated shard's complete settled-wave window list, or `None`
     /// when this peer doesn't hold the terminal block — the requester
     /// rotates to another terminal-committee member.
-    pub waves: Option<BoundedVec<WaveId, MAX_FINALIZED_TX_PER_BLOCK>>,
+    #[hbor(max = MAX_FINALIZED_TX_PER_BLOCK)]
+    pub waves: Option<Vec<WaveId>>,
 }
 
+/// The window-list cap, checked at the wire boundary.
 impl GetSettledWavesResponse {
     /// A complete window list for the terminated shard.
     #[must_use]
-    pub const fn found(waves: BoundedVec<WaveId, MAX_FINALIZED_TX_PER_BLOCK>) -> Self {
+    pub const fn found(waves: Vec<WaveId>) -> Self {
         Self { waves: Some(waves) }
     }
 
@@ -69,7 +71,7 @@ mod tests {
             BlockHeight::new(7),
             std::iter::empty().collect(),
         );
-        let response = GetSettledWavesResponse::found(vec![wave].into());
+        let response = GetSettledWavesResponse::found(vec![wave]);
         let encoded = hbor_to_vec(&response).unwrap();
         let decoded: GetSettledWavesResponse = hbor_from_slice(&encoded).unwrap();
         assert_eq!(response, decoded);

@@ -3,7 +3,6 @@
 use hyperscale_hbor::Hbor;
 
 use crate::MAX_MERKLE_PROOF_LEN;
-use crate::bounded::BoundedBytes;
 
 /// Merkle multiproof authenticating substates' inclusion in the JMT state tree.
 ///
@@ -16,13 +15,13 @@ use crate::bounded::BoundedBytes;
 /// - Sibling hashes for bottom-up verification
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 #[hbor(transparent)]
-pub struct MerkleInclusionProof(pub BoundedBytes<MAX_MERKLE_PROOF_LEN>);
+pub struct MerkleInclusionProof(#[hbor(max = MAX_MERKLE_PROOF_LEN)] pub Vec<u8>);
 
 impl MerkleInclusionProof {
     /// Create a new proof from raw bytes.
     #[must_use]
-    pub fn new(bytes: Vec<u8>) -> Self {
-        Self(BoundedBytes::from(bytes))
+    pub const fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
     }
 
     /// Get the raw proof bytes.
@@ -35,7 +34,7 @@ impl MerkleInclusionProof {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub const fn dummy() -> Self {
-        Self(BoundedBytes::new())
+        Self(Vec::new())
     }
 }
 

@@ -9,7 +9,9 @@ use hyperscale_types::network::request::GetStateRangeRequest;
 use hyperscale_types::network::response::{
     GetStateRangeResponse, MAX_LEAVES_PER_STATE_RANGE, StateRangeChunk, StateRangeLeaf,
 };
-use hyperscale_types::{BoundedBytes, Hash, MerkleInclusionProof};
+use hyperscale_types::{
+    Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN, MerkleInclusionProof,
+};
 use tracing::warn;
 
 type Jmt = Tree<Blake3Hasher, 1>;
@@ -64,13 +66,10 @@ pub fn serve_state_range_request<S: ShardStorage>(
             return unavailable;
         };
         budget = budget.saturating_sub(storage_key.len() + value.len() + 32);
-        let (Ok(storage_key), Ok(value)) = (
-            BoundedBytes::try_from_vec(storage_key),
-            BoundedBytes::try_from_vec(value),
-        ) else {
+        if storage_key.len() > MAX_STATE_ENTRY_KEY_LEN || value.len() > MAX_STATE_ENTRY_VALUE_LEN {
             warn!(height = version, "state range: oversized substate pair");
             return unavailable;
-        };
+        }
         wire_leaves.push(StateRangeLeaf {
             leaf_key: Hash::from_hash_bytes(leaf_key),
             storage_key,
@@ -92,7 +91,7 @@ pub fn serve_state_range_request<S: ShardStorage>(
     record_fetch_response_sent("state_range", wire_leaves.len());
     GetStateRangeResponse {
         chunk: Some(StateRangeChunk {
-            leaves: wire_leaves.into(),
+            leaves: wire_leaves,
             more: range.more,
             proof: MerkleInclusionProof::new(proof.encode()),
         }),

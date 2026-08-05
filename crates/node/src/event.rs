@@ -21,10 +21,10 @@ use std::sync::Arc;
 use hyperscale_core::{CommitSource, ProtocolEvent};
 use hyperscale_network::RequestError;
 use hyperscale_types::{
-    BeaconWitnessCommit, BlockHash, BlockHeight, BoundedVec, CertifiedBeaconBlock, CertifiedBlock,
+    BeaconWitnessCommit, BlockHash, BlockHeight, CertifiedBeaconBlock, CertifiedBlock,
     CertifiedBlockHeader, ConsensusPublicKey, ConsensusSignature, ElidedCertifiedBlock, Epoch,
-    HeaderFetchCount, LeafIndex, MAX_FINALIZED_TX_PER_BLOCK, ProvisionHash, ShardForkProof,
-    ShardId, ShardVoteEquivocation, Transaction, TxHash, ValidatorId, Verifiable, Verified, WaveId,
+    HeaderFetchCount, LeafIndex, ProvisionHash, ShardForkProof, ShardId, ShardVoteEquivocation,
+    Transaction, TxHash, ValidatorId, Verifiable, Verified, WaveId,
 };
 
 use crate::shard::commit::QcOnlyDivergence;
@@ -292,7 +292,7 @@ pub enum ShardScopedInput {
         source_shard: ShardId,
         /// The shard's complete settled-wave window list, or `None` for
         /// `not_found`.
-        waves: Option<BoundedVec<WaveId, MAX_FINALIZED_TX_PER_BLOCK>>,
+        waves: Option<Vec<WaveId>>,
     },
 
     /// Settled-waves fetch failed at the transport level. The driver

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use hyperscale_hbor::Hbor;
 
-use crate::{BoundedVec, MAX_READY_SIGNALS_PER_BLOCK, ReadySignal, ReshapeTrigger, VrfProof};
+use crate::{MAX_READY_SIGNALS_PER_BLOCK, ReadySignal, ReshapeTrigger, VrfProof};
 
 /// Shared handle to a block's [`WitnessSources`] — wrapped in `Arc` so
 /// verification actions can hold their own owner without deep-cloning,
@@ -34,7 +34,8 @@ pub type SharedWitnessSources = Arc<WitnessSources>;
 pub struct WitnessSources {
     /// Validator-emitted ready signals the proposer drained from its
     /// pool — one readiness leaf each.
-    ready_signals: BoundedVec<ReadySignal, MAX_READY_SIGNALS_PER_BLOCK>,
+    #[hbor(max = MAX_READY_SIGNALS_PER_BLOCK)]
+    ready_signals: Vec<ReadySignal>,
     /// The proposer's reshape assertion, if any — validated against the
     /// locally recomputed load predicate.
     reshape_trigger: Option<ReshapeTrigger>,
@@ -52,13 +53,13 @@ impl WitnessSources {
     ///
     /// Panics if a list exceeds its per-block cap.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         ready_signals: Vec<ReadySignal>,
         reshape_trigger: Option<ReshapeTrigger>,
         randomness_reveal: VrfProof,
     ) -> Self {
         Self {
-            ready_signals: ready_signals.into(),
+            ready_signals,
             reshape_trigger,
             randomness_reveal,
         }
@@ -72,7 +73,7 @@ impl WitnessSources {
     #[must_use]
     pub const fn empty() -> Self {
         Self {
-            ready_signals: BoundedVec::new(),
+            ready_signals: Vec::new(),
             reshape_trigger: None,
             randomness_reveal: VrfProof::ZERO,
         }
@@ -81,7 +82,7 @@ impl WitnessSources {
     /// Validator-emitted ready signals the proposer included. The leaf
     /// derivation projects one readiness leaf per signal.
     #[must_use]
-    pub const fn ready_signals(&self) -> &BoundedVec<ReadySignal, MAX_READY_SIGNALS_PER_BLOCK> {
+    pub const fn ready_signals(&self) -> &Vec<ReadySignal> {
         &self.ready_signals
     }
 

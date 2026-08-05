@@ -1951,7 +1951,7 @@ fn collect_finalized_receipts(
 /// other field stays identical so the receiver's per-root
 /// verifiers still pass.
 pub fn perturb_header_timestamp(h: &BlockHeader) -> BlockHeader {
-    let waves: Vec<_> = h.waves().iter().cloned().collect();
+    let waves: Vec<_> = h.waves().clone();
     let provision_tx_roots: BTreeMap<_, _> = h
         .provision_tx_roots()
         .iter()

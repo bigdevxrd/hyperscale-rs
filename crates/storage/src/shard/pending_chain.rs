@@ -1099,10 +1099,9 @@ mod tests {
     use std::sync::PoisonError;
 
     use hyperscale_types::{
-        AggregateSignature, Block, BoundedVec, CertifiedBlock, CertifiedBlockHeader,
-        ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
-        GlobalReceiptRoot, Hash, Round, SignerBitfield, Transaction, TxHash, TxOutcome,
-        WaveCertificate, WaveId, WitnessSources,
+        AggregateSignature, Block, CertifiedBlock, CertifiedBlockHeader, ExecutionCertificate,
+        ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, Round,
+        SignerBitfield, Transaction, TxHash, TxOutcome, WaveCertificate, WaveId, WitnessSources,
     };
     use indexmap::IndexMap;
 
@@ -1801,14 +1800,13 @@ mod tests {
         else {
             unreachable!("make_test_block returns a Live block")
         };
-        let mut certs = BoundedVec::new();
-        certs.push(Arc::new(
+        let certs = vec![Arc::new(
             FinalizedWave::new(
                 Arc::new(WaveCertificate::new(settles.clone(), vec![ec_for(settles)])),
                 vec![],
             )
             .into(),
-        ));
+        )];
         let block = Block::Live {
             header,
             transactions,

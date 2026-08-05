@@ -130,8 +130,8 @@ impl FetchBinding for ShardWitnessBinding {
                     push_failed();
                     return ResponseVerdict::Reject;
                 }
-                let payloads = response.payloads.into_inner();
-                let range_proof = response.range_proof.into_inner();
+                let payloads = response.payloads;
+                let range_proof = response.range_proof;
                 // Release the fetch slot before delivering the payload:
                 // the coordinator's chunk re-drive runs while handling
                 // the delivery, and the next range it requests needs the

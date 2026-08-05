@@ -205,13 +205,13 @@ impl<'a> ChainView<'a> {
                 break;
             }
             let manifest = pending.manifest();
-            for tx_hash in manifest.tx_hashes().iter() {
+            for tx_hash in manifest.tx_hashes() {
                 tx_hashes.insert(*tx_hash);
             }
-            for cert_id in manifest.cert_ids().iter() {
+            for cert_id in manifest.cert_ids() {
                 cert_ids.insert(cert_id.clone());
             }
-            for batch_hash in manifest.provision_hashes().iter() {
+            for batch_hash in manifest.provision_hashes() {
                 provision_hashes.insert(*batch_hash);
             }
             current_hash = pending.header().parent_block_hash();
@@ -227,10 +227,9 @@ mod tests {
 
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockManifest,
-        BoundedVec, CertificateRoot, Hash, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp,
-        ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, SignerBitfield,
-        Transaction, TransactionRoot, ValidatorId, Verifiable, WeightedTimestamp, WitnessSources,
-        test_utils,
+        CertificateRoot, Hash, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp, ProvisionsRoot,
+        QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, SignerBitfield, Transaction,
+        TransactionRoot, ValidatorId, Verifiable, WeightedTimestamp, WitnessSources, test_utils,
     };
 
     use super::*;
@@ -266,9 +265,9 @@ mod tests {
     fn make_block(height: u8, parent_block_hash: BlockHash) -> Block {
         Block::Live {
             header: make_header(height, parent_block_hash),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -392,9 +391,9 @@ mod tests {
         let tx_hash = tx.hash();
         let low = Block::Live {
             header: make_header(1, BlockHash::ZERO),
-            transactions: Arc::new(vec![tx].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![tx]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let low_pending = pending_from_block(&low);

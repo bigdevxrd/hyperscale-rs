@@ -17,7 +17,6 @@
 //! workspace dependencies are that crypto interface and the JMT whose
 //! inclusion proofs the provisioning types verify.
 
-mod bounded;
 mod crypto;
 pub mod network;
 mod primitives;
@@ -73,9 +72,6 @@ pub use beacon::{
     verify_cert, verify_certified, verify_empty_view_msg, verify_proposal_object, verify_qc1,
     verify_qc2, verify_qc3, verify_ratify_cert, verify_ratify_vote, verify_vote_equivocation,
     verify_vote1, verify_vote2, verify_vote3,
-};
-pub use bounded::{
-    BoundedBTreeMap, BoundedBTreeSet, BoundedBytes, BoundedLengthError, BoundedString, BoundedVec,
 };
 pub use crypto::Ed25519PrivateKey;
 pub use crypto::keys::{ed25519_keypair_from_seed, generate_ed25519_keypair};

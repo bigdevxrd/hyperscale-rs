@@ -259,7 +259,7 @@ pub fn validate_waves(
         block.transactions(),
     );
 
-    if block.header().waves().0 != expected {
+    if block.header().waves() != &expected {
         return Err(format!(
             "waves mismatch: header={:?}, computed={:?}",
             block.header().waves(),
@@ -567,12 +567,12 @@ mod tests {
     use hyperscale_types::test_utils::{TestCommittee, make_finalized_wave};
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
-        BoundedVec, CertificateRoot, ChainOrigin, FinalizedWave, Hash, InFlightCount,
-        LocalReceiptRoot, MerkleInclusionProof, NetworkDefinition, ProposerTimestamp,
-        ProvisionEntry, Provisions, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId,
-        ShardLoad, Signer, SignerBitfield, StateRoot, TimestampRange, Transaction,
-        TransactionDecision, TransactionRoot, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
-        Verified, WeightedTimestamp, WitnessSources, compute_waves, test_utils,
+        CertificateRoot, ChainOrigin, FinalizedWave, Hash, InFlightCount, LocalReceiptRoot,
+        MerkleInclusionProof, NetworkDefinition, ProposerTimestamp, ProvisionEntry, Provisions,
+        ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, Signer,
+        SignerBitfield, StateRoot, TimestampRange, Transaction, TransactionDecision,
+        TransactionRoot, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable, Verified,
+        WeightedTimestamp, WitnessSources, compute_waves, test_utils,
     };
 
     use super::*;
@@ -645,8 +645,8 @@ mod tests {
             base.certificate_root(),
             base.local_receipt_root(),
             base.provision_root(),
-            base.waves().clone().into_inner(),
-            base.provision_tx_roots().clone().into_inner(),
+            base.waves().clone(),
+            base.provision_tx_roots().clone(),
             base.in_flight(),
             BeaconWitnessRoot::ZERO,
             BeaconWitnessLeafCount::ZERO,
@@ -686,9 +686,9 @@ mod tests {
         );
         Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -1140,9 +1140,9 @@ mod tests {
     ) -> Block {
         Block::Live {
             header: header_at_height(height, 100_000),
-            transactions: Arc::new(transactions.into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(transactions),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -1267,9 +1267,9 @@ mod tests {
             .collect();
         Block::Live {
             header: header_at_height(height, 100_000),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(wrapped.into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(wrapped),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -1334,9 +1334,9 @@ mod tests {
             .collect();
         Block::Live {
             header: header_at_height(height, 100_000),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(wrapped.into()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(wrapped),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -1578,9 +1578,9 @@ mod tests {
     ) -> Block {
         Block::Live {
             header: header_at_height(BlockHeight::new(1), 100_000),
-            transactions: Arc::new(vec![Arc::clone(tx)].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(provisions.into()),
+            transactions: Arc::new(vec![Arc::clone(tx)]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(provisions),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }

@@ -20,8 +20,8 @@ use thiserror::Error;
 use crate::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use crate::transaction::vm::vm_statics;
 use crate::{
-    BoundedBytes, DeclaredKey, Derived, EnvelopeExt, Hash, MAX_TX_BYTES_LEN, Routing, ShardTrie,
-    TimestampRange, TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
+    DeclaredKey, Derived, EnvelopeExt, Hash, MAX_TX_BYTES_LEN, Routing, ShardTrie, TimestampRange,
+    TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
 };
 
 /// A signed transaction as the network carries it.
@@ -34,7 +34,8 @@ use crate::{
 #[derive(Hbor)]
 pub struct Transaction {
     /// HBOR-encoded [`TransactionEnvelope`] bytes — the canonical wire form.
-    serialized_bytes: BoundedBytes<MAX_TX_BYTES_LEN>,
+    #[hbor(max = MAX_TX_BYTES_LEN)]
+    serialized_bytes: Vec<u8>,
 
     /// Decoded envelope, populated by `body()` on first access from
     /// `serialized_bytes`. Constructors pre-populate. Not on the wire.
@@ -163,7 +164,7 @@ impl Transaction {
         let _ = hash_lock.set(hash);
 
         Self {
-            serialized_bytes: payload.into(),
+            serialized_bytes: payload,
             body: body_lock,
             derived: OnceLock::new(),
             hash: hash_lock,
@@ -270,7 +271,7 @@ impl Transaction {
     /// The envelope bytes as an owned `Vec`. For read-only access, prefer
     /// [`Self::serialized_bytes`].
     pub fn transaction_bytes(&self) -> Vec<u8> {
-        self.serialized_bytes.0.clone()
+        self.serialized_bytes.clone()
     }
 
     /// Pre-serialized wire bytes of the full `Transaction`.
@@ -513,7 +514,7 @@ mod tests {
         let mut bytes = fixture(b"graph bytes").serialized_bytes().to_vec();
         bytes.truncate(3);
         let garbage = Transaction {
-            serialized_bytes: bytes.into(),
+            serialized_bytes: bytes,
             body: OnceLock::new(),
             derived: OnceLock::new(),
             hash: OnceLock::new(),

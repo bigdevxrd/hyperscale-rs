@@ -1075,7 +1075,7 @@ impl BeaconCoordinator {
         proposal: &Verified<BeaconProposal>,
     ) -> Option<Verified<BeaconProposal>> {
         let mut equivocations = Vec::with_capacity(proposal.equivocations().len());
-        for ev in proposal.equivocations().iter() {
+        for ev in proposal.equivocations() {
             let rec = self.state.validators.get(&ev.validator)?;
             let mut ev = ev.clone();
             ev.upgrade_in_place(&PcVoteEquivocationContext {
@@ -1088,7 +1088,7 @@ impl BeaconCoordinator {
         }
         proposal
             .clone()
-            .with_verified_equivocations(equivocations.into())
+            .with_verified_equivocations(equivocations)
             .ok()
     }
 
@@ -1102,7 +1102,7 @@ impl BeaconCoordinator {
         proposal: &Verified<BeaconProposal>,
     ) -> Option<Verified<BeaconProposal>> {
         let mut vote_equivocations = Vec::with_capacity(proposal.vote_equivocations().len());
-        for ev in proposal.vote_equivocations().iter() {
+        for ev in proposal.vote_equivocations() {
             let rec = self.state.validators.get(&ev.validator)?;
             let mut ev = ev.clone();
             ev.upgrade_in_place(&ShardVoteEquivocationContext {
@@ -1115,7 +1115,7 @@ impl BeaconCoordinator {
         }
         proposal
             .clone()
-            .with_verified_vote_equivocations(vote_equivocations.into())
+            .with_verified_vote_equivocations(vote_equivocations)
             .ok()
     }
 
@@ -1485,7 +1485,7 @@ impl BeaconCoordinator {
         let mut signers: Vec<(ValidatorId, ConsensusPublicKey)> = Vec::new();
         let mut seen: BTreeSet<ValidatorId> = BTreeSet::new();
         for (_, proposal) in block.committed_proposals() {
-            for ev in proposal.equivocations().iter() {
+            for ev in proposal.equivocations() {
                 if seen.insert(ev.validator)
                     && let Some(rec) = self.state.validators.get(&ev.validator)
                 {
@@ -2693,9 +2693,9 @@ mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
     use hyperscale_types::{
         AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconChainConfig, BeaconGenesisConfig,
-        BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHeader, BlockHeight, BoundedVec,
-        CertificateRoot, CertifiedBlockHeader, ChainOrigin, ConsensusPublicKey, ConsensusSignature,
-        Epoch, GenesisConfigHash, GenesisPool, GenesisValidator, Hash, InFlightCount, JailReason,
+        BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHeader, BlockHeight, CertificateRoot,
+        CertifiedBlockHeader, ChainOrigin, ConsensusPublicKey, ConsensusSignature, Epoch,
+        GenesisConfigHash, GenesisPool, GenesisValidator, Hash, InFlightCount, JailReason,
         KeptSeat, LeafIndex, LocalReceiptRoot, MIN_BEACON_COMMITTEE_SIZE, MIN_STAKE_FLOOR,
         NetworkDefinition, ObserverSeat, PcVector, ProposerTimestamp, ProvisionsRoot,
         QuorumCertificate, Randomness, RevealChain, Round, ShardBoundary, ShardCommittee,
@@ -3146,8 +3146,8 @@ mod tests {
         let committed = vec![(ValidatorId::new(0), proposal_with_boundary(shard, qc))];
         let contribution = ShardEpochContribution {
             boundary_header: b.header().clone(),
-            payloads: payloads.into(),
-            range_proof: range_proof.into(),
+            payloads,
+            range_proof,
         };
         let block_with = |contribs: BTreeMap<ShardId, ShardEpochContribution>| {
             BeaconBlock::new_with_contributions(
@@ -3183,8 +3183,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: wrong.header().clone(),
-                payloads: BoundedVec::new(),
-                range_proof: BoundedVec::new(),
+                payloads: Vec::new(),
+                range_proof: Vec::new(),
             },
         ))
         .collect();
@@ -3200,8 +3200,8 @@ mod tests {
             shard,
             ShardEpochContribution {
                 boundary_header: b.header().clone(),
-                payloads: BoundedVec::new(),
-                range_proof: BoundedVec::new(),
+                payloads: Vec::new(),
+                range_proof: Vec::new(),
             },
         ))
         .collect();
@@ -3227,8 +3227,8 @@ mod tests {
         let committed = vec![(ValidatorId::new(0), proposal_with_boundary(shard, qc))];
         let contribution = ShardEpochContribution {
             boundary_header: b.header().clone(),
-            payloads: payloads.into(),
-            range_proof: range_proof.into(),
+            payloads,
+            range_proof,
         };
         let epoch = coord.state.current_epoch.next();
         let prev = coord.latest_block.block_hash();

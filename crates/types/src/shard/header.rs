@@ -10,12 +10,11 @@ use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use thiserror::Error;
 
 use crate::{
-    BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeight, BoundedBTreeMap, BoundedVec,
-    CertificateRoot, ChainOrigin, Hash, InFlightCount, LocalReceiptRoot,
-    MAX_REMOTE_SHARDS_PER_WAVE, MAX_TXS_PER_BLOCK, ProposerTimestamp, ProvisionTxRoot,
-    ProvisionsRoot, QuorumCertificate, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad,
-    SplitChildRoots, StateRoot, TransactionRoot, ValidatorId, Verifiable, Verified, Verify, WaveId,
-    WeightedTimestamp,
+    BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeight, CertificateRoot,
+    ChainOrigin, Hash, InFlightCount, LocalReceiptRoot, MAX_REMOTE_SHARDS_PER_WAVE,
+    MAX_TXS_PER_BLOCK, ProposerTimestamp, ProvisionTxRoot, ProvisionsRoot, QuorumCertificate,
+    RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad, SplitChildRoots, StateRoot,
+    TransactionRoot, ValidatorId, Verifiable, Verified, Verify, WaveId, WeightedTimestamp,
 };
 
 /// Block header containing consensus metadata.
@@ -41,8 +40,10 @@ pub struct BlockHeader {
     certificate_root: CertificateRoot,
     local_receipt_root: LocalReceiptRoot,
     provision_root: ProvisionsRoot,
-    waves: BoundedVec<WaveId, MAX_TXS_PER_BLOCK>,
-    provision_tx_roots: BoundedBTreeMap<ShardId, ProvisionTxRoot, MAX_REMOTE_SHARDS_PER_WAVE>,
+    #[hbor(max = MAX_TXS_PER_BLOCK)]
+    waves: Vec<WaveId>,
+    #[hbor(max = MAX_REMOTE_SHARDS_PER_WAVE)]
+    provision_tx_roots: BTreeMap<ShardId, ProvisionTxRoot>,
     in_flight: InFlightCount,
     beacon_witness_root: BeaconWitnessRoot,
     beacon_witness_leaf_count: BeaconWitnessLeafCount,
@@ -136,8 +137,8 @@ impl BlockHeader {
             certificate_root,
             local_receipt_root,
             provision_root,
-            waves: waves.into(),
-            provision_tx_roots: provision_tx_roots.into(),
+            waves,
+            provision_tx_roots,
             in_flight,
             beacon_witness_root,
             beacon_witness_leaf_count,
@@ -180,8 +181,8 @@ impl BlockHeader {
             certificate_root: CertificateRoot::ZERO,
             local_receipt_root: LocalReceiptRoot::ZERO,
             provision_root: ProvisionsRoot::ZERO,
-            waves: BoundedVec::new(),
-            provision_tx_roots: BoundedBTreeMap::new(),
+            waves: Vec::new(),
+            provision_tx_roots: BTreeMap::new(),
             in_flight: InFlightCount::ZERO,
             beacon_witness_root: BeaconWitnessRoot::ZERO,
             beacon_witness_leaf_count: BeaconWitnessLeafCount::ZERO,
@@ -232,8 +233,8 @@ impl BlockHeader {
             certificate_root: CertificateRoot::ZERO,
             local_receipt_root: LocalReceiptRoot::ZERO,
             provision_root: ProvisionsRoot::ZERO,
-            waves: BoundedVec::new(),
-            provision_tx_roots: BoundedBTreeMap::new(),
+            waves: Vec::new(),
+            provision_tx_roots: BTreeMap::new(),
             in_flight: InFlightCount::ZERO,
             beacon_witness_root: BeaconWitnessRoot::ZERO,
             beacon_witness_leaf_count: BeaconWitnessLeafCount::ZERO,
@@ -298,8 +299,8 @@ impl BlockHeader {
             certificate_root: CertificateRoot::ZERO,
             local_receipt_root: LocalReceiptRoot::ZERO,
             provision_root: ProvisionsRoot::ZERO,
-            waves: BoundedVec::new(),
-            provision_tx_roots: BoundedBTreeMap::new(),
+            waves: Vec::new(),
+            provision_tx_roots: BTreeMap::new(),
             in_flight: InFlightCount::ZERO,
             beacon_witness_root: BeaconWitnessRoot::ZERO,
             beacon_witness_leaf_count: BeaconWitnessLeafCount::ZERO,
@@ -443,7 +444,7 @@ impl BlockHeader {
     /// [`BlockHeader::provision_tx_roots`]. Empty for genesis, fallback, and
     /// sync blocks.
     #[must_use]
-    pub const fn waves(&self) -> &BoundedVec<WaveId, MAX_TXS_PER_BLOCK> {
+    pub const fn waves(&self) -> &Vec<WaveId> {
         &self.waves
     }
 
@@ -456,9 +457,7 @@ impl BlockHeader {
     /// contains the full set it was meant to receive — catches silently
     /// dropped txs on the broadcast path.
     #[must_use]
-    pub const fn provision_tx_roots(
-        &self,
-    ) -> &BoundedBTreeMap<ShardId, ProvisionTxRoot, MAX_REMOTE_SHARDS_PER_WAVE> {
+    pub const fn provision_tx_roots(&self) -> &BTreeMap<ShardId, ProvisionTxRoot> {
         &self.provision_tx_roots
     }
 
@@ -567,8 +566,8 @@ impl BlockHeader {
         CertificateRoot,
         LocalReceiptRoot,
         ProvisionsRoot,
-        BoundedVec<WaveId, MAX_TXS_PER_BLOCK>,
-        BoundedBTreeMap<ShardId, ProvisionTxRoot, MAX_REMOTE_SHARDS_PER_WAVE>,
+        Vec<WaveId>,
+        BTreeMap<ShardId, ProvisionTxRoot>,
         InFlightCount,
         BeaconWitnessRoot,
         BeaconWitnessLeafCount,
@@ -611,7 +610,7 @@ impl BlockHeader {
     #[must_use]
     pub fn provision_targets(&self) -> Vec<ShardId> {
         let mut set = BTreeSet::new();
-        for wave in self.waves.iter() {
+        for wave in &self.waves {
             set.extend(wave.remote_shards().iter().copied());
         }
         set.into_iter().collect()
@@ -886,7 +885,7 @@ mod tests {
             certificate_root,
             local_receipt_root,
             provision_root,
-            waves.iter().cloned().collect(),
+            waves,
             provision_tx_roots.iter().map(|(k, v)| (*k, *v)).collect(),
             in_flight,
             beacon_witness_root,
@@ -949,7 +948,7 @@ mod tests {
             certificate_root,
             local_receipt_root,
             provision_root,
-            waves.iter().cloned().collect(),
+            waves,
             provision_tx_roots.iter().map(|(k, v)| (*k, *v)).collect(),
             in_flight,
             beacon_witness_root,

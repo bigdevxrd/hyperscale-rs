@@ -12,12 +12,11 @@ use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
-    BeaconWitnessRoot, BlockHash, BlockHeader, BlockHeight, BoundedVec, CertificateRoot,
-    ChainOrigin, FinalizedWave, LocalReceiptRoot, MAX_FINALIZED_TX_PER_BLOCK,
-    MAX_PROVISIONS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProvisionHash, ProvisionTxRootsMap, Provisions,
-    ProvisionsRoot, QuorumCertificate, ShardId, SharedWitnessSources, SplitChildRoots, StateRoot,
-    Transaction, TransactionRoot, TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp,
-    WitnessSources,
+    BeaconWitnessRoot, BlockHash, BlockHeader, BlockHeight, CertificateRoot, ChainOrigin,
+    FinalizedWave, LocalReceiptRoot, MAX_FINALIZED_TX_PER_BLOCK, MAX_PROVISIONS_PER_BLOCK,
+    MAX_TXS_PER_BLOCK, ProvisionHash, ProvisionTxRootsMap, Provisions, ProvisionsRoot,
+    QuorumCertificate, ShardId, SharedWitnessSources, SplitChildRoots, StateRoot, Transaction,
+    TransactionRoot, TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp, WitnessSources,
 };
 
 /// Shared transaction list — wrapped in `Arc` so root-verification actions
@@ -29,7 +28,7 @@ use crate::{
 /// construction; wire-decoded blocks land at [`Verifiable::Unverified`]
 /// because HBOR decode is a transparent passthrough into that variant.
 /// Same rationale as [`SharedCertificates`].
-pub type SharedTransactions = Arc<BoundedVec<Arc<Verifiable<Transaction>>, MAX_TXS_PER_BLOCK>>;
+pub type SharedTransactions = Arc<Vec<Arc<Verifiable<Transaction>>>>;
 
 /// Build a [`SharedTransactions`] from a list of raw `Arc<Transaction>`
 /// recovered from persistent storage.
@@ -41,9 +40,6 @@ pub type SharedTransactions = Arc<BoundedVec<Arc<Verifiable<Transaction>>, MAX_T
 /// outside that trust source must construct
 /// `Vec<Arc<Verifiable<Transaction>>>` directly.
 ///
-/// # Panics
-///
-/// Panics if `txs.len() > MAX_TXS_PER_BLOCK`.
 #[must_use]
 pub fn shared_transactions_from_raw(txs: Vec<Arc<Transaction>>) -> SharedTransactions {
     let wrapped: Vec<Arc<Verifiable<Transaction>>> = txs
@@ -54,7 +50,7 @@ pub fn shared_transactions_from_raw(txs: Vec<Arc<Transaction>>) -> SharedTransac
             )))
         })
         .collect();
-    Arc::new(wrapped.into())
+    Arc::new(wrapped)
 }
 
 /// Shared certificate list — same rationale as [`SharedTransactions`].
@@ -66,16 +62,10 @@ pub fn shared_transactions_from_raw(txs: Vec<Arc<Transaction>>) -> SharedTransac
 /// passthrough into that variant. Same rationale as
 /// [`BlockHeader::parent_qc`](crate::BlockHeader) which carries
 /// `Verifiable<QuorumCertificate>` for the same reason.
-pub type SharedCertificates =
-    Arc<BoundedVec<Arc<Verifiable<FinalizedWave>>, MAX_FINALIZED_TX_PER_BLOCK>>;
+pub type SharedCertificates = Arc<Vec<Arc<Verifiable<FinalizedWave>>>>;
 
 /// Shared provision list — same rationale as [`SharedCertificates`].
-pub type SharedProvisions = Arc<BoundedVec<Arc<Verifiable<Provisions>>, MAX_PROVISIONS_PER_BLOCK>>;
-
-/// Shared provision-hash list — carried on `Block::Sealed` so that
-/// sync-serving glue can re-attach provision bodies even after the
-/// payload has been dropped. Same `Arc` rationale as [`SharedTransactions`].
-pub type SharedProvisionHashes = Arc<BoundedVec<ProvisionHash, MAX_PROVISIONS_PER_BLOCK>>;
+pub type SharedProvisions = Arc<Vec<Arc<Verifiable<Provisions>>>>;
 
 /// Gas a shard consumed across the waves `certificates` settle.
 ///
@@ -112,12 +102,17 @@ pub enum Block {
     Live {
         /// Block header (contains all merkle roots).
         header: BlockHeader,
-        /// Transactions in this block, sorted by hash.
-        transactions: SharedTransactions,
+        /// Transactions in this block, sorted by hash. Spelled out
+        /// rather than as [`SharedTransactions`] so the cap can see the
+        /// collection it bounds.
+        #[hbor(max = MAX_TXS_PER_BLOCK)]
+        transactions: Arc<Vec<Arc<Verifiable<Transaction>>>>,
         /// Wave certificates finalized in this block.
-        certificates: SharedCertificates,
+        #[hbor(max = MAX_FINALIZED_TX_PER_BLOCK)]
+        certificates: Arc<Vec<Arc<Verifiable<FinalizedWave>>>>,
         /// Provisions needed to execute cross-shard waves locally.
-        provisions: SharedProvisions,
+        #[hbor(max = MAX_PROVISIONS_PER_BLOCK)]
+        provisions: Arc<Vec<Arc<Verifiable<Provisions>>>>,
         /// Proposer-supplied beacon-witness inputs. Committed via the
         /// header's `beacon_witness_root`; carried on the body so
         /// commit-time leaf derivation is identical on every node. See
@@ -132,13 +127,18 @@ pub enum Block {
     Sealed {
         /// Block header (contains all merkle roots).
         header: BlockHeader,
-        /// Transactions in this block, sorted by hash.
-        transactions: SharedTransactions,
+        /// Transactions in this block, sorted by hash. Spelled out
+        /// rather than as [`SharedTransactions`] so the cap can see the
+        /// collection it bounds.
+        #[hbor(max = MAX_TXS_PER_BLOCK)]
+        transactions: Arc<Vec<Arc<Verifiable<Transaction>>>>,
         /// Wave certificates finalized in this block.
-        certificates: SharedCertificates,
+        #[hbor(max = MAX_FINALIZED_TX_PER_BLOCK)]
+        certificates: Arc<Vec<Arc<Verifiable<FinalizedWave>>>>,
         /// Content hashes of the provisions the block consumed while
         /// `Live`. Empty iff the block consumed no provisions.
-        provision_hashes: SharedProvisionHashes,
+        #[hbor(max = MAX_PROVISIONS_PER_BLOCK)]
+        provision_hashes: Arc<Vec<ProvisionHash>>,
         /// Proposer-supplied beacon-witness inputs — retained through
         /// sealing (unlike provisions) because the beacon-witness fold
         /// consuming them can run well after the block sealed. See
@@ -147,8 +147,6 @@ pub enum Block {
     },
 }
 
-// Variant discriminator constants — referenced by the `#[hbor(discriminant)]`
-// attributes above. Naming them explicitly means future variants can't
 /// One side of a merge: the terminal block a child's chain ends at, as
 /// much of it as the merged genesis derives from.
 ///
@@ -210,9 +208,9 @@ impl Block {
     ) -> Self {
         Self::Live {
             header: BlockHeader::genesis(shard_id, proposer, state_root, origin),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -235,9 +233,9 @@ impl Block {
                 parent_terminal,
                 parent_canonical_wt,
             ),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -263,9 +261,9 @@ impl Block {
                 right_terminal,
                 cut_wt,
             ),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -474,7 +472,7 @@ impl Block {
                     header,
                     transactions,
                     certificates,
-                    provision_hashes: Arc::new(hashes.into()),
+                    provision_hashes: Arc::new(hashes),
                     witness_sources,
                 }
             }

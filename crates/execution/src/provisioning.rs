@@ -178,9 +178,9 @@ impl ProvisioningTracker {
             clock: provisions.source_block_ts(),
             randomness: provisions.source_block_reveal(),
         };
-        for tx_entry in provisions.transactions().iter() {
+        for tx_entry in provisions.transactions() {
             let tx_hash = tx_entry.tx_hash;
-            let entries = Arc::new(tx_entry.entries.0.clone());
+            let entries = Arc::new(tx_entry.entries.clone());
             self.verified.entry(tx_hash).or_default().push(entries);
             self.received
                 .entry(tx_hash)

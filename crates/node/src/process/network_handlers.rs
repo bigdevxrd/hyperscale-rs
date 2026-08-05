@@ -83,7 +83,7 @@ where
                         );
                         return GossipVerdict::Reject;
                     };
-                    for transaction in gossip.transactions.into_inner() {
+                    for transaction in gossip.transactions {
                         // A cross-shard tx arrives once per hosted shard
                         // topic, each a fresh decode; canonicalizing here
                         // lets the shards share one validation verdict.

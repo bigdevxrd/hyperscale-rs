@@ -847,7 +847,7 @@ impl MempoolCoordinator {
         // is handled by `ExpectedTxs::record`.
         for provision in block.provisions() {
             let source_shard = provision.source_shard();
-            for entry in provision.transactions().iter() {
+            for entry in provision.transactions() {
                 let tx_hash = entry.tx_hash;
                 if self.pool.contains_key(&tx_hash) {
                     continue;
@@ -1518,7 +1518,7 @@ mod tests {
                 header,
                 transactions,
                 certificates,
-                provisions: Arc::new(vec![Arc::new(provision.into())].into()),
+                provisions: Arc::new(vec![Arc::new(provision.into())]),
                 witness_sources: Arc::new(WitnessSources::empty()),
             },
             sealed @ Block::Sealed { .. } => sealed,

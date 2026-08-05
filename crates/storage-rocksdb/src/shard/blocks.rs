@@ -285,8 +285,8 @@ impl RocksDbShardStorage {
             .collect();
         let block = Block::Sealed {
             header,
-            transactions: Arc::new(transactions.into()),
-            certificates: Arc::new(certificates.into()),
+            transactions: Arc::new(transactions),
+            certificates: Arc::new(certificates),
             provision_hashes: Arc::new(manifest.provision_hashes().clone()),
             witness_sources: Arc::new(manifest.witness_sources().clone()),
         };
@@ -430,12 +430,12 @@ impl RocksDbShardStorage {
             .collect();
         let block = Block::Sealed {
             header,
-            transactions: Arc::new(transactions.into()),
-            certificates: Arc::new(certificates.into()),
+            transactions: Arc::new(transactions),
+            certificates: Arc::new(certificates),
             provision_hashes: Arc::new(provision_hashes_bounded.clone()),
             witness_sources: Arc::new(manifest.witness_sources().clone()),
         };
-        let provision_hashes = provision_hashes_bounded.into_inner();
+        let provision_hashes = provision_hashes_bounded;
 
         let elapsed = start.elapsed().as_secs_f64();
         record_storage_read(elapsed);

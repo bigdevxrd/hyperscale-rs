@@ -3,8 +3,8 @@
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    BoundedBytes, BoundedVec, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN,
-    MerkleInclusionProof, MessageClass, NetworkMessage,
+    Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN, MerkleInclusionProof, MessageClass,
+    NetworkMessage,
 };
 
 /// Cap on the leaves a single state range chunk can carry.
@@ -30,9 +30,11 @@ pub struct StateRangeLeaf {
     /// The raw substate storage key, bounded by the same decode cap as
     /// a provisioned `SubstateEntry` — any committed key must be
     /// servable here, so the two limits must not diverge.
-    pub storage_key: BoundedBytes<MAX_STATE_ENTRY_KEY_LEN>,
+    #[hbor(max = MAX_STATE_ENTRY_KEY_LEN)]
+    pub storage_key: Vec<u8>,
     /// The raw substate value, bounded like a provisioned entry's.
-    pub value: BoundedBytes<MAX_STATE_ENTRY_VALUE_LEN>,
+    #[hbor(max = MAX_STATE_ENTRY_VALUE_LEN)]
+    pub value: Vec<u8>,
 }
 
 /// A served chunk of a shard's state at a pinned boundary: leaves in
@@ -41,7 +43,8 @@ pub struct StateRangeLeaf {
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StateRangeChunk {
     /// `(leaf, raw pair)` entries, strictly ascending by `leaf_key`.
-    pub leaves: BoundedVec<StateRangeLeaf, MAX_LEAVES_PER_STATE_RANGE>,
+    #[hbor(max = MAX_LEAVES_PER_STATE_RANGE)]
+    pub leaves: Vec<StateRangeLeaf>,
     /// Whether leaves beyond the last returned remain in the requested
     /// range — the chunk is complete only through its last leaf, and the
     /// joiner resumes immediately after it.
@@ -91,12 +94,12 @@ mod tests {
     fn test_hbor_roundtrip_chunk() {
         let leaf = StateRangeLeaf {
             leaf_key: Hash::from_bytes(b"leaf"),
-            storage_key: BoundedBytes::from(vec![7u8; 60]),
-            value: BoundedBytes::from(vec![9u8; 128]),
+            storage_key: vec![7u8; 60],
+            value: vec![9u8; 128],
         };
         let response = GetStateRangeResponse {
             chunk: Some(StateRangeChunk {
-                leaves: vec![leaf].into(),
+                leaves: vec![leaf],
                 more: true,
                 proof: MerkleInclusionProof::new(vec![1, 2, 3]),
             }),

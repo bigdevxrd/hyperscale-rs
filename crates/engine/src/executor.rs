@@ -869,7 +869,7 @@ impl Executor {
                                 owner: Address(owner),
                                 local: LocalKey(local),
                             },
-                            value.to_vec(),
+                            value.clone(),
                         );
                     }
                 }

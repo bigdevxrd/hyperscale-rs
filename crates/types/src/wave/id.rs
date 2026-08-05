@@ -6,7 +6,7 @@ use std::fmt::{self, Display};
 use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 
 use crate::primitives::bloom::BloomKey;
-use crate::{BlockHeight, BoundedBTreeSet, Hash, ShardId};
+use crate::{BlockHeight, Hash, ShardId};
 
 /// Cap on `WaveId.remote_shards` length at decode time.
 ///
@@ -32,7 +32,8 @@ pub const MAX_REMOTE_SHARDS_PER_WAVE: usize = 1024;
 pub struct WaveId {
     shard_id: ShardId,
     block_height: BlockHeight,
-    remote_shards: BoundedBTreeSet<ShardId, MAX_REMOTE_SHARDS_PER_WAVE>,
+    #[hbor(max = MAX_REMOTE_SHARDS_PER_WAVE)]
+    remote_shards: BTreeSet<ShardId>,
 }
 
 impl WaveId {
@@ -42,7 +43,7 @@ impl WaveId {
     ///
     /// Panics if `remote_shards.len() > MAX_REMOTE_SHARDS_PER_WAVE`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         shard_id: ShardId,
         block_height: BlockHeight,
         remote_shards: BTreeSet<ShardId>,
@@ -50,7 +51,7 @@ impl WaveId {
         Self {
             shard_id,
             block_height,
-            remote_shards: remote_shards.into(),
+            remote_shards,
         }
     }
 
@@ -68,7 +69,7 @@ impl WaveId {
 
     /// Set of remote shards the transactions depend on (empty for single-shard waves).
     #[must_use]
-    pub const fn remote_shards(&self) -> &BoundedBTreeSet<ShardId, MAX_REMOTE_SHARDS_PER_WAVE> {
+    pub const fn remote_shards(&self) -> &BTreeSet<ShardId> {
         &self.remote_shards
     }
 

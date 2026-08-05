@@ -425,12 +425,11 @@ mod tests {
     use hyperscale_types::test_utils::test_transaction;
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash,
-        BlockHeader, BoundedVec, CertificateRoot, ChainOrigin, ConsensusReceipt,
-        ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
-        GlobalReceiptRoot, InFlightCount, LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot,
-        QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, SignerBitfield, StateRoot,
-        TransactionRoot, TxHash, TxOutcome, ValidatorId, Verifiable, WaveCertificate, WaveId,
-        WeightedTimestamp, WitnessSources,
+        BlockHeader, CertificateRoot, ChainOrigin, ConsensusReceipt, ExecutionCertificate,
+        ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, InFlightCount,
+        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
+        ShardId, ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome,
+        ValidatorId, Verifiable, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
     };
 
     use super::*;
@@ -486,8 +485,8 @@ mod tests {
             certificate_root.unwrap_or_else(|| h.certificate_root()),
             local_receipt_root.unwrap_or_else(|| h.local_receipt_root()),
             h.provision_root(),
-            h.waves().clone().into_inner(),
-            h.provision_tx_roots().clone().into_inner(),
+            h.waves().clone(),
+            h.provision_tx_roots().clone(),
             h.in_flight(),
             BeaconWitnessRoot::ZERO,
             BeaconWitnessLeafCount::ZERO,
@@ -574,9 +573,9 @@ mod tests {
     fn validate_passes_for_canonical_block() {
         let block = Block::Live {
             header: header(),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);
@@ -588,9 +587,9 @@ mod tests {
     fn validate_rejects_height_mismatch() {
         let block = Block::Live {
             header: header(),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);
@@ -606,9 +605,9 @@ mod tests {
     fn certified_block_rejects_qc_hash_mismatch() {
         let block = Block::Live {
             header: header(),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = QuorumCertificate::new(
@@ -628,9 +627,9 @@ mod tests {
     fn validate_rejects_qc_height_mismatch() {
         let block = Block::Live {
             header: header(),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = QuorumCertificate::new(
@@ -656,9 +655,9 @@ mod tests {
         let h = header_with_roots(&header(), Some(TransactionRoot::ZERO), None, None); // canonical would be non-zero
         let block = Block::Live {
             header: h,
-            transactions: Arc::new(vec![tx].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![tx]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);
@@ -680,9 +679,9 @@ mod tests {
         );
         let block = Block::Live {
             header: h,
-            transactions: Arc::new(vec![tx].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![tx]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);
@@ -701,9 +700,9 @@ mod tests {
         );
         let block = Block::Live {
             header: h,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(vec![fw].into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(vec![fw]),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);
@@ -756,9 +755,9 @@ mod tests {
         );
         let block = Block::Live {
             header: h,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(vec![fw].into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(vec![fw]),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);
@@ -784,9 +783,9 @@ mod tests {
         );
         let block = Block::Live {
             header: h,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(vec![fw].into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(vec![fw]),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);
@@ -832,9 +831,9 @@ mod tests {
         let h = header_with_roots(&header(), None, Some(cr), Some(lrr));
         let block = Block::Live {
             header: h,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(vec![fw].into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(vec![fw]),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = qc_for(&block);

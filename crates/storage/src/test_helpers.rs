@@ -12,10 +12,10 @@ use hyperscale_types::state_key::vm_db_node_key;
 use hyperscale_types::{
     Address, AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert, BeaconChainConfig,
     BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash,
-    BlockHeader, BlockHeight, BoundedVec, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock,
-    ChainOrigin, ConsensusReceipt, Epoch, Event, ExecutionCertificate, ExecutionMetadata,
-    ExecutionOutcome, FeeSummary, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash,
-    InFlightCount, LocalReceiptRoot, LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof,
+    BlockHeader, BlockHeight, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, ChainOrigin,
+    ConsensusReceipt, Epoch, Event, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome,
+    FeeSummary, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
+    LocalReceiptRoot, LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof,
     ProposerTimestamp, ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound,
     RevealChain, Round, ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield,
     SpcCert, SpcView, Stake, StakePoolId, StateRoot, StoredReceipt, TransactionRoot, TxHash,
@@ -191,9 +191,9 @@ pub fn make_test_block_with_anchor_wt(height: BlockHeight, anchor_wt_ms: u64) ->
             None,
             ShardLoad::ZERO,
         ),
-        transactions: Arc::new(BoundedVec::new()),
-        certificates: Arc::new(BoundedVec::new()),
-        provisions: Arc::new(BoundedVec::new()),
+        transactions: Arc::new(Vec::new()),
+        certificates: Arc::new(Vec::new()),
+        provisions: Arc::new(Vec::new()),
         witness_sources: Arc::new(WitnessSources::empty()),
     }
 }
@@ -543,9 +543,9 @@ pub fn commit_block_with_witnesses(
             None,
             ShardLoad::ZERO,
         ),
-        transactions: Arc::new(BoundedVec::new()),
-        certificates: Arc::new(BoundedVec::new()),
-        provisions: Arc::new(BoundedVec::new()),
+        transactions: Arc::new(Vec::new()),
+        certificates: Arc::new(Vec::new()),
+        provisions: Arc::new(Vec::new()),
         witness_sources: Arc::new(WitnessSources::empty()),
     };
     let block_hash = block.hash();
@@ -612,9 +612,9 @@ pub fn commit_block_with_witness_window(
             None,
             ShardLoad::ZERO,
         ),
-        transactions: Arc::new(BoundedVec::new()),
-        certificates: Arc::new(BoundedVec::new()),
-        provisions: Arc::new(BoundedVec::new()),
+        transactions: Arc::new(Vec::new()),
+        certificates: Arc::new(Vec::new()),
+        provisions: Arc::new(Vec::new()),
         witness_sources: Arc::new(WitnessSources::empty()),
     };
     let block_hash = block.hash();

@@ -4,7 +4,7 @@ use hyperscale_hbor::Hbor;
 
 #[cfg(any(test, feature = "test-utils"))]
 use crate::state_key::vm_flat_key;
-use crate::{BoundedBytes, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
+use crate::{Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
 
 /// A state entry with pre-computed storage key for fast engine lookup.
 ///
@@ -17,20 +17,19 @@ use crate::{BoundedBytes, Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_L
 pub struct SubstateEntry {
     /// Pre-computed full storage key (ready for direct DB lookup).
     /// Format: `db_node_key` (50 bytes) + partition (1 byte) + `sort_key`
-    pub storage_key: BoundedBytes<MAX_STATE_ENTRY_KEY_LEN>,
+    #[hbor(max = MAX_STATE_ENTRY_KEY_LEN)]
+    pub storage_key: Vec<u8>,
 
     /// HBOR-encoded substate value (None if deleted/doesn't exist).
-    pub value: Option<BoundedBytes<MAX_STATE_ENTRY_VALUE_LEN>>,
+    #[hbor(max = MAX_STATE_ENTRY_VALUE_LEN)]
+    pub value: Option<Vec<u8>>,
 }
 
 impl SubstateEntry {
     /// Create a new DB state entry with pre-computed storage key.
     #[must_use]
-    pub fn new(storage_key: Vec<u8>, value: Option<Vec<u8>>) -> Self {
-        Self {
-            storage_key: storage_key.into(),
-            value: value.map(Into::into),
-        }
+    pub const fn new(storage_key: Vec<u8>, value: Option<Vec<u8>>) -> Self {
+        Self { storage_key, value }
     }
 
     /// Compute hash of this entry for signing/verification.
@@ -114,7 +113,8 @@ mod tests {
         ));
     }
 
-    /// Same shape as above, but for the `Some(value)` byte-vector field.
+    /// Same shape as above, but for the `Some(value)` byte-vector field,
+    /// whose cap reaches through the `Option`.
     #[test]
     fn decode_rejects_oversized_value() {
         // Empty storage_key is fine; the bound check we want fires on `value`.

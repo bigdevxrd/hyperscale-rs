@@ -1,9 +1,9 @@
 //! Beacon proposal content limits.
 //!
 //! Hard caps applied at decode time on peer-supplied proposal payloads.
-//! Wire decoders enforce them on the [`BoundedVec`](crate::BoundedVec)
-//! length prefix before any per-element work, so an oversized proposal
-//! is rejected before allocator pressure builds.
+//! Wire decoders enforce them on the length prefix before any
+//! per-element work, so an oversized proposal is rejected before
+//! allocator pressure builds.
 //!
 //! These are protocol invariants, not operator-tunable config.
 

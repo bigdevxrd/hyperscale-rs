@@ -291,8 +291,8 @@ pub fn apply_witness_chunk(
         shard,
         ShardEpochContribution {
             boundary_header: header,
-            payloads: payloads.into(),
-            range_proof: range_proof.into(),
+            payloads,
+            range_proof,
         },
     ))
     .collect();

@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use crate::state_key::{jmt_value_hash, vm_flat_key_parts, vm_leaf_key};
 use crate::{
-    BlockHeight, BoundedVec, CertifiedBlockHeader, Hash, MAX_TXS_PER_BLOCK, MerkleInclusionProof,
+    BlockHeight, CertifiedBlockHeader, Hash, MAX_TXS_PER_BLOCK, MerkleInclusionProof,
     ProvisionEntry, ProvisionHash, RETENTION_HORIZON, RevealChain, ShardId, SubstateEntry, TxHash,
     Verified, Verify, WeightedTimestamp,
 };
@@ -52,7 +52,8 @@ pub struct Provisions {
     /// the sender chose.
     source_block_reveal: RevealChain,
     proof: MerkleInclusionProof,
-    transactions: BoundedVec<ProvisionEntry, MAX_TXS_PER_BLOCK>,
+    #[hbor(max = MAX_TXS_PER_BLOCK)]
+    transactions: Vec<ProvisionEntry>,
 
     /// Lazily-computed content hash (blake3 over HBOR-encoded content fields).
     /// Populated on first [`Self::hash`] call; not on the wire.
@@ -107,7 +108,7 @@ impl Provisions {
     ///
     /// Panics if `transactions.len() > MAX_TXS_PER_BLOCK`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         source_shard: ShardId,
         target_shard: ShardId,
         block_height: BlockHeight,
@@ -123,7 +124,7 @@ impl Provisions {
             source_block_ts,
             source_block_reveal,
             proof,
-            transactions: transactions.into(),
+            transactions,
             hash: OnceLock::new(),
         }
     }
@@ -170,7 +171,7 @@ impl Provisions {
 
     /// Per-transaction entries.
     #[must_use]
-    pub const fn transactions(&self) -> &BoundedVec<ProvisionEntry, MAX_TXS_PER_BLOCK> {
+    pub const fn transactions(&self) -> &Vec<ProvisionEntry> {
         &self.transactions
     }
 
@@ -264,7 +265,11 @@ impl Provisions {
     /// Create a dummy `Provisions` for testing.
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
-    pub fn dummy(source_shard: ShardId, target_shard: ShardId, block_height: BlockHeight) -> Self {
+    pub const fn dummy(
+        source_shard: ShardId,
+        target_shard: ShardId,
+        block_height: BlockHeight,
+    ) -> Self {
         Self::new(
             source_shard,
             target_shard,

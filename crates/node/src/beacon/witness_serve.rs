@@ -149,12 +149,11 @@ mod tests {
     use hyperscale_types::network::request::beacon::GetShardWitnessesRequest;
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block,
-        BlockHash, BlockHeader, BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock,
-        ChainOrigin, Hash, InFlightCount, LeafIndex, LocalReceiptRoot, ProposerTimestamp,
-        ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad,
-        ShardWitnessPayload, SignerBitfield, Stake, StakePoolId, StateRoot, TransactionRoot,
-        ValidatorId, Verified, WeightedTimestamp, WitnessSources, compute_merkle_root,
-        verify_range_inclusion,
+        BlockHash, BlockHeader, BlockHeight, CertificateRoot, CertifiedBlock, ChainOrigin, Hash,
+        InFlightCount, LeafIndex, LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot,
+        QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, ShardWitnessPayload,
+        SignerBitfield, Stake, StakePoolId, StateRoot, TransactionRoot, ValidatorId, Verified,
+        WeightedTimestamp, WitnessSources, compute_merkle_root, verify_range_inclusion,
     };
 
     use super::*;
@@ -229,9 +228,9 @@ mod tests {
         let header = make_header(height, root, leaf_count_at_block_end);
         let block = Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = make_qc_for(&block);

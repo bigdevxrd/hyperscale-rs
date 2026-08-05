@@ -14,10 +14,10 @@ use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use thiserror::Error;
 
 use crate::{
-    BoundedBTreeMap, BoundedVec, ConsensusPublicKey, Epoch, MAX_EQUIVOCATIONS_PER_PROPOSER,
-    MAX_SHARDS, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcValueElement, PcVoteEquivocation,
-    QuorumCertificate, ShardForkProof, ShardId, ShardVoteEquivocation, Verifiable, Verified,
-    Verify, VrfOutput, VrfProof, vrf_output_from_proof, vrf_sign, vrf_verify,
+    ConsensusPublicKey, Epoch, MAX_EQUIVOCATIONS_PER_PROPOSER, MAX_SHARDS, NetworkDefinition,
+    PC_VALUE_ELEMENT_BYTES, PcValueElement, PcVoteEquivocation, QuorumCertificate, ShardForkProof,
+    ShardId, ShardVoteEquivocation, Verifiable, Verified, Verify, VrfOutput, VrfProof,
+    vrf_output_from_proof, vrf_sign, vrf_verify,
 };
 
 /// One committee member's slot submission.
@@ -34,22 +34,25 @@ pub struct BeaconProposal {
     /// for a live shard whose crossing this proposer hasn't yet observed.
     /// One honest reporter is enough to mark a shard live, so partial
     /// coverage is fine.
-    boundary_qcs: BoundedBTreeMap<ShardId, Option<Verifiable<QuorumCertificate>>, MAX_SHARDS>,
-    equivocations: BoundedVec<Verifiable<PcVoteEquivocation>, MAX_EQUIVOCATIONS_PER_PROPOSER>,
+    #[hbor(max = MAX_SHARDS)]
+    boundary_qcs: BTreeMap<ShardId, Option<Verifiable<QuorumCertificate>>>,
+    #[hbor(max = MAX_EQUIVOCATIONS_PER_PROPOSER)]
+    equivocations: Vec<Verifiable<PcVoteEquivocation>>,
     /// Self-authenticating fork proofs the proposer has observed, one per
     /// forked shard. Each rides as `Verifiable<Box<ShardForkProof>>`:
     /// wire-decoded proposals land `Unverified`; admission re-verifies
     /// against the topology schedule and the fold stamps a fork-caused
     /// `ShardRecovery` for each shard named here.
-    fork_proofs: BoundedBTreeMap<ShardId, Verifiable<Box<ShardForkProof>>, MAX_SHARDS>,
+    #[hbor(max = MAX_SHARDS)]
+    fork_proofs: BTreeMap<ShardId, Verifiable<Box<ShardForkProof>>>,
     /// Self-authenticating shard double-vote pairs the proposer has
     /// observed via gossip — the recovery lane for evidence whose
     /// holders left the source committee before a proposer there could
     /// drain it into a block. Wire-decoded proposals land `Unverified`;
     /// admission re-verifies each pair against the accused validator's
     /// registered pubkey and the fold convicts the pool.
-    vote_equivocations:
-        BoundedVec<Verifiable<Box<ShardVoteEquivocation>>, MAX_EQUIVOCATIONS_PER_PROPOSER>,
+    #[hbor(max = MAX_EQUIVOCATIONS_PER_PROPOSER)]
+    vote_equivocations: Vec<Verifiable<Box<ShardVoteEquivocation>>>,
     /// The VRF proof for this slot. The output is `vrf_output()`, a pure
     /// function of the proof — never stored, so it can't disagree.
     vrf_proof: VrfProof,
@@ -73,23 +76,19 @@ impl BeaconProposal {
             boundary_qcs: boundary_qcs
                 .into_iter()
                 .map(|(shard, qc)| (shard, qc.map(Verifiable::from)))
-                .collect::<BTreeMap<_, _>>()
-                .into(),
+                .collect::<BTreeMap<_, _>>(),
             equivocations: equivocations
                 .into_iter()
                 .map(Verifiable::from)
-                .collect::<Vec<_>>()
-                .into(),
+                .collect::<Vec<_>>(),
             fork_proofs: fork_proofs
                 .into_iter()
                 .map(|(shard, proof)| (shard, Verifiable::from(Box::new(proof))))
-                .collect::<BTreeMap<_, _>>()
-                .into(),
+                .collect::<BTreeMap<_, _>>(),
             vote_equivocations: vote_equivocations
                 .into_iter()
                 .map(|ev| Verifiable::from(Box::new(ev)))
-                .collect::<Vec<_>>()
-                .into(),
+                .collect::<Vec<_>>(),
             vrf_proof,
         }
     }
@@ -100,10 +99,10 @@ impl BeaconProposal {
     #[must_use]
     pub const fn vrf_only(vrf_proof: VrfProof) -> Self {
         Self {
-            boundary_qcs: BoundedBTreeMap::new(),
-            equivocations: BoundedVec::new(),
-            fork_proofs: BoundedBTreeMap::new(),
-            vote_equivocations: BoundedVec::new(),
+            boundary_qcs: BTreeMap::new(),
+            equivocations: Vec::new(),
+            fork_proofs: BTreeMap::new(),
+            vote_equivocations: Vec::new(),
             vrf_proof,
         }
     }
@@ -113,9 +112,7 @@ impl BeaconProposal {
     /// `Verifiable<QuorumCertificate>`: wire-decoded proposals land
     /// `Unverified`; the fold verifies them against the shard committee.
     #[must_use]
-    pub const fn boundary_qcs(
-        &self,
-    ) -> &BoundedBTreeMap<ShardId, Option<Verifiable<QuorumCertificate>>, MAX_SHARDS> {
+    pub const fn boundary_qcs(&self) -> &BTreeMap<ShardId, Option<Verifiable<QuorumCertificate>>> {
         &self.boundary_qcs
     }
 
@@ -123,9 +120,7 @@ impl BeaconProposal {
     /// `Verifiable` marker upgraded at the admission gate; admission jails
     /// the named validator once the block commits.
     #[must_use]
-    pub const fn equivocations(
-        &self,
-    ) -> &BoundedVec<Verifiable<PcVoteEquivocation>, MAX_EQUIVOCATIONS_PER_PROPOSER> {
+    pub const fn equivocations(&self) -> &Vec<Verifiable<PcVoteEquivocation>> {
         &self.equivocations
     }
 
@@ -135,9 +130,7 @@ impl BeaconProposal {
     /// the committed proof (≥ f+1 honest verifiers stood behind it) to
     /// stamp a fork-caused `ShardRecovery`.
     #[must_use]
-    pub const fn fork_proofs(
-        &self,
-    ) -> &BoundedBTreeMap<ShardId, Verifiable<Box<ShardForkProof>>, MAX_SHARDS> {
+    pub const fn fork_proofs(&self) -> &BTreeMap<ShardId, Verifiable<Box<ShardForkProof>>> {
         &self.fork_proofs
     }
 
@@ -146,9 +139,7 @@ impl BeaconProposal {
     /// the fold convicts each named validator's pool once the block
     /// commits.
     #[must_use]
-    pub const fn vote_equivocations(
-        &self,
-    ) -> &BoundedVec<Verifiable<Box<ShardVoteEquivocation>>, MAX_EQUIVOCATIONS_PER_PROPOSER> {
+    pub const fn vote_equivocations(&self) -> &Vec<Verifiable<Box<ShardVoteEquivocation>>> {
         &self.vote_equivocations
     }
 
@@ -306,7 +297,7 @@ impl Verified<BeaconProposal> {
     /// upgrade markers, never substitute evidence.
     pub fn with_verified_equivocations(
         self,
-        equivocations: BoundedVec<Verifiable<PcVoteEquivocation>, MAX_EQUIVOCATIONS_PER_PROPOSER>,
+        equivocations: Vec<Verifiable<PcVoteEquivocation>>,
     ) -> Result<Self, BeaconProposalEquivocationMismatch> {
         if self.equivocations() != &equivocations {
             return Err(BeaconProposalEquivocationMismatch);
@@ -327,10 +318,7 @@ impl Verified<BeaconProposal> {
     /// list isn't content-identical to the proposal's own.
     pub fn with_verified_vote_equivocations(
         self,
-        vote_equivocations: BoundedVec<
-            Verifiable<Box<ShardVoteEquivocation>>,
-            MAX_EQUIVOCATIONS_PER_PROPOSER,
-        >,
+        vote_equivocations: Vec<Verifiable<Box<ShardVoteEquivocation>>>,
     ) -> Result<Self, BeaconProposalEquivocationMismatch> {
         if self.vote_equivocations() != &vote_equivocations {
             return Err(BeaconProposalEquivocationMismatch);
@@ -435,7 +423,7 @@ mod tests {
         assert!(verified.clone().with_verified_equivocations(same).is_ok());
         // Substituting different evidence is rejected — a rebind must
         // upgrade markers, never swap content.
-        let substituted: BoundedVec<_, MAX_EQUIVOCATIONS_PER_PROPOSER> = BoundedVec::new();
+        let substituted = Vec::new();
         assert_eq!(
             verified.with_verified_equivocations(substituted),
             Err(BeaconProposalEquivocationMismatch),

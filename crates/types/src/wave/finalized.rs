@@ -12,10 +12,10 @@ use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
-    BoundedVec, ConsensusPublicKey, ConsensusReceipt, ExecutionCertificate,
-    ExecutionCertificateContext, ExecutionCertificateVerifyError, ExecutionOutcome,
-    GlobalReceiptHash, MAX_TXS_PER_BLOCK, NetworkDefinition, StoredReceipt, TransactionDecision,
-    TxHash, TxOutcome, Verifiable, Verified, Verify, WaveCertificate, WaveId,
+    ConsensusPublicKey, ConsensusReceipt, ExecutionCertificate, ExecutionCertificateContext,
+    ExecutionCertificateVerifyError, ExecutionOutcome, GlobalReceiptHash, MAX_TXS_PER_BLOCK,
+    NetworkDefinition, StoredReceipt, TransactionDecision, TxHash, TxOutcome, Verifiable, Verified,
+    Verify, WaveCertificate, WaveId,
 };
 
 /// A finalized wave — all participating shards have reported, `WaveCertificate` created.
@@ -40,7 +40,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct FinalizedWave {
     certificate: Arc<WaveCertificate>,
-    receipts: BoundedVec<StoredReceipt, MAX_TXS_PER_BLOCK>,
+    #[hbor(max = MAX_TXS_PER_BLOCK)]
+    receipts: Vec<StoredReceipt>,
 }
 
 /// Reason a `FinalizedWave`'s receipts don't agree with its own EC.
@@ -103,7 +104,7 @@ impl FinalizedWave {
     /// `receipts.len() <= tx_count()`. Preserves canonical block order.
     /// Held in-memory until block commit, then written atomically with block metadata.
     #[must_use]
-    pub const fn receipts(&self) -> &BoundedVec<StoredReceipt, MAX_TXS_PER_BLOCK> {
+    pub const fn receipts(&self) -> &Vec<StoredReceipt> {
         &self.receipts
     }
 
@@ -224,10 +225,10 @@ impl FinalizedWave {
     ///
     /// Panics if `receipts.len() > MAX_TXS_PER_BLOCK`.
     #[must_use]
-    pub fn new(certificate: Arc<WaveCertificate>, receipts: Vec<StoredReceipt>) -> Self {
+    pub const fn new(certificate: Arc<WaveCertificate>, receipts: Vec<StoredReceipt>) -> Self {
         Self {
             certificate,
-            receipts: receipts.into(),
+            receipts,
         }
     }
 

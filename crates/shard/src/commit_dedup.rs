@@ -121,7 +121,7 @@ impl CommitDedupIndex {
         let deadline = local_committed_ts.plus(RETENTION_HORIZON);
         for batch in batches {
             let source = batch.source_shard();
-            for entry in batch.transactions().iter() {
+            for entry in batch.transactions() {
                 self.provision_tx_retention
                     .entry((source, entry.tx_hash))
                     .or_insert(deadline);

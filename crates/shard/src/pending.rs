@@ -760,9 +760,9 @@ impl PendingBlock {
 
         let block = Arc::new(Block::Live {
             header: self.header.clone(),
-            transactions: Arc::new(transactions.into()),
-            certificates: Arc::new(certificates.into()),
-            provisions: Arc::new(provisions.into()),
+            transactions: Arc::new(transactions),
+            certificates: Arc::new(certificates),
+            provisions: Arc::new(provisions),
             witness_sources: Arc::new(self.manifest.witness_sources().clone()),
         });
 
@@ -815,7 +815,7 @@ mod tests {
 
     use hyperscale_types::test_utils::test_transaction;
     use hyperscale_types::{
-        BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHeight, BoundedVec, CertificateRoot,
+        BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHeight, CertificateRoot,
         ChainOrigin, Hash, InFlightCount, LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot,
         QuorumCertificate, RevealChain, Round, ShardId, ShardLoad, StateRoot, TransactionRoot,
         ValidatorId, Verified, WaveCertificate, WaveId, WitnessSources,
@@ -1058,9 +1058,9 @@ mod tests {
 
         let block = Block::Live {
             header: make_header(BlockHeight::new(1)),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(vec![wire_fw].into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(vec![wire_fw]),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
 

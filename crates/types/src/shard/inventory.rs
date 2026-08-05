@@ -24,10 +24,9 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    Block, BlockHash, BlockHeader, BloomFilter, BloomKey, BoundedVec, CertifiedBlock,
-    FinalizedWave, MAX_FINALIZED_TX_PER_BLOCK, MAX_PROVISIONS_PER_BLOCK, MAX_TXS_PER_BLOCK,
-    ProvisionHash, Provisions, QuorumCertificate, Transaction, TxHash, Verifiable, WaveId,
-    WitnessSources,
+    Block, BlockHash, BlockHeader, BloomFilter, BloomKey, CertifiedBlock, FinalizedWave,
+    MAX_FINALIZED_TX_PER_BLOCK, MAX_PROVISIONS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProvisionHash,
+    Provisions, QuorumCertificate, Transaction, TxHash, Verifiable, WaveId, WitnessSources,
 };
 
 /// Inventory of locally-known item hashes, grouped by category.
@@ -88,9 +87,10 @@ impl Inventory {
 pub struct ElidedCertifiedBlock {
     header: Verifiable<BlockHeader>,
     qc: Verifiable<QuorumCertificate>,
-    transactions: BoundedVec<(TxHash, Option<Arc<Verifiable<Transaction>>>), MAX_TXS_PER_BLOCK>,
-    certificates:
-        BoundedVec<(WaveId, Option<Arc<Verifiable<FinalizedWave>>>), MAX_FINALIZED_TX_PER_BLOCK>,
+    #[hbor(max = MAX_TXS_PER_BLOCK)]
+    transactions: Vec<(TxHash, Option<Arc<Verifiable<Transaction>>>)>,
+    #[hbor(max = MAX_FINALIZED_TX_PER_BLOCK)]
+    certificates: Vec<(WaveId, Option<Arc<Verifiable<FinalizedWave>>>)>,
     provisions: ElidedProvisions,
     /// The block's beacon-witness inputs, always inline (never elided):
     /// they are small and the receiver needs them to reproduce the
@@ -111,10 +111,11 @@ pub struct ElidedCertifiedBlock {
 pub enum ElidedProvisions {
     /// Block was `Live` at serve time.
     Live(
-        BoundedVec<(ProvisionHash, Option<Arc<Verifiable<Provisions>>>), MAX_PROVISIONS_PER_BLOCK>,
+        #[hbor(max = MAX_PROVISIONS_PER_BLOCK)]
+        Vec<(ProvisionHash, Option<Arc<Verifiable<Provisions>>>)>,
     ),
     /// Block was `Sealed` at serve time; hashes only.
-    Sealed(BoundedVec<ProvisionHash, MAX_PROVISIONS_PER_BLOCK>),
+    Sealed(#[hbor(max = MAX_PROVISIONS_PER_BLOCK)] Vec<ProvisionHash>),
 }
 
 impl ElidedCertifiedBlock {
@@ -144,18 +145,13 @@ impl ElidedCertifiedBlock {
     /// rehydration share the same allocations as the local mempool /
     /// pending-block stores rather than deep-cloning every body.
     #[must_use]
-    pub const fn transactions(
-        &self,
-    ) -> &BoundedVec<(TxHash, Option<Arc<Verifiable<Transaction>>>), MAX_TXS_PER_BLOCK> {
+    pub const fn transactions(&self) -> &Vec<(TxHash, Option<Arc<Verifiable<Transaction>>>)> {
         &self.transactions
     }
 
     /// Per-certificate `(wave id, optional body)` pairs; body is `None` when elided.
     #[must_use]
-    pub const fn certificates(
-        &self,
-    ) -> &BoundedVec<(WaveId, Option<Arc<Verifiable<FinalizedWave>>>), MAX_FINALIZED_TX_PER_BLOCK>
-    {
+    pub const fn certificates(&self) -> &Vec<(WaveId, Option<Arc<Verifiable<FinalizedWave>>>)> {
         &self.certificates
     }
 
@@ -181,9 +177,9 @@ impl ElidedCertifiedBlock {
         let is_live = block.is_live();
 
         // The `block.transactions()/certificates()/provisions()` source
-        // collections are themselves `BoundedVec`s capped at the same
-        // limits as the elided fields, so each `.into()` below cannot
-        // panic — the iterator can't outproduce its source.
+        // collections are capped at the same limits as the elided fields
+        // by `Block`'s own decode validator, so the elided form cannot
+        // outgrow the caps its fields declare.
         let transactions: Vec<_> = block
             .transactions()
             .iter()
@@ -226,16 +222,16 @@ impl ElidedCertifiedBlock {
                     (hash, body)
                 })
                 .collect();
-            ElidedProvisions::Live(entries.into())
+            ElidedProvisions::Live(entries)
         } else {
-            ElidedProvisions::Sealed(block.provision_hashes().into())
+            ElidedProvisions::Sealed(block.provision_hashes())
         };
 
         Self {
             header: header.into(),
             qc,
-            transactions: transactions.into(),
-            certificates: certificates.into(),
+            transactions,
+            certificates,
             provisions,
             witness_sources: block.witness_sources().as_ref().clone(),
         }
@@ -280,7 +276,7 @@ impl ElidedCertifiedBlock {
         }
         let mut miss = RehydrationMiss::default();
         let mut txs = Vec::with_capacity(self.transactions.len());
-        for (hash, body) in self.transactions.iter() {
+        for (hash, body) in &self.transactions {
             if let Some(tx) = body {
                 txs.push(Some(Arc::clone(tx)));
             } else if let Some(resolved) = tx_lookup(hash) {
@@ -292,7 +288,7 @@ impl ElidedCertifiedBlock {
         }
 
         let mut certs = Vec::with_capacity(self.certificates.len());
-        for (id, body) in self.certificates.iter() {
+        for (id, body) in &self.certificates {
             if let Some(fw) = body {
                 certs.push(Some(Arc::clone(fw)));
             } else if let Some(resolved) = cert_lookup(id) {
@@ -306,7 +302,7 @@ impl ElidedCertifiedBlock {
         let live_provs = match &self.provisions {
             ElidedProvisions::Live(entries) => {
                 let mut out = Vec::with_capacity(entries.len());
-                for (hash, body) in entries.iter() {
+                for (hash, body) in entries {
                     if let Some(p) = body {
                         out.push(Some(Arc::clone(p)));
                     } else if let Some(resolved) = provision_lookup(hash) {
@@ -328,8 +324,8 @@ impl ElidedCertifiedBlock {
         let txs: Vec<Arc<Verifiable<Transaction>>> = txs.into_iter().map(Option::unwrap).collect();
         let certs: Vec<Arc<Verifiable<FinalizedWave>>> =
             certs.into_iter().map(Option::unwrap).collect();
-        let txs = Arc::new(txs.into());
-        let certs = Arc::new(certs.into());
+        let txs = Arc::new(txs);
+        let certs = Arc::new(certs);
         let block = match (live_provs, &self.provisions) {
             (Some(entries), _) => {
                 let provisions: Vec<Arc<Verifiable<Provisions>>> =
@@ -338,7 +334,7 @@ impl ElidedCertifiedBlock {
                     header: self.header.as_unverified().clone(),
                     transactions: txs,
                     certificates: certs,
-                    provisions: Arc::new(provisions.into()),
+                    provisions: Arc::new(provisions),
                     witness_sources: Arc::new(self.witness_sources.clone()),
                 }
             }
@@ -441,9 +437,9 @@ mod tests {
     use crate::test_utils::test_transaction;
     use crate::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeight,
-        BloomFilter, BoundedVec, CertificateRoot, ChainOrigin, Hash, InFlightCount,
-        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardId,
-        ShardLoad, SignerBitfield, StateRoot, TransactionRoot, ValidatorId, WeightedTimestamp,
+        BloomFilter, CertificateRoot, ChainOrigin, Hash, InFlightCount, LocalReceiptRoot,
+        ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardId, ShardLoad, SignerBitfield,
+        StateRoot, TransactionRoot, ValidatorId, WeightedTimestamp,
     };
 
     fn create_test_block() -> Block {
@@ -475,9 +471,9 @@ mod tests {
                 None,
                 ShardLoad::ZERO,
             ),
-            transactions: Arc::new(vec![Arc::new(Verifiable::from(tx))].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![Arc::new(Verifiable::from(tx))]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }

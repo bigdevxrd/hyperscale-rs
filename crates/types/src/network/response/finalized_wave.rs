@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use hyperscale_hbor::Hbor;
 
-use crate::{BoundedVec, FinalizedWave, MessageClass, NetworkMessage};
+use crate::{FinalizedWave, MessageClass, NetworkMessage};
 
 /// Cap on finalized waves returned in a single response at decode time.
 ///
@@ -24,7 +24,8 @@ pub struct GetFinalizedWavesResponse {
     ///
     /// `Arc`-wrapped because both the server-side cache and every
     /// downstream consumer hold `FinalizedWave` behind `Arc` already.
-    pub waves: BoundedVec<Arc<FinalizedWave>, MAX_FINALIZED_WAVES_PER_RESPONSE>,
+    #[hbor(max = MAX_FINALIZED_WAVES_PER_RESPONSE)]
+    pub waves: Vec<Arc<FinalizedWave>>,
 }
 
 impl GetFinalizedWavesResponse {
@@ -34,18 +35,14 @@ impl GetFinalizedWavesResponse {
     ///
     /// Panics if `waves.len() > MAX_FINALIZED_WAVES_PER_RESPONSE`.
     #[must_use]
-    pub fn new(waves: Vec<Arc<FinalizedWave>>) -> Self {
-        Self {
-            waves: waves.into(),
-        }
+    pub const fn new(waves: Vec<Arc<FinalizedWave>>) -> Self {
+        Self { waves }
     }
 
     /// Build an empty response (responder had none of the requested waves).
     #[must_use]
     pub const fn empty() -> Self {
-        Self {
-            waves: BoundedVec::new(),
-        }
+        Self { waves: Vec::new() }
     }
 }
 

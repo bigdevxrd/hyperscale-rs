@@ -266,13 +266,12 @@ mod tests {
 
     use hyperscale_types::test_utils::TestCommittee;
     use hyperscale_types::{
-        AggregateSignature, BeaconWitnessRoot, BlockHeader, BlockHeight, BoundedVec,
-        CertificateRoot, ConsensusSignature, Epoch, InFlightCount, LocalReceiptRoot,
-        LocalTimestamp, NetworkDefinition, ProposerTimestamp, ProvisionsRoot, QuorumCertificate,
-        ReadySignal, ReshapeSeat, ReshapeTrigger, RevealChain, Round, ShardLoad, SignerBitfield,
-        Stake, StakePoolId, StateRoot, TopologySnapshot, TransactionRoot, ValidatorId,
-        ValidatorInfo, ValidatorSet, VrfProof, WeightedTimestamp, WitnessSources,
-        compute_merkle_root,
+        AggregateSignature, BeaconWitnessRoot, BlockHeader, BlockHeight, CertificateRoot,
+        ConsensusSignature, Epoch, InFlightCount, LocalReceiptRoot, LocalTimestamp,
+        NetworkDefinition, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, ReadySignal,
+        ReshapeSeat, ReshapeTrigger, RevealChain, Round, ShardLoad, SignerBitfield, Stake,
+        StakePoolId, StateRoot, TopologySnapshot, TransactionRoot, ValidatorId, ValidatorInfo,
+        ValidatorSet, VrfProof, WeightedTimestamp, WitnessSources, compute_merkle_root,
     };
 
     use super::*;
@@ -405,9 +404,9 @@ mod tests {
                 None,
                 ShardLoad::ZERO,
             ),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }

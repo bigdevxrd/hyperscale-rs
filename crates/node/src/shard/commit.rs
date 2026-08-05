@@ -1549,9 +1549,8 @@ mod tests {
     // ── Boundary trigger ─────────────────────────────────────────────────
 
     use hyperscale_types::{
-        BeaconWitnessRoot, Block, BlockHeader, BoundedVec, CertificateRoot, InFlightCount,
-        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardLoad,
-        TransactionRoot,
+        BeaconWitnessRoot, Block, BlockHeader, CertificateRoot, InFlightCount, LocalReceiptRoot,
+        ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardLoad, TransactionRoot,
     };
 
     /// Tag the pin hook pushes into the sink, distinguishing pins from
@@ -1615,9 +1614,9 @@ mod tests {
         );
         let block = Block::Live {
             header,
-            transactions: Arc::new(vec![].into()),
-            certificates: Arc::new(vec![].into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![]),
+            certificates: Arc::new(vec![]),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let hash = block.hash();

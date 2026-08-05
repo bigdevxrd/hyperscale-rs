@@ -3,8 +3,8 @@
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    BlockHeader, BoundedVec, MAX_WITNESSES_PER_FETCH, MessageClass, NetworkMessage,
-    QuorumCertificate, ShardWitnessPayload,
+    BlockHeader, MAX_WITNESSES_PER_FETCH, MessageClass, NetworkMessage, QuorumCertificate,
+    ShardWitnessPayload,
 };
 
 /// One page of a shard's beacon-witness history at a boundary anchor.
@@ -42,7 +42,8 @@ pub struct WitnessHistoryChunk {
     pub qc: QuorumCertificate,
     /// Leaf payloads from the requested `start_index`, in leaf-index
     /// order.
-    pub payloads: BoundedVec<ShardWitnessPayload, MAX_WITNESSES_PER_FETCH>,
+    #[hbor(max = MAX_WITNESSES_PER_FETCH)]
+    pub payloads: Vec<ShardWitnessPayload>,
     /// Whether leaves beyond the last returned remain below the
     /// header's leaf count — the joiner resumes at the next index.
     pub more: bool,
@@ -146,8 +147,7 @@ mod tests {
                         pool_id: StakePoolId::new(2),
                         amount: Stake::from_whole_tokens(7),
                     },
-                ]
-                .into(),
+                ],
                 more: true,
             }),
         };

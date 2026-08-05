@@ -6123,7 +6123,7 @@ mod tests {
     use hyperscale_core::Action;
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
     use hyperscale_types::{
-        AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BoundedVec, CertificateRoot,
+        AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, CertificateRoot,
         ConsensusSignature, Epoch, Hash, InFlightCount, LocalReceiptRoot, MAX_TIMESTAMP_DELAY,
         MAX_TIMESTAMP_RUSH, NetworkDefinition, NetworkParams, ProvisionsRoot, RETENTION_HORIZON,
         RevealChain, ShardId, ShardLoad, Signer, SignerBitfield, TopologySchedule,
@@ -6322,9 +6322,9 @@ mod tests {
         );
         Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -6877,9 +6877,9 @@ mod tests {
             );
             Block::Live {
                 header,
-                transactions: Arc::new(BoundedVec::new()),
-                certificates: Arc::new(BoundedVec::new()),
-                provisions: Arc::new(BoundedVec::new()),
+                transactions: Arc::new(Vec::new()),
+                certificates: Arc::new(Vec::new()),
+                provisions: Arc::new(Vec::new()),
                 witness_sources: Arc::new(WitnessSources::empty()),
             }
         };
@@ -6999,8 +6999,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -7132,9 +7132,9 @@ mod tests {
         );
         Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -7509,8 +7509,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -7585,8 +7585,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -7633,9 +7633,9 @@ mod tests {
 
         let parent_block = Block::Live {
             header: make_header_at_height(BlockHeight::new(1), 99_000),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let parent_block_hash = parent_block.hash();
@@ -7676,8 +7676,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -7785,8 +7785,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -7841,8 +7841,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -8439,8 +8439,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -8791,8 +8791,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -8841,8 +8841,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -8943,8 +8943,8 @@ mod tests {
                 __h.certificate_root(),
                 __h.local_receipt_root(),
                 __h.provision_root(),
-                __h.waves().clone().into_inner(),
-                __h.provision_tx_roots().clone().into_inner(),
+                __h.waves().clone(),
+                __h.provision_tx_roots().clone(),
                 __h.in_flight(),
                 BeaconWitnessRoot::ZERO,
                 BeaconWitnessLeafCount::ZERO,
@@ -9780,8 +9780,8 @@ mod tests {
                     __h.certificate_root(),
                     __h.local_receipt_root(),
                     __h.provision_root(),
-                    __h.waves().clone().into_inner(),
-                    __h.provision_tx_roots().clone().into_inner(),
+                    __h.waves().clone(),
+                    __h.provision_tx_roots().clone(),
                     __h.in_flight(),
                     BeaconWitnessRoot::ZERO,
                     BeaconWitnessLeafCount::ZERO,
@@ -9792,9 +9792,9 @@ mod tests {
                     ShardLoad::ZERO,
                 )
             },
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let mut sub_quorum_signers = SignerBitfield::new(4);
@@ -9855,8 +9855,8 @@ mod tests {
                     __h.certificate_root(),
                     __h.local_receipt_root(),
                     __h.provision_root(),
-                    __h.waves().clone().into_inner(),
-                    __h.provision_tx_roots().clone().into_inner(),
+                    __h.waves().clone(),
+                    __h.provision_tx_roots().clone(),
                     __h.in_flight(),
                     BeaconWitnessRoot::ZERO,
                     BeaconWitnessLeafCount::ZERO,
@@ -9867,9 +9867,9 @@ mod tests {
                     ShardLoad::ZERO,
                 )
             },
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let block_hash = block.hash();
@@ -9909,8 +9909,8 @@ mod tests {
                     __h.certificate_root(),
                     __h.local_receipt_root(),
                     __h.provision_root(),
-                    __h.waves().clone().into_inner(),
-                    __h.provision_tx_roots().clone().into_inner(),
+                    __h.waves().clone(),
+                    __h.provision_tx_roots().clone(),
                     __h.in_flight(),
                     BeaconWitnessRoot::ZERO,
                     BeaconWitnessLeafCount::ZERO,
@@ -9921,9 +9921,9 @@ mod tests {
                     ShardLoad::ZERO,
                 )
             },
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = {
@@ -10121,8 +10121,8 @@ mod tests {
                     __h.certificate_root(),
                     __h.local_receipt_root(),
                     __h.provision_root(),
-                    __h.waves().clone().into_inner(),
-                    __h.provision_tx_roots().clone().into_inner(),
+                    __h.waves().clone(),
+                    __h.provision_tx_roots().clone(),
                     __h.in_flight(),
                     BeaconWitnessRoot::ZERO,
                     BeaconWitnessLeafCount::ZERO,
@@ -10133,9 +10133,9 @@ mod tests {
                     ShardLoad::ZERO,
                 )
             },
-            transactions: Arc::new(vec![tx1.clone()].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![tx1.clone()]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let ancestor_hash = ancestor_block.hash();
@@ -10161,8 +10161,8 @@ mod tests {
                     __h.certificate_root(),
                     __h.local_receipt_root(),
                     __h.provision_root(),
-                    __h.waves().clone().into_inner(),
-                    __h.provision_tx_roots().clone().into_inner(),
+                    __h.waves().clone(),
+                    __h.provision_tx_roots().clone(),
                     __h.in_flight(),
                     BeaconWitnessRoot::ZERO,
                     BeaconWitnessLeafCount::ZERO,
@@ -10173,9 +10173,9 @@ mod tests {
                     ShardLoad::ZERO,
                 )
             },
-            transactions: Arc::new(txs.into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(txs),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
 
@@ -10213,8 +10213,8 @@ mod tests {
                     __h.certificate_root(),
                     __h.local_receipt_root(),
                     __h.provision_root(),
-                    __h.waves().clone().into_inner(),
-                    __h.provision_tx_roots().clone().into_inner(),
+                    __h.waves().clone(),
+                    __h.provision_tx_roots().clone(),
                     __h.in_flight(),
                     BeaconWitnessRoot::ZERO,
                     BeaconWitnessLeafCount::ZERO,
@@ -10225,9 +10225,9 @@ mod tests {
                     ShardLoad::ZERO,
                 )
             },
-            transactions: Arc::new(vec![tx1.clone()].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![tx1.clone()]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let ancestor_hash = ancestor_block.hash();
@@ -10251,8 +10251,8 @@ mod tests {
                     __h.certificate_root(),
                     __h.local_receipt_root(),
                     __h.provision_root(),
-                    __h.waves().clone().into_inner(),
-                    __h.provision_tx_roots().clone().into_inner(),
+                    __h.waves().clone(),
+                    __h.provision_tx_roots().clone(),
                     __h.in_flight(),
                     BeaconWitnessRoot::ZERO,
                     BeaconWitnessLeafCount::ZERO,
@@ -10263,9 +10263,9 @@ mod tests {
                     ShardLoad::ZERO,
                 )
             },
-            transactions: Arc::new(vec![tx1].into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(vec![tx1]),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
 
@@ -10566,9 +10566,9 @@ mod tests {
     fn block_with_certs(certs: Vec<Arc<Verifiable<FinalizedWave>>>) -> Block {
         Block::Live {
             header: make_header_at_height(BlockHeight::new(1), 1500),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(certs.into()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(certs),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -10728,11 +10728,13 @@ mod tests {
         );
         Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(
-                vec![cross_shard_wave(ShardId::leaf(1, 0), ShardId::ROOT, 1)].into(),
-            ),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(vec![cross_shard_wave(
+                ShardId::leaf(1, 0),
+                ShardId::ROOT,
+                1,
+            )]),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }

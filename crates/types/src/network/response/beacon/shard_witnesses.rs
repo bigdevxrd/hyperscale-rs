@@ -3,7 +3,7 @@
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    BoundedVec, Hash, MAX_RANGE_PROOF_NODES, MAX_WITNESSES_PER_SHARD, MessageClass, NetworkMessage,
+    Hash, MAX_RANGE_PROOF_NODES, MAX_WITNESSES_PER_SHARD, MessageClass, NetworkMessage,
     ShardWitnessPayload,
 };
 
@@ -31,10 +31,12 @@ use crate::{
 pub struct GetShardWitnessesResponse {
     /// Witness payloads in leaf-index order, starting at the request's
     /// `lo`.
-    pub payloads: BoundedVec<ShardWitnessPayload, MAX_WITNESSES_PER_SHARD>,
+    #[hbor(max = MAX_WITNESSES_PER_SHARD)]
+    pub payloads: Vec<ShardWitnessPayload>,
     /// Flanking merkle nodes lifting `payloads` to the anchor block's
     /// beacon-witness root.
-    pub range_proof: BoundedVec<Hash, MAX_RANGE_PROOF_NODES>,
+    #[hbor(max = MAX_RANGE_PROOF_NODES)]
+    pub range_proof: Vec<Hash>,
 }
 
 impl GetShardWitnessesResponse {
@@ -45,19 +47,19 @@ impl GetShardWitnessesResponse {
     /// Panics if `payloads.len() > MAX_WITNESSES_PER_SHARD` or
     /// `range_proof.len() > MAX_RANGE_PROOF_NODES`.
     #[must_use]
-    pub fn new(payloads: Vec<ShardWitnessPayload>, range_proof: Vec<Hash>) -> Self {
+    pub const fn new(payloads: Vec<ShardWitnessPayload>, range_proof: Vec<Hash>) -> Self {
         Self {
-            payloads: payloads.into(),
-            range_proof: range_proof.into(),
+            payloads,
+            range_proof,
         }
     }
 
     /// Empty response — responder can serve nothing at the named block.
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
-            payloads: Vec::new().into(),
-            range_proof: Vec::new().into(),
+            payloads: Vec::new(),
+            range_proof: Vec::new(),
         }
     }
 }

@@ -261,7 +261,7 @@ impl ProvisionCoordinator {
         let committed: std::collections::HashSet<ProvisionHash> =
             manifest.provision_hashes().iter().copied().collect();
         self.queue.on_block_committed(&committed);
-        for hash in manifest.provision_hashes().iter() {
+        for hash in manifest.provision_hashes() {
             self.committed_tombstones.register(*hash, new_ts);
         }
         self.committed_tombstones.prune(new_ts);
@@ -954,12 +954,11 @@ mod tests {
     use hyperscale_core::FetchRequest;
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash,
-        BlockHeader, BoundedVec, CertificateRoot, ChainOrigin, Hash, InFlightCount,
-        LocalReceiptRoot, MerkleInclusionProof, NetworkDefinition, ProposerTimestamp,
-        ProvisionEntry, ProvisionTxRoot, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        ShardId, ShardLoad, SignerBitfield, StateRoot, TopologySnapshot, TransactionRoot, TxHash,
-        ValidatorId, ValidatorSet, Verifiable, WaveId, WeightedTimestamp, WitnessSources,
-        compute_merkle_root,
+        BlockHeader, CertificateRoot, ChainOrigin, Hash, InFlightCount, LocalReceiptRoot,
+        MerkleInclusionProof, NetworkDefinition, ProposerTimestamp, ProvisionEntry,
+        ProvisionTxRoot, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad,
+        SignerBitfield, StateRoot, TopologySnapshot, TransactionRoot, TxHash, ValidatorId,
+        ValidatorSet, Verifiable, WaveId, WeightedTimestamp, WitnessSources, compute_merkle_root,
     };
     use proptest::bool::ANY as ANY_BOOL;
     use proptest::collection::vec as prop_vec;
@@ -1014,7 +1013,7 @@ mod tests {
         let raw: Vec<Hash> = tx_hashes.iter().map(|h| h.into_raw()).collect();
         let root = ProvisionTxRoot::from_raw(compute_merkle_root(&raw));
         let (header, qc) = Arc::unwrap_or_clone(header_arc).into_inner().into_parts();
-        let mut roots = header.provision_tx_roots().clone().into_inner();
+        let mut roots = header.provision_tx_roots().clone();
         roots.insert(local_shard, root);
         let header = BlockHeader::new(
             header.shard_id(),
@@ -1030,7 +1029,7 @@ mod tests {
             header.certificate_root(),
             header.local_receipt_root(),
             header.provision_root(),
-            header.waves().clone().into_inner(),
+            header.waves().clone(),
             roots,
             header.in_flight(),
             BeaconWitnessRoot::ZERO,
@@ -2025,9 +2024,9 @@ mod tests {
         );
         let block = Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = {
@@ -2338,9 +2337,9 @@ mod tests {
             Arc::new(Arc::unwrap_or_clone(provisions).into());
         let block = Block::Live {
             header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::from(vec![provisions_verifiable])),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(vec![provisions_verifiable]),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = QuorumCertificate::new(

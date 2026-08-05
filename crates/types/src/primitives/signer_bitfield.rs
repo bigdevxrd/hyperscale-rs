@@ -5,8 +5,6 @@ use hyperscale_hbor::{
     Decoder, Encoder, HborDecode, HborEncode, HborWidth, bounded as hbor_bounded,
 };
 
-use crate::BoundedBytes;
-
 /// Hard cap on signers a single bitfield may describe.
 ///
 /// Bounds attacker-controlled `num_validators` decoded from the wire so
@@ -25,7 +23,7 @@ const MAX_BITS_BYTES_LEN: usize = MAX_SIGNERS.div_ceil(8);
 /// which validators contributed to the aggregated signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignerBitfield {
-    bits: BoundedBytes<MAX_BITS_BYTES_LEN>,
+    bits: Vec<u8>,
     num_validators: usize,
 }
 
@@ -42,7 +40,7 @@ impl SignerBitfield {
         );
         let num_bytes = num_validators.div_ceil(8);
         Self {
-            bits: BoundedBytes::from(vec![0u8; num_bytes]),
+            bits: vec![0u8; num_bytes],
             num_validators,
         }
     }
@@ -51,7 +49,7 @@ impl SignerBitfield {
     #[must_use]
     pub const fn empty() -> Self {
         Self {
-            bits: BoundedBytes::new(),
+            bits: Vec::new(),
             num_validators: 0,
         }
     }
@@ -61,7 +59,7 @@ impl SignerBitfield {
         if index < self.num_validators {
             let byte_idx = index / 8;
             let bit_idx = index % 8;
-            self.bits.0[byte_idx] |= 1 << bit_idx;
+            self.bits[byte_idx] |= 1 << bit_idx;
         }
     }
 
@@ -70,7 +68,7 @@ impl SignerBitfield {
         if index < self.num_validators {
             let byte_idx = index / 8;
             let bit_idx = index % 8;
-            self.bits.0[byte_idx] &= !(1 << bit_idx);
+            self.bits[byte_idx] &= !(1 << bit_idx);
         }
     }
 
@@ -184,7 +182,7 @@ impl HborDecode for SignerBitfield {
             }
         }
         Ok(Self {
-            bits: bits.into(),
+            bits,
             num_validators,
         })
     }

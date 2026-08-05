@@ -17,7 +17,7 @@ use hyperscale_storage::{
 use hyperscale_types::state_key::VM_PARTITION;
 use hyperscale_types::{
     AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight,
-    BoundedVec, CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
+    CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
     GlobalReceiptHash, GlobalReceiptRoot, Hash, ProposerTimestamp, QuorumCertificate, Round,
     SafeVoteRegisters, ShardId, SignerBitfield, StateRoot, StoredReceipt, SyncHint, TxHash,
     ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
@@ -556,9 +556,9 @@ fn push_wave(block: &mut Block, fw: Arc<Verifiable<FinalizedWave>>) {
         block,
         Block::Sealed {
             header: block.header().clone(),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provision_hashes: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provision_hashes: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         },
     );
@@ -623,9 +623,9 @@ fn attach_receipts(block: &mut Block, receipts: Vec<StoredReceipt>) {
         block,
         Block::Sealed {
             header: block.header().clone(),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provision_hashes: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provision_hashes: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         },
     );
@@ -746,7 +746,7 @@ fn test_commit_block_stores_certificates() {
 
     // Create a block that includes this certificate
     let block = make_test_block(BlockHeight::new(1));
-    let fw_certificates = Arc::new(vec![Arc::new(FinalizedWave::new(cert, vec![]).into())].into());
+    let fw_certificates = Arc::new(vec![Arc::new(FinalizedWave::new(cert, vec![]).into())]);
     let block = match block {
         Block::Live {
             header,

@@ -324,7 +324,7 @@ fn verify_chunk(
     chunk: &StateRangeChunk,
 ) -> Result<Vec<ImportLeaf>, &'static str> {
     let mut jmt_leaves: Vec<(Key, [u8; 32])> = Vec::with_capacity(chunk.leaves.len());
-    for leaf in chunk.leaves.iter() {
+    for leaf in &chunk.leaves {
         let leaf_key = *leaf.leaf_key.as_bytes();
         if !leaf_key_binds_storage_key(&leaf_key, &leaf.storage_key) {
             return Err("leaf key does not bind the shipped storage key");
@@ -346,8 +346,8 @@ fn verify_chunk(
         .iter()
         .map(|leaf| ImportLeaf {
             leaf_key: *leaf.leaf_key.as_bytes(),
-            storage_key: leaf.storage_key.to_vec(),
-            value: leaf.value.to_vec(),
+            storage_key: leaf.storage_key.clone(),
+            value: leaf.value.clone(),
         })
         .collect())
 }
@@ -486,7 +486,7 @@ mod tests {
         let mut sync = SnapSync::new(anchor, NibblePath::empty(), 0, 100);
         let (id, request) = sync.next_requests().pop().expect("one sub-range");
         let mut response = serve_state_range_request(&peer, &request);
-        response.chunk.as_mut().unwrap().leaves.0[0].value.0[0] ^= 0xFF;
+        response.chunk.as_mut().unwrap().leaves[0].value[0] ^= 0xFF;
 
         assert!(matches!(
             sync.on_response(id, &response),
@@ -505,8 +505,8 @@ mod tests {
         let (id, request) = sync.next_requests().pop().expect("one sub-range");
         let mut response = serve_state_range_request(&peer, &request);
         let chunk = response.chunk.as_mut().unwrap();
-        let other_key = chunk.leaves.0[1].storage_key.clone();
-        chunk.leaves.0[0].storage_key = other_key;
+        let other_key = chunk.leaves[1].storage_key.clone();
+        chunk.leaves[0].storage_key = other_key;
 
         assert!(matches!(
             sync.on_response(id, &response),

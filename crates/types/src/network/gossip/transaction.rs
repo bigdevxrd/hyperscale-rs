@@ -13,7 +13,7 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
-use crate::{BoundedVec, MessageClass, NetworkMessage, Transaction};
+use crate::{MessageClass, NetworkMessage, Transaction};
 
 /// Cap on transactions accepted in a single gossip batch at decode time.
 ///
@@ -30,7 +30,8 @@ const MAX_GOSSIP_TX_BATCH: usize = 1_000;
 #[derive(Debug, Clone, Hbor)]
 pub struct TransactionGossip {
     /// The transactions in this batch.
-    pub transactions: BoundedVec<Arc<Transaction>, MAX_GOSSIP_TX_BATCH>,
+    #[hbor(max = MAX_GOSSIP_TX_BATCH)]
+    pub transactions: Vec<Arc<Transaction>>,
 }
 
 impl TransactionGossip {
@@ -40,10 +41,8 @@ impl TransactionGossip {
     ///
     /// Panics if `transactions.len() > MAX_GOSSIP_TX_BATCH`.
     #[must_use]
-    pub fn new(transactions: Vec<Arc<Transaction>>) -> Self {
-        Self {
-            transactions: transactions.into(),
-        }
+    pub const fn new(transactions: Vec<Arc<Transaction>>) -> Self {
+        Self { transactions }
     }
 
     /// Number of transactions in the batch.

@@ -160,7 +160,7 @@ pub(crate) fn canonical_boundary_qcs<'a>(
 ) -> BTreeMap<ShardId, &'a QuorumCertificate> {
     let mut canonical: BTreeMap<ShardId, &QuorumCertificate> = BTreeMap::new();
     for proposal in proposals {
-        for (shard, opt) in proposal.boundary_qcs().iter() {
+        for (shard, opt) in proposal.boundary_qcs() {
             let Some(qc) = opt.as_ref().map(Verifiable::as_unverified) else {
                 continue;
             };

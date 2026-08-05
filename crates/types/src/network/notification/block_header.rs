@@ -175,7 +175,7 @@ mod tests {
             zero_sig(),
         );
 
-        let all: Vec<TxHash> = gossip.manifest.tx_hashes().clone().into_inner();
+        let all: Vec<TxHash> = gossip.manifest.tx_hashes().clone();
         assert_eq!(all, vec![tx1, tx2, tx3]);
     }
 }

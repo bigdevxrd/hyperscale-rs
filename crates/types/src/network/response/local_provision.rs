@@ -5,8 +5,7 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    BoundedVec, CertifiedBlockHeader, MAX_PROVISIONS_PER_BLOCK, MessageClass, NetworkMessage,
-    Provisions,
+    CertifiedBlockHeader, MAX_PROVISIONS_PER_BLOCK, MessageClass, NetworkMessage, Provisions,
 };
 
 /// One returned batch plus the source-shard header that proved its
@@ -49,7 +48,8 @@ pub struct GetLocalProvisionsResponse {
     /// Capped at [`MAX_PROVISIONS_PER_BLOCK`] — the natural ceiling since a
     /// single block can't reference more provisions than this, and the fetch
     /// dispatcher chunks at 16 ids per call.
-    pub entries: BoundedVec<LocalProvisionEntry, MAX_PROVISIONS_PER_BLOCK>,
+    #[hbor(max = MAX_PROVISIONS_PER_BLOCK)]
+    pub entries: Vec<LocalProvisionEntry>,
 }
 
 impl GetLocalProvisionsResponse {
@@ -61,17 +61,15 @@ impl GetLocalProvisionsResponse {
     /// dispatcher chunks at 16 ids per call, so well-behaved callers sit
     /// far below the cap.
     #[must_use]
-    pub fn new(entries: Vec<LocalProvisionEntry>) -> Self {
-        Self {
-            entries: entries.into(),
-        }
+    pub const fn new(entries: Vec<LocalProvisionEntry>) -> Self {
+        Self { entries }
     }
 
     /// Build an empty response (responder had none of the requested batches).
     #[must_use]
     pub const fn empty() -> Self {
         Self {
-            entries: BoundedVec::new(),
+            entries: Vec::new(),
         }
     }
 }

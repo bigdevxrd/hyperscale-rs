@@ -470,7 +470,7 @@ fn test_transactions_batch_with_indexed_block() {
             ..
         } => Block::Live {
             header,
-            transactions: Arc::new(vec![tx].into()),
+            transactions: Arc::new(vec![tx]),
             certificates,
             provisions,
             witness_sources: Arc::new(WitnessSources::empty()),
@@ -482,7 +482,7 @@ fn test_transactions_batch_with_indexed_block() {
             ..
         } => Block::Sealed {
             header,
-            transactions: Arc::new(vec![tx].into()),
+            transactions: Arc::new(vec![tx]),
             certificates,
             provision_hashes,
             witness_sources: Arc::new(WitnessSources::empty()),

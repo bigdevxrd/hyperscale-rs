@@ -196,8 +196,8 @@ pub fn build_shard_contributions(
             shard,
             ShardEpochContribution {
                 boundary_header,
-                payloads: payloads.into(),
-                range_proof: range_proof.into(),
+                payloads,
+                range_proof,
             },
         );
     }

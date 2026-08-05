@@ -66,11 +66,11 @@ mod tests {
     use crate::test_utils::{install_stub_vm_statics, stub_transaction, test_validity_range};
     use crate::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
-        BlockHeight, BoundedVec, CertificateRoot, ChainOrigin, ExecutionCertificate,
-        ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
-        LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round,
-        ShardId, ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome,
-        ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
+        BlockHeight, CertificateRoot, ChainOrigin, ExecutionCertificate, ExecutionOutcome,
+        FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot,
+        ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId,
+        ShardLoad, SignerBitfield, StateRoot, TransactionRoot, TxHash, TxOutcome, ValidatorId,
+        Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
     };
 
     #[test]
@@ -250,7 +250,7 @@ mod tests {
             ChainOrigin::ROOT,
         )
         .into_sealed()
-        .into_live(Arc::new(BoundedVec::new()));
+        .into_live(Arc::new(Vec::new()));
         if let Block::Live { ref mut header, .. } = bad_block {
             *header = BlockHeader::new(
                 header.shard_id(),
@@ -266,8 +266,8 @@ mod tests {
                 header.certificate_root(),
                 header.local_receipt_root(),
                 header.provision_root(),
-                header.waves().clone().into_inner(),
-                header.provision_tx_roots().clone().into_inner(),
+                header.waves().clone(),
+                header.provision_tx_roots().clone(),
                 header.in_flight(),
                 header.beacon_witness_root(),
                 header.beacon_witness_leaf_count(),

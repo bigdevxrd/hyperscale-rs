@@ -865,9 +865,9 @@ mod tests {
 
     use hyperscale_types::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHeader,
-        BoundedVec, CertificateRoot, ChainOrigin, Hash, InFlightCount, LocalReceiptRoot,
-        ProposerTimestamp, ProvisionsRoot, RevealChain, Round, ShardId, ShardLoad, SignerBitfield,
-        StateRoot, TransactionRoot, ValidatorId, WeightedTimestamp, WitnessSources,
+        CertificateRoot, ChainOrigin, Hash, InFlightCount, LocalReceiptRoot, ProposerTimestamp,
+        ProvisionsRoot, RevealChain, Round, ShardId, ShardLoad, SignerBitfield, StateRoot,
+        TransactionRoot, ValidatorId, WeightedTimestamp, WitnessSources,
     };
 
     use super::*;
@@ -903,9 +903,9 @@ mod tests {
     fn certified(height: BlockHeight, tag: &[u8]) -> CertifiedBlock {
         let block = Block::Live {
             header: header(height, tag),
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let qc = QuorumCertificate::new(

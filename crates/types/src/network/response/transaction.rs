@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use hyperscale_hbor::Hbor;
 
-use crate::{BoundedVec, MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, Transaction};
+use crate::{MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, Transaction};
 
 /// Response to a transaction fetch request.
 ///
@@ -14,7 +14,8 @@ use crate::{BoundedVec, MAX_TXS_PER_BLOCK, MessageClass, NetworkMessage, Transac
 pub struct GetTransactionsResponse {
     /// The requested transactions that were found.
     /// Uses Arc to avoid copying transaction data.
-    pub transactions: BoundedVec<Arc<Transaction>, MAX_TXS_PER_BLOCK>,
+    #[hbor(max = MAX_TXS_PER_BLOCK)]
+    pub transactions: Vec<Arc<Transaction>>,
 }
 
 impl GetTransactionsResponse {
@@ -24,17 +25,15 @@ impl GetTransactionsResponse {
     ///
     /// Panics if `transactions.len() > MAX_TXS_PER_BLOCK`.
     #[must_use]
-    pub fn new(transactions: Vec<Arc<Transaction>>) -> Self {
-        Self {
-            transactions: transactions.into(),
-        }
+    pub const fn new(transactions: Vec<Arc<Transaction>>) -> Self {
+        Self { transactions }
     }
 
     /// Create an empty response (no transactions found).
     #[must_use]
     pub const fn empty() -> Self {
         Self {
-            transactions: BoundedVec::new(),
+            transactions: Vec::new(),
         }
     }
 
@@ -53,7 +52,7 @@ impl GetTransactionsResponse {
     /// Consume and return the transactions.
     #[must_use]
     pub fn into_transactions(self) -> Vec<Arc<Transaction>> {
-        self.transactions.into_inner()
+        self.transactions
     }
 }
 

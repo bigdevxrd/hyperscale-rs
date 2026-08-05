@@ -10,8 +10,8 @@ use hyperscale_vm_types::Address;
 use crate::crypto::Ed25519PrivateKey;
 use crate::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
-    BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
-    CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived, EnvelopeExt,
+    BlockHeight, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin, CommitProof,
+    ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived, EnvelopeExt,
     ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot,
     Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, ProposerTimestamp, ProvisionsRoot,
     QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId, ShardLoad,
@@ -303,9 +303,9 @@ pub fn make_live_block(
         .collect();
     Block::Live {
         header,
-        transactions: Arc::new(transactions.into()),
-        certificates: Arc::new(certificates.into()),
-        provisions: Arc::new(BoundedVec::new()),
+        transactions: Arc::new(transactions),
+        certificates: Arc::new(certificates),
+        provisions: Arc::new(Vec::new()),
         witness_sources: Arc::new(WitnessSources::empty()),
     }
 }
@@ -781,8 +781,8 @@ fn stamp_parent_qc_weighted_timestamp(block: Block, weighted_timestamp_ms: u64) 
             certificate_root,
             local_receipt_root,
             provision_root,
-            waves.0,
-            provision_tx_roots.0,
+            waves,
+            provision_tx_roots,
             in_flight,
             beacon_witness_root,
             beacon_witness_leaf_count,

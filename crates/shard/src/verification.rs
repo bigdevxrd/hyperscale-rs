@@ -1248,7 +1248,7 @@ impl VerificationPipeline {
         vec![Action::VerifyProvisionRoot {
             block_hash,
             expected_root: block.header().provision_root(),
-            batch_hashes: manifest.provision_hashes().0.clone(),
+            batch_hashes: manifest.provision_hashes().clone(),
         }]
     }
 
@@ -2377,9 +2377,9 @@ mod tests {
         }
     }
     use hyperscale_types::{
-        BeaconWitnessLeafCount, BoundedVec, CertificateRoot, Epoch, Hash, LocalReceiptRoot,
-        LocalTimestamp, ProposerTimestamp, QuorumCertificate, RevealChain, Round, ShardId,
-        ShardLoad, SignerBitfield, Transaction, TransactionRoot, ValidatorId, WeightedTimestamp,
+        BeaconWitnessLeafCount, CertificateRoot, Epoch, Hash, LocalReceiptRoot, LocalTimestamp,
+        ProposerTimestamp, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad,
+        SignerBitfield, Transaction, TransactionRoot, ValidatorId, WeightedTimestamp,
     };
 
     use super::*;
@@ -2445,9 +2445,9 @@ mod tests {
     ) -> Block {
         Block::Live {
             header: header_claiming(height, parent_block_hash, in_flight, substate_bytes),
-            transactions: Arc::new(transactions.into()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(transactions),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         }
     }
@@ -3013,9 +3013,9 @@ mod tests {
         );
         let block = Block::Live {
             header: forged_header,
-            transactions: Arc::new(BoundedVec::new()),
-            certificates: Arc::new(BoundedVec::new()),
-            provisions: Arc::new(BoundedVec::new()),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
             witness_sources: Arc::new(WitnessSources::empty()),
         };
         let block_hash = block.hash();

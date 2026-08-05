@@ -11,8 +11,8 @@ use hyperscale_provisions::{ProvisionConfig, ProvisionCoordinator, ProvisionMemo
 use hyperscale_types::test_utils::TestCommittee;
 use hyperscale_types::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
-    BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
-    Hash, InFlightCount, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp, ProvisionHash,
+    BlockHeight, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin, Hash,
+    InFlightCount, LocalReceiptRoot, LocalTimestamp, ProposerTimestamp, ProvisionHash,
     ProvisionTxRoot, ProvisionsRoot, QuorumCertificate, RevealChain, Round, ShardId, ShardLoad,
     SignerBitfield, StateRoot, TopologySchedule, TopologySnapshot, TransactionRoot, ValidatorId,
     Verified, WaveId, WeightedTimestamp, WitnessSources,
@@ -61,9 +61,9 @@ fn make_block(height: BlockHeight) -> CertifiedBlock {
     );
     let block = Block::Live {
         header,
-        transactions: Arc::new(BoundedVec::new()),
-        certificates: Arc::new(BoundedVec::new()),
-        provisions: Arc::new(BoundedVec::new()),
+        transactions: Arc::new(Vec::new()),
+        certificates: Arc::new(Vec::new()),
+        provisions: Arc::new(Vec::new()),
         witness_sources: Arc::new(WitnessSources::empty()),
     };
     let qc = {

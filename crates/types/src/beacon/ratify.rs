@@ -726,7 +726,7 @@ impl Verify<&CandidateVerifyContext<'_>> for CandidateBeaconBlock {
             return Err(CandidateBeaconBlockVerifyError::BadCert);
         }
         for (_, proposal) in self.block().committed_proposals() {
-            for ev in proposal.equivocations().iter() {
+            for ev in proposal.equivocations() {
                 if verify_vote_equivocation(
                     ctx.verifier,
                     ev.as_unverified(),

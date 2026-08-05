@@ -117,7 +117,7 @@ pub fn serve_block_request<S: ShardStorage>(
         .collect();
 
     GetBlockResponse::found(ElidedCertifiedBlock::elide(
-        &block.into_live(Arc::new(provisions.into())),
+        &block.into_live(Arc::new(provisions)),
         qc,
         &req.inventory,
     ))

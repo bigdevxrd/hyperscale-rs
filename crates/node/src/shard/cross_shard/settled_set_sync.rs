@@ -14,8 +14,7 @@ use hyperscale_network::{Network, ResponseVerdict};
 use hyperscale_storage::ShardStorage;
 use hyperscale_types::network::response::GetSettledWavesResponse;
 use hyperscale_types::{
-    BlockHash, BlockHeight, BoundedVec, MAX_FINALIZED_TX_PER_BLOCK, SettledWavesRoot, ShardId,
-    ValidatorId, WaveId, WeightedTimestamp,
+    BlockHash, BlockHeight, SettledWavesRoot, ShardId, ValidatorId, WaveId, WeightedTimestamp,
 };
 
 use super::settled_set::SettledWavesAcquisitionOutput;
@@ -59,7 +58,7 @@ where
     pub(crate) fn handle_settled_waves_response_received(
         &mut self,
         source_shard: ShardId,
-        waves: Option<BoundedVec<WaveId, MAX_FINALIZED_TX_PER_BLOCK>>,
+        waves: Option<Vec<WaveId>>,
     ) {
         let response = GetSettledWavesResponse { waves };
         let outputs = self

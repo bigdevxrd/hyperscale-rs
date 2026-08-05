@@ -2,7 +2,7 @@
 
 use hyperscale_hbor::Hbor;
 
-use crate::{BoundedVec, MAX_STATE_ENTRIES_PER_TX, SubstateEntry, TxHash};
+use crate::{MAX_STATE_ENTRIES_PER_TX, SubstateEntry, TxHash};
 
 /// Per-transaction state entries within a provision.
 ///
@@ -17,7 +17,8 @@ pub struct ProvisionEntry {
     /// The state entries this transaction touched on the source shard.
     /// Empty for an engagement echo — a counterpart with nothing to serve
     /// still owes the payer its commitment of the transaction.
-    pub entries: BoundedVec<SubstateEntry, MAX_STATE_ENTRIES_PER_TX>,
+    #[hbor(max = MAX_STATE_ENTRIES_PER_TX)]
+    pub entries: Vec<SubstateEntry>,
 }
 
 impl ProvisionEntry {
@@ -30,10 +31,7 @@ impl ProvisionEntry {
     #[must_use]
     pub fn new(tx_hash: TxHash, mut entries: Vec<SubstateEntry>) -> Self {
         entries.sort_by(|a, b| a.storage_key.cmp(&b.storage_key));
-        Self {
-            tx_hash,
-            entries: entries.into(),
-        }
+        Self { tx_hash, entries }
     }
 }
 

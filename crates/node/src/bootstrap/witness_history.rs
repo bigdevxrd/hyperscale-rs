@@ -388,7 +388,7 @@ mod tests {
         let mut sync = WitnessHistorySync::new(anchor, 16);
         let request = sync.next_request().expect("idle assembly emits");
         let mut response = serve_witness_history_request(&peer, &request);
-        response.history.as_mut().unwrap().payloads.0[1] = stake_deposit(999);
+        response.history.as_mut().unwrap().payloads[1] = stake_deposit(999);
         assert!(matches!(
             sync.on_response(&response),
             BootstrapOutcome::Rejected("assembled window does not merkle to the header's root"),
@@ -408,7 +408,7 @@ mod tests {
         let request = sync.next_request().expect("idle assembly emits");
         let mut response = serve_witness_history_request(&peer, &request);
         let chunk = response.history.as_mut().unwrap();
-        chunk.payloads.0.pop();
+        chunk.payloads.pop();
         assert!(matches!(
             sync.on_response(&response),
             BootstrapOutcome::Rejected("final page leaves the window short"),
@@ -424,7 +424,7 @@ mod tests {
         let request = sync.next_request().expect("idle assembly emits");
         let mut response = serve_witness_history_request(&peer, &request);
         let chunk = response.history.as_mut().unwrap();
-        chunk.payloads.0.clear();
+        chunk.payloads.clear();
         chunk.more = true;
         assert!(matches!(
             sync.on_response(&response),
