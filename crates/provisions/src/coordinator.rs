@@ -474,7 +474,7 @@ impl ProvisionCoordinator {
 
         // Only track headers that owe us a bundle. The commitment is the
         // header's own `provision_tx_roots` entry — waves can name our
-        // shard without the source owing state (a VM counterpart with
+        // shard without the source owing state (a counterpart with
         // nothing to attest), and an expectation keyed on wave naming
         // would fetch a bundle that never exists.
         let targets_us = certified_header

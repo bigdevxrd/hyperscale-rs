@@ -60,7 +60,7 @@ where
         // empty-entry bundle is the engagement evidence.
         let mut entries = Vec::with_capacity(req.local_keys.len());
         for (owner, local) in &req.local_keys {
-            let Some(value) = view.get_vm_substate_at_height(*owner, *local, source_block_height)
+            let Some(value) = view.get_substate_at_height(*owner, *local, source_block_height)
             else {
                 warn!(
                     source_shard = source_shard.inner(),

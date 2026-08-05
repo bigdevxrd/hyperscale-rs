@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use hyperscale_core::{Action, VmFeeDemand};
+use hyperscale_core::{Action, FeeDemand};
 use hyperscale_types::{
     BeaconWitnessRoot, Block, BlockHash, BlockHeader, BlockHeight, BlockManifest, CertificateRoot,
     CertifiedBlock, ChainOrigin, FinalizedWave, InFlightCount, LinkageError, LocalReceiptRoot,
@@ -50,7 +50,7 @@ pub enum VerificationKind {
     BeaconWitnessRoot,
     /// Payer-shard fee reservations against vault balances at the
     /// committed frontier.
-    VmReservations,
+    Reservations,
 }
 
 /// Lifecycle position for a verification entry. `InFlight` covers the
@@ -876,8 +876,8 @@ impl VerificationPipeline {
             )
             && root_ok(VerificationKind::BeaconWitnessRoot, true)
             && root_ok(
-                VerificationKind::VmReservations,
-                self.is_root_tracked(block_hash, VerificationKind::VmReservations),
+                VerificationKind::Reservations,
+                self.is_root_tracked(block_hash, VerificationKind::Reservations),
             )
             && self.verified_in_flight.contains(&block_hash)
     }
@@ -939,10 +939,10 @@ impl VerificationPipeline {
             "skipped(no_provision_targets)",
             !h.provision_tx_roots().is_empty(),
         );
-        let vm_reservations_status = root_status(
-            VerificationKind::VmReservations,
+        let reservations_status = root_status(
+            VerificationKind::Reservations,
             "skipped(no_local_payers)",
-            self.is_root_tracked(block_hash, VerificationKind::VmReservations),
+            self.is_root_tracked(block_hash, VerificationKind::Reservations),
         );
         let beacon_witness_defer = self.beacon_witness_defer(block_hash);
         let beacon_witness_root_status = match beacon_witness_defer {
@@ -970,7 +970,7 @@ impl VerificationPipeline {
             local_receipt_root = local_receipt_root_status,
             provision_root = provision_root_status,
             provision_tx_root = provision_tx_root_status,
-            vm_reservations = vm_reservations_status,
+            reservations = reservations_status,
             beacon_witness_root = beacon_witness_root_status,
             beacon_witness_blocker = ?beacon_witness_defer.map(|(blocker, _)| blocker),
             in_flight = in_flight_status,
@@ -1276,10 +1276,10 @@ impl VerificationPipeline {
     /// Initiate payer-shard fee-reservation verification for a block.
     /// `demands` comes from the coordinator's chain-content derivation;
     /// callers skip the dispatch entirely when it is empty.
-    pub fn initiate_vm_reservations_verification(
+    pub fn initiate_reservations_verification(
         &mut self,
         block_hash: BlockHash,
-        demands: Vec<VmFeeDemand>,
+        demands: Vec<FeeDemand>,
         committed_height: BlockHeight,
     ) -> Vec<Action> {
         debug!(
@@ -1287,8 +1287,8 @@ impl VerificationPipeline {
             payer_count = demands.len(),
             "Initiating VM fee-reservation verification"
         );
-        self.mark_root_in_flight(block_hash, VerificationKind::VmReservations);
-        vec![Action::VerifyVmReservations {
+        self.mark_root_in_flight(block_hash, VerificationKind::Reservations);
+        vec![Action::VerifyReservations {
             block_hash,
             demands,
             committed_height,
@@ -1841,7 +1841,7 @@ impl VerificationPipeline {
         count_source: SubstateCountSource<'_>,
         split_child_roots_required: bool,
         settled_waves_root_required: bool,
-        vm_fee_demands: Vec<VmFeeDemand>,
+        fee_demands: Vec<FeeDemand>,
         committed_height: BlockHeight,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
@@ -1912,12 +1912,12 @@ impl VerificationPipeline {
 
         if self.needs_root(
             block_hash,
-            VerificationKind::VmReservations,
-            !vm_fee_demands.is_empty(),
+            VerificationKind::Reservations,
+            !fee_demands.is_empty(),
         ) {
-            actions.extend(self.initiate_vm_reservations_verification(
+            actions.extend(self.initiate_reservations_verification(
                 block_hash,
-                vm_fee_demands,
+                fee_demands,
                 committed_height,
             ));
         }

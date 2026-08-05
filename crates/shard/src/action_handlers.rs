@@ -25,7 +25,7 @@ use hyperscale_types::{
     StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout, TimeoutContext,
     TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext, ValidatorId,
     Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
-    absorb_committed_vm_cells, block_header_message, block_vote_message,
+    absorb_committed_cells, block_header_message, block_vote_message,
     certified_block_header_message, commit_witness_window, compute_waves, derive_leaves,
     local_settled_wave_ids, missed_proposals_since_prev_commit, next_reveal_chain,
     ready_signal_message, shard_reveal_sign, vrf_output_from_proof, work_over_certificates,
@@ -393,7 +393,7 @@ fn collect_finalized_receipts(
         .collect();
     // A package published in this block is usable by transactions
     // admitted after it commits, and this is where that becomes true.
-    absorb_committed_vm_cells(receipts.iter().map(AsRef::as_ref));
+    absorb_committed_cells(receipts.iter().map(AsRef::as_ref));
     receipts
 }
 
@@ -568,7 +568,7 @@ where
             ctx.notify_protocol(ProtocolEvent::ProvisionTxRootsVerified { block_hash, result });
         }
 
-        Action::VerifyVmReservations {
+        Action::VerifyReservations {
             block_hash,
             demands,
             committed_height,
@@ -580,11 +580,9 @@ where
             let view = ctx.pending_chain.view_at_committed_tip();
             let mut result: Result<(), String> = Ok(());
             for demand in &demands {
-                let Some(cell) = view.get_vm_substate_at_height(
-                    demand.owner,
-                    demand.vault_local,
-                    committed_height,
-                ) else {
+                let Some(cell) =
+                    view.get_substate_at_height(demand.owner, demand.vault_local, committed_height)
+                else {
                     result = Err(format!(
                         "payer {:?}: balance history unavailable at height {}",
                         demand.owner,
@@ -603,7 +601,7 @@ where
                     break;
                 }
             }
-            ctx.notify_protocol(ProtocolEvent::VmReservationsVerified { block_hash, result });
+            ctx.notify_protocol(ProtocolEvent::ReservationsVerified { block_hash, result });
         }
 
         Action::VerifyProvisionRoot {
@@ -833,7 +831,7 @@ where
             transactions,
             finalized_waves,
             provisions,
-            vm_fee_checks,
+            fee_checks,
             fee_read_height,
             parent_in_flight,
             parent_load,
@@ -877,22 +875,18 @@ where
             // reservation verification, reading the same
             // committed-height balances, so a proposal never
             // self-rejects.
-            let transactions = if vm_fee_checks.is_empty() {
+            let transactions = if fee_checks.is_empty() {
                 transactions
             } else {
-                let mut running: std::collections::HashMap<[u8; 16], u128> = vm_fee_checks
+                let mut running: std::collections::HashMap<[u8; 16], u128> = fee_checks
                     .iter()
                     .map(|check| (check.owner, check.demand))
                     .collect();
-                let balances: std::collections::HashMap<[u8; 16], u128> = vm_fee_checks
+                let balances: std::collections::HashMap<[u8; 16], u128> = fee_checks
                     .iter()
                     .map(|check| {
                         let balance = view
-                            .get_vm_substate_at_height(
-                                check.owner,
-                                check.vault_local,
-                                fee_read_height,
-                            )
+                            .get_substate_at_height(check.owner, check.vault_local, fee_read_height)
                             .flatten()
                             .and_then(|bytes| <[u8; 16]>::try_from(bytes.as_slice()).ok())
                             .map_or(0u128, u128::from_le_bytes);
@@ -1165,7 +1159,7 @@ where
 #[cfg(test)]
 mod tests {
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
-    use hyperscale_types::test_utils::{install_stub_vm_statics, stub_vm_transaction, test_prefix};
+    use hyperscale_types::test_utils::{install_stub_vm_statics, stub_transaction, test_prefix};
     use hyperscale_types::{
         CertificateRoot, LocalReceiptRoot, ProposerTimestamp, ProvisionsRoot, Signer,
         StoredReceipt, TimestampRange, TransactionRoot, TxRootVerifyError,
@@ -1635,7 +1629,7 @@ mod tests {
             WeightedTimestamp::from_millis(1_000),
         );
         install_stub_vm_statics();
-        let tx = Arc::new(Verifiable::from(stub_vm_transaction(
+        let tx = Arc::new(Verifiable::from(stub_transaction(
             test_prefix(1),
             &[test_prefix(1)],
             1_000,
@@ -1656,7 +1650,7 @@ mod tests {
         // Same root, anchor inside the range — verification passes.
         let valid_range = TimestampRange::new(anchor, anchor.plus(Duration::from_mins(1)));
 
-        let tx2 = Arc::new(Verifiable::from(stub_vm_transaction(
+        let tx2 = Arc::new(Verifiable::from(stub_transaction(
             test_prefix(2),
             &[test_prefix(2)],
             1_000,
@@ -1682,7 +1676,7 @@ mod tests {
             anchor.plus(Duration::from_mins(10)),
         );
         install_stub_vm_statics();
-        let tx = Arc::new(Verifiable::from(stub_vm_transaction(
+        let tx = Arc::new(Verifiable::from(stub_transaction(
             test_prefix(3),
             &[test_prefix(3)],
             1_000,

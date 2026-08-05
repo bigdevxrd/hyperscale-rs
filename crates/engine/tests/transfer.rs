@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use hyperscale_effects_bridge::vm_statics::package_key;
 use hyperscale_effects_bridge::{
-    ProtocolHasher, admit_package, attach_metadata, encode_tree, vm_account_address,
+    ProtocolHasher, account_address, admit_package, attach_metadata, encode_tree,
 };
 use hyperscale_engine::genesis::{account_artifact, entropy_key, vault_key};
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, PreviewGrants, PreviewInputs,
-    PreviewOutcome, PreviewReport, ProcessExecutionCache, ResourceChange, VM_XRD, WaveBatchContext,
-    vm_genesis_updates,
+    PreviewOutcome, PreviewReport, ProcessExecutionCache, ResourceChange, WaveBatchContext, XRD,
+    genesis_updates,
 };
 use hyperscale_storage::{
     DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,
@@ -22,7 +22,7 @@ use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, ShardId, ShardTrie,
     Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
-    absorb_committed_vm_cells,
+    absorb_committed_cells,
 };
 use hyperscale_vm_effects::{
     AbiParam, Address, Constraint, EdgeRef, EnvelopeTree, Expr, GraphArg, GraphNode, IntentDecl,
@@ -61,7 +61,7 @@ struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
-        let updates = vm_genesis_updates(accounts, &[]);
+        let updates = genesis_updates(accounts, &[]);
         let mut map = BTreeMap::new();
         for (node_key, node_updates) in &updates.node_updates {
             for (partition, partition_updates) in &node_updates.partition_updates {
@@ -140,7 +140,7 @@ fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGraph {
                 target: Address(from),
                 method: "withdraw".into(),
                 args: vec![
-                    GraphArg::Literal(Value::Address(VM_XRD)),
+                    GraphArg::Literal(Value::Address(XRD)),
                     GraphArg::Literal(Value::U128(amount)),
                 ],
             },
@@ -152,7 +152,7 @@ fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGraph {
                         producer: 0,
                         output: 0,
                     },
-                    constraints: vec![Constraint::ResourceIs(VM_XRD)],
+                    constraints: vec![Constraint::ResourceIs(XRD)],
                 }],
             },
         ],
@@ -189,7 +189,7 @@ fn signed_transfer_under_bound(
     let vm = TransactionEnvelope {
         body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
-        fee_payer: vm_account_address(&key.public_key().0),
+        fee_payer: account_address(&key.public_key().0),
         max_fee,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
@@ -221,7 +221,7 @@ fn signed_transfer_with_fee(
     let vm = TransactionEnvelope {
         body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
-        fee_payer: vm_account_address(&key.public_key().0),
+        fee_payer: account_address(&key.public_key().0),
         max_fee,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
@@ -237,7 +237,7 @@ fn signed_transfer_with_fee(
 /// The account address the fee-paying tests derive from their signing key.
 fn fee_payer(seed: u8) -> [u8; 16] {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
-    vm_account_address(&key.public_key().0)
+    account_address(&key.public_key().0)
 }
 
 /// Every account any test in this binary transacts with.
@@ -286,7 +286,7 @@ fn signed_stamp(seed: u8, owner: [u8; 16]) -> Transaction {
     let vm = TransactionEnvelope {
         body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
-        fee_payer: vm_account_address(&key.public_key().0),
+        fee_payer: account_address(&key.public_key().0),
         max_fee: 1_000_000,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
@@ -483,7 +483,7 @@ fn execute_batch_on(
 
 /// The raw update a batch made to an account's native vault, if any.
 fn vault_update(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<DatabaseUpdate> {
-    let key = vault_key(owner, VM_XRD);
+    let key = vault_key(owner, XRD);
     let node = updates.node_updates.get(&vm_db_node_key(owner))?;
     let PartitionDatabaseUpdates::Delta { substate_updates } =
         node.partition_updates.get(&VM_PARTITION)?
@@ -757,8 +757,14 @@ fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
     );
 }
 
-/// An account whose prefix routes to the other half of a two-shard trie.
-const FAR: [u8; 16] = [0x88; 16];
+/// An account whose prefix routes to the other half of a two-shard trie
+/// from [`alice`], derived by flipping the bit that trie splits on so the
+/// pair straddles it whatever address derivation produces.
+fn far() -> [u8; 16] {
+    let mut prefix = alice();
+    prefix[0] ^= 0x80;
+    prefix
+}
 
 /// Execute one batch as `local_shard` under a two-leaf trie.
 fn execute_on_shard(
@@ -766,7 +772,7 @@ fn execute_on_shard(
     local_shard: ShardId,
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
-    let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (FAR, 50)]);
+    let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (far(), 50)]);
     let snapshot = DynSnapshot(&snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([local_shard]));
     let trie = ShardTrie::uniform(1);
@@ -783,10 +789,10 @@ fn execute_on_shard(
 }
 
 fn events_of(executed: &ExecutedTx) -> Vec<([u8; 16], u32)> {
-    let ConsensusReceipt::Succeeded { vm_events, .. } = &executed.consensus else {
+    let ConsensusReceipt::Succeeded { events, .. } = &executed.consensus else {
         panic!("transfer must succeed: {:?}", executed.consensus);
     };
-    vm_events
+    events
         .iter()
         .map(|event| (event.emitter, event.event_type))
         .collect()
@@ -806,23 +812,26 @@ fn hash_of(executed: &ExecutedTx) -> Hash {
 /// storing the other's events.
 #[test]
 fn an_event_lands_only_on_its_emitters_home_shard() {
-    let world = vec![(alice(), 1_000u128), (FAR, 50), (fee_payer(7), 1_000)];
+    let world = vec![(alice(), 1_000u128), (far(), 50), (fee_payer(7), 1_000)];
     let executor = Executor::new(&world, ExecutionMode::Serial);
     let trie = ShardTrie::uniform(1);
-    let (near, far) = (trie.shard_for_prefix(alice()), trie.shard_for_prefix(FAR));
-    assert_ne!(near, far, "the two accounts must sit on different shards");
+    let (near_shard, far_shard) = (trie.shard_for_prefix(alice()), trie.shard_for_prefix(far()));
+    assert_ne!(
+        near_shard, far_shard,
+        "the two accounts must sit on different shards"
+    );
 
     let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
         ALICE_SEED,
         alice(),
-        FAR,
+        far(),
         100,
     )));
-    let sender_side = execute_on_shard(&executor, near, std::slice::from_ref(&tx));
-    let recipient_side = execute_on_shard(&executor, far, &[tx]);
+    let sender_side = execute_on_shard(&executor, near_shard, std::slice::from_ref(&tx));
+    let recipient_side = execute_on_shard(&executor, far_shard, &[tx]);
 
     assert_eq!(events_of(&sender_side[0]), vec![(alice(), 0)]);
-    assert_eq!(events_of(&recipient_side[0]), vec![(FAR, 1)]);
+    assert_eq!(events_of(&recipient_side[0]), vec![(far(), 1)]);
     assert_eq!(
         hash_of(&sender_side[0]),
         hash_of(&recipient_side[0]),
@@ -836,7 +845,7 @@ fn signed_publish(seed: u8, artifact: Vec<u8>) -> Transaction {
     let vm = TransactionEnvelope {
         body: TransactionBody::Publish(artifact.into()),
         subintent_sigs: Vec::new(),
-        fee_payer: vm_account_address(&key.public_key().0),
+        fee_payer: account_address(&key.public_key().0),
         max_fee: 1_000_000,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
@@ -974,7 +983,7 @@ fn a_committed_publish_grows_the_cache_that_routing_reads() {
         cache.load().get(package).is_none(),
         "execution alone does not publish"
     );
-    absorb_committed_vm_cells([&executed[0].consensus]);
+    absorb_committed_cells([&executed[0].consensus]);
     assert_eq!(
         cache.load().get(package),
         Some(&metadata),
@@ -999,7 +1008,7 @@ fn only_a_cell_that_addresses_its_own_contents_publishes() {
 
     // The right bytes at the wrong key: a vault slot, not the content
     // address. Refused.
-    let vault = vault_key(publisher, VM_XRD);
+    let vault = vault_key(publisher, XRD);
     cache.absorb_cell(publisher, vault.local.0, &artifact);
     assert!(
         cache.load().get(package).is_none(),
@@ -1035,7 +1044,7 @@ fn preview_on(
 
 /// The reported change to `owner`'s native vault.
 fn change_for(report: &PreviewReport, owner: [u8; 16]) -> ResourceChange {
-    let key = vault_key(owner, VM_XRD);
+    let key = vault_key(owner, XRD);
     *report
         .changes
         .iter()
@@ -1189,7 +1198,7 @@ fn a_preview_prices_an_abort_at_its_class_floor() {
     assert_eq!(
         report.changes,
         vec![ResourceChange {
-            key: vault_key(payer, VM_XRD),
+            key: vault_key(payer, XRD),
             before: 1_000,
             after: 1_000 - PREVIEW_CEILING / 10,
             credit: 0,
@@ -1310,7 +1319,7 @@ fn a_committed_cell_that_is_not_a_package_is_ignored() {
     )));
     let executed = execute(&executor, &[tx]);
     let bogus = package_hash(&ProtocolHasher, encode_amount(900).as_ref());
-    absorb_committed_vm_cells([&executed[0].consensus]);
+    absorb_committed_cells([&executed[0].consensus]);
     assert!(
         executor.packages().load().get(bogus).is_none(),
         "vault writes are not packages"

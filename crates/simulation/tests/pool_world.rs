@@ -13,8 +13,8 @@
 
 use std::time::Duration;
 
-use hyperscale_scenarios::tx::vm_staking_genesis_accounts;
-use hyperscale_scenarios::{ScenarioConfig, vm_delegation_folds_into_beacon_state};
+use hyperscale_scenarios::tx::staking_genesis_accounts;
+use hyperscale_scenarios::{ScenarioConfig, delegation_folds_into_beacon_state};
 
 mod support;
 
@@ -40,6 +40,6 @@ fn a_pool_seated_after_the_statics_are_installed_still_folds() {
     let _pool_less = SimCluster::new(&witness_config(), 0x9001);
 
     let mut cluster =
-        SimCluster::with_vm_accounts(&witness_config(), 0x57AC, &vm_staking_genesis_accounts());
-    vm_delegation_folds_into_beacon_state(&mut cluster);
+        SimCluster::with_accounts(&witness_config(), 0x57AC, &staking_genesis_accounts());
+    delegation_folds_into_beacon_state(&mut cluster);
 }

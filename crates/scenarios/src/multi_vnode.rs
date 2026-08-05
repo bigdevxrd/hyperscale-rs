@@ -19,7 +19,7 @@ use crate::support::{Cluster, epochs};
 ///
 /// Cross-shard multi-vnode hosting — one `io_loop` servicing a vnode in each of
 /// two shards — arises organically after a split and is exercised by
-/// [`cross_shard_tx`](crate::cross_shard_tx), whose transfer settles only when
+/// [`cross_shard_transfer`](crate::cross_shard_transfer), whose transfer settles only when
 /// both co-hosted children stay live.
 ///
 /// # Panics

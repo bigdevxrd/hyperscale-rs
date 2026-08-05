@@ -62,7 +62,7 @@ impl NodeStateMachine {
             certified,
         ));
         // Committed bundles are engagement evidence: promote any parked
-        // cross-shard VM transaction whose payer bundle just committed.
+        // cross-shard transaction whose payer bundle just committed.
         // Covers the case where another proposer paired the bundle
         // before this node's provisions pipeline verified it.
         for bundle in certified.block().provisions() {

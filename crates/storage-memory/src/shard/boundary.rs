@@ -360,7 +360,7 @@ mod tests {
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: updates.clone(),
                 beacon_witness_events: Vec::new(),
-                vm_events: Vec::new(),
+                events: Vec::new(),
             }),
         );
         (updates, receipt)

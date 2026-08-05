@@ -655,7 +655,7 @@ pub struct SubstateView<S> {
     /// (see [`jmt::TreeReader`] impl).
     jmt_nodes: JmtNodeIndex,
     /// Per-receipt references for versioned queries
-    /// ([`SubstateStore::get_vm_substate_at_height`]).
+    /// ([`SubstateStore::get_substate_at_height`]).
     /// Sorted by height ascending.
     versioned_receipts: Vec<(BlockHeight, Arc<ConsensusReceipt>)>,
     /// Lazy cache of base-storage reads observed through this view.
@@ -944,7 +944,7 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         (*self.base).state_root()
     }
 
-    fn get_vm_substate_at_height(
+    fn get_substate_at_height(
         &self,
         owner: [u8; 16],
         local: [u8; 16],
@@ -953,13 +953,13 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
         let persisted_version = (*self.base).jmt_height();
         if block_height <= persisted_version {
-            return (*self.base).get_vm_substate_at_height(owner, local, block_height);
+            return (*self.base).get_substate_at_height(owner, local, block_height);
         }
 
         // Base value at the persisted tip, then pending receipts in
         // commit order up to `block_height` — the same overlay walk as
         // the node-level listing, narrowed to one flat key.
-        let mut value = (*self.base).get_vm_substate_at_height(owner, local, persisted_version)?;
+        let mut value = (*self.base).get_substate_at_height(owner, local, persisted_version)?;
         let node_key = vm_db_node_key(owner);
         let sort_key = DbSortKey(local.to_vec());
         for (h, receipt) in &self.versioned_receipts {
@@ -1187,7 +1187,7 @@ mod tests {
         fn state_root(&self) -> StateRoot {
             StateRoot::ZERO
         }
-        fn get_vm_substate_at_height(
+        fn get_substate_at_height(
             &self,
             _owner: [u8; 16],
             _local: [u8; 16],
@@ -1320,7 +1320,7 @@ mod tests {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: updates,
             beacon_witness_events: Vec::new(),
-            vm_events: Vec::new(),
+            events: Vec::new(),
         })
     }
 

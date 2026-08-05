@@ -14,7 +14,7 @@ use hyperscale_vm_effects::{
     Value,
 };
 
-use crate::vm_statics::{VM_XRD, encode_tree, vm_account_address};
+use crate::vm_statics::{XRD, account_address, encode_tree};
 
 /// The execution gas limit every built envelope signs. Placeholder
 /// pricing — well above what a transfer draws, so the ceiling is never
@@ -31,7 +31,7 @@ pub fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGra
                 target: Address(from),
                 method: "withdraw".into(),
                 args: vec![
-                    GraphArg::Literal(Value::Address(VM_XRD)),
+                    GraphArg::Literal(Value::Address(XRD)),
                     GraphArg::Literal(Value::U128(amount)),
                 ],
             },
@@ -43,7 +43,7 @@ pub fn transfer_graph(from: [u8; 16], to: [u8; 16], amount: u128) -> ManifestGra
                         producer: 0,
                         output: 0,
                     },
-                    constraints: vec![Constraint::ResourceIs(VM_XRD)],
+                    constraints: vec![Constraint::ResourceIs(XRD)],
                 }],
             },
         ],
@@ -75,7 +75,7 @@ pub fn sign_call(
     TransactionEnvelope {
         body: TransactionBody::Call(encode_tree(&tree).into()),
         subintent_sigs: Vec::new(),
-        fee_payer: vm_account_address(&payer.public_key().0),
+        fee_payer: account_address(&payer.public_key().0),
         max_fee,
         gas_limit: DEFAULT_GAS_LIMIT,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),

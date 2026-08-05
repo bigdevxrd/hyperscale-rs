@@ -1,4 +1,4 @@
-//! The VM envelope's static derivation: the tree wire codec and the
+//! The envelope's static derivation: the tree wire codec and the
 //! [`VmStatics`] implementation admission verifies through.
 //!
 //! The envelope tree travels as canonical basic-SBOR of the mirror types
@@ -33,10 +33,10 @@ use crate::ProtocolHasher;
 use crate::artifact::admit_package;
 use crate::wire::{WireValue, value, wire_value};
 
-const DOMAIN_VM_ACCOUNT: &[u8] = b"hyperscale/engine-vm/account-address";
+const DOMAIN_ACCOUNT: &[u8] = b"hyperscale/engine/account-address";
 
 /// The native fee/transfer resource of the VM namespace.
-pub const VM_XRD: Address = Address([0x58; 16]);
+pub const XRD: Address = Address([0x58; 16]);
 
 /// The vault cell for `resource` under `owner` — the same child key the
 /// stdlib account metadata's effect clauses compute.
@@ -99,15 +99,15 @@ pub fn package_key(publisher: [u8; 16], package: PackageHash) -> SubstateKey {
     )
 }
 
-/// The VM account address owned by an ed25519 public key: the protocol
+/// The account address owned by an ed25519 public key: the protocol
 /// hash of the key, truncated to the owner-prefix width.
 ///
 /// Deterministic — genesis funding, transaction builders, and admission
 /// all derive the same address from the same key.
 #[must_use]
-pub fn vm_account_address(public_key: &[u8; 32]) -> [u8; 16] {
+pub fn account_address(public_key: &[u8; 32]) -> [u8; 16] {
     use hyperscale_vm_effects::Hasher as _;
-    let digest = ProtocolHasher.hash(DOMAIN_VM_ACCOUNT, &[public_key]);
+    let digest = ProtocolHasher.hash(DOMAIN_ACCOUNT, &[public_key]);
     let mut address = [0u8; 16];
     address.copy_from_slice(&digest.0[..16]);
     address
@@ -452,7 +452,7 @@ impl BridgeStatics {
         let publisher = vm.fee_payer;
         let package = package_hash(&ProtocolHasher, artifact);
         let cell = package_key(publisher, package);
-        let vault = vault_key(publisher, VM_XRD);
+        let vault = vault_key(publisher, XRD);
         let mut write_keys = vec![
             DeclaredKey::substate(cell.owner.0, cell.local.0),
             DeclaredKey::substate(vault.owner.0, vault.local.0),
@@ -572,7 +572,7 @@ impl VmStatics for BridgeStatics {
         // in the envelope. An unbound payer field is therefore a debit
         // on an account that authorised nothing, spendable by anyone
         // who knows its address.
-        if vm_account_address(&vm.signer) != vm.fee_payer {
+        if account_address(&vm.signer) != vm.fee_payer {
             return Err(VmStaticsError(
                 "fee payer is not the composer's own account".into(),
             ));
@@ -593,7 +593,7 @@ impl VmStatics for BridgeStatics {
         // declaration hashes returned here.
         for (index, (sig, subintent)) in vm.subintent_sigs.iter().zip(&tree.subintents).enumerate()
         {
-            if vm_account_address(&sig.public_key) != subintent.signer.0 {
+            if account_address(&sig.public_key) != subintent.signer.0 {
                 return Err(VmStaticsError(format!(
                     "subintent {index} signer address does not match its public key"
                 )));
@@ -666,7 +666,7 @@ impl VmStatics for BridgeStatics {
                 .iter()
                 .map(|record| record.subintent.0.0)
                 .collect(),
-            fee_vault_local: vault_key(vm.fee_payer, VM_XRD).local.0,
+            fee_vault_local: vault_key(vm.fee_payer, XRD).local.0,
         })
     }
 }
@@ -689,11 +689,11 @@ mod tests {
     }
 
     fn composer_addr() -> Address {
-        Address(vm_account_address(&key(7).public_key().0))
+        Address(account_address(&key(7).public_key().0))
     }
 
     fn bob_addr() -> Address {
-        Address(vm_account_address(&key(9).public_key().0))
+        Address(account_address(&key(9).public_key().0))
     }
 
     fn statics() -> BridgeStatics {

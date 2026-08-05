@@ -13,7 +13,7 @@ use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
 use hyperscale_effects_bridge::{
     PoolRegistry, ProtocolHasher, admit_package, attach_metadata, validator_key,
 };
-pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
+pub use hyperscale_effects_bridge::{XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
 use hyperscale_types::StakePoolSeat;
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
@@ -83,10 +83,10 @@ pub fn staking_artifact() -> &'static [u8] {
     &STAKING_ARTIFACT
 }
 
-/// The genesis-static VM world: published stdlib metadata and the funded
+/// The genesis-static world: published stdlib metadata and the funded
 /// accounts' instance registrations.
 #[derive(Debug, Clone)]
-pub struct VmWorld {
+pub struct World {
     /// Published package metadata, growing as blocks commit.
     pub cache: PackageCache,
     /// Instance registrations.
@@ -115,7 +115,7 @@ pub struct VmWorld {
 /// Panics if the stdlib artifact would not be admissible as a published
 /// package — a build defect, not a runtime condition.
 #[must_use]
-pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
+pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> World {
     genesis_world_with_pools(accounts, &[])
 }
 
@@ -132,7 +132,7 @@ pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
 /// Panics if a stdlib artifact would not be admissible as a published
 /// package — a build defect, not a runtime condition.
 #[must_use]
-pub fn genesis_world_with_pools(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> VmWorld {
+pub fn genesis_world_with_pools(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> World {
     let artifact = account_artifact();
     let account_package = package_hash(&ProtocolHasher, artifact);
     let metadata =
@@ -169,7 +169,7 @@ pub fn genesis_world_with_pools(accounts: &[([u8; 16], u128)], pools: &[StakePoo
                 // surface admits. The pool's own identity is its address,
                 // so nothing here names it.
                 config: vec![
-                    Value::Address(VM_XRD),
+                    Value::Address(XRD),
                     Value::Address(stake_unit(seat.address)),
                     Value::Address(Address(seat.operator)),
                 ],
@@ -177,7 +177,7 @@ pub fn genesis_world_with_pools(accounts: &[([u8; 16], u128)], pools: &[StakePoo
         );
         registry.register(seat.address, seat.id);
     }
-    VmWorld {
+    World {
         cache,
         instances,
         account_package,
@@ -193,16 +193,13 @@ pub fn genesis_world_with_pools(accounts: &[([u8; 16], u128)], pools: &[StakePoo
 /// pool that owes them.
 #[must_use]
 pub fn stake_unit(pool: [u8; 16]) -> Address {
-    Address(vault_key(pool, VM_XRD).local.0)
+    Address(vault_key(pool, XRD).local.0)
 }
 
-/// The funded accounts' genesis substate writes: one [`VM_XRD`] vault
+/// The funded accounts' genesis substate writes: one [`XRD`] vault
 /// cell per account, identity-keyed under the owner's prefix.
 #[must_use]
-pub fn vm_genesis_updates(
-    accounts: &[([u8; 16], u128)],
-    pools: &[StakePoolSeat],
-) -> DatabaseUpdates {
+pub fn genesis_updates(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> DatabaseUpdates {
     let mut updates = DatabaseUpdates::default();
     // The stdlib package as a committed cell, under the same content
     // address a publish would place it at. Genesis is then the cache's
@@ -254,7 +251,7 @@ pub fn vm_genesis_updates(
             );
     }
     for (address, balance) in accounts {
-        let key = vault_key(*address, VM_XRD);
+        let key = vault_key(*address, XRD);
         let mut substate_updates = IndexMap::new();
         substate_updates.insert(
             DbSortKey(key.local.0.to_vec()),
@@ -278,13 +275,13 @@ mod tests {
     use hyperscale_types::state_key::{VM_FLAT_KEY_LEN, vm_flat_key_parts};
 
     use super::*;
-    use crate::vm_account_address;
+    use crate::account_address;
 
     #[test]
     fn genesis_updates_are_identity_keyed_vault_cells() {
         let alice = [0x11u8; 16];
         let bob = [0x22u8; 16];
-        let updates = vm_genesis_updates(&[(alice, 500), (bob, 700)], &[]);
+        let updates = genesis_updates(&[(alice, 500), (bob, 700)], &[]);
         // Two funded accounts, plus the stdlib package under the
         // publisher no key derives.
         assert_eq!(updates.node_updates.len(), 3);
@@ -295,7 +292,7 @@ mod tests {
         );
 
         for (owner, balance) in [(alice, 500u128), (bob, 700)] {
-            let key = vault_key(owner, VM_XRD);
+            let key = vault_key(owner, XRD);
             assert_eq!(key.owner.0, owner);
             let node = updates
                 .node_updates
@@ -381,8 +378,8 @@ mod tests {
 
     #[test]
     fn account_addresses_derive_deterministically_from_keys() {
-        let a = vm_account_address(&[7u8; 32]);
-        assert_eq!(a, vm_account_address(&[7u8; 32]));
-        assert_ne!(a, vm_account_address(&[8u8; 32]));
+        let a = account_address(&[7u8; 32]);
+        assert_eq!(a, account_address(&[7u8; 32]));
+        assert_ne!(a, account_address(&[8u8; 32]));
     }
 }

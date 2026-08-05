@@ -13,14 +13,14 @@ use hyperscale_types::{
     AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert, BeaconChainConfig, BeaconState,
     BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, ChainOrigin,
-    ConsensusReceipt, Epoch, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome, FeeSummary,
-    FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot,
-    LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp,
-    ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound, RevealChain, Round,
-    ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield, SpcCert, SpcView, Stake,
-    StakePoolId, StateRoot, StoredReceipt, TransactionRoot, TxHash, TxOutcome, ValidatorId,
-    Verifiable, Verified, VmEvent, WaveCertificate, WaveId, WeightedTimestamp, WitnessSources,
-    compute_global_receipt_root, compute_merkle_root,
+    ConsensusReceipt, Epoch, Event, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome,
+    FeeSummary, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
+    LocalReceiptRoot, LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof,
+    ProposerTimestamp, ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound,
+    RevealChain, Round, ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield,
+    SpcCert, SpcView, Stake, StakePoolId, StateRoot, StoredReceipt, TransactionRoot, TxHash,
+    TxOutcome, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
+    WitnessSources, compute_global_receipt_root, compute_merkle_root,
 };
 use radix_common::math::Decimal;
 use radix_common::prelude::DatabaseUpdate;
@@ -346,7 +346,7 @@ pub fn make_test_receipt(seed: u8) -> StoredReceipt {
         receipt_hash: GlobalReceiptHash::ZERO,
         database_updates: DatabaseUpdates::default(),
         beacon_witness_events: Vec::new(),
-        vm_events: vec![VmEvent {
+        events: vec![Event {
             emitter: [seed; 16],
             event_type: u32::from(seed),
             payload: vec![seed, seed + 1],
@@ -486,7 +486,7 @@ pub fn commit_block_with_updates(
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: updates.clone(),
             beacon_witness_events: Vec::new(),
-            vm_events: Vec::new(),
+            events: Vec::new(),
         }),
         metadata: None,
     };

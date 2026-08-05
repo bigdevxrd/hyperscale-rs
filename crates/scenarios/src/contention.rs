@@ -19,8 +19,8 @@ use hyperscale_types::{ShardId, TransactionDecision, TransactionStatus, TxHash};
 
 use crate::reshape::split_lifecycle;
 use crate::support::tx::{
-    build_vm_fan_out_tx, build_vm_transfer_tx, validity_around, vm_accounts_routing_to,
-    vm_participant_sweep_accounts,
+    accounts_routing_to, build_fan_out_tx, build_transfer_tx, participant_sweep_accounts,
+    validity_around,
 };
 use crate::support::{Budget, Cluster, epochs, grow_to};
 
@@ -172,13 +172,13 @@ pub fn cross_shard_fraction(
     split_lifecycle(c);
     let (left, right) = (ShardId::leaf(1, 0), ShardId::leaf(1, 1));
 
-    // The same taken-walk as `vm_cross_fraction_genesis_accounts`, so the
+    // The same taken-walk as `cross_fraction_genesis_accounts`, so the
     // senders are exactly the genesis-funded accounts.
     let mut taken = Vec::new();
-    let senders = vm_accounts_routing_to(left, 2, total, &mut taken);
+    let senders = accounts_routing_to(left, 2, total, &mut taken);
     let cross_count = total * cross_permille as usize / 1000;
-    let local_recipients = vm_accounts_routing_to(left, 2, total, &mut taken);
-    let cross_recipients = vm_accounts_routing_to(right, 2, total, &mut taken);
+    let local_recipients = accounts_routing_to(left, 2, total, &mut taken);
+    let cross_recipients = accounts_routing_to(right, 2, total, &mut taken);
 
     let recipients = cross_recipients
         .iter()
@@ -187,7 +187,7 @@ pub fn cross_shard_fraction(
         .map(|(_, account)| *account);
     let mut submissions = Vec::with_capacity(total);
     for ((payer, from), to) in senders.iter().zip(recipients) {
-        let tx = build_vm_transfer_tx(
+        let tx = build_transfer_tx(
             payer,
             *from,
             to,
@@ -223,9 +223,9 @@ pub fn participant_count_sweep(
         "a fan-out cannot touch more shards than the topology has",
     );
     grow_to(c, u32::try_from(num_shards).expect("shard count fits"));
-    // The same walk `vm_participant_sweep_accounts` funds: the payer on
+    // The same walk `participant_sweep_accounts` funds: the payer on
     // the first leaf, then one payee per leaf in leaf order.
-    let accounts = vm_participant_sweep_accounts(num_shards);
+    let accounts = participant_sweep_accounts(num_shards);
     let (payer, from) = (&accounts[0].0, accounts[0].1);
 
     let mut latencies = Vec::new();
@@ -233,7 +233,7 @@ pub fn participant_count_sweep(
         let recipients: Vec<[u8; 16]> = (1..participants)
             .map(|leaf| accounts[1 + leaf as usize].1)
             .collect();
-        let tx = build_vm_fan_out_tx(
+        let tx = build_fan_out_tx(
             payer,
             from,
             &recipients,

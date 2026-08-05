@@ -278,7 +278,7 @@ pub struct MempoolCoordinator {
     /// consulted to drive grace-window fetch fallback.
     expected_txs: ExpectedTxs,
 
-    /// Cross-shard VM transactions parked outside contention until their
+    /// Cross-shard transactions parked outside contention until their
     /// engagement evidence — the payer shard's bundle — arrives. Value is
     /// the payer shard the evidence must come from. A parked transaction
     /// is pooled, fetchable, and reported `Pending`, but holds no ready
@@ -437,7 +437,7 @@ impl MempoolCoordinator {
         }
 
         let cross_shard = topology_snapshot.is_cross_shard_transaction(tx);
-        // A cross-shard VM transaction at a non-payer shard enters
+        // A cross-shard transaction at a non-payer shard enters
         // contention only once its engagement evidence exists.
         match self.engagement_park_target(topology_snapshot, tx, cross_shard) {
             Some(payer_shard) => {
@@ -1011,7 +1011,7 @@ impl MempoolCoordinator {
     /// Add a transaction to ready tracking when it becomes Pending. The
     /// store decides whether it lands in the ready or deferred set based on
     /// currently-locked and already-claimed nodes.
-    /// The payer shard a cross-shard VM transaction must show engagement
+    /// The payer shard a cross-shard transaction must show engagement
     /// evidence from before entering contention, or `None` when the
     /// transaction is immediately ready: not VM, not cross-shard, this
     /// shard is the payer's, or the evidence already arrived.
@@ -1436,7 +1436,7 @@ mod tests {
     use hyperscale_metrics_memory::MemoryRecorder;
     use hyperscale_types::test_utils::{
         TestCommittee, certify, install_stub_vm_statics, make_finalized_wave, make_live_block,
-        stub_vm_transaction, test_prefix, test_transaction, test_transaction_with_prefixes,
+        stub_transaction, test_prefix, test_transaction, test_transaction_with_prefixes,
         test_validity_range,
     };
     use hyperscale_types::{RevealChain, Verified, WitnessSources};
@@ -2679,12 +2679,12 @@ mod tests {
 
     fn tx_with_end(seed: u8, end_ms: u64) -> Arc<Verified<Transaction>> {
         use hyperscale_types::TimestampRange;
-        use hyperscale_types::test_utils::{stub_vm_transaction, test_prefix};
+        use hyperscale_types::test_utils::{stub_transaction, test_prefix};
         let range = TimestampRange::new(
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(end_ms),
         );
-        Arc::new(verified(stub_vm_transaction(
+        Arc::new(verified(stub_transaction(
             test_prefix(seed),
             &[test_prefix(seed)],
             1_000,
@@ -2927,11 +2927,11 @@ mod tests {
 
     // ─── Engagement parking ─────────────────────────────────────────────
 
-    /// A signed stub VM transaction whose derived owners are exactly
+    /// A signed stub transaction whose derived owners are exactly
     /// `owners`, paying from `payer`.
     fn stub_vm(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verified<Transaction>> {
         install_stub_vm_statics();
-        Arc::new(verified(stub_vm_transaction(
+        Arc::new(verified(stub_transaction(
             payer,
             owners,
             1_000,
@@ -2940,7 +2940,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_shard_vm_tx_parks_until_engagement_evidence() {
+    fn cross_shard_tx_parks_until_engagement_evidence() {
         let topology = TestCommittee::new(4, 42).topology_snapshot(2);
         let local = ShardId::leaf(1, 0);
         let payer_shard = ShardId::leaf(1, 1);

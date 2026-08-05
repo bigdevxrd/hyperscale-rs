@@ -9,7 +9,7 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use hyperscale_engine::VM_XRD;
+use hyperscale_engine::XRD;
 use hyperscale_engine::genesis::vault_key;
 use hyperscale_types::{
     BlockHeight, Ed25519PrivateKey, Epoch, ShardId, TransactionDecision, TransactionStatus, TxHash,
@@ -22,8 +22,8 @@ use crate::support::query::{
 use crate::support::tx::{
     MERGE_STRADDLER_LEFT, MERGE_STRADDLER_RIGHT, MERGE_STRADDLER_SURVIVOR, STRADDLER_SPLITTER,
     STRADDLER_SUCCESSOR, STRADDLER_SURVIVOR, SplitStraddlerSetup, TERMINATING_PAYER_FUNDING,
-    build_reshape_threshold_vote_tx, build_vm_transfer_tx, merge_straddler_setup,
-    split_straddler_setup, validity_around, vm_pool_operator,
+    build_reshape_threshold_vote_tx, build_transfer_tx, merge_straddler_setup, pool_operator,
+    split_straddler_setup, validity_around,
 };
 use crate::support::wait::{
     await_anchor_seeded, await_beacon_epoch, await_merge_keeper_count, await_root_matches_anchor,
@@ -166,7 +166,7 @@ pub fn arm_splitter_termination<C: Cluster>(c: &mut C) {
         .chain_config
         .epoch_duration_ms;
     let vote = build_reshape_threshold_vote_tx(
-        &vm_pool_operator().0,
+        &pool_operator().0,
         STRADDLER_SPLIT_BYTES,
         Epoch::new(current.inner() + vote_activate_lead(c.vote_fold_budget_ms(), epoch_ms)),
         validity_around(c.now()),
@@ -282,7 +282,7 @@ fn assert_payer_is_blocked<C: FaultableCluster>(
     setup: &SplitStraddlerSetup,
 ) {
     let (payer_key, payer, _) = &setup.terminating;
-    let blocked = build_vm_transfer_tx(
+    let blocked = build_transfer_tx(
         payer_key,
         *payer,
         setup.successor_recipient,
@@ -293,7 +293,7 @@ fn assert_payer_is_blocked<C: FaultableCluster>(
     c.submit(Arc::new(blocked));
 
     let (control_key, control_payer) = &setup.control;
-    let control = build_vm_transfer_tx(
+    let control = build_transfer_tx(
         control_key,
         *control_payer,
         setup.successor_recipient,
@@ -377,7 +377,7 @@ pub fn split_terminating_payer_releases_its_reservation(c: &mut impl FaultableCl
     // survivor's half, so no wave of its can finalize.
     let _ = isolate_ec_intake(c, splitter, survivor);
 
-    let held = build_vm_transfer_tx(
+    let held = build_transfer_tx(
         payer_key,
         *payer,
         *recipient,
@@ -398,7 +398,7 @@ pub fn split_terminating_payer_releases_its_reservation(c: &mut impl FaultableCl
          before it terminates",
     );
     assert_eq!(
-        vm_vault_balance(c, splitter, *payer),
+        vault_balance(c, splitter, *payer),
         TERMINATING_PAYER_FUNDING,
         "the reservation must not move the payer's vault: it is an engagement, \
          not an on-chain hold",
@@ -452,7 +452,7 @@ pub fn split_terminating_payer_releases_its_reservation(c: &mut impl FaultableCl
     // settled no fee receipt, and a receipt is the only thing that moves state;
     // the refused probe was never included anywhere at all.
     assert_eq!(
-        vm_vault_balance(c, successor, *payer),
+        vault_balance(c, successor, *payer),
         TERMINATING_PAYER_FUNDING,
         "the payer's vault must carry across the split untouched",
     );
@@ -462,7 +462,7 @@ pub fn split_terminating_payer_releases_its_reservation(c: &mut impl FaultableCl
     // begins at the seeded genesis, so there is no hold left to count against
     // the payer — the reservation died with the shard that held it, without
     // anything having to sweep it.
-    let released = build_vm_transfer_tx(
+    let released = build_transfer_tx(
         payer_key,
         *payer,
         setup.successor_recipient,
@@ -481,15 +481,15 @@ pub fn split_terminating_payer_releases_its_reservation(c: &mut impl FaultableCl
          in-flight state outlives the shard; status = {status:?}",
     );
     assert!(
-        vm_vault_balance(c, successor, *payer) < TERMINATING_PAYER_FUNDING,
+        vault_balance(c, successor, *payer) < TERMINATING_PAYER_FUNDING,
         "the released transaction must actually have spent from the payer's vault",
     );
 }
 
 /// The committed native-vault balance `owner` holds on `shard`.
-fn vm_vault_balance<C: Cluster>(c: &C, shard: ShardId, owner: [u8; 16]) -> u128 {
-    let vault = vault_key(owner, VM_XRD);
-    c.vm_substate(shard, vault.owner.0, vault.local.0)
+fn vault_balance<C: Cluster>(c: &C, shard: ShardId, owner: [u8; 16]) -> u128 {
+    let vault = vault_key(owner, XRD);
+    c.substate(shard, vault.owner.0, vault.local.0)
         .map_or(0, |bytes| {
             let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
             u128::from_le_bytes(cell)
@@ -720,7 +720,7 @@ pub fn submit_straddler<C: Cluster>(
     from: [u8; 16],
     to: [u8; 16],
 ) -> TxHash {
-    let tx = build_vm_transfer_tx(key, from, to, STRADDLER_PAYMENT, validity_around(c.now()));
+    let tx = build_transfer_tx(key, from, to, STRADDLER_PAYMENT, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
     hash

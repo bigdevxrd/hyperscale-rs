@@ -275,7 +275,7 @@ where
         let event_tx = self.event_sender().clone();
         let local_shard = self.shard;
         let par: Parallelism = self.process.dispatch.parallelism();
-        // Admission solvency policy, not consensus: a VM transaction
+        // Admission solvency policy, not consensus: a transaction
         // whose local payer cannot cover its signed fee ceiling at the
         // current tip never enters the mempool — envelopes are free to
         // mint, and an uncoverable one would otherwise occupy ready
@@ -382,7 +382,7 @@ where
     }
 }
 
-/// Whether the payer of a VM transaction can cover its signed fee
+/// Whether the payer of a transaction can cover its signed fee
 /// ceiling, read at the local committed tip. `true` for anything the
 /// policy does not judge: Radix transactions, remote payers (their
 /// balance is unreadable here — the payer shard's own admission judges
@@ -401,7 +401,7 @@ fn payer_covers_fee_ceiling<S: SubstateStore>(
     let Some(storage) = storage else {
         return true;
     };
-    let Some(cell) = storage.get_vm_substate_at_height(owner, vault_local, storage.jmt_height())
+    let Some(cell) = storage.get_substate_at_height(owner, vault_local, storage.jmt_height())
     else {
         return true;
     };

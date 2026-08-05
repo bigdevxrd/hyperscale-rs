@@ -390,7 +390,7 @@ pub enum ProtocolEvent {
 
     /// Payer-shard fee-reservation verification completed for a pending
     /// block.
-    VmReservationsVerified {
+    ReservationsVerified {
         /// Block whose reservations were verified.
         block_hash: BlockHash,
         /// `Ok` when every payer's balance covers its demand; the

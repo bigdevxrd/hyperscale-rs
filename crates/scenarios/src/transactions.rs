@@ -5,7 +5,7 @@ use std::sync::Arc;
 use hyperscale_types::{TransactionDecision, TransactionStatus};
 
 use crate::reshape::split_lifecycle;
-use crate::support::tx::{PROBE_PAYMENT, build_vm_transfer_tx, validity_around, vm_livelock_pair};
+use crate::support::tx::{PROBE_PAYMENT, build_transfer_tx, livelock_pair, validity_around};
 use crate::support::wait::await_tx_terminal;
 use crate::support::{Cluster, epochs};
 
@@ -39,12 +39,12 @@ pub fn livelock_resolves_promptly(c: &mut impl Cluster) {
     split_lifecycle(c);
 
     let validity = validity_around(c.now());
-    let pair = vm_livelock_pair();
+    let pair = livelock_pair();
     let (key_a, acc_a) = &pair[0];
     let (key_b, acc_b) = &pair[1];
 
-    let tx_a = build_vm_transfer_tx(key_a, *acc_a, *acc_b, PROBE_PAYMENT, validity);
-    let tx_b = build_vm_transfer_tx(key_b, *acc_b, *acc_a, PROBE_PAYMENT, validity);
+    let tx_a = build_transfer_tx(key_a, *acc_a, *acc_b, PROBE_PAYMENT, validity);
+    let tx_b = build_transfer_tx(key_b, *acc_b, *acc_a, PROBE_PAYMENT, validity);
     let hash_a = tx_a.hash();
     let hash_b = tx_b.hash();
     c.submit(Arc::new(tx_a));
@@ -64,7 +64,7 @@ pub fn livelock_resolves_promptly(c: &mut impl Cluster) {
 
     // The control on that: whatever the pair did, neither shard is still
     // encumbered. A lock the deadlock left behind would refuse this.
-    let after = build_vm_transfer_tx(
+    let after = build_transfer_tx(
         key_a,
         *acc_a,
         *acc_b,

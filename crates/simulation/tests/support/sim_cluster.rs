@@ -17,7 +17,7 @@ use hyperscale_network::fault::{HostId, RuleHandle};
 use hyperscale_network_memory::NodeIndex;
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::query::{chain_fate, status_rank};
-use hyperscale_scenarios::tx::{vm_staking_genesis_accounts, vm_world_accounts, vm_world_pools};
+use hyperscale_scenarios::tx::{staking_genesis_accounts, world_accounts, world_pools};
 use hyperscale_scenarios::{
     Budget, Cluster, DeferralStats, FaultHandle, FaultableCluster, ScenarioConfig, grow_to,
     vote_reshape_threshold,
@@ -25,9 +25,9 @@ use hyperscale_scenarios::{
 use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner};
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::{
-    BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds, ShardId,
-    Signer, StateRoot, Transaction, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
-    VmEvent,
+    BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, Event, ReshapeThresholds,
+    ShardId, Signer, StateRoot, Transaction, TransactionDecision, TransactionStatus, TxHash,
+    ValidatorId,
 };
 
 /// The clock slice `run_until` advances per poll, matching the runner's own
@@ -49,8 +49,8 @@ struct BuildArgs<'a> {
     seed: u64,
     dedicated_pool_hosts: bool,
     share_declared_reads: bool,
-    vm_accounts: &'a [([u8; 16], u128)],
-    vm_execution_mode: ExecutionMode,
+    accounts: &'a [([u8; 16], u128)],
+    execution_mode: ExecutionMode,
 }
 
 /// The simulation adaptor: a [`Cluster`] over a [`SimulationRunner`].
@@ -70,44 +70,44 @@ impl SimCluster {
         Self::build(config, seed, &[], false, false)
     }
 
-    /// [`Self::with_vm_accounts`] with declared reads shared rather than
+    /// [`Self::with_accounts`] with declared reads shared rather than
     /// exclusive — the share side of the read-share A/B.
     #[must_use]
-    pub fn with_vm_accounts_and_read_share(
+    pub fn with_accounts_and_read_share(
         config: &ScenarioConfig,
         seed: u64,
-        vm_accounts: &[([u8; 16], u128)],
+        accounts: &[([u8; 16], u128)],
     ) -> Self {
-        Self::build(config, seed, vm_accounts, false, true)
+        Self::build(config, seed, accounts, false, true)
     }
 
     /// Build a genesis cluster with funded accounts, batch-scheduling
     /// waves serially.
     #[must_use]
-    pub fn with_vm_accounts(
+    pub fn with_accounts(
         config: &ScenarioConfig,
         seed: u64,
-        vm_accounts: &[([u8; 16], u128)],
+        accounts: &[([u8; 16], u128)],
     ) -> Self {
-        Self::with_vm_mode(config, seed, vm_accounts, ExecutionMode::Serial)
+        Self::with_execution_mode(config, seed, accounts, ExecutionMode::Serial)
     }
 
-    /// [`Self::with_vm_accounts`] with an explicit batch scheduling mode —
+    /// [`Self::with_accounts`] with an explicit batch scheduling mode —
     /// one side of the serial/parallel A/B.
     #[must_use]
-    pub fn with_vm_mode(
+    pub fn with_execution_mode(
         config: &ScenarioConfig,
         seed: u64,
-        vm_accounts: &[([u8; 16], u128)],
-        vm_execution_mode: ExecutionMode,
+        accounts: &[([u8; 16], u128)],
+        execution_mode: ExecutionMode,
     ) -> Self {
         Self::build_full(&BuildArgs {
             config,
             seed,
             dedicated_pool_hosts: false,
             share_declared_reads: false,
-            vm_accounts,
-            vm_execution_mode,
+            accounts,
+            execution_mode,
         })
     }
 
@@ -115,12 +115,12 @@ impl SimCluster {
     /// straddler and halt-recovery scenarios, whose legs are transfers
     /// over a byte skew the genesis ballast shapes.
     #[must_use]
-    pub fn with_vm_and_dedicated_pool_hosts(
+    pub fn with_accounts_and_dedicated_pool_hosts(
         config: &ScenarioConfig,
         seed: u64,
-        vm_accounts: &[([u8; 16], u128)],
+        accounts: &[([u8; 16], u128)],
     ) -> Self {
-        Self::build(config, seed, vm_accounts, true, false)
+        Self::build(config, seed, accounts, true, false)
     }
 
     /// Build a genesis cluster giving each pool extra its own shard-less
@@ -138,7 +138,7 @@ impl SimCluster {
     fn build(
         config: &ScenarioConfig,
         seed: u64,
-        vm_accounts: &[([u8; 16], u128)],
+        accounts: &[([u8; 16], u128)],
         dedicated_pool_hosts: bool,
         share_declared_reads: bool,
     ) -> Self {
@@ -147,8 +147,8 @@ impl SimCluster {
             seed,
             dedicated_pool_hosts,
             share_declared_reads,
-            vm_accounts,
-            vm_execution_mode: ExecutionMode::Serial,
+            accounts,
+            execution_mode: ExecutionMode::Serial,
         })
     }
 
@@ -176,11 +176,11 @@ impl SimCluster {
             // a network parameter — the same reason the statics register
             // every pool rather than only the ones a scenario delegates
             // to.
-            vm_accounts: args
-                .vm_accounts
+            accounts: args
+                .accounts
                 .iter()
                 .copied()
-                .chain(vm_staking_genesis_accounts())
+                .chain(staking_genesis_accounts())
                 .collect(),
             // Unconditional, including for clusters that fund no accounts
             // at all: the statics install once per process and the first
@@ -188,10 +188,10 @@ impl SimCluster {
             // would otherwise install an empty registry that every later
             // scenario fails against. Registering an address nothing
             // transacts with costs nothing.
-            vm_world_accounts: vm_world_accounts(),
-            vm_execution_mode: args.vm_execution_mode,
-            vm_pools: vm_world_pools(),
-            vm_world_pools: vm_world_pools(),
+            world_accounts: world_accounts(),
+            execution_mode: args.execution_mode,
+            pools: world_pools(),
+            world_pools: world_pools(),
             ..SimConfig::default()
         };
         let mut runner = SimulationRunner::new(&sim_config, args.seed);
@@ -204,7 +204,7 @@ impl SimCluster {
     }
 
     /// Build a cluster grown to `config.num_shards` with `config.split_bytes`
-    /// as the live reshape threshold, with `vm_accounts` funded at the
+    /// as the live reshape threshold, with `accounts` funded at the
     /// single ROOT genesis so the grow splits their cells to their prefix
     /// shards.
     ///
@@ -218,16 +218,16 @@ impl SimCluster {
     ///
     /// Panics if the grow or the threshold activation misses its budget.
     #[must_use]
-    pub fn with_grown_vm_accounts(
+    pub fn with_grown_accounts(
         config: &ScenarioConfig,
         seed: u64,
-        vm_accounts: &[([u8; 16], u128)],
+        accounts: &[([u8; 16], u128)],
     ) -> Self {
         let grow_config = ScenarioConfig {
             split_bytes: 0,
             ..*config
         };
-        let mut cluster = Self::with_vm_accounts(&grow_config, seed, vm_accounts);
+        let mut cluster = Self::with_accounts(&grow_config, seed, accounts);
         grow_to(&mut cluster, config.num_shards);
         vote_reshape_threshold(&mut cluster, config.split_bytes);
         cluster
@@ -398,16 +398,16 @@ impl Cluster for SimCluster {
         Some(total)
     }
 
-    fn vm_substate(&self, shard: ShardId, owner: [u8; 16], local: [u8; 16]) -> Option<Vec<u8>> {
+    fn substate(&self, shard: ShardId, owner: [u8; 16], local: [u8; 16]) -> Option<Vec<u8>> {
         let store = self
             .live_committee_hosts(shard)
             .into_iter()
             .find_map(|host| self.runner.hosts_shard(host, shard))?;
         let height = store.jmt_height();
-        store.get_vm_substate_at_height(owner, local, height)?
+        store.get_substate_at_height(owner, local, height)?
     }
 
-    fn vm_preview(
+    fn preview(
         &self,
         shard: ShardId,
         tx: &Transaction,
@@ -423,7 +423,7 @@ impl Cluster for SimCluster {
         // transaction, and so which reveal anchors it, is not yet decided.
         let tip = store.get_certified_header(store.committed_height())?;
         let snapshot = store.snapshot();
-        Some(self.runner.vm_engine().preview(
+        Some(self.runner.engine().preview(
             &DynSnapshot(&snapshot),
             tx,
             PreviewInputs {
@@ -434,11 +434,11 @@ impl Cluster for SimCluster {
         ))
     }
 
-    fn vm_events(&self, shard: ShardId, tx: TxHash) -> Option<Vec<VmEvent>> {
+    fn events(&self, shard: ShardId, tx: TxHash) -> Option<Vec<Event>> {
         let store =
             (0..self.runner.num_hosts()).find_map(|host| self.runner.hosts_shard(host, shard))?;
         match store.get_consensus_receipt(&tx)?.as_ref() {
-            ConsensusReceipt::Succeeded { vm_events, .. } => Some(vm_events.clone()),
+            ConsensusReceipt::Succeeded { events, .. } => Some(events.clone()),
             ConsensusReceipt::Failed => Some(Vec::new()),
         }
     }

@@ -1,6 +1,6 @@
 //! In-flight fee reservations at the payer shard.
 //!
-//! A committed VM transaction whose fee payer routes to this shard holds
+//! A committed transaction whose fee payer routes to this shard holds
 //! `max_fee` against the payer's vault until its wave finalizes — the
 //! window in which the reservation is engaged but not yet settled. The
 //! ledger tracks exactly that window from chain content: entries insert
@@ -92,27 +92,27 @@ impl FeeReservationLedger {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::test_utils::{make_finalized_wave, stub_vm_transaction};
+    use hyperscale_types::test_utils::{make_finalized_wave, stub_transaction};
     use hyperscale_types::{BlockHeight, TimestampRange, TransactionDecision, Verified};
 
     use super::*;
 
     const PAYER: [u8; 16] = [0xAA; 16];
 
-    fn vm_tx(max_fee: u128, end_ms: u64) -> Arc<Verifiable<Transaction>> {
+    fn transaction(max_fee: u128, end_ms: u64) -> Arc<Verifiable<Transaction>> {
         let validity = TimestampRange::new(
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(end_ms),
         );
         Arc::new(Verifiable::from(Verified::new_unchecked_for_test(
-            stub_vm_transaction(PAYER, &[PAYER], max_fee, validity),
+            stub_transaction(PAYER, &[PAYER], max_fee, validity),
         )))
     }
 
     #[test]
     fn holds_accumulate_and_release_on_finalized_waves() {
         let mut ledger = FeeReservationLedger::new();
-        let tx = vm_tx(1_000, 60_000);
+        let tx = transaction(1_000, 60_000);
         ledger.register_committed(std::slice::from_ref(&tx), |_| true);
         assert_eq!(ledger.held_for(PAYER), 1_000);
         assert_eq!(ledger.held_for([0xBB; 16]), 0);
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn non_payer_local_and_radix_transactions_hold_nothing() {
         let mut ledger = FeeReservationLedger::new();
-        let tx = vm_tx(1_000, 60_000);
+        let tx = transaction(1_000, 60_000);
         ledger.register_committed(std::slice::from_ref(&tx), |_| false);
         assert_eq!(ledger.held_for(PAYER), 0);
     }
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn prune_drops_holds_past_the_retention_deadline() {
         let mut ledger = FeeReservationLedger::new();
-        let tx = vm_tx(1_000, 100);
+        let tx = transaction(1_000, 100);
         ledger.register_committed(std::slice::from_ref(&tx), |_| true);
 
         ledger.prune(WeightedTimestamp::from_millis(100));

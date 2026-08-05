@@ -153,17 +153,17 @@ impl Verify<&ProvisionTxRootsContext<'_>> for ProvisionTxRootsMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{TestCommittee, install_stub_vm_statics, stub_vm_transaction};
+    use crate::test_utils::{TestCommittee, install_stub_vm_statics, stub_transaction};
     use crate::{TimestampRange, WeightedTimestamp};
 
-    fn cross_shard_vm_tx(payer: [u8; 16]) -> Arc<Verifiable<Transaction>> {
+    fn cross_shard_tx(payer: [u8; 16]) -> Arc<Verifiable<Transaction>> {
         install_stub_vm_statics();
         let validity = TimestampRange::new(
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(100_000),
         );
         Arc::new(Verifiable::from(Verified::new_unchecked_for_test(
-            stub_vm_transaction(payer, &[[0x01; 16], [0x81; 16]], 1_000, validity),
+            stub_transaction(payer, &[[0x01; 16], [0x81; 16]], 1_000, validity),
         )))
     }
 
@@ -175,7 +175,7 @@ mod tests {
         let topo = TestCommittee::new(4, 42).topology_snapshot(2);
         let payer_shard = ShardId::leaf(1, 1);
         let counterpart = ShardId::leaf(1, 0);
-        let txs = vec![cross_shard_vm_tx([0x81; 16])];
+        let txs = vec![cross_shard_tx([0x81; 16])];
 
         let at_counterpart = Verified::<ProvisionTxRootsMap>::compute(counterpart, &topo, &txs);
         let targets: Vec<ShardId> = at_counterpart.as_ref().keys().copied().collect();

@@ -12,32 +12,32 @@
 //! with per-tx attribution via `local_receipt_root` (`ConsensusReceipt::local_receipt_hash`).
 
 pub mod consensus;
+pub mod event;
 pub mod global;
 pub mod metadata;
 pub mod stored;
-pub mod vm_event;
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        BeaconWitnessRoot, ConsensusReceipt, DatabaseUpdates, EventRoot, GlobalReceipt,
-        GlobalReceiptHash, Hash, OwnershipRoot, VmEvent, WritesRoot,
+        BeaconWitnessRoot, ConsensusReceipt, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
+        GlobalReceiptHash, Hash, OwnershipRoot, WritesRoot,
     };
 
-    fn make_event(seed: u8) -> VmEvent {
-        VmEvent {
+    fn make_event(seed: u8) -> Event {
+        Event {
             emitter: [seed; 16],
             event_type: u32::from(seed),
             payload: vec![seed, seed + 1],
         }
     }
 
-    fn make_succeeded(events: Vec<VmEvent>) -> ConsensusReceipt {
+    fn make_succeeded(events: Vec<Event>) -> ConsensusReceipt {
         ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: DatabaseUpdates::default(),
             beacon_witness_events: Vec::new(),
-            vm_events: events,
+            events,
         }
     }
 

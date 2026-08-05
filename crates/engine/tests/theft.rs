@@ -15,11 +15,11 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use hyperscale_effects_bridge::{encode_tree, vm_account_address};
+use hyperscale_effects_bridge::{account_address, encode_tree};
 use hyperscale_engine::genesis::vault_key;
 use hyperscale_engine::{
-    DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache, VM_XRD,
-    WaveBatchContext, vm_genesis_updates,
+    DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache,
+    WaveBatchContext, XRD, genesis_updates,
 };
 use hyperscale_storage::{
     DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase,
@@ -50,7 +50,7 @@ struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
-        let updates = vm_genesis_updates(accounts, &[]);
+        let updates = genesis_updates(accounts, &[]);
         let mut map = BTreeMap::new();
         for (node_key, node_updates) in &updates.node_updates {
             for (partition, partition_updates) in &node_updates.partition_updates {
@@ -98,7 +98,7 @@ impl SubstateDatabase for MapDb {
 
 fn thief() -> [u8; 16] {
     let key = Ed25519PrivateKey::from_bytes(&[THIEF; 32]).unwrap();
-    vm_account_address(&key.public_key().0)
+    account_address(&key.public_key().0)
 }
 
 /// Every address any test in this binary transacts with.
@@ -111,7 +111,7 @@ fn withdraw(target: [u8; 16], amount: u128) -> GraphNode {
         target: Address(target),
         method: "withdraw".into(),
         args: vec![
-            GraphArg::Literal(Value::Address(VM_XRD)),
+            GraphArg::Literal(Value::Address(XRD)),
             GraphArg::Literal(Value::U128(amount)),
         ],
     }
@@ -126,7 +126,7 @@ fn deposit(target: [u8; 16], producer: u32) -> GraphNode {
                 producer,
                 output: 0,
             },
-            constraints: vec![Constraint::ResourceIs(VM_XRD)],
+            constraints: vec![Constraint::ResourceIs(XRD)],
         }],
     }
 }
@@ -182,7 +182,7 @@ fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
 
 /// An account's native vault as the batch left it.
 fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
-    let key = vault_key(owner, VM_XRD);
+    let key = vault_key(owner, XRD);
     let node = updates.node_updates.get(&vm_db_node_key(owner))?;
     let PartitionDatabaseUpdates::Delta { substate_updates } =
         node.partition_updates.get(&VM_PARTITION)?

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hex::encode as hex_encode;
-use hyperscale_effects_bridge::vm_account_address;
+use hyperscale_effects_bridge::account_address;
 use hyperscale_types::{Ed25519PrivateKey, ShardId, ShardTrie, ed25519_keypair_from_seed};
 use rand::{Rng, RngExt};
 use serde_json::{from_str as json_from_str, to_string_pretty as json_to_string_pretty};
@@ -98,7 +98,7 @@ impl FundedAccount {
 
     /// Derive account address from keypair.
     fn address_from_keypair(keypair: &Ed25519PrivateKey) -> [u8; 16] {
-        vm_account_address(&keypair.public_key().0)
+        account_address(&keypair.public_key().0)
     }
 
     /// Determine which shard an address belongs to. An account's address

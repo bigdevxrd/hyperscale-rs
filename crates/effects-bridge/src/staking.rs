@@ -2,7 +2,7 @@
 //!
 //! The beacon's control plane consumes lifecycle facts — a pool gained
 //! stake, a pool lost stake, a pool took on a validator — and the stake
-//! pool package emits them as ordinary VM events. This module is the
+//! pool package emits them as ordinary events. This module is the
 //! whole of the trust boundary between those two statements: emission is
 //! unprivileged, and every layer past this one is mechanical, so what a
 //! witness is allowed to be is decided here and nowhere else.
@@ -40,8 +40,8 @@ use std::collections::BTreeMap;
 
 use hyperscale_types::{
     BeaconWitnessEvent, CONSENSUS_PUBLIC_KEY_BYTES, ConsensusPublicKey, ConsensusSignature, Epoch,
-    NetworkParams, ParamProposal, ParamVote, ReshapeThresholds, Stake, StakePoolId, ValidatorId,
-    VmEvent,
+    Event, NetworkParams, ParamProposal, ParamVote, ReshapeThresholds, Stake, StakePoolId,
+    ValidatorId,
 };
 use hyperscale_vm_effects::{Address, InstanceRegistry, PackageHash};
 
@@ -107,7 +107,7 @@ impl PoolRegistry {
 /// would vary by replica.
 #[must_use]
 pub fn witness_from_event(
-    event: &VmEvent,
+    event: &Event,
     pools: &PoolRegistry,
     instances: &InstanceRegistry,
     staking_package: PackageHash,
@@ -260,8 +260,8 @@ mod tests {
         (pools, instances)
     }
 
-    fn event(emitter: [u8; 16], event_type: u32, amount: u128) -> VmEvent {
-        VmEvent {
+    fn event(emitter: [u8; 16], event_type: u32, amount: u128) -> Event {
+        Event {
             emitter,
             event_type,
             payload: amount.to_le_bytes().to_vec(),
@@ -328,8 +328,8 @@ mod tests {
         payload
     }
 
-    fn raw(emitter: [u8; 16], event_type: u32, payload: Vec<u8>) -> VmEvent {
-        VmEvent {
+    fn raw(emitter: [u8; 16], event_type: u32, payload: Vec<u8>) -> Event {
+        Event {
             emitter,
             event_type,
             payload,
@@ -558,7 +558,7 @@ mod tests {
     fn a_payload_that_is_not_an_amount_cell_is_not_a_fact() {
         let (pools, instances) = world();
         for payload in [Vec::new(), vec![1; 8], vec![1; 17]] {
-            let event = VmEvent {
+            let event = Event {
                 emitter: POOL,
                 event_type: STAKED,
                 payload,

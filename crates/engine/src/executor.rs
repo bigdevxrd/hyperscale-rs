@@ -28,9 +28,9 @@ use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
-    BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata,
+    BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventRoot, ExecutionMetadata,
     FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, StakePoolSeat, SubstateEntry,
-    Transaction, TxHash, Verified, VmEvent, compute_merkle_root, install_vm_statics,
+    Transaction, TxHash, Verified, compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
@@ -46,10 +46,10 @@ use radix_common::prelude::DbSubstateValue;
 use radix_substate_store_interface::interface::{DatabaseUpdates, DbPartitionKey};
 
 use crate::backend::EngineBackend;
-use crate::genesis::{VmWorld, genesis_world_with_pools};
+use crate::genesis::{World, genesis_world_with_pools};
 use crate::sharding::{compute_writes_root, sort_database_updates};
 use crate::{
-    CachedVmOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, WaveBatchContext, project_to_shard,
+    CachedOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, WaveBatchContext, project_to_shard,
 };
 
 /// Whether a derivation holds a gated node to its target's authority.
@@ -69,7 +69,7 @@ pub enum TargetAuthority {
 /// the invocation its package's ABI binding describes, and
 /// [`ManifestWalk`] performs them over the engine backend. Nothing on
 /// this side names a method.
-pub struct PreparedVmTx {
+pub struct PreparedTx {
     /// The lowered invocations the kernel walks, in manifest node order.
     /// Envelope trees lower into one flat list, so nothing downstream
     /// sees intent structure.
@@ -89,7 +89,7 @@ pub fn protocol_hash(data: &[u8]) -> [u8; 32] {
 }
 
 /// Domain tag for the per-transaction randomness draw.
-const DOMAIN_TX_RANDOMNESS: &[u8] = b"hyperscale/vm/tx-randomness";
+const DOMAIN_TX_RANDOMNESS: &[u8] = b"hyperscale/engine/tx-randomness";
 
 /// The transaction's randomness draw: the payer block's reveal chain —
 /// its proposer's VRF reveal, attested by the committee that committed
@@ -154,7 +154,7 @@ impl Base for VmBase {
 /// The VM engine: the genesis-static world, the compiled stdlib guests,
 /// and the batch scheduling mode.
 pub struct Executor {
-    pub(crate) world: VmWorld,
+    pub(crate) world: World,
     pub(crate) backend: EngineBackend,
     pub(crate) mode: ExecutionMode,
 }
@@ -211,7 +211,7 @@ impl Executor {
     /// — the same `decode → admit → route` admission ran; refusal here
     /// means the transaction bypassed admission and fails
     /// deterministically.
-    pub(crate) fn prepare(&self, tx: &Transaction) -> Result<PreparedVmTx, String> {
+    pub(crate) fn prepare(&self, tx: &Transaction) -> Result<PreparedTx, String> {
         self.prepare_with_authority(tx, TargetAuthority::Required)
     }
 
@@ -225,7 +225,7 @@ impl Executor {
         &self,
         tx: &Transaction,
         authority: TargetAuthority,
-    ) -> Result<PreparedVmTx, String> {
+    ) -> Result<PreparedTx, String> {
         let vm = tx.body();
         let packages = self.world.cache.load();
         let tree = decode_tree(
@@ -266,7 +266,7 @@ impl Executor {
         let declaration = routing
             .declaration()
             .map_err(|error| format!("declaration: {error:?}"))?;
-        Ok(PreparedVmTx {
+        Ok(PreparedTx {
             calls: routing.calls,
             declaration,
             nullifiers: admitted
@@ -580,7 +580,7 @@ fn build_fee_receipt(
     // work is unattested — a failed outcome carries no gas either — so an
     // abort contributes nothing to its shard's emission weight. Pricing
     // aborted work is the floor's job, not the weight's.
-    let cached = CachedVmOutput::succeeded(
+    let cached = CachedOutput::succeeded(
         updates,
         receipt_hash,
         vm_metadata(0, None),
@@ -631,7 +631,7 @@ fn assemble_published_tx(
         fees_applied: BTreeMap::new(),
     };
     let cached = if let Some(reason) = &refusal {
-        CachedVmOutput::failed(vm_metadata(work, Some(reason.clone())))
+        CachedOutput::failed(vm_metadata(work, Some(reason.clone())))
     } else {
         {
             let mut writes: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
@@ -661,7 +661,7 @@ fn assemble_published_tx(
                 OwnershipRoot::ZERO,
             )
             .receipt_hash();
-            CachedVmOutput::succeeded(
+            CachedOutput::succeeded(
                 updates,
                 receipt_hash,
                 vm_metadata(work, None),
@@ -745,10 +745,10 @@ fn assemble_executed_tx(
         // Every participant derives the same events from the same
         // manifest, so the root covers the whole union while each shard's
         // receipt keeps only what its own instances emitted.
-        let vm_events: Vec<VmEvent> = receipt
+        let events: Vec<Event> = receipt
             .events
             .iter()
-            .map(|event| VmEvent {
+            .map(|event| Event {
                 emitter: event.emitter.0,
                 event_type: event.event_type,
                 payload: event.payload.clone(),
@@ -760,7 +760,7 @@ fn assemble_executed_tx(
         // share so every participant derives the same set — which shard
         // keeps a fact is settled once, at projection, by the same rule
         // that settles which shard keeps the event.
-        let vm_witnesses: Vec<([u8; 16], BeaconWitnessEvent)> = vm_events
+        let witnesses: Vec<([u8; 16], BeaconWitnessEvent)> = events
             .iter()
             .filter_map(|event| {
                 witness_from_event(
@@ -772,7 +772,7 @@ fn assemble_executed_tx(
                 .map(|witness| (event.emitter, witness))
             })
             .collect();
-        let event_hashes: Vec<Hash> = vm_events.iter().map(VmEvent::hash).collect();
+        let event_hashes: Vec<Hash> = events.iter().map(Event::hash).collect();
         let receipt_hash = GlobalReceipt::new(
             true,
             EventRoot::from_raw(compute_merkle_root(&event_hashes)),
@@ -781,16 +781,16 @@ fn assemble_executed_tx(
             OwnershipRoot::ZERO,
         )
         .receipt_hash();
-        CachedVmOutput::succeeded(
+        CachedOutput::succeeded(
             updates,
             receipt_hash,
             vm_metadata(receipt.fuel, None),
             receipt.fuel,
-            vm_events,
-            vm_witnesses,
+            events,
+            witnesses,
         )
     } else {
-        CachedVmOutput::failed(vm_metadata(
+        CachedOutput::failed(vm_metadata(
             receipt.fuel,
             Some(abort_reason(&receipt.outcome)),
         ))
@@ -844,7 +844,7 @@ impl Executor {
 
         // Derive every transaction; refusals become deterministic
         // failures without touching the batch.
-        let mut prepared: BTreeMap<VmTxHash, PreparedVmTx> = BTreeMap::new();
+        let mut prepared: BTreeMap<VmTxHash, PreparedTx> = BTreeMap::new();
         let mut refused: BTreeMap<TxHash, String> = BTreeMap::new();
         for tx in transactions {
             let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
@@ -1047,7 +1047,7 @@ impl Executor {
                         .get(&tx.hash())
                         .cloned()
                         .unwrap_or_else(|| "missing batch receipt".to_string());
-                    let cached = CachedVmOutput::failed(vm_metadata(0, Some(reason)));
+                    let cached = CachedOutput::failed(vm_metadata(0, Some(reason)));
                     project_to_shard(&cached, tx.hash(), ctx.local_shard, ctx.shard_trie)
                 })
             })

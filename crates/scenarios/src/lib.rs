@@ -18,16 +18,24 @@
 mod support;
 
 mod contention;
+mod execution;
 mod faults;
 mod liveness;
 mod multi_vnode;
 mod reshape;
 mod straddler;
 mod transactions;
-mod vm;
 mod witnesses;
 
 pub use contention::{ContentionReport, cross_shard_fraction, participant_count_sweep};
+pub use execution::{
+    a_failed_attempt_still_attests_work, abort_converges, abort_floor_settles_on_deadline,
+    attested_load_reaches_the_beacon, cross_shard_transfer, deploy_storm_rides_out,
+    events_land_on_their_emitters_home_shard, failure_charges_its_payer, hot_recipient,
+    insolvent_payer_engages_nothing, nullifier_race_admits_exactly_one,
+    preview_reports_resource_changes, randomness_draw_agrees_across_shards,
+    reads_the_committed_baseline, single_transfer, zipf_payments,
+};
 pub use faults::{
     beacon_lag_drops_skipped_epochs_reveal_chains, beacon_pool_partition_stalls_epoch_production,
     cross_shard_compound_drop_fetch_fallback, cross_shard_exec_cert_drop_fetch_fallback,
@@ -58,17 +66,9 @@ pub use support::{
     vote_reshape_threshold, wait,
 };
 pub use transactions::livelock_resolves_promptly;
-pub use vm::{
-    vm_a_failed_attempt_still_attests_work, vm_abort_converges, vm_abort_floor_settles_on_deadline,
-    vm_attested_load_reaches_the_beacon, vm_cross_shard_transfer, vm_deploy_storm_rides_out,
-    vm_events_land_on_their_emitters_home_shard, vm_failure_charges_its_payer, vm_hot_recipient,
-    vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
-    vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,
-    vm_reads_the_committed_baseline, vm_single_transfer, vm_zipf_payments,
-};
 pub use witnesses::{
-    pool_capacity_caps_registrations, re_registration_of_a_live_validator_is_a_no_op,
-    register_validator_pools_a_node, register_without_capacity_is_rejected,
-    registered_validator_activates_onto_a_shard, stake_withdraw_drops_effective_stake,
-    vm_delegation_folds_into_beacon_state,
+    delegation_folds_into_beacon_state, pool_capacity_caps_registrations,
+    re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
+    register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
+    stake_withdraw_drops_effective_stake,
 };

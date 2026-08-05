@@ -354,7 +354,7 @@ impl StateMachine for NodeStateMachine {
             | ProtocolEvent::LocalReceiptRootVerified { .. }
             | ProtocolEvent::ProvisionsRootVerified { .. }
             | ProtocolEvent::ProvisionTxRootsVerified { .. }
-            | ProtocolEvent::VmReservationsVerified { .. }
+            | ProtocolEvent::ReservationsVerified { .. }
             | ProtocolEvent::BeaconWitnessRootVerified { .. }
             | ProtocolEvent::StateRootVerified { .. }
             | ProtocolEvent::ProposalBuilt { .. }

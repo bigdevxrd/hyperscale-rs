@@ -2,7 +2,7 @@
 //!
 //! Receipt projection runs in two stages:
 //!
-//! - the engine turns its own receipt into a [`CachedVmOutput`] — every
+//! - the engine turns its own receipt into a [`CachedOutput`] — every
 //!   field is shard-invariant for a given transaction. This is the
 //!   cacheable stage.
 //! - [`project_to_shard`] consumes the cached output and a target shard
@@ -10,8 +10,8 @@
 //!   slice, the events, and the beacon facts are shard-specific.
 
 use hyperscale_types::{
-    BeaconWitnessEvent, ConsensusReceipt, ExecutionMetadata, GlobalReceiptHash, ShardId, ShardTrie,
-    TxHash, VmEvent, has_partition_reset,
+    BeaconWitnessEvent, ConsensusReceipt, Event, ExecutionMetadata, GlobalReceiptHash, ShardId,
+    ShardTrie, TxHash, has_partition_reset,
 };
 use radix_substate_store_interface::interface::DatabaseUpdates;
 
@@ -26,13 +26,13 @@ use crate::sharding::{filter_updates_for_shard, sort_database_updates};
 /// here is identical on every shard that executes the same transaction.
 /// Per-shard `database_updates` is *not* cached — it's re-derived per
 /// call from `raw_updates` via [`project_to_shard`].
-pub struct CachedVmOutput {
+pub struct CachedOutput {
     metadata: ExecutionMetadata,
-    body: CachedVmOutputBody,
+    body: CachedOutputBody,
 }
 
 #[allow(clippy::large_enum_variant)] // Succeeded is the common case; boxing penalises every hit
-enum CachedVmOutputBody {
+enum CachedOutputBody {
     /// A per-transaction abort, or a transaction that never reached the
     /// engine.
     Failed,
@@ -43,7 +43,7 @@ enum CachedVmOutputBody {
         /// Events in emission order, unfiltered: the projection picks
         /// each shard's own by the emitter's home, and the event root
         /// covers the whole union.
-        events: Vec<VmEvent>,
+        events: Vec<Event>,
         receipt_hash: GlobalReceiptHash,
         /// Beacon facts lifted from a recognised stake pool's events,
         /// each beside the emitter that produced it.
@@ -61,7 +61,7 @@ enum CachedVmOutputBody {
     },
 }
 
-impl CachedVmOutput {
+impl CachedOutput {
     /// The success output: the folded absolute updates and the receipt
     /// hash over their canonical encoding. Keys carry their shard
     /// placement in the owner prefix, so no declared node set or
@@ -72,12 +72,12 @@ impl CachedVmOutput {
         receipt_hash: GlobalReceiptHash,
         metadata: ExecutionMetadata,
         gas_consumed: u64,
-        events: Vec<VmEvent>,
+        events: Vec<Event>,
         witnesses: Vec<([u8; 16], BeaconWitnessEvent)>,
     ) -> Self {
         Self {
             metadata,
-            body: CachedVmOutputBody::Succeeded {
+            body: CachedOutputBody::Succeeded {
                 raw_updates,
                 events,
                 receipt_hash,
@@ -93,24 +93,24 @@ impl CachedVmOutput {
     pub const fn failed(metadata: ExecutionMetadata) -> Self {
         Self {
             metadata,
-            body: CachedVmOutputBody::Failed,
+            body: CachedOutputBody::Failed,
         }
     }
 }
 
 #[cfg(test)]
-impl CachedVmOutput {
+impl CachedOutput {
     /// Build a `Failed` output for cache-mechanics tests. The body
     /// content doesn't matter for cache-identity assertions.
     pub(crate) fn failed_for_tests() -> Self {
         Self {
             metadata: ExecutionMetadata::empty(),
-            body: CachedVmOutputBody::Failed,
+            body: CachedOutputBody::Failed,
         }
     }
 }
 
-/// Build an [`ExecutedTx`] for `local_shard` from a [`CachedVmOutput`].
+/// Build an [`ExecutedTx`] for `local_shard` from a [`CachedOutput`].
 ///
 /// Runs the per-shard step: `filter_updates_for_shard` over the cached
 /// `raw_updates`, then assembles the `ExecutedTx`. The filter output is
@@ -124,16 +124,16 @@ impl CachedVmOutput {
 /// [`has_partition_reset`](hyperscale_types::has_partition_reset)).
 #[must_use]
 pub fn project_to_shard(
-    cached: &CachedVmOutput,
+    cached: &CachedOutput,
     tx_hash: TxHash,
     local_shard: ShardId,
     shard_trie: &ShardTrie,
 ) -> ExecutedTx {
     match &cached.body {
-        CachedVmOutputBody::Failed => {
+        CachedOutputBody::Failed => {
             ExecutedTx::new(tx_hash, ConsensusReceipt::Failed, cached.metadata.clone())
         }
-        CachedVmOutputBody::Succeeded {
+        CachedOutputBody::Succeeded {
             raw_updates,
             events,
             receipt_hash,
@@ -169,7 +169,7 @@ pub fn project_to_shard(
             // keeps its own and the rest are another shard's to hold. The
             // receipt hash covers the whole union, so dropping them here
             // costs no agreement.
-            let vm_events: Vec<VmEvent> = events
+            let events: Vec<Event> = events
                 .iter()
                 .filter(|event| shard_trie.shard_for_prefix(event.emitter) == local_shard)
                 .cloned()
@@ -178,7 +178,7 @@ pub fn project_to_shard(
                 receipt_hash: *receipt_hash,
                 database_updates,
                 beacon_witness_events,
-                vm_events,
+                events,
             };
             let mut executed = ExecutedTx::new(tx_hash, consensus, cached.metadata.clone());
             executed.attested_work = *gas_consumed;

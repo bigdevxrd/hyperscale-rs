@@ -72,7 +72,7 @@ pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
     /// Returns `None` if the height is unavailable (garbage-collected or
     /// not yet committed); `Some(None)` when the cell is absent at that
     /// height.
-    fn get_vm_substate_at_height(
+    fn get_substate_at_height(
         &self,
         owner: [u8; 16],
         local: [u8; 16],

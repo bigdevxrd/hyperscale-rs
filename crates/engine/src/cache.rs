@@ -1,6 +1,6 @@
 //! Process-scope cache of shard-invariant execution outputs.
 //!
-//! [`ProcessExecutionCache`] memoises the [`CachedVmOutput`] a batch
+//! [`ProcessExecutionCache`] memoises the [`CachedOutput`] a batch
 //! produces, keyed by [`TxHash`]. A single `IoLoop` owns one cache;
 //! every hosted vnode's action dispatch consults it. Repeated
 //! executions of the same transaction — across same-shard vnodes
@@ -33,14 +33,14 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry as DashEntry;
 use hyperscale_types::{RETENTION_HORIZON, ShardId, TxHash, WeightedTimestamp};
 
-use crate::receipt::CachedVmOutput;
+use crate::receipt::CachedOutput;
 
 /// Shared slot returned by [`ProcessExecutionCache::try_acquire`].
 ///
 /// Callers `set` their result if they got [`SlotStatus::Claimed`], or
 /// peek / wait on another worker's result if they got
 /// [`SlotStatus::Pending`].
-pub type CachedSlot = Arc<OnceLock<Arc<CachedVmOutput>>>;
+pub type CachedSlot = Arc<OnceLock<Arc<CachedOutput>>>;
 
 type Slot = CachedSlot;
 
@@ -54,7 +54,7 @@ type Slot = CachedSlot;
 /// underlying `OnceLock`.
 pub enum SlotStatus {
     /// Value already cached.
-    Completed(Arc<CachedVmOutput>),
+    Completed(Arc<CachedOutput>),
     /// Slot freshly reserved for the caller. The caller is the unique
     /// owner of the right to fill it via `slot.set(...)`.
     Claimed(CachedSlot),
@@ -358,7 +358,7 @@ mod tests {
     ) {
         match cache.try_acquire(tx, participating) {
             SlotStatus::Claimed(slot) => {
-                let _ = slot.set(Arc::new(CachedVmOutput::failed_for_tests()));
+                let _ = slot.set(Arc::new(CachedOutput::failed_for_tests()));
             }
             SlotStatus::Completed(_) | SlotStatus::Pending(_) => {
                 panic!("populate called after slot already reserved")
@@ -380,7 +380,7 @@ mod tests {
         assert!(matches!(pending_status, SlotStatus::Pending(_)));
 
         // Fill: a third caller sees Completed.
-        let value = Arc::new(CachedVmOutput::failed_for_tests());
+        let value = Arc::new(CachedOutput::failed_for_tests());
         let set_ok = claimed.set(Arc::clone(&value)).is_ok();
         assert!(set_ok, "first set wins");
         match cache.try_acquire(tx_hash(1), [shard(0)]) {

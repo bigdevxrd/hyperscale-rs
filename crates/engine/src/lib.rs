@@ -6,7 +6,7 @@
 //!
 //! State machines emit `Action::ExecuteTransactions`; the runner drives
 //! the executor over the wave's batch, which projects the shard-invariant
-//! [`CachedVmOutput`] into the local shard's [`ExecutedTx`] via
+//! [`CachedOutput`] into the local shard's [`ExecutedTx`] via
 //! [`project_to_shard`]. The process-scope [`ProcessExecutionCache`]
 //! short-circuits execution when same-shard vnodes (or hosted
 //! participating shards) replay an already-executed transaction.
@@ -44,12 +44,12 @@ pub use batch::{
 };
 pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 pub use executor::Executor;
-pub use genesis::{GenesisConfig, VM_XRD, VmWorld, genesis_world, vm_genesis_updates};
+pub use genesis::{GenesisConfig, World, XRD, genesis_updates, genesis_world};
 // Re-export the fan-out strategy `WaveBatchContext` carries, so callers
 // and their tests need no separate dispatch dependency.
 pub use hyperscale_dispatch::Parallelism;
-pub use hyperscale_effects_bridge::vm_account_address;
+pub use hyperscale_effects_bridge::account_address;
 pub use hyperscale_vm_kernel::ExecutionMode;
 pub use output::ExecutedTx;
 pub use preview::{PreviewGrants, PreviewInputs, PreviewOutcome, PreviewReport, ResourceChange};
-pub use receipt::{CachedVmOutput, project_to_shard};
+pub use receipt::{CachedOutput, project_to_shard};

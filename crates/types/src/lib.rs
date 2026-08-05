@@ -112,14 +112,14 @@ pub use provisioning::substate::SubstateEntry;
 pub use radix_common::network::NetworkDefinition;
 pub use radix_substate_store_interface::interface::DatabaseUpdates;
 pub use receipt::consensus::{
-    ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_vm_cells, has_partition_reset,
+    ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_cells, has_partition_reset,
+};
+pub use receipt::event::{
+    Event, MAX_VM_EVENT_PAYLOAD_LEN, MAX_VM_EVENT_TYPES, MAX_VM_EVENTS_PER_TX,
 };
 pub use receipt::global::GlobalReceipt;
 pub use receipt::metadata::{ExecutionMetadata, FeeSummary, LogLevel};
 pub use receipt::stored::StoredReceipt;
-pub use receipt::vm_event::{
-    MAX_VM_EVENT_PAYLOAD_LEN, MAX_VM_EVENT_TYPES, MAX_VM_EVENTS_PER_TX, VmEvent,
-};
 pub use sbor_codec::{
     BoundedBTreeMap, BoundedBTreeSet, BoundedBytes, BoundedLengthError, BoundedString, BoundedVec,
 };

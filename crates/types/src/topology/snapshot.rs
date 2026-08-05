@@ -991,7 +991,7 @@ impl TopologySnapshot {
         self.shard_trie.shard_for(node_id)
     }
 
-    /// The shard owning a VM owner prefix's key space: the trie walk on
+    /// The shard owning a owner prefix's key space: the trie walk on
     /// the prefix's own bits, no hashing.
     #[must_use]
     pub fn shard_for_prefix(&self, prefix: [u8; 16]) -> ShardId {

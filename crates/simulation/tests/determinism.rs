@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_scenarios::tx::{
-    build_vm_transfer_tx, validity_around, vm_cross_shard_cast, vm_cross_shard_genesis_accounts,
-    vm_genesis_accounts, vm_recipient, vm_sender,
+    build_transfer_tx, cross_shard_cast, cross_shard_genesis_accounts, genesis_accounts, recipient,
+    sender, validity_around,
 };
 use hyperscale_scenarios::{Cluster, ScenarioConfig, epochs, grow_to};
 use hyperscale_simulation::{SimConfig, SimulationRunner};
@@ -36,7 +36,7 @@ fn base_config() -> SimConfig {
     SimConfig {
         shard_size: 4,
         jitter_fraction: 0.1,
-        vm_accounts: vm_genesis_accounts(DETERMINISM_TXS, DETERMINISM_TXS),
+        accounts: genesis_accounts(DETERMINISM_TXS, DETERMINISM_TXS),
         ..Default::default()
     }
 }
@@ -81,11 +81,11 @@ fn run_once(seed: u64, install_faults: impl FnOnce(&mut SimulationRunner)) -> Ru
 
     for (i, delay_ms) in [50u64, 51, 52].into_iter().enumerate() {
         let index = u8::try_from(i).expect("three transactions fit a byte");
-        let (payer, from) = vm_sender(index);
-        let tx = build_vm_transfer_tx(
+        let (payer, from) = sender(index);
+        let tx = build_transfer_tx(
             &payer,
             from,
-            vm_recipient(index),
+            recipient(index),
             100,
             validity_around(runner.now()),
         );
@@ -236,15 +236,12 @@ const fn cross_shard_config() -> ScenarioConfig {
 #[test]
 fn cross_shard_grow_replays_byte_identical() {
     let run = |seed: u64| -> (Vec<BlockHeight>, u64, u64) {
-        let (payer, from, to) = vm_cross_shard_cast();
-        let mut cluster = SimCluster::with_vm_accounts(
-            &cross_shard_config(),
-            seed,
-            &vm_cross_shard_genesis_accounts(),
-        );
+        let (payer, from, to) = cross_shard_cast();
+        let mut cluster =
+            SimCluster::with_accounts(&cross_shard_config(), seed, &cross_shard_genesis_accounts());
         grow_to(&mut cluster, 2);
 
-        let tx = build_vm_transfer_tx(&payer, from, to, 500, validity_around(cluster.now()));
+        let tx = build_transfer_tx(&payer, from, to, 500, validity_around(cluster.now()));
         let tx_hash = tx.hash();
         cluster.submit(Arc::new(tx));
         // Advance to the same deterministic point in both runs — settlement, or

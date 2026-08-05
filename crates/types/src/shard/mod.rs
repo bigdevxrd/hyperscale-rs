@@ -59,7 +59,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::test_utils::{install_stub_vm_statics, stub_vm_transaction, test_validity_range};
+    use crate::test_utils::{install_stub_vm_statics, stub_transaction, test_validity_range};
     use crate::{
         AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, BlockHash, BlockHeader,
         BlockHeight, BoundedVec, CertificateRoot, ChainOrigin, ExecutionCertificate,
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn test_compute_transaction_root_deterministic() {
         install_stub_vm_statics();
-        let tx = Arc::new(Verifiable::from(stub_vm_transaction(
+        let tx = Arc::new(Verifiable::from(stub_transaction(
             [1; 16],
             &[[2; 16]],
             1_000,

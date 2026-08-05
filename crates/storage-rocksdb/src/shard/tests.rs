@@ -62,7 +62,7 @@ fn updates_to_receipts(updates: &DatabaseUpdates) -> Vec<StoredReceipt> {
             receipt_hash: GlobalReceiptHash::ZERO,
             database_updates: updates.clone(),
             beacon_witness_events: Vec::new(),
-            vm_events: Vec::new(),
+            events: Vec::new(),
         }),
         metadata: None,
     }]
@@ -1138,7 +1138,7 @@ fn rocks_commit_with(
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: updates.clone(),
                 beacon_witness_events: Vec::new(),
-                vm_events: Vec::new(),
+                events: Vec::new(),
             }),
             metadata: None,
         };
@@ -1309,7 +1309,7 @@ fn test_snapshot_at_below_retention_panics() {
     let _snap = <RocksDbShardStorage as VersionedStore>::snapshot_at(&storage, BlockHeight::new(1));
 }
 
-/// `get_vm_substate_at_height` is an external-facing API — it must
+/// `get_substate_at_height` is an external-facing API — it must
 /// return `None` for out-of-retention heights rather than panicking.
 #[test]
 fn test_historical_substate_read_respects_retention() {
@@ -1340,21 +1340,21 @@ fn test_historical_substate_read_respects_retention() {
 
     // Within retention: returns Some.
     assert_eq!(
-        storage.get_vm_substate_at_height(owner, local, BlockHeight::new(9)),
+        storage.get_substate_at_height(owner, local, BlockHeight::new(9)),
         Some(Some(vec![9])),
         "height within retention must succeed"
     );
     // Below retention: returns None.
     assert!(
         storage
-            .get_vm_substate_at_height(owner, local, BlockHeight::new(1))
+            .get_substate_at_height(owner, local, BlockHeight::new(1))
             .is_none(),
         "height below retention must return None"
     );
     // Above current: returns None.
     assert!(
         storage
-            .get_vm_substate_at_height(owner, local, BlockHeight::new(99))
+            .get_substate_at_height(owner, local, BlockHeight::new(99))
             .is_none(),
         "future height returns None"
     );

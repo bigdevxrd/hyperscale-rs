@@ -12,7 +12,7 @@ use std::sync::Arc;
 use hyperscale_types::{BlockHeight, Epoch, ShardId};
 
 use super::query::beacon_epoch;
-use super::tx::{build_reshape_threshold_vote_tx, validity_around, vm_pool_operator};
+use super::tx::{build_reshape_threshold_vote_tx, pool_operator, validity_around};
 use super::{Budget, Cluster, epochs};
 
 /// Epochs of lead before the threshold vote activates — enough for the vote
@@ -94,7 +94,7 @@ pub fn vote_reshape_threshold(c: &mut impl Cluster, split_bytes: u64) {
         let current = beacon_epoch(c).expect("a beacon epoch is committed");
         let activate_at = Epoch::new(current.inner() + VOTE_ACTIVATE_LEAD);
         let vote = build_reshape_threshold_vote_tx(
-            &vm_pool_operator().0,
+            &pool_operator().0,
             split_bytes,
             activate_at,
             validity_around(c.now()),

@@ -45,10 +45,10 @@ impl StoredReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DatabaseUpdates, FeeSummary, GlobalReceiptHash, Hash, VmEvent};
+    use crate::{DatabaseUpdates, Event, FeeSummary, GlobalReceiptHash, Hash};
 
-    fn make_event(seed: u8) -> VmEvent {
-        VmEvent {
+    fn make_event(seed: u8) -> Event {
+        Event {
             emitter: [seed; 16],
             event_type: u32::from(seed),
             payload: vec![seed, seed + 1],
@@ -62,7 +62,7 @@ mod tests {
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: DatabaseUpdates::default(),
-                vm_events: vec![make_event(1)],
+                events: vec![make_event(1)],
                 beacon_witness_events: Vec::new(),
             }),
         );

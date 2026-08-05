@@ -1,4 +1,4 @@
-//! The beacon's control plane on the VM engine: a delegation to a seated
+//! The beacon's control plane on the engine: a delegation to a seated
 //! stake pool arrives in the executing shard's `beacon_witness_events`.
 //!
 //! Its own binary rather than a case in `transfer`, because the VM statics
@@ -9,11 +9,11 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use hyperscale_effects_bridge::{encode_tree, vm_account_address};
+use hyperscale_effects_bridge::{account_address, encode_tree};
 use hyperscale_engine::genesis::stake_unit;
 use hyperscale_engine::{
-    DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache, VM_XRD,
-    WaveBatchContext, vm_genesis_updates,
+    DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache,
+    WaveBatchContext, XRD, genesis_updates,
 };
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
 use hyperscale_types::{
@@ -46,7 +46,7 @@ struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> Self {
-        let updates = vm_genesis_updates(accounts, pools);
+        let updates = genesis_updates(accounts, pools);
         let mut map = BTreeMap::new();
         for (node_key, node_updates) in &updates.node_updates {
             for (partition, partition_updates) in &node_updates.partition_updates {
@@ -97,7 +97,7 @@ fn key_of(seed: u8) -> Ed25519PrivateKey {
 }
 
 fn account_of(seed: u8) -> [u8; 16] {
-    vm_account_address(&key_of(seed).public_key().0)
+    account_address(&key_of(seed).public_key().0)
 }
 
 fn delegator() -> [u8; 16] {
@@ -147,14 +147,14 @@ fn from_edge(producer: u32, resource: Address) -> GraphArg {
 /// `delegator.withdraw(XRD) -> pool.stake -> delegator.deposit(units)`.
 fn signed_stake(pool: [u8; 16], amount: u128) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
-    let from = vm_account_address(&key.public_key().0);
+    let from = account_address(&key.public_key().0);
     let graph = ManifestGraph {
         nodes: vec![
-            withdraw(from, VM_XRD, amount),
+            withdraw(from, XRD, amount),
             GraphNode {
                 target: Address(pool),
                 method: "stake".into(),
-                args: vec![from_edge(0, VM_XRD)],
+                args: vec![from_edge(0, XRD)],
             },
             GraphNode {
                 target: Address(from),
@@ -270,14 +270,14 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
         ExecutionMode::Serial,
     );
     let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
-    let from = vm_account_address(&key.public_key().0);
+    let from = account_address(&key.public_key().0);
     let graph = ManifestGraph {
         nodes: vec![
-            withdraw(from, VM_XRD, 100),
+            withdraw(from, XRD, 100),
             GraphNode {
                 target: Address(from),
                 method: "deposit".into(),
-                args: vec![from_edge(0, VM_XRD)],
+                args: vec![from_edge(0, XRD)],
             },
         ],
     };

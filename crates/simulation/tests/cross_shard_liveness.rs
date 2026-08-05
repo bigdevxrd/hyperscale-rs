@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperscale_scenarios::tx::{build_vm_transfer_tx, validity_around, vm_account_routing_to};
+use hyperscale_scenarios::tx::{account_routing_to, build_transfer_tx, validity_around};
 use hyperscale_scenarios::{Cluster, ScenarioConfig};
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{BlockHeight, Ed25519PrivateKey, ShardId, ShardTrie};
@@ -75,7 +75,7 @@ fn fallbacks(cluster: &SimCluster, shard: ShardId) -> Vec<(u64, u64)> {
 /// The accounts the load runs between, alternating leaves so every
 /// transfer in the round-robin below crosses.
 ///
-/// Ground rather than seeded: a VM address is its own placement, so
+/// Ground rather than seeded: a address is its own placement, so
 /// where an account lands is a property of its key, and leaving that to
 /// chance would let the load stop crossing without the test noticing —
 /// which is the whole load it is meant to apply.
@@ -85,7 +85,7 @@ fn cast() -> Vec<(Ed25519PrivateKey, [u8; 16])> {
     (0..ACCOUNTS)
         .map(|index| {
             let shard = if index % 2 == 0 { left } else { right };
-            vm_account_routing_to(shard, &mut taken)
+            account_routing_to(shard, &mut taken)
         })
         .collect()
 }
@@ -97,7 +97,7 @@ fn cross_shard_load_costs_no_view_changes() {
         .iter()
         .map(|(_, account)| (*account, 100_000u128))
         .collect();
-    let mut cluster = SimCluster::with_vm_accounts(&grow_config(), SEED, &accounts);
+    let mut cluster = SimCluster::with_accounts(&grow_config(), SEED, &accounts);
     cluster.runner_mut().grow_to(2);
 
     let (left, right) = ShardId::ROOT.children();
@@ -119,7 +119,7 @@ fn cross_shard_load_costs_no_view_changes() {
             trie.shard_for_prefix(cast[to].1),
             "every leg of the load has to cross, or the test applies no load",
         );
-        let transfer = build_vm_transfer_tx(
+        let transfer = build_transfer_tx(
             &cast[from].0,
             cast[from].1,
             cast[to].1,

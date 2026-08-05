@@ -51,7 +51,7 @@ impl ShardParticipation {
         let queued = self.provisions_coordinator.queued_provisions(self.now);
 
         // The engagement gate: a non-payer shard proposes a cross-shard
-        // VM transaction only beside its payer bundle — this proposal's
+        // transaction only beside its payer bundle — this proposal's
         // own provisions — or after an earlier block absorbed it. The
         // bundle is the transaction commit proof (verified against a
         // commit-proven payer header), so locks engage only on committed
@@ -75,7 +75,7 @@ impl ShardParticipation {
                         .iter()
                         .any(|key| in_flight.contains(key))
             })
-            .filter(|tx| self.vm_engagement_held(tx, topology, &queued))
+            .filter(|tx| self.engagement_held(tx, topology, &queued))
             .collect();
 
         // Provisions coordinator stores `Verified` internally; lift each
@@ -93,10 +93,10 @@ impl ShardParticipation {
         }
     }
 
-    /// Whether the engagement evidence for `tx` is in hand: not a VM
+    /// Whether the engagement evidence for `tx` is in hand: not a
     /// transaction, single-shard, our shard is the payer's, the payer's
     /// bundle rides in `queued`, or an earlier block already absorbed it.
-    fn vm_engagement_held(
+    fn engagement_held(
         &self,
         tx: &Arc<Verified<Transaction>>,
         topology: &TopologySnapshot,

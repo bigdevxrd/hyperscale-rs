@@ -176,7 +176,7 @@ mod tests {
     }
 
     /// Routing and placement agree with no translation: the shard
-    /// `shard_for_prefix(owner)` routes a VM transaction to is the shard
+    /// `shard_for_prefix(owner)` routes a transaction to is the shard
     /// whose prefix subtree holds the owner's identity leaves.
     #[test]
     fn vm_leaf_places_under_the_shard_its_owner_prefix_routes_to() {

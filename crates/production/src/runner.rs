@@ -207,10 +207,10 @@ pub struct ProductionRunnerBuilder {
     genesis_config: Option<GenesisConfig>,
     /// VM addresses the process-wide statics register, when that set must
     /// be wider than this cluster's own genesis funding.
-    vm_world_accounts: Vec<([u8; 16], u128)>,
+    world_accounts: Vec<([u8; 16], u128)>,
     /// Pool instances the process-wide statics seat, when that set must be
     /// wider than this cluster's own genesis seating.
-    vm_world_pools: Vec<StakePoolSeat>,
+    world_pools: Vec<StakePoolSeat>,
     /// Radix network definition for transaction validation.
     /// Defaults to simulator network if not set.
     network_definition: Option<NetworkDefinition>,
@@ -256,8 +256,8 @@ impl ProductionRunnerBuilder {
             channel_capacity: 10_000,
             publishers: RpcPublishers::default(),
             genesis_config: None,
-            vm_world_accounts: Vec::new(),
-            vm_world_pools: Vec::new(),
+            world_accounts: Vec::new(),
+            world_pools: Vec::new(),
             network_definition: None,
             // Harness default: the routing overlay runs in production
             // tests; the validator binary always overrides this from its
@@ -353,19 +353,19 @@ impl ProductionRunnerBuilder {
     /// nothing: the world carries identities, and each cluster still funds
     /// its own balances from its own genesis.
     #[must_use]
-    pub fn vm_world_accounts(mut self, accounts: Vec<([u8; 16], u128)>) -> Self {
-        self.vm_world_accounts = accounts;
+    pub fn world_accounts(mut self, accounts: Vec<([u8; 16], u128)>) -> Self {
+        self.world_accounts = accounts;
         self
     }
 
     /// Seat `pools` in the process VM statics instead of this cluster's
-    /// own genesis seating — [`Self::vm_world_accounts`] for pool
+    /// own genesis seating — [`Self::world_accounts`] for pool
     /// instances, and installed for the same first-wins reason. A pool
     /// nobody delegates to emits nothing, so recognising one everywhere
     /// costs a registry entry.
     #[must_use]
-    pub fn vm_world_pools(mut self, pools: Vec<StakePoolSeat>) -> Self {
-        self.vm_world_pools = pools;
+    pub fn world_pools(mut self, pools: Vec<StakePoolSeat>) -> Self {
+        self.world_pools = pools;
         self
     }
 
@@ -567,15 +567,15 @@ impl ProductionRunnerBuilder {
         // startup genesis path installs, unless a wider one was set:
         // construction installs the process VM statics, which are
         // first-writer-wins, so several clusters in one process must agree.
-        let world_accounts = if self.vm_world_accounts.is_empty() {
+        let world_accounts = if self.world_accounts.is_empty() {
             &engine_bootstrap.config.accounts
         } else {
-            &self.vm_world_accounts
+            &self.world_accounts
         };
-        let world_pools = if self.vm_world_pools.is_empty() {
+        let world_pools = if self.world_pools.is_empty() {
             &engine_bootstrap.config.pools
         } else {
-            &self.vm_world_pools
+            &self.world_pools
         };
         let executor: Arc<Executor> = Arc::new(Executor::with_pools(
             world_accounts,

@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use hyperscale_core::{Action, VmFeeDemand};
+use hyperscale_core::{Action, FeeDemand};
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, Epoch, FinalizedWave, Hash, LocalTimestamp,
     ProposerTimestamp, ProvisionHash, Provisions, ReadySignal, ReshapeTrigger, RevealChain, Round,
@@ -237,12 +237,12 @@ pub fn select_finalized_waves(
     (waves_to_propose, finalized_tx_count)
 }
 
-/// Drop cross-shard VM transactions whose payer bundle is neither among
+/// Drop cross-shard transactions whose payer bundle is neither among
 /// the block's selected provisions nor committed within the retention
-/// window — the proposer-side form of `validate_vm_engagement`, applied
+/// window — the proposer-side form of `validate_engagement`, applied
 /// after provision selection so a capped-out bundle can never strand its
 /// transaction in a self-rejecting proposal.
-pub fn filter_engaged_vm_transactions(
+pub fn filter_engaged_transactions(
     topology_snapshot: &TopologySnapshot,
     local_shard: ShardId,
     transactions: Vec<Arc<Verified<Transaction>>>,
@@ -359,7 +359,7 @@ pub fn assemble_build_action(
     carry_settled_waves_root: bool,
     settled_waves_window_floor: Option<WeightedTimestamp>,
     classification_topology_snapshot: Arc<TopologySnapshot>,
-    vm_fee_checks: Vec<VmFeeDemand>,
+    fee_checks: Vec<FeeDemand>,
     fee_read_height: BlockHeight,
     substate_bytes: Option<u64>,
 ) -> BuildActionPlan {
@@ -434,7 +434,7 @@ pub fn assemble_build_action(
         transactions,
         finalized_waves,
         provisions,
-        vm_fee_checks,
+        fee_checks,
         fee_read_height,
         parent_in_flight,
         parent_load,
@@ -509,7 +509,7 @@ mod tests {
     use std::time::Duration;
 
     use hyperscale_types::TimestampRange;
-    use hyperscale_types::test_utils::{install_stub_vm_statics, stub_vm_transaction, test_prefix};
+    use hyperscale_types::test_utils::{install_stub_vm_statics, stub_transaction, test_prefix};
 
     use super::*;
 
@@ -613,9 +613,12 @@ mod tests {
 
     fn tx_with_range(seed: u8, range: TimestampRange) -> Arc<Verified<Transaction>> {
         install_stub_vm_statics();
-        Arc::new(Verified::<Transaction>::from_persisted(
-            stub_vm_transaction(test_prefix(seed), &[test_prefix(seed)], 1_000, range),
-        ))
+        Arc::new(Verified::<Transaction>::from_persisted(stub_transaction(
+            test_prefix(seed),
+            &[test_prefix(seed)],
+            1_000,
+            range,
+        )))
     }
 
     fn empty_dedup_index() -> CommitDedupIndex {

@@ -88,7 +88,7 @@ pub struct WaveState {
     /// ready. `None` until `provisioned_txs` is full.
     all_provisioned_at: Option<WeightedTimestamp>,
 
-    // ── Engagement coverage (payer-shard VM legs) ───────────────────────
+    // ── Engagement coverage (payer-shard legs) ───────────────────────
     /// Per-tx, the counterpart shards whose engagement echo this shard —
     /// the transaction's fee payer — still waits for before voting.
     /// Recorded at wave creation and drained as echoes commit; empty for
@@ -297,7 +297,7 @@ impl WaveState {
 
     /// Record that this shard, as `tx_hash`'s fee payer, waits for
     /// `counterparts` to echo their engagement before voting. Called at
-    /// wave creation for each payer-local cross-shard VM transaction;
+    /// wave creation for each payer-local cross-shard transaction;
     /// `validity_end` is the signed window end bounding the wait.
     pub fn record_engagement_wait(
         &mut self,
@@ -644,7 +644,7 @@ impl WaveState {
     /// - Not provisioned: wait until `committed_ts >= wave_start_ts +
     ///   WAVE_TIMEOUT`. Upon timeout, every tx in the wave is implicitly
     ///   aborted.
-    /// - Engagement-gated (the payer shard's cross-shard VM legs): every
+    /// - Engagement-gated (the payer shard's cross-shard legs): every
     ///   counterpart's engagement echo has committed, or the wave's
     ///   deadline passed — whichever comes first. The wave speaks once,
     ///   so a counterpart engaging at the edge of its window cannot
@@ -1213,7 +1213,7 @@ mod tests {
                     #[allow(clippy::default_trait_access)]
                     database_updates: Default::default(),
                     beacon_witness_events: Vec::new(),
-                    vm_events: Vec::new(),
+                    events: Vec::new(),
                 }
             } else {
                 ConsensusReceipt::Failed
@@ -1280,7 +1280,7 @@ mod tests {
                 receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"fee-receipt")),
                 database_updates: DatabaseUpdates::default(),
                 beacon_witness_events: Vec::new(),
-                vm_events: Vec::new(),
+                events: Vec::new(),
             }),
         )
     }
@@ -1960,7 +1960,7 @@ mod tests {
 
     #[test]
     fn dispatch_environment_prefers_the_payer_bundles_anchor() {
-        // A remote-payer VM leg executes under the clock and draw its
+        // A remote-payer leg executes under the clock and draw its
         // payer bundle carried; every other leg anchors on this wave's
         // own committing block.
         let mut w = make_cross_shard_wave(2);

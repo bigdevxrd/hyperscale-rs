@@ -26,7 +26,7 @@ use radix_common::prelude::DbSubstateValue;
 use radix_substate_store_interface::interface::{DbPartitionKey, DbSortKey, PartitionEntry};
 
 use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
-use crate::receipt::CachedVmOutput;
+use crate::receipt::CachedOutput;
 
 /// Type-erased borrow of the wave's state snapshot, so one batch entry
 /// point serves every backend's snapshot type while the concrete type
@@ -112,7 +112,7 @@ pub fn participating_shards<'a>(
 /// worker's slot via `get_or_init` (the closure only fires if the
 /// claimant abandoned the slot without setting a value).
 enum Plan {
-    Done(Arc<CachedVmOutput>),
+    Done(Arc<CachedOutput>),
     Claimed(CachedSlot),
     Pending(CachedSlot),
 }
@@ -131,8 +131,8 @@ pub fn batch_compute_cached(
     cache: &ProcessExecutionCache,
     txs: &[Arc<Verified<Transaction>>],
     shard_trie: &ShardTrie,
-    compute: impl Fn(usize) -> CachedVmOutput + Send + Sync,
-) -> Vec<Arc<CachedVmOutput>> {
+    compute: impl Fn(usize) -> CachedOutput + Send + Sync,
+) -> Vec<Arc<CachedOutput>> {
     let plans: Vec<(usize, Plan)> = txs
         .iter()
         .enumerate()

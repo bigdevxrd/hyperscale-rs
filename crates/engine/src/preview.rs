@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hyperscale_effects_bridge::admit_package;
-use hyperscale_types::{RevealChain, Transaction, VmEvent, WeightedTimestamp};
+use hyperscale_types::{Event, RevealChain, Transaction, WeightedTimestamp};
 use hyperscale_vm_effects::{EffectTarget, Hash32, SubstateKey};
 use hyperscale_vm_kernel::{
     Base, BatchTx, Locality, ManifestWalk, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
@@ -34,7 +34,7 @@ use crate::executor::{
     read_cell, tx_randomness,
 };
 use crate::genesis::vault_key;
-use crate::{DynSnapshot, Executor, VM_XRD};
+use crate::{DynSnapshot, Executor, XRD};
 
 /// What a preview run is permitted that a committed execution is not.
 ///
@@ -138,7 +138,7 @@ pub struct PreviewReport {
     /// wallet can see whether its ceiling bound the charge.
     pub fuel: u64,
     /// What the run emitted.
-    pub events: Vec<VmEvent>,
+    pub events: Vec<Event>,
 }
 
 impl PreviewReport {
@@ -247,10 +247,10 @@ impl Executor {
     ) -> PreviewReport {
         let vm = tx.body();
         let payer = PayerFee {
-            // Derived rather than read off `vm_fee_vault`, which panics
+            // Derived rather than read off `fee_vault`, which panics
             // on an envelope derivation refuses — the exact envelope a
             // preview exists to give an answer about.
-            vault: vault_key(vm.fee_payer, VM_XRD),
+            vault: vault_key(vm.fee_payer, XRD),
             max_fee: vm.max_fee,
             floor: vm.abort_floor(),
             // A preview is one envelope against one snapshot: no wave can
@@ -327,7 +327,7 @@ impl Executor {
             events: receipt
                 .events
                 .iter()
-                .map(|event| VmEvent {
+                .map(|event| Event {
                     emitter: event.emitter.0,
                     event_type: event.event_type,
                     payload: event.payload.clone(),

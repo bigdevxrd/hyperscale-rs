@@ -13,8 +13,8 @@ use crate::straddler::{chain_settled, submit_straddler};
 use crate::support::faultable::FaultableCluster;
 use crate::support::query::beacon_epoch;
 use crate::support::tx::{
-    HALT_STRADDLER_BATCH, build_probe_transfer_tx, build_vm_transfer_tx, cross_shard_fault_cast,
-    halt_straddler_setup, validity_around, vm_account_shard,
+    HALT_STRADDLER_BATCH, account_shard, build_probe_transfer_tx, build_transfer_tx,
+    cross_shard_fault_cast, halt_straddler_setup, validity_around,
 };
 use crate::support::wait::{await_beacon_epoch, await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -159,11 +159,11 @@ pub fn isolated_validator_still_settles(c: &mut impl FaultableCluster) {
 /// agree the assertion is out of play there, and that agreement is what
 /// this scenario exercises.
 ///
-/// Requires [`halt_recovery_genesis_balances`] at genesis, a dedicated
+/// Requires [`halt_straddler_setup`] at genesis, a dedicated
 /// host per validator, and two committees' worth of pool surplus — one
 /// grow cohort, one recovery committee.
 ///
-/// [`halt_recovery_genesis_balances`]: crate::tx::halt_recovery_genesis_balances
+/// [`halt_straddler_setup`]: crate::tx::halt_straddler_setup
 ///
 /// # Panics
 ///
@@ -271,7 +271,7 @@ pub fn halted_shard_straddler_atomic(c: &mut impl FaultableCluster) {
         .iter()
         .zip(&payers[HALT_STRADDLER_BATCH..])
     {
-        if vm_account_shard(*from, 2) != survivor {
+        if account_shard(*from, 2) != survivor {
             assert!(
                 c.chain_fate(survivor, *hash).0.is_none(),
                 "the survivor engaged a wave whose payer shard is frozen",
@@ -831,7 +831,7 @@ pub fn inter_shard_partition_strands_waves_until_it_heals(c: &mut impl Faultable
 
     // A second cross-shard transfer submitted under the severance, sourced on
     // the far side so each shard pays for one stranded wave.
-    let during_tx = build_vm_transfer_tx(
+    let during_tx = build_transfer_tx(
         &cast.right.0,
         cast.right.1,
         cast.left.1,
@@ -845,7 +845,7 @@ pub fn inter_shard_partition_strands_waves_until_it_heals(c: &mut impl Faultable
     // pair — these must settle purely intra-shard while the cross-shard waves
     // are stranded.
     for (index, (key, from, to)) in cast.controls.iter().enumerate() {
-        let control = build_vm_transfer_tx(key, *from, *to, 100, validity_around(c.now()));
+        let control = build_transfer_tx(key, *from, *to, 100, validity_around(c.now()));
         let hash = control.hash();
         c.submit(Arc::new(control));
         let status = await_tx_terminal(c, hash, epochs(2));
@@ -1102,7 +1102,7 @@ fn assert_crossed<C: Cluster>(c: &C, hash: TxHash, context: &str) {
 
 fn submit_crossing<C: Cluster>(c: &mut C) -> TxHash {
     let cast = cross_shard_fault_cast();
-    let tx = build_vm_transfer_tx(
+    let tx = build_transfer_tx(
         &cast.left.0,
         cast.left.1,
         cast.right.1,
@@ -1126,7 +1126,7 @@ fn submit_crossing<C: Cluster>(c: &mut C) -> TxHash {
 /// cleanly. Asserts the transfer accepts, the drop fired, the fetch engaged, and
 /// nothing aborted.
 ///
-/// The provisions leg is the sharpest of these on the VM engine: a payer's
+/// The provisions leg is the sharpest of these on the engine: a payer's
 /// bundle is the evidence its counterpart engages against, so suppressing the
 /// broadcast withholds engagement itself until the fetch bridges it.
 fn cross_shard_broadcast_drop(

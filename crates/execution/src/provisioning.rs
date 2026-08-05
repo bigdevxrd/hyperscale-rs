@@ -52,7 +52,7 @@ pub struct ProvisioningTracker {
     /// draw a non-payer participant executes under.
     received: HashMap<TxHash, BTreeMap<ShardId, SourceAnchor>>,
 
-    /// The payer shard of each cross-shard VM transaction whose payer is
+    /// The payer shard of each cross-shard transaction whose payer is
     /// remote, recorded at wave creation beside `required`. Resolves
     /// which `received` entry carries the transaction's environment
     /// without re-deriving topology at dispatch.
@@ -119,7 +119,7 @@ impl ProvisioningTracker {
         self.stamp_deadline(tx_hash);
     }
 
-    /// Record the remote payer shard of a cross-shard VM transaction, so
+    /// Record the remote payer shard of a cross-shard transaction, so
     /// dispatch can read the transaction's environment off the payer's
     /// bundle.
     pub fn record_payer_shard(&mut self, tx_hash: TxHash, payer_shard: ShardId) {
@@ -127,7 +127,7 @@ impl ProvisioningTracker {
     }
 
     /// Whether provisions from `shard` have been absorbed for `tx_hash`.
-    /// For a VM transaction's payer shard this is the transaction commit
+    /// For a transaction's payer shard this is the transaction commit
     /// proof held: absorption admits a bundle only against a
     /// commit-proven source header, committed into the local chain.
     #[must_use]

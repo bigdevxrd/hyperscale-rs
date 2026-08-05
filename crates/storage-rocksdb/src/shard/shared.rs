@@ -115,13 +115,13 @@ impl SubstateStore for SharedStorage {
         self.0.state_root()
     }
 
-    fn get_vm_substate_at_height(
+    fn get_substate_at_height(
         &self,
         owner: [u8; 16],
         local: [u8; 16],
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        self.0.get_vm_substate_at_height(owner, local, block_height)
+        self.0.get_substate_at_height(owner, local, block_height)
     }
 
     fn generate_merkle_proofs(

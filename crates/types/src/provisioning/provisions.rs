@@ -311,7 +311,7 @@ pub enum ProvisionsVerifyError {
     /// entries.
     #[error("merkle inclusion verification failed against committed state root")]
     BadInclusion,
-    /// A `SubstateEntry` carried a `storage_key` that is neither a VM flat
+    /// A `SubstateEntry` carried a `storage_key` that is neither a flat
     /// key nor `db_node_key`-prefixed, so it cannot name a committed substate.
     #[error(
         "provision entry storage key is malformed (neither VM flat key nor db_node_key prefixed)"

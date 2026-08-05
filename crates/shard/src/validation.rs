@@ -392,7 +392,7 @@ pub fn validate_provisions_not_fenced(
     Ok(())
 }
 
-/// A non-payer shard engages a cross-shard VM transaction only against
+/// A non-payer shard engages a cross-shard transaction only against
 /// its payer bundle — the transaction commit proof. The block is valid
 /// only if each such transaction's bundle rides in this same block or a
 /// committed bundle named it within the retention window. Deterministic
@@ -400,7 +400,7 @@ pub fn validate_provisions_not_fenced(
 /// selection gate makes honest proposals satisfy it, so this closes the
 /// Byzantine-proposer path to engaging counterpart locks before the
 /// payer shard commits.
-pub fn validate_vm_engagement(
+pub fn validate_engagement(
     topology_snapshot: &TopologySnapshot,
     local_shard: ShardId,
     block: &Block,
@@ -495,7 +495,7 @@ pub fn validate_block_for_vote(
     validate_no_duplicate_certificates(block, qc_chain_cert_ids, dedup_index)?;
     validate_no_duplicate_provisions(block, qc_chain_provision_hashes, dedup_index)?;
     validate_provisions_not_fenced(topology_snapshot, block)?;
-    validate_vm_engagement(topology_snapshot, local_shard, block, dedup_index)?;
+    validate_engagement(topology_snapshot, local_shard, block, dedup_index)?;
     Ok(())
 }
 
@@ -1556,23 +1556,23 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // validate_vm_engagement
+    // validate_engagement
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// A signed stub VM transaction whose derived owners are exactly
+    /// A signed stub transaction whose derived owners are exactly
     /// `owners`, paying from `payer`, wrapped verified for block content.
-    fn stub_vm_tx(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verifiable<Transaction>> {
+    fn stub_tx(payer: [u8; 16], owners: &[[u8; 16]]) -> Arc<Verifiable<Transaction>> {
         test_utils::install_stub_vm_statics();
         let validity = TimestampRange::new(
             WeightedTimestamp::ZERO,
             WeightedTimestamp::from_millis(100_000),
         );
         Arc::new(Verifiable::from(Verified::new_unchecked_for_test(
-            test_utils::stub_vm_transaction(payer, owners, 1_000, validity),
+            test_utils::stub_transaction(payer, owners, 1_000, validity),
         )))
     }
 
-    fn block_with_vm_tx(
+    fn block_with_tx(
         tx: &Arc<Verifiable<Transaction>>,
         provisions: Vec<Arc<Verifiable<Provisions>>>,
     ) -> Block {
@@ -1586,20 +1586,19 @@ mod tests {
     }
 
     #[test]
-    fn vm_engagement_demands_the_payer_bundle() {
+    fn engagement_demands_the_payer_bundle() {
         // Two-shard trie: a clear top bit routes to leaf(1, 0), a set one
         // to leaf(1, 1). The payer lives on the remote shard.
         let topo = TestCommittee::new(4, 42).topology_snapshot(2);
         let local = ShardId::leaf(1, 0);
         let local_owner = [0x01; 16];
         let payer_owner = [0x81; 16];
-        let tx = stub_vm_tx(payer_owner, &[local_owner, payer_owner]);
+        let tx = stub_tx(payer_owner, &[local_owner, payer_owner]);
         let tx_hash = tx.hash();
 
         // No bundle anywhere: the counterpart must not engage.
-        let bare = block_with_vm_tx(&tx, Vec::new());
-        let err =
-            validate_vm_engagement(&topo, local, &bare, &CommitDedupIndex::new()).unwrap_err();
+        let bare = block_with_tx(&tx, Vec::new());
+        let err = validate_engagement(&topo, local, &bare, &CommitDedupIndex::new()).unwrap_err();
         assert!(err.contains("payer bundle"), "{err}");
 
         // The payer's empty-entry bundle in the same block: engaged.
@@ -1615,8 +1614,8 @@ mod tests {
             ))
             .into(),
         );
-        let paired = block_with_vm_tx(&tx, vec![Arc::clone(&bundle)]);
-        assert!(validate_vm_engagement(&topo, local, &paired, &CommitDedupIndex::new()).is_ok());
+        let paired = block_with_tx(&tx, vec![Arc::clone(&bundle)]);
+        assert!(validate_engagement(&topo, local, &paired, &CommitDedupIndex::new()).is_ok());
 
         // A bundle committed within the retention window: engaged.
         let mut dedup = CommitDedupIndex::new();
@@ -1624,7 +1623,7 @@ mod tests {
             std::slice::from_ref(&bundle),
             WeightedTimestamp::from_millis(1_000),
         );
-        assert!(validate_vm_engagement(&topo, local, &bare, &dedup).is_ok());
+        assert!(validate_engagement(&topo, local, &bare, &dedup).is_ok());
 
         // A bundle from the wrong source shard is not engagement evidence.
         let wrong_source: Arc<Verifiable<Provisions>> = Arc::new(
@@ -1639,24 +1638,24 @@ mod tests {
             ))
             .into(),
         );
-        let mispaired = block_with_vm_tx(&tx, vec![wrong_source]);
+        let mispaired = block_with_tx(&tx, vec![wrong_source]);
         let err =
-            validate_vm_engagement(&topo, local, &mispaired, &CommitDedupIndex::new()).unwrap_err();
+            validate_engagement(&topo, local, &mispaired, &CommitDedupIndex::new()).unwrap_err();
         assert!(err.contains("payer bundle"), "{err}");
     }
 
     #[test]
-    fn vm_engagement_exempts_the_payer_shard_and_single_shard_legs() {
+    fn engagement_exempts_the_payer_shard_and_single_shard_legs() {
         let topo = TestCommittee::new(4, 42).topology_snapshot(2);
         let local_owner = [0x01; 16];
         let payer_owner = [0x81; 16];
 
         // At the payer's own shard the reservation, not the bundle, is
         // the gate — no bundle demanded.
-        let cross = stub_vm_tx(payer_owner, &[local_owner, payer_owner]);
-        let at_payer = block_with_vm_tx(&cross, Vec::new());
+        let cross = stub_tx(payer_owner, &[local_owner, payer_owner]);
+        let at_payer = block_with_tx(&cross, Vec::new());
         assert!(
-            validate_vm_engagement(
+            validate_engagement(
                 &topo,
                 ShardId::leaf(1, 1),
                 &at_payer,
@@ -1666,10 +1665,10 @@ mod tests {
         );
 
         // A single-shard leg engages nothing remotely.
-        let single = stub_vm_tx(local_owner, &[local_owner]);
-        let local_only = block_with_vm_tx(&single, Vec::new());
+        let single = stub_tx(local_owner, &[local_owner]);
+        let local_only = block_with_tx(&single, Vec::new());
         assert!(
-            validate_vm_engagement(
+            validate_engagement(
                 &topo,
                 ShardId::leaf(1, 0),
                 &local_only,

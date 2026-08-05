@@ -20,10 +20,10 @@ use thiserror::Error;
 
 use crate::{BoundedBytes, DeclaredKey, Hash, MAX_TX_BYTES_LEN, TimestampRange, WeightedTimestamp};
 
-/// Domain separator for the VM envelope signing hash.
+/// Domain separator for the envelope signing hash.
 const SIGNING_DOMAIN: &[u8] = b"hyperscale-vm-envelope-v1";
 
-/// The cap on a VM envelope's optional message, in bytes.
+/// The cap on a envelope's optional message, in bytes.
 pub const MAX_VM_MESSAGE_LEN: usize = 1024;
 
 /// One bound subintent's signature: the signer's key and their ed25519
@@ -37,7 +37,7 @@ pub struct SubintentSig {
     pub signature: [u8; 64],
 }
 
-/// What a VM envelope asks the chain for: a call graph to run, or a
+/// What a envelope asks the chain for: a call graph to run, or a
 /// package to publish.
 ///
 /// Wholly one or the other. Every other field of the envelope — the fee
@@ -57,7 +57,7 @@ pub enum TransactionBody {
     Publish(BoundedBytes<MAX_TX_BYTES_LEN>),
 }
 
-/// A VM transaction: what it asks for and the signing-time choices,
+/// A transaction: what it asks for and the signing-time choices,
 /// under the composer's signature.
 #[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
 pub struct TransactionEnvelope {
@@ -189,7 +189,7 @@ impl TransactionEnvelope {
     }
 }
 
-/// A VM transaction's derived routing identity.
+/// A transaction's derived routing identity.
 ///
 /// Admission conflict keys and the owner prefixes that place it on
 /// shards. A pure function of the envelope and genesis-static metadata
@@ -233,7 +233,7 @@ impl Routing {
     }
 }
 
-/// Everything the bridge derives from a VM envelope.
+/// Everything the bridge derives from a envelope.
 ///
 /// The routing identity plus the declaration hash each subintent
 /// signature must cover, in tree order. Derivation has already checked
@@ -274,9 +274,9 @@ pub trait VmStatics: Send + Sync {
     /// bound signer address the matching public key does not derive.
     fn derive(&self, vm: &TransactionEnvelope) -> Result<Derived, VmStaticsError>;
 
-    /// Offer one committed VM cell to the published-package cache.
+    /// Offer one committed cell to the published-package cache.
     ///
-    /// Called for every VM cell a block commits, on the commit path and
+    /// Called for every cell a block commits, on the commit path and
     /// on the sync path alike, because both derive their state from the
     /// same block content. What makes a cell a package is a property of
     /// its own bytes, so the implementation decides — this seam carries
@@ -310,7 +310,7 @@ pub fn vm_statics_installed() -> bool {
 ///
 /// # Panics
 ///
-/// If none is installed — VM transactions cannot exist in a process that
+/// If none is installed — transactions cannot exist in a process that
 /// never wired the derivation seam.
 pub fn vm_statics() -> &'static dyn VmStatics {
     VM_STATICS

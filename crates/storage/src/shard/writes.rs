@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_routes_vm_updates_by_their_owner_prefix() {
+    fn filter_routes_updates_by_their_owner_prefix() {
         use hyperscale_types::state_key::vm_db_node_key;
         use hyperscale_types::{ShardId, shard_prefix_path};
 

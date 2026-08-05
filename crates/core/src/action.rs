@@ -157,7 +157,7 @@ pub struct ProvisionsRequest {
 /// One payer's fee-reservation demand, verified against its vault
 /// balance at a deterministic committed height.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmFeeDemand {
+pub struct FeeDemand {
     /// The payer account's owner prefix — the vault cell's owner half.
     pub owner: [u8; 16],
     /// The vault cell's local half.
@@ -832,12 +832,12 @@ pub enum Action {
     /// committed frontier and checks it covers the reservation demand
     /// the coordinator derived from chain content. Storage-anchored at
     /// `committed_height`, so every replica reads identical state.
-    /// Returns `ProtocolEvent::VmReservationsVerified`.
-    VerifyVmReservations {
+    /// Returns `ProtocolEvent::ReservationsVerified`.
+    VerifyReservations {
         /// Block whose reservations are being verified.
         block_hash: BlockHash,
         /// Per-payer demands; empty demands never dispatch.
-        demands: Vec<VmFeeDemand>,
+        demands: Vec<FeeDemand>,
         /// The committed height every replica reads balances at.
         committed_height: BlockHeight,
     },
@@ -884,7 +884,7 @@ pub enum Action {
         /// accumulates candidate ceilings on top and drops transactions
         /// their payer cannot cover, so a proposal never self-rejects
         /// the voters' reservation verification.
-        vm_fee_checks: Vec<VmFeeDemand>,
+        fee_checks: Vec<FeeDemand>,
         /// The committed height the builder reads payer balances at.
         fee_read_height: BlockHeight,
         /// Parent block's in-flight count (for deterministic computation).
@@ -1616,7 +1616,7 @@ impl Action {
             | Self::VerifyProvisionRoot { .. }
             | Self::VerifyCertificateRoot { .. }
             | Self::VerifyProvisionTxRoots { .. }
-            | Self::VerifyVmReservations { .. }
+            | Self::VerifyReservations { .. }
             | Self::VerifyStateRoot { .. }
             | Self::VerifyBeaconWitnessRoot { .. }
             | Self::BuildProposal { .. }
@@ -1722,7 +1722,7 @@ impl Action {
             | Self::VerifyProvisionRoot { .. }
             | Self::VerifyCertificateRoot { .. }
             | Self::VerifyProvisionTxRoots { .. }
-            | Self::VerifyVmReservations { .. }
+            | Self::VerifyReservations { .. }
             | Self::BuildProposal { .. }
             | Self::ExecuteTransactions { .. }
             | Self::ExecuteCrossShardTransactions { .. }
@@ -1806,7 +1806,7 @@ impl Action {
             | Self::VerifyProvisionRoot { .. }
             | Self::VerifyCertificateRoot { .. }
             | Self::VerifyProvisionTxRoots { .. }
-            | Self::VerifyVmReservations { .. }
+            | Self::VerifyReservations { .. }
             | Self::VerifyStateRoot { .. }
             | Self::VerifyBeaconWitnessRoot { .. }
             | Self::BuildProposal { .. }

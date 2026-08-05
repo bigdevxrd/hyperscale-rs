@@ -28,7 +28,7 @@ impl SubstateStore for SimShardStorage {
         read_or_recover(&self.state).current_root_hash
     }
 
-    fn get_vm_substate_at_height(
+    fn get_substate_at_height(
         &self,
         owner: [u8; 16],
         local: [u8; 16],

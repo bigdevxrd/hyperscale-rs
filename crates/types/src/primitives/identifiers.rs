@@ -495,7 +495,7 @@ impl Display for StakePoolId {
 
 /// A stake pool the network seats.
 ///
-/// The VM instance whose events it reads as beacon facts, the identifier
+/// The instance whose events it reads as beacon facts, the identifier
 /// it folds them under, the principal its operator surface admits, and
 /// the validators it already operates.
 ///

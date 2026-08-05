@@ -2534,7 +2534,7 @@ impl ExecutionCoordinator {
     /// Whether provisions from `shard` have been absorbed for `tx_hash` —
     /// committed chain content, since absorption runs at block commit.
     /// The proposal seam's engagement check reads this for the payer
-    /// shard of a cross-shard VM transaction.
+    /// shard of a cross-shard transaction.
     #[must_use]
     pub fn has_provisions_from(&self, tx_hash: TxHash, shard: ShardId) -> bool {
         self.provisioning.has_received_from(tx_hash, shard)
@@ -4622,7 +4622,7 @@ mod tests {
                     #[allow(clippy::default_trait_access)]
                     database_updates: Default::default(),
                     beacon_witness_events: Vec::new(),
-                    vm_events: Vec::new(),
+                    events: Vec::new(),
                 }),
                 metadata: None,
             });

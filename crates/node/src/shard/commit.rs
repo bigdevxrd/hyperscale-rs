@@ -27,7 +27,7 @@ use hyperscale_storage::{ChainEntry, PendingChain, ShardChainWriter, ShardStorag
 use hyperscale_types::{
     BeaconWitnessCommit, BlockHash, BlockHeight, CertifiedBlock, ConsensusReceipt, EpochWindows,
     FinalizedWave, LocalTimestamp, PreparedCommit, ShardId, StateRoot, SyncHint, Verifiable,
-    Verified, WeightedTimestamp, absorb_committed_vm_cells, local_settled_wave_ids,
+    Verified, WeightedTimestamp, absorb_committed_cells, local_settled_wave_ids,
 };
 use tracing::debug;
 
@@ -203,7 +203,7 @@ where
         .collect();
     // The synced replica reaches the same cache as the one that
     // executed: both read it out of the same block content.
-    absorb_committed_vm_cells(receipts.iter().map(AsRef::as_ref));
+    absorb_committed_cells(receipts.iter().map(AsRef::as_ref));
     let parent_block_hash = block.header().parent_block_hash();
     let settled_waves = local_settled_wave_ids(finalized_waves.iter(), block.header().shard_id());
     pending_chain.insert(

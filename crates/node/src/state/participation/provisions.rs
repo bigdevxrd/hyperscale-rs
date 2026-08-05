@@ -33,7 +33,7 @@ impl ShardParticipation {
             ),
             ProtocolEvent::ProvisionsAdmitted { provisions, .. } => {
                 // A verified bundle is engagement evidence: promote any
-                // parked cross-shard VM transaction it names, before the
+                // parked cross-shard transaction it names, before the
                 // proposal latch below gathers ready transactions — the
                 // bundle and its transactions then pair in one proposal.
                 self.mempool_coordinator.on_engagement_evidence(

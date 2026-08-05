@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use hyperscale_core::{Action, CommitSource, ProtocolEvent, TimerId, VmFeeDemand};
+use hyperscale_core::{Action, CommitSource, FeeDemand, ProtocolEvent, TimerId};
 use hyperscale_types::{
     BlockHash, DeclaredKey, Hash, InFlightCount, LocalTimestamp, MAX_FINALIZED_TX_PER_BLOCK,
     MAX_PROGRESS_WAIT, MAX_READY_SIGNALS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProposerTimestamp,
@@ -111,7 +111,7 @@ use crate::lookups::{committee_public_keys, vote_recipients};
 use crate::pending::{OrphanedFetches, PendingBlock, PendingBlocks};
 use crate::proposal::{
     ProposalKind, ProposalTracker, TakeResult, assemble_build_action, dispatch_or_defer,
-    filter_engaged_vm_transactions, select_finalized_waves, select_provisions, select_transactions,
+    filter_engaged_transactions, select_finalized_waves, select_provisions, select_transactions,
 };
 use crate::ready_signal_pool::{MIN_READY_SIGNAL_DWELL, ReadySignalPool};
 use crate::timeout_keeper::TimeoutKeeper;
@@ -1561,10 +1561,10 @@ impl ShardCoordinator {
             &self.dedup_index,
             MAX_TXS_PER_BLOCK,
         );
-        // Applied after provision selection: a cross-shard VM transaction
+        // Applied after provision selection: a cross-shard transaction
         // rides only beside (or after) its payer bundle, the engagement
-        // evidence the voters' `validate_vm_engagement` demands.
-        let transactions = filter_engaged_vm_transactions(
+        // evidence the voters' `validate_engagement` demands.
+        let transactions = filter_engaged_transactions(
             topology_schedule.head(),
             self.local_shard,
             transactions,
@@ -1965,7 +1965,7 @@ impl ShardCoordinator {
         // Prior demand per candidate payer: in-flight holds plus the
         // uncommitted window. The builder adds candidate ceilings on
         // top and drops what a payer cannot cover.
-        let vm_fee_checks = match &kind {
+        let fee_checks = match &kind {
             ProposalKind::Normal { transactions, .. } => {
                 let payer_seeds = self.local_payer_fees(
                     committee,
@@ -1974,7 +1974,7 @@ impl ShardCoordinator {
                         (owner, local, 0u128)
                     }),
                 );
-                self.vm_fee_demands(&payer_seeds, parent_block_hash)
+                self.fee_demands(&payer_seeds, parent_block_hash)
             }
             ProposalKind::Fallback | ProposalKind::Sync => Vec::new(),
         };
@@ -1998,7 +1998,7 @@ impl ShardCoordinator {
             topology_schedule
                 .settled_window_floor(self.local_shard, parent_qc.weighted_timestamp()),
             Arc::clone(committee),
-            vm_fee_checks,
+            fee_checks,
             self.committed_height,
             substate_bytes,
         );
@@ -2949,8 +2949,7 @@ impl ShardCoordinator {
                     (owner, local, tx.body().max_fee)
                 }),
             );
-            let vm_fee_demands =
-                self.vm_fee_demands(&block_fees, block.header().parent_block_hash());
+            let fee_demands = self.fee_demands(&block_fees, block.header().parent_block_hash());
             let verification_actions = self.verification.initiate_block_verifications(
                 committee,
                 topology_schedule,
@@ -2971,7 +2970,7 @@ impl ShardCoordinator {
                 },
                 split_child_roots_required,
                 settled_waves_root_required,
-                vm_fee_demands,
+                fee_demands,
                 self.committed_height,
             );
 
@@ -3028,11 +3027,11 @@ impl ShardCoordinator {
     /// Empty when the list names no local payer. A rare manifest-only
     /// ancestor under view changes contributes nothing — a bounded
     /// optimism the fee settlement's saturating debit absorbs.
-    fn vm_fee_demands(
+    fn fee_demands(
         &self,
         fees: &[([u8; 16], [u8; 16], u128)],
         parent_block_hash: BlockHash,
-    ) -> Vec<VmFeeDemand> {
+    ) -> Vec<FeeDemand> {
         let mut demands: std::collections::BTreeMap<[u8; 16], ([u8; 16], u128)> =
             std::collections::BTreeMap::new();
         for (owner, vault_local, max_fee) in fees {
@@ -3063,7 +3062,7 @@ impl ShardCoordinator {
         }
         demands
             .into_iter()
-            .map(|(owner, (vault_local, demand))| VmFeeDemand {
+            .map(|(owner, (vault_local, demand))| FeeDemand {
                 owner,
                 vault_local,
                 demand,
@@ -3633,7 +3632,7 @@ impl ShardCoordinator {
     }
 
     /// Handle a completed payer-shard fee-reservation verification.
-    pub fn on_vm_reservations_verified(
+    pub fn on_reservations_verified(
         &mut self,
         topology_schedule: &TopologySchedule,
         block_hash: BlockHash,
@@ -3648,7 +3647,7 @@ impl ShardCoordinator {
         }
         self.on_root_verified_impl(
             topology_schedule,
-            VerificationKind::VmReservations,
+            VerificationKind::Reservations,
             block_hash,
             result.is_ok(),
         )

@@ -16,7 +16,7 @@ use hyperscale_network_libp2p::fault::{DropSpec, HostId, RuleHandle};
 use hyperscale_network_libp2p::test_utils::TestFixtures;
 use hyperscale_production::LocalValidator;
 use hyperscale_scenarios::query::status_rank;
-use hyperscale_scenarios::tx::{vm_staking_genesis_accounts, vm_world_pools};
+use hyperscale_scenarios::tx::{staking_genesis_accounts, world_pools};
 use hyperscale_scenarios::{
     Budget, Cluster, FaultHandle, FaultableCluster, ScenarioConfig, grow_to, vote_reshape_threshold,
 };
@@ -41,7 +41,7 @@ struct StartArgs<'a> {
     config: &'a ScenarioConfig,
     seed: u64,
     epoch_ms: u64,
-    vm_accounts: Vec<([u8; 16], u128)>,
+    accounts: Vec<([u8; 16], u128)>,
 }
 
 /// The production adaptor: a [`Cluster`] over the real QUIC + `RocksDB` harness.
@@ -59,24 +59,24 @@ impl ProdCluster {
     /// topology; reshape scenarios are seed-sensitive.
     #[must_use]
     pub fn start(config: &ScenarioConfig, seed: u64, epoch_ms: u64) -> Self {
-        Self::start_with_vm_accounts(config, seed, epoch_ms, Vec::new())
+        Self::start_with_accounts(config, seed, epoch_ms, Vec::new())
     }
 
     /// [`Self::start`] with funded accounts — the mirror of
-    /// `SimCluster::with_vm_accounts`, so the catalogue runs identically
+    /// `SimCluster::with_accounts`, so the catalogue runs identically
     /// on both harnesses.
     #[must_use]
-    pub fn start_with_vm_accounts(
+    pub fn start_with_accounts(
         config: &ScenarioConfig,
         seed: u64,
         epoch_ms: u64,
-        vm_accounts: Vec<([u8; 16], u128)>,
+        accounts: Vec<([u8; 16], u128)>,
     ) -> Self {
         Self::start_full(&StartArgs {
             config,
             seed,
             epoch_ms,
-            vm_accounts,
+            accounts,
         })
     }
 
@@ -112,27 +112,27 @@ impl ProdCluster {
     }
 
     /// Build a cluster grown to `config.num_shards` with `config.split_bytes`
-    /// as the live reshape threshold, with `vm_accounts` funded at the
+    /// as the live reshape threshold, with `accounts` funded at the
     /// single ROOT genesis so the grow moves their cells to their prefix
     /// shards.
     ///
     /// Genesis is always a single ROOT shard, so a scenario that needs a
     /// deeper partition reaches it the only way the network does — by
     /// splitting into it, here via [`grow_to`]. The mirror of
-    /// `SimCluster::with_grown_vm_accounts`, so a scenario starts
+    /// `SimCluster::with_grown_accounts`, so a scenario starts
     /// identically on both harnesses.
     #[must_use]
-    pub fn start_with_grown_vm_accounts(
+    pub fn start_with_grown_accounts(
         config: &ScenarioConfig,
         seed: u64,
         epoch_ms: u64,
-        vm_accounts: Vec<([u8; 16], u128)>,
+        accounts: Vec<([u8; 16], u128)>,
     ) -> Self {
         let grow_config = ScenarioConfig {
             split_bytes: 0,
             ..*config
         };
-        let mut cluster = Self::start_with_vm_accounts(&grow_config, seed, epoch_ms, vm_accounts);
+        let mut cluster = Self::start_with_accounts(&grow_config, seed, epoch_ms, accounts);
         grow_to(&mut cluster, config.num_shards);
         vote_reshape_threshold(&mut cluster, config.split_bytes);
         cluster
@@ -177,12 +177,12 @@ impl ProdCluster {
             // vote is how any cluster retunes a network parameter.
             genesis_config: Some(GenesisConfig {
                 accounts: args
-                    .vm_accounts
+                    .accounts
                     .iter()
                     .copied()
-                    .chain(vm_staking_genesis_accounts())
+                    .chain(staking_genesis_accounts())
                     .collect(),
-                pools: vm_world_pools(),
+                pools: world_pools(),
             }),
             simulated_outbound_latency: config.latency,
         }

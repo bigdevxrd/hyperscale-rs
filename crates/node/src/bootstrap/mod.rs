@@ -27,7 +27,7 @@ pub mod state_range_serve;
 pub mod witness_history;
 pub mod witness_history_serve;
 
-use hyperscale_engine::{GenesisConfig, vm_genesis_updates};
+use hyperscale_engine::{GenesisConfig, genesis_updates};
 use hyperscale_storage::{
     GenesisCommit, ImportProgress, RecoveredState, ShardChainReader, WitnessSeed,
 };
@@ -68,7 +68,7 @@ where
         BlockHeight::GENESIS,
         "genesis replication requires a store with no committed blocks"
     );
-    storage.replicate_genesis_substates(&vm_genesis_updates(&[], &genesis_config.pools));
+    storage.replicate_genesis_substates(&genesis_updates(&[], &genesis_config.pools));
 }
 
 /// The identity of the network's genesis package state.

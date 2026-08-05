@@ -1,4 +1,4 @@
-//! The VM engine's event record: what a transaction said happened.
+//! The engine's event record: what a transaction said happened.
 //!
 //! An event names its emitting instance, the emitting package's event
 //! type, and an opaque payload. The kernel stamps the emitter from the
@@ -36,9 +36,9 @@ pub const MAX_VM_EVENTS_PER_TX: usize = 256;
 /// malformed rather than merely wasteful.
 pub const MAX_VM_EVENT_TYPES: u32 = 1024;
 
-/// One event a VM transaction emitted.
+/// One event a transaction emitted.
 #[derive(Clone, Debug, PartialEq, Eq, Categorize, Encode)]
-pub struct VmEvent {
+pub struct Event {
     /// The instance that emitted it, as the leaf key's owner half.
     pub emitter: [u8; 16],
     /// The index into the emitting package's event table.
@@ -47,7 +47,7 @@ pub struct VmEvent {
     pub payload: Vec<u8>,
 }
 
-impl VmEvent {
+impl Event {
     /// This event's leaf hash in the transaction's event root.
     #[must_use]
     pub fn hash(&self) -> Hash {
@@ -55,7 +55,7 @@ impl VmEvent {
     }
 }
 
-impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for VmEvent {
+impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for Event {
     fn decode_body_with_value_kind(
         decoder: &mut D,
         value_kind: ValueKind<NoCustomValueKind>,

@@ -62,7 +62,7 @@ pub fn test_transaction_with_prefixes(
     for (slot, &byte) in payer.iter_mut().zip(seed_bytes) {
         *slot = byte;
     }
-    stub_vm_transaction_with_reads(
+    stub_transaction_with_reads(
         payer,
         read_prefixes,
         write_prefixes,
@@ -890,7 +890,7 @@ pub fn make_finalized_wave(
 /// The envelope's tree is a leading read count followed by that many
 /// 16-byte shared-mode owner prefixes and then the exclusive ones.
 /// Routing is thus fully controlled per transaction by
-/// [`stub_vm_transaction`], with no effects-bridge dependency.
+/// [`stub_transaction`], with no effects-bridge dependency.
 struct StubVmStatics;
 
 impl VmStatics for StubVmStatics {
@@ -959,13 +959,13 @@ pub fn install_stub_vm_statics() {
 /// Build a signed transaction the [`StubVmStatics`] derivation routes to
 /// exactly `owner_prefixes` as exclusive keys, paying from `fee_payer`.
 #[must_use]
-pub fn stub_vm_transaction(
+pub fn stub_transaction(
     fee_payer: [u8; 16],
     owner_prefixes: &[[u8; 16]],
     max_fee: u128,
     validity: TimestampRange,
 ) -> Transaction {
-    stub_vm_transaction_with_reads(fee_payer, &[], owner_prefixes, max_fee, validity)
+    stub_transaction_with_reads(fee_payer, &[], owner_prefixes, max_fee, validity)
 }
 
 /// Build a signed transaction the [`StubVmStatics`] derivation routes to
@@ -979,7 +979,7 @@ pub fn stub_vm_transaction(
 /// Panics if the fixture signing key fails to construct, or if the read
 /// set exceeds what a one-byte count can name.
 #[must_use]
-pub fn stub_vm_transaction_with_reads(
+pub fn stub_transaction_with_reads(
     fee_payer: [u8; 16],
     read_prefixes: &[[u8; 16]],
     write_prefixes: &[[u8; 16]],

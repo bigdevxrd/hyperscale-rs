@@ -21,8 +21,8 @@ use hyperscale_vm_effects::{Hash32, Hasher};
 pub use staking::{PoolRegistry, witness_from_event};
 pub use vm_metadata::{MAX_PACKAGE_METADATA_BYTES, decode_metadata, encode_metadata};
 pub use vm_statics::{
-    BridgeStatics, VM_XRD, check_target_authority, decode_tree, encode_tree, entropy_key,
-    envelope_identity, validator_key, vault_key, vm_account_address,
+    BridgeStatics, XRD, account_address, check_target_authority, decode_tree, encode_tree,
+    entropy_key, envelope_identity, validator_key, vault_key,
 };
 
 /// The protocol hash behind the `vm_effects` hashing seam: blake3 over the

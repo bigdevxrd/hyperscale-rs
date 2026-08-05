@@ -7,8 +7,8 @@ use hyperscale_crypto_bls::BlsSigner;
 use hyperscale_engine::{PreviewGrants, PreviewReport};
 use hyperscale_mempool::DeferralStats;
 use hyperscale_types::{
-    BeaconState, BlockHeight, ShardId, Signer, StateRoot, Transaction, TransactionDecision,
-    TransactionStatus, TxHash, VmEvent,
+    BeaconState, BlockHeight, Event, ShardId, Signer, StateRoot, Transaction, TransactionDecision,
+    TransactionStatus, TxHash,
 };
 
 use super::Budget;
@@ -86,13 +86,13 @@ pub trait Cluster {
         None
     }
 
-    /// The committed value of a VM cell on `shard`, read straight from a
+    /// The committed value of a cell on `shard`, read straight from a
     /// hosted store. `None` when no host serves `shard` or the cell is
     /// absent.
     ///
     /// An observation seam, not a protocol one: scenarios assert against
     /// committed state, and nothing a transaction carries comes from here.
-    fn vm_substate(&self, shard: ShardId, owner: [u8; 16], local: [u8; 16]) -> Option<Vec<u8>> {
+    fn substate(&self, shard: ShardId, owner: [u8; 16], local: [u8; 16]) -> Option<Vec<u8>> {
         let _ = (shard, owner, local);
         None
     }
@@ -104,7 +104,7 @@ pub trait Cluster {
     /// submitted, gossiped, or included, and nothing it computes is
     /// attested. `None` when no hosted store on `shard` can serve the
     /// snapshot and the tip whose clock the run reads.
-    fn vm_preview(
+    fn preview(
         &self,
         shard: ShardId,
         tx: &Transaction,
@@ -114,12 +114,12 @@ pub trait Cluster {
         None
     }
 
-    /// The VM events `shard`'s own copy of `tx`'s receipt carries.
+    /// The events `shard`'s own copy of `tx`'s receipt carries.
     ///
     /// An event is stored where its emitter lives, so this differs by
     /// shard for a multi-shard transaction by design. `None` when no
     /// hosted store on `shard` holds the receipt.
-    fn vm_events(&self, shard: ShardId, tx: TxHash) -> Option<Vec<VmEvent>> {
+    fn events(&self, shard: ShardId, tx: TxHash) -> Option<Vec<Event>> {
         let _ = (shard, tx);
         None
     }

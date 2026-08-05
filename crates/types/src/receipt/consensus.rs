@@ -8,7 +8,7 @@
 //! not the local metadata.
 //!
 //! The variant tag IS the outcome — there's no separate `Success/Failure`
-//! flag and no zero-padded `database_updates`/`vm_events` for failed
+//! flag and no zero-padded `database_updates`/`events` for failed
 //! transactions.
 
 use std::sync::LazyLock;
@@ -25,9 +25,9 @@ use crate::sbor_codec::decode_bounded_vec;
 use crate::state_key::{VM_PARTITION, vm_db_node_key_owner};
 use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
-    BeaconWitnessEvent, BeaconWitnessRoot, DatabaseUpdates, EventRoot, GlobalReceipt,
+    BeaconWitnessEvent, BeaconWitnessRoot, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
     GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_VM_EVENTS_PER_TX, OwnershipRoot,
-    VmEvent, WritesRoot, compute_merkle_root,
+    WritesRoot, compute_merkle_root,
 };
 
 // Variant tag bytes for SBOR encoding. Explicit rather than relying on
@@ -83,7 +83,7 @@ pub enum ConsensusReceipt {
         /// emitter lives, while `receipt_hash` binds the canonical union
         /// through [`GlobalReceipt::event_root`], so committees still
         /// agree on what the transaction emitted.
-        vm_events: Vec<VmEvent>,
+        events: Vec<Event>,
     },
     /// All failures collapse to one variant — the canonical
     /// [`FAILED_RECEIPT_HASH`] is derived at hash time, no payload needed.
@@ -112,15 +112,15 @@ pub fn has_partition_reset(updates: &DatabaseUpdates) -> bool {
     })
 }
 
-/// Offer every VM cell these committed receipts write to the installed
+/// Offer every cell these committed receipts write to the installed
 /// VM statics, so the published-package cache grows with the chain.
 ///
 /// Called on both the live commit path and the sync path, which is the
 /// point: a block's receipts are block content, so a replica that
 /// replayed the block reaches the same cache as one that executed it.
-/// Receipts are also the only thing that moves VM state, so nothing a
+/// Receipts are also the only thing that moves state, so nothing a
 /// package cell could arrive through is missed here.
-pub fn absorb_committed_vm_cells<'a>(receipts: impl IntoIterator<Item = &'a ConsensusReceipt>) {
+pub fn absorb_committed_cells<'a>(receipts: impl IntoIterator<Item = &'a ConsensusReceipt>) {
     if !vm_statics_installed() {
         return;
     }
@@ -165,14 +165,14 @@ impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusRe
                 receipt_hash,
                 database_updates,
                 beacon_witness_events,
-                vm_events,
+                events,
             } => {
                 encoder.write_discriminator(RECEIPT_VARIANT_SUCCEEDED)?;
                 encoder.write_size(4)?;
                 encoder.encode(receipt_hash)?;
                 encoder.encode(database_updates)?;
                 encoder.encode(beacon_witness_events)?;
-                encoder.encode(vm_events)?;
+                encoder.encode(events)?;
             }
             Self::Failed => {
                 encoder.write_discriminator(RECEIPT_VARIANT_FAILED)?;
@@ -210,12 +210,12 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
                     decoder,
                     MAX_BEACON_WITNESS_EVENTS_PER_TX,
                 )?;
-                let vm_events = decode_bounded_vec::<_, VmEvent>(decoder, MAX_VM_EVENTS_PER_TX)?;
+                let events = decode_bounded_vec::<_, Event>(decoder, MAX_VM_EVENTS_PER_TX)?;
                 Ok(Self::Succeeded {
                     receipt_hash,
                     database_updates,
                     beacon_witness_events,
-                    vm_events,
+                    events,
                 })
             }
             RECEIPT_VARIANT_FAILED => {
@@ -291,10 +291,10 @@ impl ConsensusReceipt {
         let (outcome_byte, event_root, database_updates) = match self {
             Self::Succeeded {
                 database_updates,
-                vm_events,
+                events,
                 ..
             } => {
-                let event_hashes: Vec<Hash> = vm_events.iter().map(VmEvent::hash).collect();
+                let event_hashes: Vec<Hash> = events.iter().map(Event::hash).collect();
                 (
                     [1u8],
                     compute_merkle_root(&event_hashes),
@@ -326,7 +326,7 @@ mod tests {
             receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")),
             database_updates: DatabaseUpdates::default(),
             beacon_witness_events: Vec::new(),
-            vm_events: vec![VmEvent {
+            events: vec![Event {
                 emitter: [7; 16],
                 event_type: 1,
                 payload: vec![4, 5, 6],
@@ -406,7 +406,7 @@ mod tests {
             receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")),
             database_updates,
             beacon_witness_events: Vec::new(),
-            vm_events: Vec::new(),
+            events: Vec::new(),
         };
         let bytes = basic_encode(&receipt).unwrap();
         let err = basic_decode::<ConsensusReceipt>(&bytes).unwrap_err();

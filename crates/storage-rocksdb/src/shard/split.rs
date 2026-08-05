@@ -719,7 +719,7 @@ mod tests {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     database_updates: updates,
                     beacon_witness_events: Vec::new(),
-                    vm_events: Vec::new(),
+                    events: Vec::new(),
                 }),
             )];
             let height = BlockHeight::new(u64::from(seed));

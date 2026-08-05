@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperscale_effects_bridge::{build_transfer_tx, vm_account_address};
+use hyperscale_effects_bridge::{account_address, build_transfer_tx};
 use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_simulation::{CryptoScheme, SimConfig, SimulationRunner};
 use hyperscale_storage::ShardChainReader;
@@ -24,7 +24,7 @@ fn signer_from_seed(seed: u8) -> Ed25519PrivateKey {
 }
 
 fn account_from_seed(seed: u8) -> [u8; 16] {
-    vm_account_address(&signer_from_seed(seed).public_key().0)
+    account_address(&signer_from_seed(seed).public_key().0)
 }
 
 /// A validity window bracketing `now`, wide enough that a transaction stays
@@ -384,7 +384,7 @@ impl Session {
             // session that followed them would run several times slower for a
             // signature path it never draws.
             crypto_scheme: CryptoScheme::Mock,
-            vm_accounts: (1..=ACCOUNTS)
+            accounts: (1..=ACCOUNTS)
                 .map(|s| (account_from_seed(s), ACCOUNT_FUNDING))
                 .collect(),
             ..SimConfig::default()

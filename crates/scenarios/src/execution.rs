@@ -1,8 +1,8 @@
-//! The single-shard catalogue on the VM engine.
+//! The single-shard catalogue on the engine.
 //!
 //! Every scenario drives signed manifest graphs — the account guest's
 //! withdraw+deposit — through the live pipeline: gossip, derived-key
-//! admission, proposal, wave execution on the VM batch executor,
+//! admission, proposal, wave execution on the batch executor,
 //! receipts, commit. The bodies are portable over [`Cluster`]; the
 //! kernel-level invariants (handle capabilities, snapshot semantics,
 //! schedule invariance) are pinned in the vm repo's differential suite —
@@ -16,7 +16,7 @@ use hyperscale_effects_bridge::ProtocolHasher;
 use hyperscale_effects_bridge::vm_statics::package_key;
 use hyperscale_engine::genesis::{entropy_key, vault_key};
 use hyperscale_engine::{
-    PreviewGrants, PreviewOutcome, PreviewReport, ResourceChange, VM_XRD, vm_account_address,
+    PreviewGrants, PreviewOutcome, PreviewReport, ResourceChange, XRD, account_address,
 };
 use hyperscale_types::{BlockHeight, ShardId, TransactionDecision, TransactionStatus, TxHash};
 use hyperscale_vm_effects::package_hash;
@@ -24,14 +24,14 @@ use hyperscale_vm_effects::package_hash;
 use crate::contention::{ContentionReport, Lcg, settle_and_report, zipf_cdf};
 use crate::support::faultable::FaultableCluster;
 use crate::support::tx::{
-    build_vm_composed_tx, build_vm_publish_tx, build_vm_stamp_tx, build_vm_transfer_tx,
-    validity_around, vm_cross_shard_cast, vm_cross_shard_keys, vm_nullifier_race_cast,
-    vm_payment_request, vm_recipient, vm_sender, vm_storm_artifact, vm_storm_publishers,
+    build_composed_tx, build_publish_tx, build_stamp_tx, build_transfer_tx, cross_shard_cast,
+    cross_shard_keys, nullifier_race_cast, payment_request, recipient, sender, storm_artifact,
+    storm_publishers, validity_around,
 };
 use crate::support::wait::{await_height, await_tx_terminal};
 use crate::support::{Cluster, epochs};
 
-/// Per-payment amount of the VM contention scenarios.
+/// Per-payment amount of the contention scenarios.
 const PAYMENT: u128 = 5;
 
 /// The payment a nullifier race contends over.
@@ -53,25 +53,25 @@ const REQUEST: u128 = 100;
 ///
 /// Panics if both compositions settle the same way, if the request is
 /// filled more than once, or if either payer is charged the wrong class.
-pub fn vm_nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
+pub fn nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
     let shard = ShardId::ROOT;
-    let (first_key, second_key, requester_key) = vm_nullifier_race_cast();
-    let first = vm_account_address(&first_key.public_key().0);
-    let second = vm_account_address(&second_key.public_key().0);
-    let requester = vm_account_address(&requester_key.public_key().0);
+    let (first_key, second_key, requester_key) = nullifier_race_cast();
+    let first = account_address(&first_key.public_key().0);
+    let second = account_address(&second_key.public_key().0);
+    let requester = account_address(&requester_key.public_key().0);
 
     let before = [
-        vm_vault_balance(c, shard, first),
-        vm_vault_balance(c, shard, second),
-        vm_vault_balance(c, shard, requester),
+        vault_balance(c, shard, first),
+        vault_balance(c, shard, second),
+        vault_balance(c, shard, requester),
     ];
 
-    let request = vm_payment_request(requester, REQUEST);
+    let request = payment_request(requester, REQUEST);
     let window = validity_around(c.now());
     let mut hashes = Vec::new();
     let mut floors = Vec::new();
     for (composer, from) in [(&first_key, first), (&second_key, second)] {
-        let tx = build_vm_composed_tx(composer, from, &requester_key, &request, REQUEST, window);
+        let tx = build_composed_tx(composer, from, &requester_key, &request, REQUEST, window);
         floors.push(tx.body().abort_floor());
         hashes.push(tx.hash());
         c.submit(Arc::new(tx));
@@ -96,7 +96,7 @@ pub fn vm_nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
     );
 
     // The request was filled once, so the requester banked one payment.
-    let after_requester = vm_vault_balance(c, shard, requester);
+    let after_requester = vault_balance(c, shard, requester);
     assert_eq!(
         after_requester - before[2],
         REQUEST,
@@ -111,13 +111,13 @@ pub fn vm_nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
     );
     let (winner_spent, loser_spent) = if won {
         (
-            before[0] - vm_vault_balance(c, shard, first),
-            before[1] - vm_vault_balance(c, shard, second),
+            before[0] - vault_balance(c, shard, first),
+            before[1] - vault_balance(c, shard, second),
         )
     } else {
         (
-            before[1] - vm_vault_balance(c, shard, second),
-            before[0] - vm_vault_balance(c, shard, first),
+            before[1] - vault_balance(c, shard, second),
+            before[0] - vault_balance(c, shard, first),
         )
     };
     assert!(
@@ -130,7 +130,7 @@ pub fn vm_nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
     );
 }
 
-/// Submit one VM transfer between genesis-funded VM accounts and assert
+/// Submit one transfer between genesis-funded accounts and assert
 /// it accepts and lands state.
 ///
 /// The committed state root must move off its pre-submission value: the
@@ -142,11 +142,11 @@ pub fn vm_nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
 ///
 /// Panics if the transfer does not accept within budget, the root shard
 /// does not advance, or the state root does not move.
-pub fn vm_single_transfer(c: &mut impl Cluster) {
-    let (payer, from) = vm_sender(0);
-    let to = vm_recipient(0);
+pub fn single_transfer(c: &mut impl Cluster) {
+    let (payer, from) = sender(0);
+    let to = recipient(0);
     let before = c.committed_state_root(ShardId::ROOT);
-    let transfer = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+    let transfer = build_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
     let hash = transfer.hash();
     c.submit(Arc::new(transfer));
 
@@ -170,7 +170,7 @@ pub fn vm_single_transfer(c: &mut impl Cluster) {
     );
 }
 
-/// An uncovered VM withdrawal aborts deterministically on every replica
+/// An uncovered withdrawal aborts deterministically on every replica
 /// and the chain carries on — the consensus half of INV-VM-1.
 ///
 /// The over-withdrawal's reservation is infeasible against committed
@@ -184,11 +184,11 @@ pub fn vm_single_transfer(c: &mut impl Cluster) {
 ///
 /// Panics if the over-withdrawal does not reject, or the follow-up does
 /// not accept.
-pub fn vm_abort_converges(c: &mut impl Cluster) {
-    let (payer, from) = vm_sender(0);
-    let to = vm_recipient(0);
+pub fn abort_converges(c: &mut impl Cluster) {
+    let (payer, from) = sender(0);
+    let to = recipient(0);
 
-    let over = build_vm_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
+    let over = build_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
     let over_hash = over.hash();
     c.submit(Arc::new(over));
     let status = await_tx_terminal(c, over_hash, epochs(8));
@@ -200,7 +200,7 @@ pub fn vm_abort_converges(c: &mut impl Cluster) {
         "an uncovered VM withdrawal must reject deterministically; status = {status:?}"
     );
 
-    let fine = build_vm_transfer_tx(&payer, from, to, 50, validity_around(c.now()));
+    let fine = build_transfer_tx(&payer, from, to, 50, validity_around(c.now()));
     let fine_hash = fine.hash();
     c.submit(Arc::new(fine));
     let status = await_tx_terminal(c, fine_hash, epochs(8));
@@ -213,7 +213,7 @@ pub fn vm_abort_converges(c: &mut impl Cluster) {
     );
 }
 
-/// A dependent VM transfer reads its own block's attested baseline.
+/// A dependent transfer reads its own block's attested baseline.
 ///
 /// The second transfer spends more than its payer's genesis balance and
 /// is covered only by the first transfer's committed deposit. It accepts
@@ -228,14 +228,14 @@ pub fn vm_abort_converges(c: &mut impl Cluster) {
 ///
 /// Panics if either transfer misses its budget, the dependent transfer
 /// does not accept, or the commit order is not strictly increasing.
-pub fn vm_reads_the_committed_baseline(c: &mut impl Cluster) {
-    let (alice_key, alice) = vm_sender(0);
-    let (bob_key, bob) = vm_sender(1);
-    let carol = vm_recipient(0);
+pub fn reads_the_committed_baseline(c: &mut impl Cluster) {
+    let (alice_key, alice) = sender(0);
+    let (bob_key, bob) = sender(1);
+    let carol = recipient(0);
 
     // Bob holds 10_000 at genesis; after Alice's 5_000 deposit he can
     // cover 12_000.
-    let first = build_vm_transfer_tx(&alice_key, alice, bob, 5_000, validity_around(c.now()));
+    let first = build_transfer_tx(&alice_key, alice, bob, 5_000, validity_around(c.now()));
     let first_hash = first.hash();
     c.submit(Arc::new(first));
     let status = await_tx_terminal(c, first_hash, epochs(10));
@@ -247,7 +247,7 @@ pub fn vm_reads_the_committed_baseline(c: &mut impl Cluster) {
         "funding transfer must accept; status = {status:?}"
     );
 
-    let second = build_vm_transfer_tx(&bob_key, bob, carol, 12_000, validity_around(c.now()));
+    let second = build_transfer_tx(&bob_key, bob, carol, 12_000, validity_around(c.now()));
     let second_hash = second.hash();
     c.submit(Arc::new(second));
     let status = await_tx_terminal(c, second_hash, epochs(10));
@@ -274,12 +274,12 @@ pub fn vm_reads_the_committed_baseline(c: &mut impl Cluster) {
 
 /// Zipf-skewed VM payments: `senders` transfers into `recipients` payees
 /// drawn from a Zipf(`skew`) distribution — the catalogue's contention
-/// shape on the VM engine.
+/// shape on the engine.
 ///
 /// # Panics
 ///
 /// Panics if any payment misses its budget or does not accept.
-pub fn vm_zipf_payments(
+pub fn zipf_payments(
     c: &mut impl Cluster,
     senders: u8,
     recipients: u8,
@@ -289,11 +289,11 @@ pub fn vm_zipf_payments(
     let mut rng = Lcg(0x5eed_c0de ^ u64::from(senders) << 8 ^ u64::from(recipients));
     let mut submissions = Vec::with_capacity(senders as usize);
     for index in 0..senders {
-        let (payer, from) = vm_sender(index);
+        let (payer, from) = sender(index);
         let draw = rng.unit();
         let rank = cdf.iter().position(|&c| draw < c).unwrap_or(cdf.len() - 1);
-        let to = vm_recipient(u8::try_from(rank).expect("recipient rank fits"));
-        let tx = build_vm_transfer_tx(&payer, from, to, PAYMENT, validity_around(c.now()));
+        let to = recipient(u8::try_from(rank).expect("recipient rank fits"));
+        let tx = build_transfer_tx(&payer, from, to, PAYMENT, validity_around(c.now()));
         submissions.push((tx.hash(), c.now()));
         c.submit(Arc::new(tx));
     }
@@ -311,13 +311,13 @@ pub fn vm_zipf_payments(
 ///
 /// Panics if any payment misses its budget, does not accept, or two hot
 /// payments commit at one height.
-pub fn vm_hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport, u64) {
-    let hot = vm_recipient(0);
-    let before = vm_vault_balance(c, ShardId::ROOT, hot);
+pub fn hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport, u64) {
+    let hot = recipient(0);
+    let before = vault_balance(c, ShardId::ROOT, hot);
     let mut submissions = Vec::with_capacity(senders as usize);
     for index in 0..senders {
-        let (payer, from) = vm_sender(index);
-        let tx = build_vm_transfer_tx(&payer, from, hot, PAYMENT, validity_around(c.now()));
+        let (payer, from) = sender(index);
+        let tx = build_transfer_tx(&payer, from, hot, PAYMENT, validity_around(c.now()));
         submissions.push((tx.hash(), c.now()));
         c.submit(Arc::new(tx));
     }
@@ -349,14 +349,14 @@ pub fn vm_hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport,
     // `settle_and_report` has already asserted all of them accepted.
     let settled = u128::try_from(report.submitted).expect("bounded");
     assert_eq!(
-        vm_vault_balance(c, ShardId::ROOT, hot) - before,
+        vault_balance(c, ShardId::ROOT, hot) - before,
         settled * PAYMENT,
         "the hot vault must hold every accepted payment: {settled} settled",
     );
     (report, span)
 }
 
-/// A cross-shard VM transfer settles through the payer-first holdback.
+/// A cross-shard transfer settles through the payer-first holdback.
 ///
 /// The reserve leg lives on the payer's shard and the delta leg on the
 /// recipient's; neither leg provisions state (both are commutative), so
@@ -372,9 +372,9 @@ pub fn vm_hot_recipient(c: &mut impl Cluster, senders: u8) -> (ContentionReport,
 ///
 /// Panics if the transfer misses its budget, does not accept, or either
 /// shard's chain never commits it.
-pub fn vm_cross_shard_transfer(c: &mut impl Cluster) {
-    let (payer, from, to) = vm_cross_shard_cast();
-    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+pub fn cross_shard_transfer(c: &mut impl Cluster) {
+    let (payer, from, to) = cross_shard_cast();
+    let tx = build_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
 
@@ -410,9 +410,9 @@ pub fn vm_cross_shard_transfer(c: &mut impl Cluster) {
 /// Panics if the transfer does not accept, if either shard never holds a
 /// receipt for it, or if either shard stores an event whose emitter lives
 /// on the other.
-pub fn vm_events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
-    let (payer, from, to) = vm_cross_shard_cast();
-    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+pub fn events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
+    let (payer, from, to) = cross_shard_cast();
+    let tx = build_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
 
@@ -428,14 +428,12 @@ pub fn vm_events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
     let (sender_shard, recipient_shard) = (ShardId::leaf(1, 0), ShardId::leaf(1, 1));
     // Receipts persist a beat behind the decision, so wait for both.
     let stored = c.run_until(epochs(8), |c| {
-        c.vm_events(sender_shard, hash).is_some() && c.vm_events(recipient_shard, hash).is_some()
+        c.events(sender_shard, hash).is_some() && c.events(recipient_shard, hash).is_some()
     });
     assert!(stored, "both shards must hold a receipt for the transfer");
 
-    let sender_events = c.vm_events(sender_shard, hash).expect("payer receipt");
-    let recipient_events = c
-        .vm_events(recipient_shard, hash)
-        .expect("recipient receipt");
+    let sender_events = c.events(sender_shard, hash).expect("payer receipt");
+    let recipient_events = c.events(recipient_shard, hash).expect("recipient receipt");
     assert_eq!(
         sender_events
             .iter()
@@ -477,12 +475,12 @@ pub fn vm_events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
 /// level never reaches the beacon within budget, if the counterpart
 /// attests no work for the leg it executed, or if a recorded byte level
 /// moves while nothing is executing.
-pub fn vm_attested_load_reaches_the_beacon(c: &mut impl Cluster) {
+pub fn attested_load_reaches_the_beacon(c: &mut impl Cluster) {
     let left = ShardId::leaf(1, 0);
     let right = ShardId::leaf(1, 1);
 
-    let (payer, from, to) = vm_cross_shard_cast();
-    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+    let (payer, from, to) = cross_shard_cast();
+    let tx = build_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
     let status = await_tx_terminal(c, hash, epochs(16));
@@ -547,10 +545,10 @@ pub fn vm_attested_load_reaches_the_beacon(c: &mut impl Cluster) {
 /// Panics if the uncovered withdrawal does not reject, or if the shard's
 /// attested mark fails to move across a block whose only transaction
 /// applied nothing.
-pub fn vm_a_failed_attempt_still_attests_work(c: &mut impl Cluster) {
+pub fn a_failed_attempt_still_attests_work(c: &mut impl Cluster) {
     let shard = ShardId::ROOT;
-    let (payer, from) = vm_sender(0);
-    let to = vm_recipient(0);
+    let (payer, from) = sender(0);
+    let to = recipient(0);
 
     // Settle any earlier traffic so the mark below moves only for the
     // failure this scenario submits.
@@ -560,7 +558,7 @@ pub fn vm_a_failed_attempt_still_attests_work(c: &mut impl Cluster) {
     );
     let before = recorded_gas(c, shard).expect("a folded crossing");
 
-    let over = build_vm_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
+    let over = build_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
     let over_hash = over.hash();
     c.submit(Arc::new(over));
     let status = await_tx_terminal(c, over_hash, epochs(8));
@@ -612,9 +610,9 @@ fn recorded_bytes<C: Cluster>(c: &C, shard: ShardId) -> Option<u64> {
 /// Panics if the stamp misses its budget, does not accept, either
 /// shard's chain never commits it, either leaf is unstamped, or the two
 /// stamps differ.
-pub fn vm_randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
-    let (payer, left_owner, right_key, right_owner) = vm_cross_shard_keys();
-    let tx = build_vm_stamp_tx(&payer, left_owner, &right_key, validity_around(c.now()));
+pub fn randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
+    let (payer, left_owner, right_key, right_owner) = cross_shard_keys();
+    let tx = build_stamp_tx(&payer, left_owner, &right_key, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
 
@@ -638,7 +636,7 @@ pub fn vm_randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
     // trails the settling block by the persistence step.
     let read = |c: &C, shard: ShardId, owner: [u8; 16]| -> Option<Vec<u8>> {
         let key = entropy_key(owner);
-        c.vm_substate(shard, key.owner.0, key.local.0)
+        c.substate(shard, key.owner.0, key.local.0)
     };
     assert!(
         c.run_until(epochs(4), |c| read(c, ShardId::leaf(1, 0), left_owner)
@@ -668,9 +666,9 @@ pub fn vm_randomness_draw_agrees_across_shards<C: Cluster>(c: &mut C) {
 ///
 /// Panics if either chain stalls, the transaction completes, or either
 /// shard's chain ever includes it.
-pub fn vm_insolvent_payer_engages_nothing(c: &mut impl Cluster) {
-    let (payer, from, to) = vm_cross_shard_cast();
-    let tx = build_vm_transfer_tx(&payer, from, to, 5, validity_around(c.now()));
+pub fn insolvent_payer_engages_nothing(c: &mut impl Cluster) {
+    let (payer, from, to) = cross_shard_cast();
+    let tx = build_transfer_tx(&payer, from, to, 5, validity_around(c.now()));
     let hash = tx.hash();
     c.submit(Arc::new(tx));
 
@@ -720,11 +718,11 @@ pub fn vm_insolvent_payer_engages_nothing(c: &mut impl Cluster) {
 /// commits, the bundle is never suppressed, the transaction fails to
 /// reach a terminal abort, the counterpart engages, or the payer's
 /// balance moves by anything other than the floor.
-pub fn vm_abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
+pub fn abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
     let payer_shard = ShardId::leaf(1, 0);
     let counterpart = ShardId::leaf(1, 1);
-    let (payer, from, to) = vm_cross_shard_cast();
-    let before = vm_vault_balance(c, payer_shard, from);
+    let (payer, from, to) = cross_shard_cast();
+    let before = vault_balance(c, payer_shard, from);
 
     // Both channels the bundle travels. The fetch rule names the
     // *request* type: the fault engine tags a request and its response
@@ -732,7 +730,7 @@ pub fn vm_abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
     let broadcast_dropped = c.drop_type("provisions.broadcast");
     let fetch_dropped = c.drop_type("provision.request");
 
-    let tx = build_vm_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
+    let tx = build_transfer_tx(&payer, from, to, 100, validity_around(c.now()));
     let hash = tx.hash();
     let floor = tx.body().abort_floor();
     c.submit(Arc::new(tx));
@@ -762,7 +760,7 @@ pub fn vm_abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
     );
 
     // The floor left the payer's vault; the transfer did not.
-    let after = vm_vault_balance(c, payer_shard, from);
+    let after = vault_balance(c, payer_shard, from);
     assert_eq!(
         before.saturating_sub(after),
         floor,
@@ -785,13 +783,13 @@ pub fn vm_abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
 /// Panics if the uncovered withdrawal does not reject, if the covered
 /// transfer that follows does not accept, or if the rejected attempt
 /// moves the payer's vault by anything other than the floor.
-pub fn vm_failure_charges_its_payer(c: &mut impl Cluster) {
+pub fn failure_charges_its_payer(c: &mut impl Cluster) {
     let shard = ShardId::ROOT;
-    let (payer, from) = vm_sender(0);
-    let to = vm_recipient(0);
+    let (payer, from) = sender(0);
+    let to = recipient(0);
 
-    let before = vm_vault_balance(c, shard, from);
-    let over = build_vm_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
+    let before = vault_balance(c, shard, from);
+    let over = build_transfer_tx(&payer, from, to, 1_000_000, validity_around(c.now()));
     let floor = over.body().abort_floor();
     let over_hash = over.hash();
     c.submit(Arc::new(over));
@@ -804,7 +802,7 @@ pub fn vm_failure_charges_its_payer(c: &mut impl Cluster) {
         "an uncovered VM withdrawal must reject deterministically; status = {status:?}"
     );
 
-    let after = vm_vault_balance(c, shard, from);
+    let after = vault_balance(c, shard, from);
     assert_eq!(
         before.saturating_sub(after),
         floor,
@@ -813,7 +811,7 @@ pub fn vm_failure_charges_its_payer(c: &mut impl Cluster) {
     );
 
     // The charge is the only thing that moved: the payer can still spend.
-    let fine = build_vm_transfer_tx(&payer, from, to, 50, validity_around(c.now()));
+    let fine = build_transfer_tx(&payer, from, to, 50, validity_around(c.now()));
     let fine_hash = fine.hash();
     c.submit(Arc::new(fine));
     let status = await_tx_terminal(c, fine_hash, epochs(8));
@@ -826,11 +824,11 @@ pub fn vm_failure_charges_its_payer(c: &mut impl Cluster) {
     );
 }
 
-/// The committed balance of a VM account's native vault, read through the
+/// The committed balance of a account's native vault, read through the
 /// harness's client-proven snapshot seam.
-fn vm_vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {
-    let vault = vault_key(owner, VM_XRD);
-    c.vm_substate(shard, vault.owner.0, vault.local.0)
+fn vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {
+    let vault = vault_key(owner, XRD);
+    c.substate(shard, vault.owner.0, vault.local.0)
         .map_or(0, |bytes| {
             let cell: [u8; 16] = bytes.as_slice().try_into().expect("an amount cell");
             u128::from_le_bytes(cell)
@@ -839,7 +837,7 @@ fn vm_vault_balance(c: &impl Cluster, shard: ShardId, owner: [u8; 16]) -> u128 {
 
 /// The reported change to `owner`'s native vault.
 fn preview_change(report: &PreviewReport, owner: [u8; 16]) -> ResourceChange {
-    let vault = vault_key(owner, VM_XRD);
+    let vault = vault_key(owner, XRD);
     *report
         .changes
         .iter()
@@ -869,10 +867,10 @@ fn preview_change(report: &PreviewReport, owner: [u8; 16]) -> ResourceChange {
 /// with the committed baseline or with what the transfer commits, if the
 /// preview leaks the transaction into the chain, or if the transfer does
 /// not accept.
-pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
+pub fn preview_reports_resource_changes(c: &mut impl Cluster) {
     const AMOUNT: u128 = 100;
-    let (payer, from) = vm_sender(0);
-    let to = vm_recipient(0);
+    let (payer, from) = sender(0);
+    let to = recipient(0);
 
     // A preview reads the chain's own attested clock and reveal, so it
     // wants a chain that has spoken at least once.
@@ -880,13 +878,13 @@ pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
         await_height(c, ShardId::ROOT, 1, epochs(2)),
         "root shard did not advance past genesis"
     );
-    let sender_before = vm_vault_balance(c, ShardId::ROOT, from);
-    let recipient_before = vm_vault_balance(c, ShardId::ROOT, to);
+    let sender_before = vault_balance(c, ShardId::ROOT, from);
+    let recipient_before = vault_balance(c, ShardId::ROOT, to);
 
-    let candidate = build_vm_transfer_tx(&payer, from, to, AMOUNT, validity_around(c.now()));
+    let candidate = build_transfer_tx(&payer, from, to, AMOUNT, validity_around(c.now()));
     let hash = candidate.hash();
     let report = c
-        .vm_preview(ShardId::ROOT, &candidate, PreviewGrants::default())
+        .preview(ShardId::ROOT, &candidate, PreviewGrants::default())
         .expect("the root shard serves a preview");
 
     assert_eq!(
@@ -910,7 +908,7 @@ pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
     );
 
     let credited = c
-        .vm_preview(
+        .preview(
             ShardId::ROOT,
             &candidate,
             PreviewGrants {
@@ -945,7 +943,7 @@ pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
         "a preview must reach no chain"
     );
     assert_eq!(
-        vm_vault_balance(c, ShardId::ROOT, from),
+        vault_balance(c, ShardId::ROOT, from),
         sender_before,
         "a preview writes nothing"
     );
@@ -961,12 +959,12 @@ pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
         "the previewed transfer did not accept; status = {status:?}"
     );
     assert_eq!(
-        vm_vault_balance(c, ShardId::ROOT, from),
+        vault_balance(c, ShardId::ROOT, from),
         sender.after,
         "the commit landed on the figure the preview named for the sender"
     );
     assert_eq!(
-        vm_vault_balance(c, ShardId::ROOT, to),
+        vault_balance(c, ShardId::ROOT, to),
         recipient.after,
         "the commit landed on the figure the preview named for the recipient"
     );
@@ -992,10 +990,10 @@ pub fn vm_preview_reports_resource_changes(c: &mut impl Cluster) {
 ///
 /// Panics if any publish fails to settle, if a publish did not commit on
 /// its publisher's shard, or if either shard's chain failed to advance.
-pub fn vm_deploy_storm_rides_out(c: &mut impl Cluster) {
+pub fn deploy_storm_rides_out(c: &mut impl Cluster) {
     const PER_PUBLISHER: u16 = 6;
 
-    let publishers = vm_storm_publishers();
+    let publishers = storm_publishers();
     let shards = [ShardId::leaf(1, 0), ShardId::leaf(1, 1)];
     let before: Vec<Option<BlockHeight>> = shards
         .iter()
@@ -1009,9 +1007,9 @@ pub fn vm_deploy_storm_rides_out(c: &mut impl Cluster) {
         for nonce in 0..PER_PUBLISHER {
             // Distinct per publisher as well as per nonce, so the two
             // shards never race to publish one content address.
-            let artifact = vm_storm_artifact(nonce + index * 1_000);
+            let artifact = storm_artifact(nonce + index * 1_000);
             let cell = package_key(*publisher, package_hash(&ProtocolHasher, &artifact));
-            let tx = build_vm_publish_tx(key, artifact, validity);
+            let tx = build_publish_tx(key, artifact, validity);
             let shard = shards[usize::from(index)];
             submitted.push((tx.hash(), shard));
             cells.push((shard, cell.owner.0, cell.local.0));
@@ -1049,7 +1047,7 @@ pub fn vm_deploy_storm_rides_out(c: &mut impl Cluster) {
     // collapse into one cell and the storm would be a single publish.
     for (shard, owner, local) in &cells {
         assert!(
-            c.vm_substate(*shard, *owner, *local).is_some(),
+            c.substate(*shard, *owner, *local).is_some(),
             "{shard:?} does not hold the package cell the storm published"
         );
     }

@@ -75,7 +75,7 @@ where
             | Action::VerifyProvisionRoot { .. }
             | Action::VerifyCertificateRoot { .. }
             | Action::VerifyProvisionTxRoots { .. }
-            | Action::VerifyVmReservations { .. }
+            | Action::VerifyReservations { .. }
             | Action::VerifyProvisions { .. }
             | Action::ExecuteTransactions { .. }
             | Action::ExecuteCrossShardTransactions { .. }

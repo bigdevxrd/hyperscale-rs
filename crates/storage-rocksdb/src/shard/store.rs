@@ -43,7 +43,7 @@ impl SubstateStore for RocksDbShardStorage {
         root_hash
     }
 
-    fn get_vm_substate_at_height(
+    fn get_substate_at_height(
         &self,
         owner: [u8; 16],
         local: [u8; 16],

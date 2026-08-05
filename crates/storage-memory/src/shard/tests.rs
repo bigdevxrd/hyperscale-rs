@@ -124,7 +124,7 @@ fn commit_with(
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: updates.clone(),
                 beacon_witness_events: Vec::new(),
-                vm_events: Vec::new(),
+                events: Vec::new(),
             }),
             metadata: None,
         };
@@ -775,26 +775,26 @@ fn historical_substate_reads_resolve_per_version() {
     assert_ne!(root_v1, root_v2, "roots must differ after overwrite");
 
     assert_eq!(
-        storage.get_vm_substate_at_height(owner, local, BlockHeight::new(1)),
+        storage.get_substate_at_height(owner, local, BlockHeight::new(1)),
         Some(Some(vec![100u8])),
         "v1 value should be [100]"
     );
     assert_eq!(
-        storage.get_vm_substate_at_height(owner, local, BlockHeight::new(2)),
+        storage.get_substate_at_height(owner, local, BlockHeight::new(2)),
         Some(Some(vec![200u8])),
         "v2 value should be [200]"
     );
 
     // An unwritten cell reads as absent, not as an unavailable height.
     assert_eq!(
-        storage.get_vm_substate_at_height([99u8; 16], local, BlockHeight::new(1)),
+        storage.get_substate_at_height([99u8; 16], local, BlockHeight::new(1)),
         Some(None),
     );
 
     // A future version is unavailable.
     assert!(
         storage
-            .get_vm_substate_at_height(owner, local, BlockHeight::new(99))
+            .get_substate_at_height(owner, local, BlockHeight::new(99))
             .is_none(),
         "future version should return None"
     );
@@ -1025,7 +1025,7 @@ fn test_snapshot_at_below_retention_panics() {
     let _snap = <SimShardStorage as VersionedStore>::snapshot_at(&storage, BlockHeight::new(1));
 }
 
-/// `get_vm_substate_at_height` is an external-facing API — it must
+/// `get_substate_at_height` is an external-facing API — it must
 /// return `None` for out-of-retention heights rather than panicking
 /// (the panic path is reserved for `snapshot_at` callers).
 #[test]
@@ -1048,7 +1048,7 @@ fn test_historical_substate_read_respects_retention() {
     // current=10, floor=8.
 
     // Within retention: returns Some.
-    let got = storage.get_vm_substate_at_height(owner, local, BlockHeight::new(9));
+    let got = storage.get_substate_at_height(owner, local, BlockHeight::new(9));
     assert_eq!(
         got,
         Some(Some(vec![9])),
@@ -1056,11 +1056,11 @@ fn test_historical_substate_read_respects_retention() {
     );
 
     // Below retention: returns None (graceful).
-    let got = storage.get_vm_substate_at_height(owner, local, BlockHeight::new(1));
+    let got = storage.get_substate_at_height(owner, local, BlockHeight::new(1));
     assert!(got.is_none(), "height below retention must return None");
 
     // Above current: returns None.
-    let got = storage.get_vm_substate_at_height(owner, local, BlockHeight::new(99));
+    let got = storage.get_substate_at_height(owner, local, BlockHeight::new(99));
     assert!(got.is_none(), "future height returns None");
 }
 

@@ -131,10 +131,10 @@ pub struct SimConfig {
     /// (`MempoolConfig::share_declared_reads`). Off by default; the
     /// read-share A/B constructs one cluster per setting.
     pub share_declared_reads: bool,
-    /// Genesis-funded VM accounts (owner prefix, balance). Builds the
+    /// Genesis-funded accounts (owner prefix, balance). Builds the
     /// process VM statics and the executor world, and seeds the funded
-    /// vault cells at genesis. Empty runs no VM traffic.
-    pub vm_accounts: Vec<([u8; 16], u128)>,
+    /// vault cells at genesis. Empty runs no traffic.
+    pub accounts: Vec<([u8; 16], u128)>,
     /// Addresses the process's VM statics must resolve, when that is wider
     /// than what this cluster funds.
     ///
@@ -142,24 +142,24 @@ pub struct SimConfig {
     /// wins, so a test binary running several clusters has to register
     /// every address any of them will transact with — otherwise the first
     /// cluster fixes the instance registry and the rest fail admission.
-    /// Genesis still seeds only [`SimConfig::vm_accounts`], which is what
+    /// Genesis still seeds only [`SimConfig::accounts`], which is what
     /// keeps per-cluster funding independent. Empty means "the same
     /// accounts this cluster funds".
-    pub vm_world_accounts: Vec<([u8; 16], u128)>,
+    pub world_accounts: Vec<([u8; 16], u128)>,
     /// Stake pools the beacon folds facts for: the pool instance's owner
     /// prefix and the identifier it is folded under.
-    pub vm_pools: Vec<StakePoolSeat>,
+    pub pools: Vec<StakePoolSeat>,
     /// Pool instances the process's VM statics must resolve, when that is
     /// wider than what this cluster seats — the pool counterpart of
-    /// [`SimConfig::vm_world_accounts`], installed for the same
+    /// [`SimConfig::world_accounts`], installed for the same
     /// first-wins reason. Empty means "the same pools this cluster
     /// seats".
-    pub vm_world_pools: Vec<StakePoolSeat>,
-    /// The VM batch executor's group scheduling. Receipts are
+    pub world_pools: Vec<StakePoolSeat>,
+    /// The batch executor's group scheduling. Receipts are
     /// schedule-invariant, so this cannot change any outcome — the
     /// serial-vs-parallel A/B constructs one cluster per mode and
     /// asserts exactly that.
-    pub vm_execution_mode: ExecutionMode,
+    pub execution_mode: ExecutionMode,
 }
 
 impl Default for SimConfig {
@@ -176,11 +176,11 @@ impl Default for SimConfig {
             packet_loss_rate: 0.0,
             crypto_scheme: CryptoScheme::default(),
             share_declared_reads: false,
-            vm_accounts: Vec::new(),
-            vm_world_accounts: Vec::new(),
-            vm_pools: Vec::new(),
-            vm_world_pools: Vec::new(),
-            vm_execution_mode: ExecutionMode::Serial,
+            accounts: Vec::new(),
+            world_accounts: Vec::new(),
+            pools: Vec::new(),
+            world_pools: Vec::new(),
+            execution_mode: ExecutionMode::Serial,
         }
     }
 }
@@ -238,20 +238,20 @@ pub struct SimulationRunner {
     /// vnodes admit under the same discipline as genesis-seated ones.
     share_declared_reads: bool,
 
-    /// [`SimConfig::vm_accounts`], retained so genesis seeds the same
+    /// [`SimConfig::accounts`], retained so genesis seeds the same
     /// world the executor and statics were built with.
-    vm_accounts: Vec<([u8; 16], u128)>,
+    accounts: Vec<([u8; 16], u128)>,
 
-    /// [`SimConfig::vm_pools`] with each seat's founding members filled
+    /// [`SimConfig::pools`] with each seat's founding members filled
     /// in from the folded genesis beacon state, so the contract's record
     /// of who a pool operates and the beacon's agree from the first
     /// block.
-    vm_pools: Vec<StakePoolSeat>,
+    pools: Vec<StakePoolSeat>,
 
     /// The [`Executor`] every host runs, retained so a harness can reach
     /// the engine-side surfaces that are not part of wave execution —
     /// preview being the only one today.
-    vm_engine: Arc<Executor>,
+    engine: Arc<Executor>,
 
     /// Beacon genesis config hash, retained for runtime-built
     /// `BeaconCoordinator`s.
@@ -395,24 +395,24 @@ impl SimulationRunner {
         );
         let rng = ChaCha8Rng::seed_from_u64(seed);
 
-        // One VM engine per cluster: the genesis-static world is shared by
+        // One engine per cluster: the genesis-static world is shared by
         // every host, and construction installs the process VM statics.
-        let world_accounts = if network_config.vm_world_accounts.is_empty() {
-            &network_config.vm_accounts
+        let world_accounts = if network_config.world_accounts.is_empty() {
+            &network_config.accounts
         } else {
-            &network_config.vm_world_accounts
+            &network_config.world_accounts
         };
-        let world_pools = if network_config.vm_world_pools.is_empty() {
-            &network_config.vm_pools
+        let world_pools = if network_config.world_pools.is_empty() {
+            &network_config.pools
         } else {
-            &network_config.vm_world_pools
+            &network_config.world_pools
         };
-        let vm_engine = Arc::new(Executor::with_pools(
+        let engine = Arc::new(Executor::with_pools(
             world_accounts,
             world_pools,
-            network_config.vm_execution_mode,
+            network_config.execution_mode,
         ));
-        let shared_executor = Arc::clone(&vm_engine);
+        let shared_executor = Arc::clone(&engine);
 
         // Generate keys for all registered validators using deterministic
         // seeding. Pool extras are registered in beacon genesis (landing
@@ -467,8 +467,8 @@ impl SimulationRunner {
         // committee size, form the genesis beacon committee.
         let beacon_network = genesis_validators.network.clone();
         let boot = build_genesis(&genesis_validators, chain_config);
-        let mut vm_pools = network_config.vm_pools.clone();
-        seed_founding_members(&boot.state, &mut vm_pools);
+        let mut pools = network_config.pools.clone();
+        seed_founding_members(&boot.state, &mut pools);
         let beacon_config_hash = boot.config_hash;
         let shared_topology = Arc::clone(&boot.topology_snapshot);
 
@@ -627,9 +627,9 @@ impl SimulationRunner {
             verifier,
             crypto_scheme,
             share_declared_reads: network_config.share_declared_reads,
-            vm_accounts: network_config.vm_accounts.clone(),
-            vm_pools,
-            vm_engine,
+            accounts: network_config.accounts.clone(),
+            pools,
+            engine,
             beacon_config_hash,
             beacon_network,
             pending_participation_changes: Vec::new(),
@@ -704,8 +704,8 @@ impl SimulationRunner {
     /// The cluster's engine, for the engine-side surfaces that are not
     /// part of wave execution — preview being the only one today.
     #[must_use]
-    pub fn vm_engine(&self) -> &Executor {
-        &self.vm_engine
+    pub fn engine(&self) -> &Executor {
+        &self.engine
     }
 
     /// Process-shared beacon storage for a host. One handle per host,
@@ -904,8 +904,8 @@ impl SimulationRunner {
     /// the pools its beacon folds facts for.
     pub(crate) fn genesis_config(&self) -> GenesisConfig {
         GenesisConfig {
-            accounts: self.vm_accounts.clone(),
-            pools: self.vm_pools.clone(),
+            accounts: self.accounts.clone(),
+            pools: self.pools.clone(),
         }
     }
 
