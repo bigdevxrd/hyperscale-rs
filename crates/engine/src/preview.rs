@@ -250,7 +250,7 @@ impl Executor {
             // Derived rather than read off `fee_vault`, which panics
             // on an envelope derivation refuses — the exact envelope a
             // preview exists to give an answer about.
-            vault: vault_key(vm.fee_payer, XRD),
+            vault: vault_key(vm.fee_payer.0, XRD),
             max_fee: vm.max_fee,
             floor: vm.abort_floor(),
             // A preview is one envelope against one snapshot: no wave can
@@ -324,15 +324,7 @@ impl Executor {
             changes: resource_changes(&base, Some(receipt), fee, payer.vault, inputs.grants),
             fee,
             fuel: receipt.fuel,
-            events: receipt
-                .events
-                .iter()
-                .map(|event| Event {
-                    emitter: event.emitter.0,
-                    event_type: event.event_type,
-                    payload: event.payload.clone(),
-                })
-                .collect(),
+            events: receipt.events.clone(),
         }
     }
 }

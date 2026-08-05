@@ -43,7 +43,7 @@ use hyperscale_types::{
     Event, NetworkParams, ParamProposal, ParamVote, ReshapeThresholds, Stake, StakePoolId,
     ValidatorId,
 };
-use hyperscale_vm_effects::{Address, InstanceRegistry, PackageHash};
+use hyperscale_vm_effects::{InstanceRegistry, PackageHash};
 
 /// The stake pool's event table, by the index its guest emits.
 ///
@@ -112,13 +112,13 @@ pub fn witness_from_event(
     instances: &InstanceRegistry,
     staking_package: PackageHash,
 ) -> Option<BeaconWitnessEvent> {
-    let pool_id = pools.pool_of(event.emitter)?;
+    let pool_id = pools.pool_of(event.emitter.0)?;
     // The registry says this instance counts; the instance registry says
     // what code it runs. A recognised address running someone else's code
     // is a genesis defect rather than a runtime condition, and it stays a
     // refusal rather than a panic because the execution path cannot take
     // a view on which of two authorities is wrong.
-    if instances.get(Address(event.emitter))?.package != staking_package {
+    if instances.get(event.emitter)?.package != staking_package {
         return None;
     }
     let payload = event.payload.as_slice();
@@ -232,7 +232,7 @@ fn registration_of(
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_vm_effects::{Hash32, InstanceMeta};
+    use hyperscale_vm_effects::{Address, Hash32, InstanceMeta};
 
     use super::*;
 
@@ -262,7 +262,7 @@ mod tests {
 
     fn event(emitter: [u8; 16], event_type: u32, amount: u128) -> Event {
         Event {
-            emitter,
+            emitter: Address(emitter),
             event_type,
             payload: amount.to_le_bytes().to_vec(),
         }
@@ -330,7 +330,7 @@ mod tests {
 
     fn raw(emitter: [u8; 16], event_type: u32, payload: Vec<u8>) -> Event {
         Event {
-            emitter,
+            emitter: Address(emitter),
             event_type,
             payload,
         }
@@ -559,7 +559,7 @@ mod tests {
         let (pools, instances) = world();
         for payload in [Vec::new(), vec![1; 8], vec![1; 17]] {
             let event = Event {
-                emitter: POOL,
+                emitter: Address(POOL),
                 event_type: STAKED,
                 payload,
             };

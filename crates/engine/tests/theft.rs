@@ -27,8 +27,8 @@ use hyperscale_storage::{
 };
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
-    BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, ShardId, ShardTrie,
-    Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
+    BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, RevealChain, ShardId,
+    ShardTrie, Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -146,14 +146,14 @@ fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> Transaction {
     };
     Transaction::new(
         TransactionEnvelope {
-            body: TransactionBody::Call(encode_tree(&tree).into()),
+            body: TransactionBody::Call(encode_tree(&tree)),
             subintent_sigs: Vec::new(),
-            fee_payer: thief(),
+            fee_payer: Address(thief()),
             max_fee: 1_000,
             gas_limit: 1_000_000,
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
-            message: Vec::new().into(),
+            message: Vec::new(),
             signer: [0; 32],
             signature: [0; 64],
         }

@@ -14,14 +14,15 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::OnceLock;
 
 use blake3::Hasher;
+use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use sbor::prelude::*;
 use thiserror::Error;
 
 use crate::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use crate::transaction::vm::vm_statics;
 use crate::{
-    BoundedBytes, DeclaredKey, Derived, Hash, MAX_TX_BYTES_LEN, Routing, ShardTrie, TimestampRange,
-    TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
+    BoundedBytes, DeclaredKey, Derived, EnvelopeExt, Hash, MAX_TX_BYTES_LEN, Routing, ShardTrie,
+    TimestampRange, TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
 };
 
 /// A signed transaction as the network carries it.
@@ -152,7 +153,7 @@ impl Transaction {
     /// closed basic-SBOR type, so encoding is infallible in practice.
     #[must_use]
     pub fn new(vm: TransactionEnvelope) -> Self {
-        let payload = basic_encode(&vm).expect("TransactionEnvelope SBOR encode is infallible");
+        let payload = hbor_to_vec(&vm).expect("an envelope within its caps encodes");
         let mut hasher = Hasher::new();
         hasher.update(&payload);
         let hash = Hash::from_hash_bytes(hasher.finalize().as_bytes());
@@ -194,7 +195,7 @@ impl Transaction {
         if let Some(body) = self.body.get() {
             return Ok(body);
         }
-        let decoded = basic_decode::<TransactionEnvelope>(&self.serialized_bytes)
+        let decoded = hbor_from_slice::<TransactionEnvelope>(&self.serialized_bytes)
             .map_err(|_| TransactionVerifyError::UndecodableBody)?;
         Ok(self.body.get_or_init(|| decoded))
     }
@@ -236,7 +237,7 @@ impl Transaction {
     /// Panics under the same conditions as [`Self::routing`].
     #[must_use]
     pub fn fee_vault(&self) -> ([u8; 16], [u8; 16]) {
-        (self.body().fee_payer, self.derived().fee_vault_local)
+        (self.body().fee_payer.0, self.derived().fee_vault_local)
     }
 
     /// The cached derivation, or a panic naming the refusal.
@@ -396,6 +397,7 @@ impl Verified<Transaction> {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_vm_types::Address;
     use sbor::{
         BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, DecodeError, Encoder as _,
         NoCustomValueKind, ValueKind, VecEncoder, basic_decode, basic_encode,
@@ -440,14 +442,14 @@ mod tests {
         let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
         let range = test_validity_range();
         TransactionEnvelope {
-            body: TransactionBody::Call(tree.to_vec().into()),
+            body: TransactionBody::Call(tree.to_vec()),
             subintent_sigs: Vec::new(),
-            fee_payer: [0xAA; 16],
+            fee_payer: Address([0xAA; 16]),
             max_fee: 1_000,
             gas_limit: 1_000_000,
             validity_start_ms: range.start_timestamp_inclusive.as_millis(),
             validity_end_ms: range.end_timestamp_exclusive.as_millis(),
-            message: Vec::new().into(),
+            message: Vec::new(),
             signer: [0; 32],
             signature: [0; 64],
         }

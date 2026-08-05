@@ -1,176 +1,68 @@
-//! [`TransactionEnvelope`] — the signed envelope a [`Transaction`](crate::Transaction) carries.
+//! The VM seam: the envelope re-exported, its crypto binding, and the
+//! derivation trait admission runs through.
 //!
-//! The envelope carries the bound tree — the composer's root graph plus
-//! every signed subintent — as canonical bytes, beside the signing-time
-//! choices no node can derive: the fee payer, the fee ceiling and gas
-//! limit, snapshot version pins, the validity window, and a capped
-//! optional message. The composer signs the whole envelope, and the
-//! transaction hash covers it, so distinct submissions differ in signed
-//! content. The tree vocabulary lives behind the effects bridge: this
-//! crate treats the tree as opaque signed content, and admission
-//! decodes, admits, and derives effect sets through the bridge's
-//! registered [`VmStatics`](crate::VmStatics).
+//! [`TransactionEnvelope`] and its body live in `hyperscale-vm-types` —
+//! the envelope is the VM's artifact, and its signed content is defined
+//! there through the derived preimage. What binds here is what the leaf
+//! crate deliberately does not know: the protocol hash and curve behind
+//! [`EnvelopeExt`], the clock behind the validity window, and the
+//! workspace's admission vocabulary behind [`VmStatics`].
 
 use std::sync::OnceLock;
 
 use blake3::Hasher as Blake3;
-use sbor::prelude::*;
+use hyperscale_hbor::HborSigned;
+pub use hyperscale_vm_types::{
+    MAX_MESSAGE_LEN, MAX_SUBINTENTS, SubintentSig, TransactionBody, TransactionEnvelope,
+};
 use thiserror::Error;
 
 use crate::crypto::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, verify_ed25519};
-use crate::{BoundedBytes, DeclaredKey, Hash, MAX_TX_BYTES_LEN, TimestampRange, WeightedTimestamp};
+use crate::{DeclaredKey, Hash, TimestampRange, WeightedTimestamp};
 
-/// Domain separator for the envelope signing hash.
-const SIGNING_DOMAIN: &[u8] = b"hyperscale-vm-envelope-v1";
-
-/// The cap on a envelope's optional message, in bytes.
-pub const MAX_VM_MESSAGE_LEN: usize = 1024;
-
-/// One bound subintent's signature: the signer's key and their ed25519
-/// signature over the subintent's declaration hash, in tree order.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub struct SubintentSig {
-    /// The subintent signer's ed25519 public key; its derived account
-    /// address must match the signer the tree binds.
-    pub public_key: [u8; 32],
-    /// The signature over the subintent's declaration hash.
-    pub signature: [u8; 64],
-}
-
-/// What a envelope asks the chain for: a call graph to run, or a
-/// package to publish.
+/// The workspace's crypto and clock binding for the envelope.
 ///
-/// Wholly one or the other. Every other field of the envelope — the fee
-/// terms, the window, the message, the composer's signature — means the
-/// same thing for both, which is why publishing rides this envelope
-/// rather than a body of its own: fee assurance, engagement, and wave
-/// settlement are the same machinery either way.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub enum TransactionBody {
-    /// The bound envelope tree, canonically encoded; the effects bridge
-    /// owns the encoding.
-    Call(BoundedBytes<MAX_TX_BYTES_LEN>),
-    /// A component artifact to publish under the composer's own prefix,
-    /// its effect metadata section included. Content addressing covers
-    /// the whole artifact, so the code and the signatures it declares
-    /// cannot drift apart.
-    Publish(BoundedBytes<MAX_TX_BYTES_LEN>),
-}
-
-/// A transaction: what it asks for and the signing-time choices,
-/// under the composer's signature.
-#[derive(Debug, Clone, PartialEq, Eq, BasicSbor)]
-pub struct TransactionEnvelope {
-    /// The call graph or the package.
-    pub body: TransactionBody,
-    /// One signature per bound subintent, in tree order.
-    pub subintent_sigs: Vec<SubintentSig>,
-    /// The fee-paying account — the composer's.
-    pub fee_payer: [u8; 16],
-    /// The signed fee ceiling, in fee units.
-    pub max_fee: u128,
-    /// The signed execution gas limit.
-    pub gas_limit: u64,
-    /// The signed validity window's inclusive start, in weighted-time
-    /// milliseconds. The wire `validity_range` must mirror the window.
-    pub validity_start_ms: u64,
-    /// The signed validity window's exclusive end.
-    pub validity_end_ms: u64,
-    /// An optional message, capped at [`MAX_VM_MESSAGE_LEN`].
-    pub message: BoundedBytes<MAX_VM_MESSAGE_LEN>,
-    /// The composer's ed25519 public key.
-    pub signer: [u8; 32],
-    /// The composer's signature over [`TransactionEnvelope::signing_hash`].
-    pub signature: [u8; 64],
-}
-
-/// The abort class floor as a fraction of the signed fee ceiling:
-/// aborting costs the payer a tenth of what it authorised. Placeholder
-/// pricing — the number is calibrated against measured baselines, the
-/// shape is that an abort is bounded strictly below the ceiling a
-/// success may burn.
-const ABORT_FLOOR_DIVISOR: u128 = 10;
-
-impl TransactionEnvelope {
-    /// The bound envelope tree, for a call.
-    #[must_use]
-    pub fn call_tree(&self) -> Option<&[u8]> {
-        match &self.body {
-            TransactionBody::Call(tree) => Some(tree),
-            TransactionBody::Publish(_) => None,
-        }
-    }
-
-    /// The component artifact, for a publish.
-    #[must_use]
-    pub fn artifact(&self) -> Option<&[u8]> {
-        match &self.body {
-            TransactionBody::Publish(artifact) => Some(artifact),
-            TransactionBody::Call(_) => None,
-        }
-    }
-
-    /// What an abort of this transaction burns from the payer's vault.
-    ///
-    /// Derived from signed content alone, so every payer-shard voter
-    /// attests the same figure without reading any state.
-    #[must_use]
-    pub const fn abort_floor(&self) -> u128 {
-        self.max_fee / ABORT_FLOOR_DIVISOR
-    }
-
+/// The envelope defines its signed content — the preimage — and this
+/// trait turns it into signatures and windows with the protocol's own
+/// hash, curve, and time vocabulary.
+pub trait EnvelopeExt: Sized {
     /// The domain-separated hash of the envelope's signed content —
     /// everything but the composer's own key and signature. This is
     /// also the identity fresh derivations root at: distinct signed
     /// envelopes never mint the same fresh key.
-    #[must_use]
-    pub fn signing_hash(&self) -> Hash {
-        let mut hasher = Blake3::new();
-        let frame = |hasher: &mut Blake3, bytes: &[u8]| {
-            hasher.update(&(bytes.len() as u64).to_le_bytes());
-            hasher.update(bytes);
-        };
-        hasher.update(SIGNING_DOMAIN);
-        // The discriminant is signed content: the same bytes read as a
-        // call graph and as an artifact are different transactions.
-        match &self.body {
-            TransactionBody::Call(tree) => {
-                hasher.update(&[0u8]);
-                frame(&mut hasher, tree);
-            }
-            TransactionBody::Publish(artifact) => {
-                hasher.update(&[1u8]);
-                frame(&mut hasher, artifact);
-            }
-        }
-        hasher.update(&(self.subintent_sigs.len() as u64).to_le_bytes());
-        for sig in &self.subintent_sigs {
-            hasher.update(&sig.public_key);
-            hasher.update(&sig.signature);
-        }
-        hasher.update(&self.fee_payer);
-        hasher.update(&self.max_fee.to_le_bytes());
-        hasher.update(&self.gas_limit.to_le_bytes());
-        hasher.update(&self.validity_start_ms.to_le_bytes());
-        hasher.update(&self.validity_end_ms.to_le_bytes());
-        frame(&mut hasher, &self.message);
-        Hash::from_hash_bytes(hasher.finalize().as_bytes())
-    }
+    fn signing_hash(&self) -> Hash;
 
     /// Sign the envelope's content with the composer's key, filling the
     /// signer and signature fields.
     #[must_use]
-    pub fn sign(mut self, key: &Ed25519PrivateKey) -> Self {
+    fn sign(self, key: &Ed25519PrivateKey) -> Self;
+
+    /// Whether the composer's signature covers the envelope content
+    /// under the signer's key.
+    fn signature_is_valid(&self) -> bool;
+
+    /// The signed validity window as the wire's range form.
+    fn validity_window(&self) -> TimestampRange;
+}
+
+impl EnvelopeExt for TransactionEnvelope {
+    fn signing_hash(&self) -> Hash {
+        let preimage = self
+            .signing_bytes()
+            .expect("an envelope within its caps encodes");
+        let mut hasher = Blake3::new();
+        hasher.update(&preimage);
+        Hash::from_hash_bytes(hasher.finalize().as_bytes())
+    }
+
+    fn sign(mut self, key: &Ed25519PrivateKey) -> Self {
         let hash = self.signing_hash();
         self.signer = key.public_key().0;
         self.signature = key.sign(hash.as_bytes()).0;
         self
     }
 
-    /// Whether the composer's signature covers the envelope content
-    /// under the signer's key.
-    #[must_use]
-    pub fn signature_is_valid(&self) -> bool {
+    fn signature_is_valid(&self) -> bool {
         let hash = self.signing_hash();
         verify_ed25519(
             hash.as_bytes(),
@@ -179,9 +71,7 @@ impl TransactionEnvelope {
         )
     }
 
-    /// The signed validity window as the wire's range form.
-    #[must_use]
-    pub const fn validity_window(&self) -> TimestampRange {
+    fn validity_window(&self) -> TimestampRange {
         TimestampRange::new(
             WeightedTimestamp::from_millis(self.validity_start_ms),
             WeightedTimestamp::from_millis(self.validity_end_ms),

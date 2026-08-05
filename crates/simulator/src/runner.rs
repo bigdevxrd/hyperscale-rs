@@ -329,7 +329,7 @@ impl Simulator {
     /// every envelope names directly.
     fn get_target_shard(&self, tx: &Transaction) -> ShardId {
         ShardTrie::uniform_from_count(u64::from(self.config.num_shards))
-            .shard_for_prefix(tx.body().fee_payer)
+            .shard_for_prefix(tx.body().fee_payer.0)
     }
 
     /// A host that currently serves `shard`, for status reads. The grow

@@ -19,6 +19,8 @@ hyperscale-crypto-bls = { workspace = true, optional = true }
 hyperscale-jmt.workspace = true
 
 # Serialization
+hyperscale-hbor.workspace = true
+hyperscale-vm-types.workspace = true
 sbor.workspace = true
 
 # Error handling

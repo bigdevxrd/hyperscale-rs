@@ -147,7 +147,7 @@ fn provision_request(
                 .map(|local| (key.owner, local))
         })
         .collect();
-    let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
+    let payer_shard = trie.shard_for_prefix(tx.body().fee_payer.0);
     let targets: Vec<ShardId> = if local_keys.is_empty() && payer_shard != local_shard {
         // The engagement echo: a counterpart with nothing to serve still
         // owes the payer its commitment of the transaction — the evidence

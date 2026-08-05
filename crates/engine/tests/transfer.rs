@@ -21,8 +21,8 @@ use hyperscale_storage::{
 };
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
-    BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, ShardId, ShardTrie,
-    Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
+    BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, RevealChain, ShardId,
+    ShardTrie, Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
     absorb_committed_cells,
 };
 use hyperscale_vm_effects::{
@@ -186,14 +186,14 @@ fn signed_transfer_under_bound(
         subintents: Vec::new(),
     };
     let vm = TransactionEnvelope {
-        body: TransactionBody::Call(encode_tree(&tree).into()),
+        body: TransactionBody::Call(encode_tree(&tree)),
         subintent_sigs: Vec::new(),
-        fee_payer: account_address(&key.public_key().0),
+        fee_payer: Address(account_address(&key.public_key().0)),
         max_fee,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
-        message: Vec::new().into(),
+        message: Vec::new(),
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -218,14 +218,14 @@ fn signed_transfer_with_fee(
         subintents: Vec::new(),
     };
     let vm = TransactionEnvelope {
-        body: TransactionBody::Call(encode_tree(&tree).into()),
+        body: TransactionBody::Call(encode_tree(&tree)),
         subintent_sigs: Vec::new(),
-        fee_payer: account_address(&key.public_key().0),
+        fee_payer: Address(account_address(&key.public_key().0)),
         max_fee,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
-        message: Vec::new().into(),
+        message: Vec::new(),
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -283,14 +283,14 @@ fn signed_stamp(seed: u8, owner: [u8; 16]) -> Transaction {
         subintents: Vec::new(),
     };
     let vm = TransactionEnvelope {
-        body: TransactionBody::Call(encode_tree(&tree).into()),
+        body: TransactionBody::Call(encode_tree(&tree)),
         subintent_sigs: Vec::new(),
-        fee_payer: account_address(&key.public_key().0),
+        fee_payer: Address(account_address(&key.public_key().0)),
         max_fee: 1_000_000,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
-        message: Vec::new().into(),
+        message: Vec::new(),
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -793,7 +793,7 @@ fn events_of(executed: &ExecutedTx) -> Vec<([u8; 16], u32)> {
     };
     events
         .iter()
-        .map(|event| (event.emitter, event.event_type))
+        .map(|event| (event.emitter.0, event.event_type))
         .collect()
 }
 
@@ -842,14 +842,14 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
 fn signed_publish(seed: u8, artifact: Vec<u8>) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
     let vm = TransactionEnvelope {
-        body: TransactionBody::Publish(artifact.into()),
+        body: TransactionBody::Publish(artifact),
         subintent_sigs: Vec::new(),
-        fee_payer: account_address(&key.public_key().0),
+        fee_payer: Address(account_address(&key.public_key().0)),
         max_fee: 1_000_000,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
-        message: Vec::new().into(),
+        message: Vec::new(),
         signer: [0; 32],
         signature: [0; 64],
     }

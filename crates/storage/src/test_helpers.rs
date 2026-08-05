@@ -10,12 +10,12 @@ use std::sync::Arc;
 use hyperscale_jmt::TreeReader;
 use hyperscale_types::state_key::vm_db_node_key;
 use hyperscale_types::{
-    AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert, BeaconChainConfig, BeaconState,
-    BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
-    BlockHeight, BoundedVec, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, ChainOrigin,
-    ConsensusReceipt, Epoch, Event, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome,
-    FeeSummary, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
-    LocalReceiptRoot, LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof,
+    Address, AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert, BeaconChainConfig,
+    BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash,
+    BlockHeader, BlockHeight, BoundedVec, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock,
+    ChainOrigin, ConsensusReceipt, Epoch, Event, ExecutionCertificate, ExecutionMetadata,
+    ExecutionOutcome, FeeSummary, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash,
+    InFlightCount, LocalReceiptRoot, LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof,
     ProposerTimestamp, ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound,
     RevealChain, Round, ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield,
     SpcCert, SpcView, Stake, StakePoolId, StateRoot, StoredReceipt, TransactionRoot, TxHash,
@@ -345,7 +345,7 @@ pub fn make_test_receipt(seed: u8) -> StoredReceipt {
         database_updates: DatabaseUpdates::default(),
         beacon_witness_events: Vec::new(),
         events: vec![Event {
-            emitter: [seed; 16],
+            emitter: Address([seed; 16]),
             event_type: u32::from(seed),
             payload: vec![seed, seed + 1],
         }],

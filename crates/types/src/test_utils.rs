@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use hyperscale_crypto::{Signer, Verifier};
 use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
+use hyperscale_vm_types::Address;
 
 use crate::crypto::Ed25519PrivateKey;
 use crate::{
     AggregateSignature, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash, BlockHeader,
     BlockHeight, BoundedVec, CertificateRoot, CertifiedBlock, CertifiedBlockHeader, ChainOrigin,
-    CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived,
+    CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived, EnvelopeExt,
     ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot,
     Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, ProposerTimestamp, ProvisionsRoot,
     QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId, ShardLoad,
@@ -966,14 +967,14 @@ pub fn stub_transaction_with_reads(
     tree.extend_from_slice(&read_prefixes.concat());
     tree.extend_from_slice(&write_prefixes.concat());
     let vm = TransactionEnvelope {
-        body: TransactionBody::Call(tree.into()),
+        body: TransactionBody::Call(tree),
         subintent_sigs: Vec::new(),
-        fee_payer,
+        fee_payer: Address(fee_payer),
         max_fee,
         gas_limit: 1_000_000,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
-        message: Vec::new().into(),
+        message: Vec::new(),
         signer: [0; 32],
         signature: [0; 64],
     }

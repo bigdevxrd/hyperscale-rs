@@ -1026,7 +1026,7 @@ impl MempoolCoordinator {
         }
         let payer_shard = topology_snapshot
             .shard_trie()
-            .shard_for_prefix(tx.body().fee_payer);
+            .shard_for_prefix(tx.body().fee_payer.0);
         if payer_shard == self.local_shard {
             return None;
         }

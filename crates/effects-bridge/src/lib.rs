@@ -12,7 +12,6 @@ pub mod builder;
 pub mod staking;
 pub mod vm_metadata;
 pub mod vm_statics;
-mod wire;
 
 pub use artifact::{METADATA_SECTION, admit_package, attach_metadata, extract_metadata};
 use blake3::Hasher as Blake3;

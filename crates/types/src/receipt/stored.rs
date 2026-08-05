@@ -44,12 +44,14 @@ impl StoredReceipt {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_vm_types::Address;
+
     use super::*;
     use crate::{DatabaseUpdates, Event, FeeSummary, GlobalReceiptHash, Hash};
 
     fn make_event(seed: u8) -> Event {
         Event {
-            emitter: [seed; 16],
+            emitter: Address([seed; 16]),
             event_type: u32::from(seed),
             payload: vec![seed, seed + 1],
         }

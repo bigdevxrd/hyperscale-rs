@@ -412,7 +412,7 @@ pub fn validate_engagement(
         }
         let payer_shard = topology_snapshot
             .shard_trie()
-            .shard_for_prefix(tx.body().fee_payer);
+            .shard_for_prefix(tx.body().fee_payer.0);
         if payer_shard == local_shard {
             continue;
         }

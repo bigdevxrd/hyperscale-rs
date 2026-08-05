@@ -31,9 +31,10 @@ use hyperscale_storage::{
 };
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
-    BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventRoot, ExecutionMetadata,
-    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, Stake, StakePoolSeat,
-    SubstateEntry, Transaction, TxHash, Verified, compute_merkle_root, install_vm_statics,
+    BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventExt, EventRoot,
+    ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, Stake,
+    StakePoolSeat, SubstateEntry, Transaction, TxHash, Verified, compute_merkle_root,
+    install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
@@ -234,13 +235,8 @@ impl Executor {
         )
         .map_err(|error| error.to_string())?;
         if authority == TargetAuthority::Required {
-            check_target_authority(
-                &tree,
-                Address(vm.fee_payer),
-                &packages,
-                &self.world.instances,
-            )
-            .map_err(|error| error.0)?;
+            check_target_authority(&tree, vm.fee_payer, &packages, &self.world.instances)
+                .map_err(|error| error.0)?;
         }
         let admitted = admit_tree(
             &tree,
@@ -745,15 +741,9 @@ fn assemble_executed_tx(
         // Every participant derives the same events from the same
         // manifest, so the root covers the whole union while each shard's
         // receipt keeps only what its own instances emitted.
-        let events: Vec<Event> = receipt
-            .events
-            .iter()
-            .map(|event| Event {
-                emitter: event.emitter.0,
-                event_type: event.event_type,
-                payload: event.payload.clone(),
-            })
-            .collect();
+        // The kernel's record is the wire record — one shared type, so
+        // there is nothing to convert.
+        let events: Vec<Event> = receipt.events.clone();
         // The beacon facts among them. Read here rather than at
         // projection because this is where the world that decides is in
         // reach, and read from the whole union rather than one shard's
@@ -769,10 +759,10 @@ fn assemble_executed_tx(
                     inputs.instances,
                     inputs.staking_package,
                 )
-                .map(|witness| (event.emitter, witness))
+                .map(|witness| (event.emitter.0, witness))
             })
             .collect();
-        let event_hashes: Vec<Hash> = events.iter().map(Event::hash).collect();
+        let event_hashes: Vec<Hash> = events.iter().map(EventExt::hash).collect();
         let receipt_hash = GlobalReceipt::new(
             true,
             EventRoot::from_raw(compute_merkle_root(&event_hashes)),
@@ -837,7 +827,7 @@ impl Executor {
                 let artifact = vm.artifact()?;
                 Some((
                     VmTxHash(Hash32(*tx.hash().as_bytes())),
-                    (vm.fee_payer, artifact.to_vec()),
+                    (vm.fee_payer.0, artifact.to_vec()),
                 ))
             })
             .collect();

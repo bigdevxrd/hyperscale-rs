@@ -17,21 +17,19 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use hyperscale_types::{
-    DeclaredKey, Derived, Routing, TransactionEnvelope, VmStatics, VmStaticsError,
+    DeclaredKey, Derived, EnvelopeExt, Routing, TransactionEnvelope, VmStatics, VmStaticsError,
 };
 use hyperscale_vm_effects::stdlib::{ENTROPY, VALIDATORS, VAULT};
 use hyperscale_vm_effects::{
-    Accessibility, Address, Constraint, EdgeRef, EffectSet, EffectTarget, EnvelopeTree, GraphArg,
-    GraphNode, Hash32, InstanceRegistry, IntentDecl, ManifestGraph, ManifestHash, MetadataCache,
-    Mode, PackageHash, PackageMetadata, PrefixShardResolver, RoleId, Subintent, SubstateKey, Value,
-    YieldBinding, YieldParam, admit_tree, child_key, package_hash, route_tree,
+    Accessibility, Address, EffectSet, EffectTarget, EnvelopeTree, Hash32, InstanceRegistry,
+    ManifestHash, MetadataCache, Mode, PackageHash, PackageMetadata, PrefixShardResolver, RoleId,
+    SubstateKey, Value, admit_tree, child_key, package_hash, route_tree,
 };
-use sbor::prelude::*;
 
 use crate::ProtocolHasher;
 use crate::artifact::admit_package;
-use crate::wire::{WireValue, value, wire_value};
 
 const DOMAIN_ACCOUNT: &[u8] = b"hyperscale/engine/account-address";
 
@@ -113,230 +111,26 @@ pub fn account_address(public_key: &[u8; 32]) -> [u8; 16] {
     address
 }
 
-/// Wire mirror of [`Constraint`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BasicSbor)]
-enum WireConstraint {
-    MinAmount(u128),
-    MaxAmount(u128),
-    ResourceIs([u8; 16]),
-}
-
-/// Wire mirror of [`GraphArg`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireArg {
-    Literal(WireValue),
-    Edge {
-        producer: u32,
-        output: u32,
-        constraints: Vec<WireConstraint>,
-    },
-    Param(u32),
-}
-
-/// Wire mirror of [`GraphNode`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireNode {
-    target: [u8; 16],
-    method: String,
-    args: Vec<WireArg>,
-}
-
-/// Wire mirror of [`IntentDecl`]: a graph plus its declared yield
-/// parameters.
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireIntent {
-    nodes: Vec<WireNode>,
-    params: Vec<WireParam>,
-}
-
-/// Wire mirror of [`YieldParam`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireParam {
-    resource: [u8; 16],
-    constraints: Vec<WireConstraint>,
-}
-
-/// Wire mirror of [`YieldBinding`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireBinding {
-    intent: u32,
-    producer: u32,
-    output: u32,
-}
-
-/// Wire mirror of [`Subintent`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireSubintent {
-    decl: WireIntent,
-    signer: [u8; 16],
-    bindings: Vec<WireBinding>,
-}
-
-/// Wire mirror of [`EnvelopeTree`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireTree {
-    root: WireIntent,
-    root_bindings: Vec<WireBinding>,
-    subintents: Vec<WireSubintent>,
-}
-
-const fn wire_constraint(constraint: &Constraint) -> WireConstraint {
-    match constraint {
-        Constraint::MinAmount(amount) => WireConstraint::MinAmount(*amount),
-        Constraint::MaxAmount(amount) => WireConstraint::MaxAmount(*amount),
-        Constraint::ResourceIs(resource) => WireConstraint::ResourceIs(resource.0),
-    }
-}
-
-const fn constraint(wire: WireConstraint) -> Constraint {
-    match wire {
-        WireConstraint::MinAmount(amount) => Constraint::MinAmount(amount),
-        WireConstraint::MaxAmount(amount) => Constraint::MaxAmount(amount),
-        WireConstraint::ResourceIs(resource) => Constraint::ResourceIs(Address(resource)),
-    }
-}
-
-fn wire_intent(decl: &IntentDecl) -> WireIntent {
-    WireIntent {
-        nodes: decl
-            .graph
-            .nodes
-            .iter()
-            .map(|node| WireNode {
-                target: node.target.0,
-                method: node.method.clone(),
-                args: node
-                    .args
-                    .iter()
-                    .map(|arg| match arg {
-                        GraphArg::Literal(literal) => WireArg::Literal(wire_value(literal)),
-                        GraphArg::Edge { edge, constraints } => WireArg::Edge {
-                            producer: edge.producer,
-                            output: edge.output,
-                            constraints: constraints.iter().map(wire_constraint).collect(),
-                        },
-                        GraphArg::Param(param) => WireArg::Param(*param),
-                    })
-                    .collect(),
-            })
-            .collect(),
-        params: decl
-            .params
-            .iter()
-            .map(|param| WireParam {
-                resource: param.resource.0,
-                constraints: param.constraints.iter().map(wire_constraint).collect(),
-            })
-            .collect(),
-    }
-}
-
-fn intent(wire: WireIntent) -> IntentDecl {
-    IntentDecl {
-        graph: ManifestGraph {
-            nodes: wire
-                .nodes
-                .into_iter()
-                .map(|node| GraphNode {
-                    target: Address(node.target),
-                    method: node.method,
-                    args: node
-                        .args
-                        .into_iter()
-                        .map(|arg| match arg {
-                            WireArg::Literal(literal) => GraphArg::Literal(value(literal)),
-                            WireArg::Edge {
-                                producer,
-                                output,
-                                constraints,
-                            } => GraphArg::Edge {
-                                edge: EdgeRef { producer, output },
-                                constraints: constraints.into_iter().map(constraint).collect(),
-                            },
-                            WireArg::Param(param) => GraphArg::Param(param),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        },
-        params: wire
-            .params
-            .into_iter()
-            .map(|param| YieldParam {
-                resource: Address(param.resource),
-                constraints: param.constraints.into_iter().map(constraint).collect(),
-            })
-            .collect(),
-    }
-}
-
-fn wire_bindings(bindings: &[YieldBinding]) -> Vec<WireBinding> {
-    bindings
-        .iter()
-        .map(|binding| WireBinding {
-            intent: binding.intent,
-            producer: binding.edge.producer,
-            output: binding.edge.output,
-        })
-        .collect()
-}
-
-fn bindings(wire: Vec<WireBinding>) -> Vec<YieldBinding> {
-    wire.into_iter()
-        .map(|binding| YieldBinding {
-            intent: binding.intent,
-            edge: EdgeRef {
-                producer: binding.producer,
-                output: binding.output,
-            },
-        })
-        .collect()
-}
-
-/// Encode an envelope tree into its canonical wire bytes.
+/// Encode an envelope tree to its canonical bytes.
+///
+/// The vocabulary owns its codec; this is the seam's name for it.
 ///
 /// # Panics
 ///
-/// Never in practice: the mirror types are closed basic-SBOR shapes.
+/// On a tree past the vocabulary's own caps — one no admission path can
+/// have accepted.
 #[must_use]
 pub fn encode_tree(tree: &EnvelopeTree) -> Vec<u8> {
-    let wire = WireTree {
-        root: wire_intent(&tree.root),
-        root_bindings: wire_bindings(&tree.root_bindings),
-        subintents: tree
-            .subintents
-            .iter()
-            .map(|subintent| WireSubintent {
-                decl: wire_intent(&subintent.decl),
-                signer: subintent.signer.0,
-                bindings: wire_bindings(&subintent.bindings),
-            })
-            .collect(),
-    };
-    basic_encode(&wire).expect("tree wire encode is infallible")
+    hbor_to_vec(tree).expect("a tree within its caps encodes")
 }
 
 /// Decode wire bytes into an envelope tree.
 ///
 /// # Errors
 ///
-/// [`VmStaticsError`] on malformed bytes.
+/// [`VmStaticsError`] on malformed or non-canonical bytes.
 pub fn decode_tree(bytes: &[u8]) -> Result<EnvelopeTree, VmStaticsError> {
-    let wire: WireTree =
-        basic_decode(bytes).map_err(|error| VmStaticsError(format!("tree decode: {error:?}")))?;
-    Ok(EnvelopeTree {
-        root: intent(wire.root),
-        root_bindings: bindings(wire.root_bindings),
-        subintents: wire
-            .subintents
-            .into_iter()
-            .map(|subintent| Subintent {
-                decl: intent(subintent.decl),
-                signer: Address(subintent.signer),
-                bindings: bindings(subintent.bindings),
-            })
-            .collect(),
-    })
+    hbor_from_slice(bytes).map_err(|error| VmStaticsError(format!("tree decode: {error}")))
 }
 
 /// The admission key for one effect target: substate-granular for points,
@@ -451,8 +245,8 @@ impl BridgeStatics {
 
         let publisher = vm.fee_payer;
         let package = package_hash(&ProtocolHasher, artifact);
-        let cell = package_key(publisher, package);
-        let vault = vault_key(publisher, XRD);
+        let cell = package_key(publisher.0, package);
+        let vault = vault_key(publisher.0, XRD);
         let mut write_keys = vec![
             DeclaredKey::substate(cell.owner.0, cell.local.0),
             DeclaredKey::substate(vault.owner.0, vault.local.0),
@@ -463,7 +257,7 @@ impl BridgeStatics {
         Ok(Derived {
             routing: Routing {
                 read_prefixes: Vec::new(),
-                write_prefixes: vec![publisher],
+                write_prefixes: vec![publisher.0],
                 provision_prefixes: Vec::new(),
                 read_keys: Vec::new(),
                 write_keys,
@@ -572,7 +366,7 @@ impl VmStatics for BridgeStatics {
         // in the envelope. An unbound payer field is therefore a debit
         // on an account that authorised nothing, spendable by anyone
         // who knows its address.
-        if account_address(&vm.signer) != vm.fee_payer {
+        if account_address(&vm.signer) != vm.fee_payer.0 {
             return Err(VmStaticsError(
                 "fee payer is not the composer's own account".into(),
             ));
@@ -602,7 +396,7 @@ impl VmStatics for BridgeStatics {
         let packages = self.cache.load();
         // What the fee-payer binding above does for the one field that
         // debits an account, generalised to every node that touches one.
-        check_target_authority(&tree, Address(vm.fee_payer), &packages, &self.instances)?;
+        check_target_authority(&tree, vm.fee_payer, &packages, &self.instances)?;
         let admitted = admit_tree(
             &tree,
             envelope_identity(vm),
@@ -666,7 +460,7 @@ impl VmStatics for BridgeStatics {
                 .iter()
                 .map(|record| record.subintent.0.0)
                 .collect(),
-            fee_vault_local: vault_key(vm.fee_payer, XRD).local.0,
+            fee_vault_local: vault_key(vm.fee_payer.0, XRD).local.0,
         })
     }
 }
@@ -676,7 +470,8 @@ mod tests {
     use hyperscale_types::{Ed25519PrivateKey, SubintentSig, TransactionBody};
     use hyperscale_vm_effects::stdlib::{VAULT, account_metadata};
     use hyperscale_vm_effects::{
-        Hasher, InstanceMeta, PackageHash, SubintentHash, child_key, nullifier_key,
+        Constraint, EdgeRef, GraphArg, GraphNode, Hasher, InstanceMeta, IntentDecl, ManifestGraph,
+        PackageHash, Subintent, SubintentHash, YieldBinding, YieldParam, child_key, nullifier_key,
     };
 
     use super::*;
@@ -822,14 +617,14 @@ mod tests {
             })
             .collect();
         TransactionEnvelope {
-            body: TransactionBody::Call(encode_tree(tree).into()),
+            body: TransactionBody::Call(encode_tree(tree)),
             subintent_sigs,
-            fee_payer: composer_addr().0,
+            fee_payer: composer_addr(),
             max_fee: 1_000,
             gas_limit: 1_000_000,
             validity_start_ms: 0,
             validity_end_ms: 1_000_000,
-            message: Vec::new().into(),
+            message: Vec::new(),
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -904,7 +699,7 @@ mod tests {
             deposit_edge(bob_addr(), 0, RES_X),
         ]);
         let mut stolen = envelope(&tree, &[]);
-        stolen.fee_payer = bob_addr().0;
+        stolen.fee_payer = bob_addr();
         let stolen = stolen.sign(&key(7));
 
         assert!(stolen.signature_is_valid(), "the composer signed it");

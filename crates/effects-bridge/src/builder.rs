@@ -7,7 +7,8 @@
 //! can compare.
 
 use hyperscale_types::{
-    Ed25519PrivateKey, TimestampRange, Transaction, TransactionBody, TransactionEnvelope,
+    Ed25519PrivateKey, EnvelopeExt, TimestampRange, Transaction, TransactionBody,
+    TransactionEnvelope,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -73,14 +74,14 @@ pub fn sign_call(
         subintents: Vec::new(),
     };
     TransactionEnvelope {
-        body: TransactionBody::Call(encode_tree(&tree).into()),
+        body: TransactionBody::Call(encode_tree(&tree)),
         subintent_sigs: Vec::new(),
-        fee_payer: account_address(&payer.public_key().0),
+        fee_payer: Address(account_address(&payer.public_key().0)),
         max_fee,
         gas_limit: DEFAULT_GAS_LIMIT,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
-        message: message.into(),
+        message,
         signer: [0; 32],
         signature: [0; 64],
     }

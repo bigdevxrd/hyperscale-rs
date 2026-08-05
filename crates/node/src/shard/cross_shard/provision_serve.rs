@@ -65,7 +65,7 @@ pub fn serve_provision_request<S: ShardStorage>(
         // — the engagement evidence — and a counterpart with
         // nothing owned serves its empty bundle to the payer alone:
         // the engagement echo. Both mirror the emit path.
-        let payer_shard = shard_trie.shard_for_prefix(tx.body().fee_payer);
+        let payer_shard = shard_trie.shard_for_prefix(tx.body().fee_payer.0);
         if local_keys.is_empty() && payer_shard != local_shard {
             if payer_shard != req.target_shard {
                 continue;

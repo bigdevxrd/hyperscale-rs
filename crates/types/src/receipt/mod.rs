@@ -19,6 +19,9 @@ pub mod stored;
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_vm_types::Address;
+
+    use crate::receipt::event::EventExt;
     use crate::{
         BeaconWitnessRoot, ConsensusReceipt, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
         GlobalReceiptHash, Hash, OwnershipRoot, WritesRoot,
@@ -26,7 +29,7 @@ mod tests {
 
     fn make_event(seed: u8) -> Event {
         Event {
-            emitter: [seed; 16],
+            emitter: Address([seed; 16]),
             event_type: u32::from(seed),
             payload: vec![seed, seed + 1],
         }

@@ -13,20 +13,22 @@
 
 use std::sync::LazyLock;
 
+use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use sbor::prelude::basic_encode;
 use sbor::{
     Categorize, Decode, DecodeError, Decoder, Describe, Encode, EncodeError, Encoder,
     NoCustomTypeKind, NoCustomValueKind, RustTypeId, TypeData, TypeKind, ValueKind,
 };
 
-use crate::sbor_codec::decode_bounded_vec;
+use crate::receipt::event::EventExt;
+use crate::sbor_codec::{decode_bounded_bytes, decode_bounded_vec};
 use crate::state_key::{VM_PARTITION, vm_db_node_key_owner};
 use crate::substate::{DatabaseUpdate, PartitionDatabaseUpdates};
 use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
     BeaconWitnessEvent, BeaconWitnessRoot, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
-    GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_VM_EVENTS_PER_TX, OwnershipRoot,
-    WritesRoot, compute_merkle_root,
+    GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EVENT_PAYLOAD_BYTES,
+    MAX_EVENTS_PER_TX, OwnershipRoot, WritesRoot, compute_merkle_root,
 };
 
 // Variant tag bytes for SBOR encoding. Explicit rather than relying on
@@ -171,7 +173,12 @@ impl<E: Encoder<NoCustomValueKind>> Encode<NoCustomValueKind, E> for ConsensusRe
                 encoder.encode(receipt_hash)?;
                 encoder.encode(database_updates)?;
                 encoder.encode(beacon_witness_events)?;
-                encoder.encode(events)?;
+                // The events are shared vocabulary and HBOR-native; they
+                // cross this SBOR wrapper as one canonical byte field, the
+                // same seam the envelope rides inside a `Transaction`.
+                let events_hbor =
+                    hbor_to_vec(events).map_err(|_| EncodeError::MaxDepthExceeded(0))?;
+                encoder.encode(&events_hbor)?;
             }
             Self::Failed => {
                 encoder.write_discriminator(RECEIPT_VARIANT_FAILED)?;
@@ -209,7 +216,15 @@ impl<D: Decoder<NoCustomValueKind>> Decode<NoCustomValueKind, D> for ConsensusRe
                     decoder,
                     MAX_BEACON_WITNESS_EVENTS_PER_TX,
                 )?;
-                let events = decode_bounded_vec::<_, Event>(decoder, MAX_VM_EVENTS_PER_TX)?;
+                let events_hbor = decode_bounded_bytes(
+                    decoder,
+                    (MAX_EVENT_PAYLOAD_BYTES + 64) * MAX_EVENTS_PER_TX,
+                )?;
+                let events: Vec<Event> =
+                    hbor_from_slice(&events_hbor).map_err(|_| DecodeError::InvalidCustomValue)?;
+                if events.len() > MAX_EVENTS_PER_TX {
+                    return Err(DecodeError::InvalidCustomValue);
+                }
                 Ok(Self::Succeeded {
                     receipt_hash,
                     database_updates,
@@ -293,7 +308,7 @@ impl ConsensusReceipt {
                 events,
                 ..
             } => {
-                let event_hashes: Vec<Hash> = events.iter().map(Event::hash).collect();
+                let event_hashes: Vec<Hash> = events.iter().map(EventExt::hash).collect();
                 (
                     [1u8],
                     compute_merkle_root(&event_hashes),
@@ -314,6 +329,7 @@ impl ConsensusReceipt {
 
 #[cfg(test)]
 mod tests {
+    use hyperscale_vm_types::Address;
     use sbor::prelude::basic_decode;
     use sbor::{BASIC_SBOR_V1_MAX_DEPTH, BASIC_SBOR_V1_PAYLOAD_PREFIX, VecEncoder};
 
@@ -326,7 +342,7 @@ mod tests {
             database_updates: DatabaseUpdates::default(),
             beacon_witness_events: Vec::new(),
             events: vec![Event {
-                emitter: [7; 16],
+                emitter: Address([7; 16]),
                 event_type: 1,
                 payload: vec![4, 5, 6],
             }],

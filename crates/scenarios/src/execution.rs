@@ -437,7 +437,7 @@ pub fn events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
     assert_eq!(
         sender_events
             .iter()
-            .map(|event| event.emitter)
+            .map(|event| event.emitter.0)
             .collect::<Vec<_>>(),
         vec![from],
         "the payer shard stores its own emission and nothing else"
@@ -445,7 +445,7 @@ pub fn events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
     assert_eq!(
         recipient_events
             .iter()
-            .map(|event| event.emitter)
+            .map(|event| event.emitter.0)
             .collect::<Vec<_>>(),
         vec![to],
         "the recipient shard stores its own emission and nothing else"

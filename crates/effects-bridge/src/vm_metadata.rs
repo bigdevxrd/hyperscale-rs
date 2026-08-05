@@ -1,37 +1,20 @@
-//! Package metadata's wire codec: the canonical encoding a published
-//! artifact carries in its metadata section.
+//! The package-metadata section codec's caps and semantic checks.
 //!
-//! The effect vocabulary is wire-free, so every encoding of it belongs
-//! here beside the envelope tree's, which is what makes the format the
-//! workspace's to freeze. The shape it freezes is the whole signature
-//! tree: a method's declared accessibility, its parameter kinds, its
-//! output resource expressions, its effect clauses down through nested
-//! `for-each` bodies, its static call sites, and the package's event
-//! table.
-//!
-//! Decode is canonical and bounded. Canonical because the format admits
-//! exactly one byte string per value: SBOR's own sizes are minimal
-//! LEB128, the payload's end is checked, and the method table travels as
-//! a vector this module reads under a strictly ascending name order
-//! rather than as a map a peer could permute or repeat. Bounded because
-//! the byte cap makes decode linear in its input — SBOR is self-framing,
-//! so no collection can claim more elements than the input has bytes —
-//! while the vocabulary's own nesting bounds cover the depths a few
-//! hundred bytes could still reach. Above those sit the two caps that
-//! carry meaning rather than safety: a clause tree no evaluation could
-//! ever declare, and an event table longer than the index the kernel
-//! accepts.
+//! The encoding itself is the vocabulary's own — canonical HBOR of
+//! [`PackageMetadata`], the same bytes the artifact section carries. What
+//! belongs here is what the vocabulary deliberately does not fix: the
+//! byte budget a section may claim of a transaction, the nesting cap that
+//! budget implies, and the semantic bounds — an event table no emitted
+//! index could reach past, clause and expression depths evaluation would
+//! refuse — that make a decoded section one the rest of admission will
+//! accept.
 
-use hyperscale_types::{MAX_TX_BYTES_LEN, MAX_VM_EVENT_TYPES, VmStaticsError};
+use hyperscale_hbor::{from_slice_with_depth, to_vec_with_depth};
+use hyperscale_types::{MAX_EVENT_TYPES, MAX_TX_BYTES_LEN, VmStaticsError};
 use hyperscale_vm_effects::{
-    AbiParam, Accessibility, CallSite, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE,
-    MAX_EXPR_DEPTH, MAX_VALUE_DEPTH, MethodSignature, ModeExpr, PackageMetadata, ParamType, RoleId,
-    TargetExpr,
+    Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH, MAX_VALUE_DEPTH,
+    MethodSignature, ModeExpr, PackageMetadata, TargetExpr,
 };
-use sbor::prelude::*;
-use sbor::{basic_decode_with_depth_limit, basic_encode_with_depth_limit};
-
-use crate::wire::{WireValue, value, wire_value};
 
 /// The bound on an encoded metadata section.
 ///
@@ -43,395 +26,15 @@ use crate::wire::{WireValue, value, wire_value};
 /// can outrun the input.
 pub const MAX_PACKAGE_METADATA_BYTES: usize = MAX_TX_BYTES_LEN / 4;
 
-/// The SBOR nesting limit this codec encodes and decodes at.
+/// The nesting cap the section codec encodes and decodes at.
 ///
-/// Every nested field counts one level, so the vocabulary's depth bounds
-/// do not translate one for one: a clause layer costs two levels — the
-/// body vector and its element — an expression layer up to two, for a
-/// child key's material vector and its element, and a value layer two for
-/// the same reason. The fixed prefix is the remainder: the metadata
-/// record, its method table, a method, its clause list, a target and a
-/// mode. The limit admits everything [`check_metadata`] accepts; the
-/// checks are what decide.
-const MAX_SBOR_DEPTH: usize = 16 + 2 * (MAX_CLAUSE_DEPTH + MAX_EXPR_DEPTH + MAX_VALUE_DEPTH);
-
-/// Wire mirror of [`ParamType`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BasicSbor)]
-enum WireParamType {
-    U64,
-    U128,
-    Bytes,
-    Address,
-    Bucket,
-}
-
-/// Wire mirror of [`Expr`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireExpr {
-    Literal(WireValue),
-    Arg(u32),
-    Config(u32),
-    Binding(u32),
-    SelfAddr,
-    Field(Box<Self>, u32),
-    ResourceOf(Box<Self>),
-    Lookup {
-        map: Box<Self>,
-        key: Box<Self>,
-    },
-    ChildKey {
-        owner: Box<Self>,
-        role: u16,
-        material: Vec<Self>,
-    },
-    FreshId {
-        slot: u32,
-    },
-    FreshKey {
-        slot: u32,
-    },
-    Pack {
-        hi: Box<Self>,
-        lo: Box<Self>,
-    },
-}
-
-/// Wire mirror of [`ModeExpr`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireMode {
-    Read,
-    Locked,
-    Delta,
-    Reserve(WireExpr),
-    Write,
-}
-
-/// Wire mirror of [`TargetExpr`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireTarget {
-    Point(WireExpr),
-    Entry {
-        owner: WireExpr,
-        collection: u16,
-        order: WireExpr,
-    },
-    Range {
-        owner: WireExpr,
-        collection: u16,
-        lo: WireExpr,
-        hi: WireExpr,
-        cap: u32,
-    },
-}
-
-/// Wire mirror of [`Clause`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireClause {
-    Effect { target: WireTarget, mode: WireMode },
-    ForEach { list: WireExpr, body: Vec<Self> },
-}
-
-/// Wire mirror of [`CallSite`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireCall {
-    target: WireExpr,
-    method: String,
-    args: Vec<WireExpr>,
-}
-
-/// Wire mirror of [`AbiParam`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-enum WireAbiParam {
-    Handle(u32),
-    Bucket(u32),
-    Derived(WireExpr),
-}
-
-/// Wire mirror of [`Accessibility`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BasicSbor)]
-enum WireAccessibility {
-    Public,
-    RequiresTargetAuth,
-    RequiresConfiguredAuth(u32),
-}
-
-/// Wire mirror of [`MethodSignature`], carrying the name it is filed
-/// under: the table is a vector so its order is part of the encoding.
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireMethod {
-    name: String,
-    accessibility: WireAccessibility,
-    params: Vec<WireParamType>,
-    abi: Vec<WireAbiParam>,
-    outputs: Vec<WireExpr>,
-    effects: Vec<WireClause>,
-    calls: Vec<WireCall>,
-}
-
-/// Wire mirror of [`PackageMetadata`].
-#[derive(Clone, Debug, PartialEq, Eq, BasicSbor)]
-struct WireMetadata {
-    methods: Vec<WireMethod>,
-    events: Vec<String>,
-}
-
-const fn wire_param(param: ParamType) -> WireParamType {
-    match param {
-        ParamType::U64 => WireParamType::U64,
-        ParamType::U128 => WireParamType::U128,
-        ParamType::Bytes => WireParamType::Bytes,
-        ParamType::Address => WireParamType::Address,
-        ParamType::Bucket => WireParamType::Bucket,
-    }
-}
-
-const fn param(wire: WireParamType) -> ParamType {
-    match wire {
-        WireParamType::U64 => ParamType::U64,
-        WireParamType::U128 => ParamType::U128,
-        WireParamType::Bytes => ParamType::Bytes,
-        WireParamType::Address => ParamType::Address,
-        WireParamType::Bucket => ParamType::Bucket,
-    }
-}
-
-fn wire_expr(expr: &Expr) -> WireExpr {
-    match expr {
-        Expr::Literal(literal) => WireExpr::Literal(wire_value(literal)),
-        Expr::Arg(index) => WireExpr::Arg(*index),
-        Expr::Config(index) => WireExpr::Config(*index),
-        Expr::Binding(index) => WireExpr::Binding(*index),
-        Expr::SelfAddr => WireExpr::SelfAddr,
-        Expr::Field(tuple, index) => WireExpr::Field(Box::new(wire_expr(tuple)), *index),
-        Expr::ResourceOf(bucket) => WireExpr::ResourceOf(Box::new(wire_expr(bucket))),
-        Expr::Lookup { map, key } => WireExpr::Lookup {
-            map: Box::new(wire_expr(map)),
-            key: Box::new(wire_expr(key)),
-        },
-        Expr::ChildKey {
-            owner,
-            role,
-            material,
-        } => WireExpr::ChildKey {
-            owner: Box::new(wire_expr(owner)),
-            role: role.0,
-            material: material.iter().map(wire_expr).collect(),
-        },
-        Expr::FreshId { slot } => WireExpr::FreshId { slot: *slot },
-        Expr::FreshKey { slot } => WireExpr::FreshKey { slot: *slot },
-        Expr::Pack { hi, lo } => WireExpr::Pack {
-            hi: Box::new(wire_expr(hi)),
-            lo: Box::new(wire_expr(lo)),
-        },
-    }
-}
-
-fn expr(wire: WireExpr) -> Expr {
-    match wire {
-        WireExpr::Literal(literal) => Expr::Literal(value(literal)),
-        WireExpr::Arg(index) => Expr::Arg(index),
-        WireExpr::Config(index) => Expr::Config(index),
-        WireExpr::Binding(index) => Expr::Binding(index),
-        WireExpr::SelfAddr => Expr::SelfAddr,
-        WireExpr::Field(tuple, index) => Expr::Field(Box::new(expr(*tuple)), index),
-        WireExpr::ResourceOf(bucket) => Expr::ResourceOf(Box::new(expr(*bucket))),
-        WireExpr::Lookup { map, key } => Expr::Lookup {
-            map: Box::new(expr(*map)),
-            key: Box::new(expr(*key)),
-        },
-        WireExpr::ChildKey {
-            owner,
-            role,
-            material,
-        } => Expr::ChildKey {
-            owner: Box::new(expr(*owner)),
-            role: RoleId(role),
-            material: material.into_iter().map(expr).collect(),
-        },
-        WireExpr::FreshId { slot } => Expr::FreshId { slot },
-        WireExpr::FreshKey { slot } => Expr::FreshKey { slot },
-        WireExpr::Pack { hi, lo } => Expr::Pack {
-            hi: Box::new(expr(*hi)),
-            lo: Box::new(expr(*lo)),
-        },
-    }
-}
-
-fn wire_target(target: &TargetExpr) -> WireTarget {
-    match target {
-        TargetExpr::Point(key) => WireTarget::Point(wire_expr(key)),
-        TargetExpr::Entry {
-            owner,
-            collection,
-            order,
-        } => WireTarget::Entry {
-            owner: wire_expr(owner),
-            collection: collection.0,
-            order: wire_expr(order),
-        },
-        TargetExpr::Range {
-            owner,
-            collection,
-            lo,
-            hi,
-            cap,
-        } => WireTarget::Range {
-            owner: wire_expr(owner),
-            collection: collection.0,
-            lo: wire_expr(lo),
-            hi: wire_expr(hi),
-            cap: *cap,
-        },
-    }
-}
-
-fn target(wire: WireTarget) -> TargetExpr {
-    match wire {
-        WireTarget::Point(key) => TargetExpr::Point(expr(key)),
-        WireTarget::Entry {
-            owner,
-            collection,
-            order,
-        } => TargetExpr::Entry {
-            owner: expr(owner),
-            collection: RoleId(collection),
-            order: expr(order),
-        },
-        WireTarget::Range {
-            owner,
-            collection,
-            lo,
-            hi,
-            cap,
-        } => TargetExpr::Range {
-            owner: expr(owner),
-            collection: RoleId(collection),
-            lo: expr(lo),
-            hi: expr(hi),
-            cap,
-        },
-    }
-}
-
-const fn wire_accessibility(accessibility: Accessibility) -> WireAccessibility {
-    match accessibility {
-        Accessibility::Public => WireAccessibility::Public,
-        Accessibility::RequiresTargetAuth => WireAccessibility::RequiresTargetAuth,
-        Accessibility::RequiresConfiguredAuth(field) => {
-            WireAccessibility::RequiresConfiguredAuth(field)
-        }
-    }
-}
-
-const fn accessibility(wire: WireAccessibility) -> Accessibility {
-    match wire {
-        WireAccessibility::Public => Accessibility::Public,
-        WireAccessibility::RequiresTargetAuth => Accessibility::RequiresTargetAuth,
-        WireAccessibility::RequiresConfiguredAuth(field) => {
-            Accessibility::RequiresConfiguredAuth(field)
-        }
-    }
-}
-
-fn wire_abi_param(binding: &AbiParam) -> WireAbiParam {
-    match binding {
-        AbiParam::Handle(clause) => WireAbiParam::Handle(*clause),
-        AbiParam::Bucket(param) => WireAbiParam::Bucket(*param),
-        AbiParam::Derived(expr) => WireAbiParam::Derived(wire_expr(expr)),
-    }
-}
-
-fn abi_param(wire: WireAbiParam) -> AbiParam {
-    match wire {
-        WireAbiParam::Handle(clause) => AbiParam::Handle(clause),
-        WireAbiParam::Bucket(param) => AbiParam::Bucket(param),
-        WireAbiParam::Derived(wire) => AbiParam::Derived(expr(wire)),
-    }
-}
-
-fn wire_mode(mode: &ModeExpr) -> WireMode {
-    match mode {
-        ModeExpr::Read => WireMode::Read,
-        ModeExpr::Locked => WireMode::Locked,
-        ModeExpr::Delta => WireMode::Delta,
-        ModeExpr::Reserve(amount) => WireMode::Reserve(wire_expr(amount)),
-        ModeExpr::Write => WireMode::Write,
-    }
-}
-
-fn mode(wire: WireMode) -> ModeExpr {
-    match wire {
-        WireMode::Read => ModeExpr::Read,
-        WireMode::Locked => ModeExpr::Locked,
-        WireMode::Delta => ModeExpr::Delta,
-        WireMode::Reserve(amount) => ModeExpr::Reserve(expr(amount)),
-        WireMode::Write => ModeExpr::Write,
-    }
-}
-
-fn wire_clause(clause: &Clause) -> WireClause {
-    match clause {
-        Clause::Effect { target, mode } => WireClause::Effect {
-            target: wire_target(target),
-            mode: wire_mode(mode),
-        },
-        Clause::ForEach { list, body } => WireClause::ForEach {
-            list: wire_expr(list),
-            body: body.iter().map(wire_clause).collect(),
-        },
-    }
-}
-
-fn clause(wire: WireClause) -> Clause {
-    match wire {
-        WireClause::Effect {
-            target: wire_target,
-            mode: wire_mode,
-        } => Clause::Effect {
-            target: target(wire_target),
-            mode: mode(wire_mode),
-        },
-        WireClause::ForEach { list, body } => Clause::ForEach {
-            list: expr(list),
-            body: body.into_iter().map(clause).collect(),
-        },
-    }
-}
-
-fn wire_call(call: &CallSite) -> WireCall {
-    WireCall {
-        target: wire_expr(&call.target),
-        method: call.method.clone(),
-        args: call.args.iter().map(wire_expr).collect(),
-    }
-}
-
-fn call(wire: WireCall) -> CallSite {
-    CallSite {
-        target: expr(wire.target),
-        method: wire.method,
-        args: wire.args.into_iter().map(expr).collect(),
-    }
-}
-
-fn wire_metadata(metadata: &PackageMetadata) -> WireMetadata {
-    WireMetadata {
-        methods: metadata
-            .methods
-            .iter()
-            .map(|(name, signature)| WireMethod {
-                name: name.clone(),
-                accessibility: wire_accessibility(signature.accessibility),
-                params: signature.params.iter().copied().map(wire_param).collect(),
-                abi: signature.abi.iter().map(wire_abi_param).collect(),
-                outputs: signature.outputs.iter().map(wire_expr).collect(),
-                effects: signature.effects.iter().map(wire_clause).collect(),
-                calls: signature.calls.iter().map(wire_call).collect(),
-            })
-            .collect(),
-        events: metadata.events.clone(),
-    }
-}
+/// A vocabulary layer costs at most two decoder levels — a collection
+/// field and its hoisted element body — so the clause, expression, and
+/// value bounds translate at two apiece, over a fixed prefix for the
+/// record, its method table, a method, and a clause's target and mode.
+/// The cap admits everything [`check_metadata`] accepts; the checks are
+/// what decide.
+const METADATA_WIRE_DEPTH: usize = 16 + 2 * (MAX_CLAUSE_DEPTH + MAX_EXPR_DEPTH + MAX_VALUE_DEPTH);
 
 /// Encode package metadata into its canonical section bytes.
 ///
@@ -441,8 +44,8 @@ fn wire_metadata(metadata: &PackageMetadata) -> WireMetadata {
 /// that whatever this returns decodes back to an equal value.
 pub fn encode_metadata(metadata: &PackageMetadata) -> Result<Vec<u8>, VmStaticsError> {
     check_metadata(metadata)?;
-    let bytes = basic_encode_with_depth_limit(&wire_metadata(metadata), MAX_SBOR_DEPTH)
-        .map_err(|error| VmStaticsError(format!("metadata encode: {error:?}")))?;
+    let bytes = to_vec_with_depth(metadata, METADATA_WIRE_DEPTH)
+        .map_err(|error| VmStaticsError(format!("metadata encode: {error}")))?;
     if bytes.len() > MAX_PACKAGE_METADATA_BYTES {
         return Err(VmStaticsError(format!(
             "metadata encodes to {} bytes, past the {MAX_PACKAGE_METADATA_BYTES} cap",
@@ -465,34 +68,8 @@ pub fn decode_metadata(bytes: &[u8]) -> Result<PackageMetadata, VmStaticsError> 
             bytes.len()
         )));
     }
-    let wire: WireMetadata = basic_decode_with_depth_limit(bytes, MAX_SBOR_DEPTH)
-        .map_err(|error| VmStaticsError(format!("metadata decode: {error:?}")))?;
-
-    let mut metadata = PackageMetadata {
-        methods: BTreeMap::new(),
-        events: wire.events,
-    };
-    let mut previous: Option<String> = None;
-    for method in wire.methods {
-        if previous.as_ref().is_some_and(|prior| *prior >= method.name) {
-            return Err(VmStaticsError(format!(
-                "method table is not in ascending name order at {:?}",
-                method.name
-            )));
-        }
-        previous = Some(method.name.clone());
-        metadata.methods.insert(
-            method.name,
-            MethodSignature {
-                accessibility: accessibility(method.accessibility),
-                params: method.params.into_iter().map(param).collect(),
-                abi: method.abi.into_iter().map(abi_param).collect(),
-                outputs: method.outputs.into_iter().map(expr).collect(),
-                effects: method.effects.into_iter().map(clause).collect(),
-                calls: method.calls.into_iter().map(call).collect(),
-            },
-        );
-    }
+    let metadata: PackageMetadata = from_slice_with_depth(bytes, METADATA_WIRE_DEPTH)
+        .map_err(|error| VmStaticsError(format!("metadata decode: {error}")))?;
     check_metadata(&metadata)?;
     Ok(metadata)
 }
@@ -503,9 +80,9 @@ pub fn decode_metadata(bytes: &[u8]) -> Result<PackageMetadata, VmStaticsError> 
 /// depth, same comparison — so a signature this accepts is one evaluation
 /// will not refuse on structure alone.
 fn check_metadata(metadata: &PackageMetadata) -> Result<(), VmStaticsError> {
-    if metadata.events.len() > MAX_VM_EVENT_TYPES as usize {
+    if metadata.events.len() > MAX_EVENT_TYPES as usize {
         return Err(VmStaticsError(format!(
-            "event table names {} types, past the {MAX_VM_EVENT_TYPES} an event index can reach",
+            "event table names {} types, past the {MAX_EVENT_TYPES} an event index can reach",
             metadata.events.len()
         )));
     }
@@ -631,10 +208,14 @@ fn check_expr(expr: &Expr, depth: usize) -> Result<(), VmStaticsError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use hyperscale_vm_effects::stdlib::{
         VAULT, account_metadata, amm_metadata, book_metadata, splitter_metadata,
     };
-    use hyperscale_vm_effects::{Address, LocalKey, SubstateKey, Value};
+    use hyperscale_vm_effects::{
+        Accessibility, Address, CallSite, LocalKey, ParamType, RoleId, SubstateKey, Value,
+    };
 
     use super::*;
 
@@ -668,8 +249,8 @@ mod tests {
     /// what a hostile publisher writes, and the only input that puts the
     /// decode-side bounds under test.
     fn encode_unchecked(metadata: &PackageMetadata) -> Vec<u8> {
-        basic_encode_with_depth_limit(&wire_metadata(metadata), MAX_SBOR_DEPTH)
-            .expect("the wire mirror encodes within the codec's own nesting limit")
+        to_vec_with_depth(metadata, METADATA_WIRE_DEPTH)
+            .expect("the vocabulary encodes within the codec's own nesting cap")
     }
 
     /// Both sides of a bound: the admitted structure round trips, and the
@@ -862,9 +443,18 @@ mod tests {
 
     #[test]
     fn the_method_table_decodes_only_in_ascending_name_order() {
-        // The table travels as a vector, so permuting it or repeating a
-        // name is a distinct byte string that must not decode to a value
-        // the map would silently normalise.
+        // The table travels sorted, so permuting it or repeating a name
+        // is a distinct byte string that must not decode to a value the
+        // map would silently normalise. A sequence of pairs encodes
+        // byte-identically to a map whose entries arrive in the same
+        // order, so this is how a forged table is spelled at all — the
+        // map form cannot hold one.
+        #[derive(hyperscale_hbor::Hbor)]
+        struct Forged {
+            methods: Vec<(String, MethodSignature)>,
+            events: Vec<String>,
+        }
+
         let mut metadata = PackageMetadata::default();
         for name in ["a", "b"] {
             metadata
@@ -872,29 +462,22 @@ mod tests {
                 .insert(name.into(), MethodSignature::default());
         }
         let bytes = encode_metadata(&metadata).expect("encodes");
-
-        let rewrite = |methods: Vec<WireMethod>| {
-            basic_encode_with_depth_limit(
-                &WireMetadata {
-                    methods,
+        let rewrite = |names: &[&str]| {
+            to_vec_with_depth(
+                &Forged {
+                    methods: names
+                        .iter()
+                        .map(|name| ((*name).to_owned(), MethodSignature::default()))
+                        .collect(),
                     events: Vec::new(),
                 },
-                MAX_SBOR_DEPTH,
+                METADATA_WIRE_DEPTH,
             )
-            .expect("wire encodes")
+            .expect("the forged table encodes")
         };
-        let entry = |name: &str| WireMethod {
-            accessibility: WireAccessibility::Public,
-            abi: Vec::new(),
-            name: name.into(),
-            params: Vec::new(),
-            outputs: Vec::new(),
-            effects: Vec::new(),
-            calls: Vec::new(),
-        };
-        assert_eq!(rewrite(vec![entry("a"), entry("b")]), bytes);
-        assert!(decode_metadata(&rewrite(vec![entry("b"), entry("a")])).is_err());
-        assert!(decode_metadata(&rewrite(vec![entry("a"), entry("a")])).is_err());
+        assert_eq!(rewrite(&["a", "b"]), bytes);
+        assert!(decode_metadata(&rewrite(&["b", "a"])).is_err());
+        assert!(decode_metadata(&rewrite(&["a", "a"])).is_err());
     }
 
     #[test]
@@ -1004,8 +587,8 @@ mod tests {
             events: vec![String::new(); len],
         };
         assert_bounded(
-            &table(MAX_VM_EVENT_TYPES as usize),
-            &table(MAX_VM_EVENT_TYPES as usize + 1),
+            &table(MAX_EVENT_TYPES as usize),
+            &table(MAX_EVENT_TYPES as usize + 1),
         );
     }
 
@@ -1016,7 +599,7 @@ mod tests {
         // reads a byte of it.
         let over = PackageMetadata {
             methods: BTreeMap::new(),
-            events: vec!["e".repeat(1024); MAX_VM_EVENT_TYPES as usize],
+            events: vec!["e".repeat(1024); MAX_EVENT_TYPES as usize],
         };
         let bytes = encode_unchecked(&over);
         assert!(bytes.len() > MAX_PACKAGE_METADATA_BYTES);

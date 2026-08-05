@@ -49,7 +49,7 @@ impl FeeReservationLedger {
     ) {
         for tx in transactions {
             let vm = tx.body();
-            if !payer_local(vm.fee_payer) {
+            if !payer_local(vm.fee_payer.0) {
                 continue;
             }
             let deadline = tx
@@ -57,7 +57,7 @@ impl FeeReservationLedger {
                 .end_timestamp_exclusive
                 .plus(RETENTION_HORIZON);
             self.holds.entry(tx.hash()).or_insert(Hold {
-                payer: vm.fee_payer,
+                payer: vm.fee_payer.0,
                 max_fee: vm.max_fee,
                 deadline,
             });

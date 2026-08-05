@@ -171,7 +171,7 @@ pub fn project_to_shard(
             // costs no agreement.
             let events: Vec<Event> = events
                 .iter()
-                .filter(|event| shard_trie.shard_for_prefix(event.emitter) == local_shard)
+                .filter(|event| shard_trie.shard_for_prefix(event.emitter.0) == local_shard)
                 .cloned()
                 .collect();
             let consensus = ConsensusReceipt::Succeeded {

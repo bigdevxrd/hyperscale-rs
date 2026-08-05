@@ -14,7 +14,7 @@ use hyperscale_effects_bridge::{
 use hyperscale_engine::genesis::stake_unit;
 use hyperscale_engine::{XRD, account_address};
 use hyperscale_types::{
-    ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR,
+    ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, EnvelopeExt, Epoch, MIN_STAKE_FLOOR,
     NetworkParams, ShardId, ShardTrie, StakePoolId, StakePoolSeat, SubintentSig, TimestampRange,
     Transaction, TransactionBody, TransactionEnvelope, ValidatorId, WeightedTimestamp,
     ed25519_keypair_from_seed,
@@ -882,17 +882,17 @@ pub fn build_stamp_tx(
     };
     let signed = right_key.sign(right.hash(&ProtocolHasher).0.0);
     let vm = TransactionEnvelope {
-        body: TransactionBody::Call(encode_tree(&tree).into()),
+        body: TransactionBody::Call(encode_tree(&tree)),
         subintent_sigs: vec![SubintentSig {
             public_key: right_key.public_key().0,
             signature: signed.0,
         }],
-        fee_payer: account_address(&payer.public_key().0),
+        fee_payer: Address(account_address(&payer.public_key().0)),
         max_fee: MAX_FEE,
         gas_limit: 1_000_000,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
-        message: Vec::new().into(),
+        message: Vec::new(),
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -1021,14 +1021,14 @@ pub fn build_publish_tx(
 ) -> Transaction {
     Transaction::new(
         TransactionEnvelope {
-            body: TransactionBody::Publish(artifact.into()),
+            body: TransactionBody::Publish(artifact),
             subintent_sigs: Vec::new(),
-            fee_payer: account_address(&payer.public_key().0),
+            fee_payer: Address(account_address(&payer.public_key().0)),
             max_fee: PUBLISH_MAX_FEE,
             gas_limit: 1_000_000,
             validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
             validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
-            message: Vec::new().into(),
+            message: Vec::new(),
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -1372,17 +1372,17 @@ pub fn build_composed_tx(
     // whole, subintent signatures included.
     let signed = signer_key.sign(request.hash(&ProtocolHasher).0.0);
     let vm = TransactionEnvelope {
-        body: TransactionBody::Call(encode_tree(&tree).into()),
+        body: TransactionBody::Call(encode_tree(&tree)),
         subintent_sigs: vec![SubintentSig {
             public_key: signer_key.public_key().0,
             signature: signed.0,
         }],
-        fee_payer: account_address(&composer.public_key().0),
+        fee_payer: Address(account_address(&composer.public_key().0)),
         max_fee: 1_000,
         gas_limit: 1_000_000,
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
-        message: Vec::new().into(),
+        message: Vec::new(),
         signer: [0; 32],
         signature: [0; 64],
     }

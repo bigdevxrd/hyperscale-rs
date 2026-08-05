@@ -20,9 +20,9 @@ use hyperscale_storage::{
     PartitionEntry, SubstateDatabase,
 };
 use hyperscale_types::{
-    BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain, ShardId,
-    ShardTrie, Stake, StakePoolId, StakePoolSeat, Transaction, TransactionBody,
-    TransactionEnvelope, Verified, WeightedTimestamp,
+    BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash,
+    RevealChain, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, Transaction,
+    TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -174,14 +174,14 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> Transaction {
     };
     Transaction::new(
         TransactionEnvelope {
-            body: TransactionBody::Call(encode_tree(&tree).into()),
+            body: TransactionBody::Call(encode_tree(&tree)),
             subintent_sigs: Vec::new(),
-            fee_payer: from,
+            fee_payer: Address(from),
             max_fee: 1_000,
             gas_limit: 1_000_000,
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
-            message: Vec::new().into(),
+            message: Vec::new(),
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -292,14 +292,14 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
     };
     let tx = Transaction::new(
         TransactionEnvelope {
-            body: TransactionBody::Call(encode_tree(&tree).into()),
+            body: TransactionBody::Call(encode_tree(&tree)),
             subintent_sigs: Vec::new(),
-            fee_payer: from,
+            fee_payer: Address(from),
             max_fee: 1_000,
             gas_limit: 1_000_000,
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
-            message: Vec::new().into(),
+            message: Vec::new(),
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -336,14 +336,14 @@ fn signed_registration(pool: [u8; 16], seed: u8) -> Transaction {
     };
     Transaction::new(
         TransactionEnvelope {
-            body: TransactionBody::Call(encode_tree(&tree).into()),
+            body: TransactionBody::Call(encode_tree(&tree)),
             subintent_sigs: Vec::new(),
-            fee_payer: account_of(seed),
+            fee_payer: Address(account_of(seed)),
             max_fee: 1_000,
             gas_limit: 1_000_000,
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
-            message: Vec::new().into(),
+            message: Vec::new(),
             signer: [0; 32],
             signature: [0; 64],
         }

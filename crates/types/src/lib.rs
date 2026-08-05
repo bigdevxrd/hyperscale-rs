@@ -81,6 +81,7 @@ pub use hyperscale_crypto::{
     ConsensusPublicKey, ConsensusSignature, SignError, Signer, VRF_PROOF_BYTES, Verifier,
     VrfOutput, VrfProof,
 };
+pub use hyperscale_vm_types::{Address, LocalKey, SubstateKey};
 pub use network::{
     GossipMessage, MessageClass, NetworkMessage, Request, Signed, SignedContext, SignedVerifyError,
     TopicScope,
@@ -114,7 +115,7 @@ pub use receipt::consensus::{
     ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_cells, has_partition_reset,
 };
 pub use receipt::event::{
-    Event, MAX_VM_EVENT_PAYLOAD_LEN, MAX_VM_EVENT_TYPES, MAX_VM_EVENTS_PER_TX,
+    Event, EventExt, MAX_EVENT_PAYLOAD_BYTES, MAX_EVENT_TYPES, MAX_EVENTS_PER_TX,
 };
 pub use receipt::global::GlobalReceipt;
 pub use receipt::metadata::{ExecutionMetadata, FeeSummary, LogLevel};
@@ -205,8 +206,8 @@ pub use transaction::status::{
     TransactionDecision, TransactionError, TransactionStatus, TransactionStatusParseError,
 };
 pub use transaction::vm::{
-    Derived, MAX_VM_MESSAGE_LEN, Routing, SubintentSig, TransactionBody, TransactionEnvelope,
-    VmStatics, VmStaticsError, install_vm_statics, vm_statics_installed,
+    Derived, EnvelopeExt, MAX_MESSAGE_LEN, MAX_SUBINTENTS, Routing, SubintentSig, TransactionBody,
+    TransactionEnvelope, VmStatics, VmStaticsError, install_vm_statics, vm_statics_installed,
 };
 pub use transaction::wire::{Transaction, TransactionVerifyError};
 pub use verifiable::{Verifiable, Verified, Verify};
