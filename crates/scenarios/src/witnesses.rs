@@ -16,9 +16,9 @@
 use std::sync::Arc;
 
 use hyperscale_types::{
-    BeaconWitnessEvent, ConsensusPublicKey, Stake, StakePoolId, TransactionDecision,
-    TransactionStatus, UNBONDING_WINDOW_EPOCHS, ValidatorId, ValidatorStatus,
-    validator_possession_proof_sign,
+    BeaconWitnessEvent, ConsensusPublicKey, MIN_STAKE_FLOOR, RoutableTransaction, Stake,
+    StakePoolId, TransactionDecision, TransactionStatus, UNBONDING_WINDOW_EPOCHS, ValidatorId,
+    ValidatorStatus, validator_possession_proof_sign,
 };
 use radix_common::network::NetworkDefinition;
 
@@ -26,8 +26,8 @@ use crate::support::query::{
     pool_effective_stake, pool_total_stake, validator_pubkey, validator_status,
 };
 use crate::support::tx::{
-    VM_STAKE_POOL, VM_STAKE_POOL_ID, build_vm_stake_tx, build_witness_tx, validity_around,
-    vm_delegator, witness_payer,
+    VM_STAKE_POOL, VM_STAKE_POOL_ID, build_vm_stake_tx, build_vm_unstake_tx, build_witness_tx,
+    validity_around, vm_delegator, witness_payer,
 };
 use crate::support::wait::{await_beacon_epoch, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -153,35 +153,6 @@ pub fn vm_delegation_folds_into_beacon_state(c: &mut impl Cluster) {
 /// sit well inside the delegator's genesis funding.
 const DELEGATION: u128 = 250_000;
 
-/// A stake deposit to a fresh pool folds into the beacon state.
-///
-/// # Panics
-///
-/// Panics if the beacon never folds the deposit within budget.
-pub fn stake_deposit_folds_into_beacon_state(c: &mut impl Cluster) {
-    warm_up(c);
-
-    // A pool id no genesis validator uses, so the deposit is the only source of
-    // its stake.
-    let pool = StakePoolId::new(7777);
-    let amount = Stake::from_whole_tokens(1_000);
-    assert_eq!(pool_total_stake(c, pool), None, "pool must not exist yet");
-
-    submit_action(
-        c,
-        1,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: pool,
-            amount,
-        },
-    );
-
-    assert!(
-        c.run_until(epochs(8), |c| pool_total_stake(c, pool) == Some(amount)),
-        "beacon never folded the stake deposit",
-    );
-}
-
 /// Registering a validator against a funded pool seats it in the pool.
 ///
 /// # Panics
@@ -252,53 +223,84 @@ pub fn register_without_capacity_is_rejected(c: &mut impl Cluster) {
     );
 }
 
-/// A withdrawal drops the pool's effective stake immediately while its total
-/// stake holds until the unbond matures.
+/// Returning part of a staking position drops the pool's effective stake
+/// immediately while its total stake holds until the unbond matures.
+///
+/// The position is an ordinary fungible balance, so unwinding one is an
+/// ordinary withdrawal from the delegator's own account handed back to
+/// the pool — and what the beacon folds is the pool's own account of
+/// what left, not an amount the transaction asserted.
 ///
 /// # Panics
 ///
-/// Panics if the deposit or withdrawal never folds, or if total stake drops
-/// before the unbond matures.
+/// Panics if the delegation or the return never folds, or if total stake
+/// drops before the unbond matures.
 pub fn stake_withdraw_drops_effective_stake(c: &mut impl Cluster) {
     warm_up(c);
 
-    let pool = StakePoolId::new(9999);
-    let deposited = Stake::from_whole_tokens(5_000_000);
-    let withdrawn = Stake::from_whole_tokens(2_000_000);
-    let remaining = Stake::from_whole_tokens(3_000_000);
+    let pool = VM_STAKE_POOL_ID;
+    let delegated = MIN_STAKE_FLOOR.attos() * 5;
+    let returned = MIN_STAKE_FLOOR.attos() * 2;
+    let remaining = Stake::from_attos(delegated - returned);
+    let (key, delegator) = vm_delegator();
 
-    submit_action(
+    submit_committed(
         c,
-        1,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: pool,
-            amount: deposited,
-        },
+        build_vm_stake_tx(
+            &key,
+            delegator,
+            VM_STAKE_POOL,
+            delegated,
+            validity_around(c.now()),
+        ),
     );
     assert!(
-        c.run_until(epochs(8), |c| pool_total_stake(c, pool) == Some(deposited)),
-        "deposit never folded",
+        c.run_until(epochs(8), |c| pool_total_stake(c, pool)
+            == Some(Stake::from_attos(delegated))),
+        "the delegation never folded; pool stake = {:?}",
+        pool_total_stake(c, pool),
     );
 
-    submit_action(
+    submit_committed(
         c,
-        2,
-        &BeaconWitnessEvent::StakeWithdraw {
-            pool_id: pool,
-            amount: withdrawn,
-        },
+        build_vm_unstake_tx(
+            &key,
+            delegator,
+            VM_STAKE_POOL,
+            returned,
+            validity_around(c.now()),
+        ),
     );
     assert!(
         c.run_until(epochs(8), |c| pool_effective_stake(c, pool)
             == Some(remaining)),
-        "withdrawal never dropped effective stake",
+        "the return never dropped effective stake; effective = {:?}",
+        pool_effective_stake(c, pool),
     );
     // `total_stake` holds through the unbonding window; only `effective_stake`
     // drops immediately.
     assert_eq!(
         pool_total_stake(c, pool),
-        Some(deposited),
+        Some(Stake::from_attos(delegated)),
         "total stake must hold until the withdrawal unbonds",
+    );
+}
+
+/// Submit `tx` and wait for it to commit, failing on any other outcome.
+///
+/// A witness only exists if its transaction settled, so a scenario that
+/// waited on the fold alone would report "the beacon never folded it"
+/// for a transaction that never ran.
+fn submit_committed<C: Cluster>(c: &mut C, tx: RoutableTransaction) {
+    let hash = tx.hash();
+    c.submit(Arc::new(tx));
+    let status = await_tx_terminal(c, hash, epochs(8));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Accept))
+        ),
+        "the action must commit before it can be witnessed; status = {status:?}",
     );
 }
 

@@ -38,11 +38,10 @@ use hyperscale_scenarios::{
     register_validator_pools_a_node, register_without_capacity_is_rejected,
     registered_validator_activates_onto_a_shard, shared_read_payments, single_shard_tx,
     split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
-    split_terminating_payer_releases_its_reservation, stake_deposit_folds_into_beacon_state,
-    stake_withdraw_drops_effective_stake, surviving_sibling_split_seats_full_committees,
-    vm_a_failed_attempt_still_attests_work, vm_abort_converges, vm_abort_floor_settles_on_deadline,
-    vm_attested_load_reaches_the_beacon, vm_cross_shard_transfer,
-    vm_delegation_folds_into_beacon_state, vm_deploy_storm_rides_out,
+    split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
+    surviving_sibling_split_seats_full_committees, vm_a_failed_attempt_still_attests_work,
+    vm_abort_converges, vm_abort_floor_settles_on_deadline, vm_attested_load_reaches_the_beacon,
+    vm_cross_shard_transfer, vm_delegation_folds_into_beacon_state, vm_deploy_storm_rides_out,
     vm_events_land_on_their_emitters_home_shard, vm_failure_charges_its_payer, vm_hot_recipient,
     vm_insolvent_payer_engages_nothing, vm_nullifier_race_admits_exactly_one,
     vm_preview_reports_resource_changes, vm_randomness_draw_agrees_across_shards,
@@ -1119,13 +1118,6 @@ const fn witness_config(validators: u32) -> ScenarioConfig {
 }
 
 #[test]
-fn stake_deposit_folds_into_beacon_state_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(4), 0x57AC, &witness_genesis_balances());
-    stake_deposit_folds_into_beacon_state(&mut cluster);
-}
-
-#[test]
 fn vm_delegation_folds_into_beacon_state_sim() {
     let mut cluster = SimCluster::with_vm_pools(
         &witness_config(4),
@@ -1153,8 +1145,13 @@ fn register_without_capacity_is_rejected_sim() {
 
 #[test]
 fn stake_withdraw_drops_effective_stake_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(4), 0xD7A1, &witness_genesis_balances());
+    let mut cluster = SimCluster::with_vm_pools(
+        &witness_config(4),
+        0xD7A1,
+        &witness_genesis_balances(),
+        &vm_staking_genesis_accounts(),
+        &vm_staking_pools(),
+    );
     stake_withdraw_drops_effective_stake(&mut cluster);
 }
 

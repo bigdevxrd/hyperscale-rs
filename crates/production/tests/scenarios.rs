@@ -35,11 +35,10 @@ use hyperscale_scenarios::{
     re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
     single_shard_tx, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
-    split_terminating_payer_releases_its_reservation, stake_deposit_folds_into_beacon_state,
-    stake_withdraw_drops_effective_stake, surviving_sibling_split_seats_full_committees,
-    vm_abort_converges, vm_delegation_folds_into_beacon_state, vm_hot_recipient,
-    vm_single_transfer, vm_zipf_payments, withdrawal_ejects_a_validator_that_a_deposit_reactivates,
-    zipf_payments,
+    split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
+    surviving_sibling_split_seats_full_committees, vm_abort_converges,
+    vm_delegation_folds_into_beacon_state, vm_hot_recipient, vm_single_transfer, vm_zipf_payments,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use serial_test::serial;
 use support::ProdCluster;
@@ -711,22 +710,6 @@ const fn witness_config(validators: u32) -> ScenarioConfig {
     not(feature = "ci"),
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
-fn stake_deposit_folds_into_beacon_state_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
-        &witness_config(4),
-        0x57AC,
-        EPOCH_MS,
-        witness_genesis_balances(),
-    );
-    stake_deposit_folds_into_beacon_state(&mut cluster);
-}
-
-#[test]
-#[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
 fn vm_delegation_folds_into_beacon_state_prod() {
     let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(4),
@@ -778,11 +761,13 @@ fn register_without_capacity_is_rejected_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn stake_withdraw_drops_effective_stake_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(4),
         0xD7A1,
         EPOCH_MS,
         witness_genesis_balances(),
+        vm_staking_genesis_accounts(),
+        vm_staking_pools(),
     );
     stake_withdraw_drops_effective_stake(&mut cluster);
 }

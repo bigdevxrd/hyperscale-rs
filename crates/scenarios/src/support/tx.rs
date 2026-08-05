@@ -12,9 +12,9 @@ use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, encode_tree};
 use hyperscale_engine_vm::genesis::stake_unit;
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
-    BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
-    ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId, ShardTrie,
-    StakePoolId, StakePoolSeat, TimestampRange, VmBody, VmSubintentSig, VmTransaction,
+    BeaconWitnessEvent, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR, NetworkParams, NodeId,
+    NotarizeOptions, ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId,
+    ShardTrie, StakePoolId, StakePoolSeat, TimestampRange, VmBody, VmSubintentSig, VmTransaction,
     WeightedTimestamp, build_transfer_tx as build_transfer, ed25519_keypair_from_seed,
     encode_system_action, routable_from_notarized_v1, sign_and_notarize,
     sign_and_notarize_with_options, uniform_shard_for_node,
@@ -1142,11 +1142,26 @@ pub fn vm_delegator() -> (Ed25519PrivateKey, [u8; 16]) {
     (key, account)
 }
 
-/// Genesis VM accounts for the staking scenario: the delegator funded
-/// well above its delegation and its fee ceiling.
+/// What the delegator holds at genesis.
+///
+/// The beacon's stake floor is denominated in whole tokens and the
+/// witness scenarios move multiples of it, so the delegator has to hold
+/// stake-scale funds rather than the token amounts the transfer
+/// scenarios use. Sized above every delegation any scenario makes plus
+/// their fees.
+pub const VM_DELEGATOR_FUNDING: u128 = 40 * MIN_STAKE_FLOOR.attos();
+
+/// Genesis VM accounts for the staking scenarios.
+///
+/// The delegator is funded well above its delegations and their fee
+/// ceilings; the operator is funded for the fees its own actions cost —
+/// an operator action moves no funds, but it still pays to be included.
 #[must_use]
 pub fn vm_staking_genesis_accounts() -> Vec<([u8; 16], u128)> {
-    vec![(vm_delegator().1, 1_000_000)]
+    vec![
+        (vm_delegator().1, VM_DELEGATOR_FUNDING),
+        (vm_pool_operator().1, VM_MAX_FEE * 64),
+    ]
 }
 
 /// The pools a staking cluster seats.
@@ -1157,6 +1172,46 @@ pub fn vm_staking_pools() -> Vec<StakePoolSeat> {
         id: VM_STAKE_POOL_ID,
         operator: vm_pool_operator().1,
     }]
+}
+
+/// Return `amount` worth of stake units to `pool`, moving that much of
+/// the delegator's position into the pool's unbonding total.
+///
+/// The units are withdrawn from the delegator's own account like any
+/// other balance — a staking position is an ordinary fungible holding,
+/// so unwinding one is an ordinary withdrawal.
+#[must_use]
+pub fn build_vm_unstake_tx(
+    delegator: &Ed25519PrivateKey,
+    from: [u8; 16],
+    pool: [u8; 16],
+    amount: u128,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let graph = ManifestGraph {
+        nodes: vec![
+            GraphNode {
+                target: Address(from),
+                method: "withdraw".into(),
+                args: vec![
+                    GraphArg::Literal(Value::Address(stake_unit(pool))),
+                    GraphArg::Literal(Value::U128(amount)),
+                ],
+            },
+            GraphNode {
+                target: Address(pool),
+                method: "unstake".into(),
+                args: vec![GraphArg::Edge {
+                    edge: EdgeRef {
+                        producer: 0,
+                        output: 0,
+                    },
+                    constraints: vec![Constraint::ResourceIs(stake_unit(pool))],
+                }],
+            },
+        ],
+    };
+    RoutableTransaction::new_vm(vm_envelope(graph, delegator, validity))
 }
 
 /// The principal the staking scenario's pool admits on its operator
