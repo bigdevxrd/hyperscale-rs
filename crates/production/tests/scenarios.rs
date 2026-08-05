@@ -729,11 +729,13 @@ fn vm_delegation_folds_into_beacon_state_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn register_validator_pools_a_node_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(4),
         0x5EED,
         EPOCH_MS,
         witness_genesis_balances(),
+        vm_staking_genesis_accounts(),
+        vm_staking_pools(),
     );
     register_validator_pools_a_node(&mut cluster);
 }
@@ -745,11 +747,13 @@ fn register_validator_pools_a_node_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn register_without_capacity_is_rejected_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(4),
         0x0CA9,
         EPOCH_MS,
         witness_genesis_balances(),
+        vm_staking_genesis_accounts(),
+        vm_staking_pools(),
     );
     register_without_capacity_is_rejected(&mut cluster);
 }
@@ -813,11 +817,13 @@ fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn re_registration_of_a_live_validator_is_a_no_op_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(4),
         0xDEAD,
         EPOCH_MS,
         witness_genesis_balances(),
+        vm_staking_genesis_accounts(),
+        vm_staking_pools(),
     );
     re_registration_of_a_live_validator_is_a_no_op(&mut cluster);
 }
@@ -829,11 +835,13 @@ fn re_registration_of_a_live_validator_is_a_no_op_prod() {
     ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
 )]
 fn pool_capacity_caps_registrations_prod() {
-    let mut cluster = ProdCluster::start_with_balances(
+    let mut cluster = ProdCluster::start_with_vm_pools(
         &witness_config(4),
         0xCA9A,
         EPOCH_MS,
         witness_genesis_balances(),
+        vm_staking_genesis_accounts(),
+        vm_staking_pools(),
     );
     pool_capacity_caps_registrations(&mut cluster);
 }

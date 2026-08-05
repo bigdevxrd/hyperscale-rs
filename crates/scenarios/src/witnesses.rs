@@ -26,8 +26,9 @@ use crate::support::query::{
     pool_effective_stake, pool_total_stake, validator_pubkey, validator_status,
 };
 use crate::support::tx::{
-    VM_STAKE_POOL, VM_STAKE_POOL_ID, build_vm_stake_tx, build_vm_unstake_tx, build_witness_tx,
-    validity_around, vm_delegator, witness_payer,
+    VM_SECOND_POOL, VM_SECOND_POOL_ID, VM_STAKE_POOL, VM_STAKE_POOL_ID, build_vm_register_tx,
+    build_vm_stake_tx, build_vm_unstake_tx, build_witness_tx, validity_around, vm_delegator,
+    vm_pool_operator, witness_payer,
 };
 use crate::support::wait::{await_beacon_epoch, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -61,6 +62,51 @@ fn submit_action<C: Cluster>(c: &mut C, nonce: u32, event: &BeaconWitnessEvent) 
 /// deterministic key serves.
 fn dummy_pubkey(c: &impl Cluster, seed: u8) -> ConsensusPublicKey {
     c.signer_from_seed(&[seed; 32]).public_key()
+}
+
+/// Delegate `amount` to `pool` and wait for the beacon to hold it.
+///
+/// A pool's capacity is its stake, so most operator scenarios open by
+/// buying the capacity they are about to spend.
+fn delegate<C: Cluster>(c: &mut C, pool: [u8; 16], id: StakePoolId, amount: u128) {
+    let (key, delegator) = vm_delegator();
+    let before = pool_total_stake(c, id).unwrap_or(Stake::ZERO);
+    submit_committed(
+        c,
+        build_vm_stake_tx(&key, delegator, pool, amount, validity_around(c.now())),
+    );
+    let expected = before.saturating_add(Stake::from_attos(amount));
+    assert!(
+        c.run_until(epochs(8), |c| pool_total_stake(c, id) == Some(expected)),
+        "the delegation never folded; pool stake = {:?}",
+        pool_total_stake(c, id),
+    );
+}
+
+/// Register `validator` against `pool` under the operator's signature,
+/// with a genuine proof-of-possession — the fold rejects a registration
+/// whose proof does not verify, so the signing scheme must be the
+/// cluster's own.
+fn register<C: Cluster>(c: &mut C, pool: [u8; 16], seed: u8, validator: ValidatorId) {
+    let keypair = c.signer_from_seed(&[seed; 32]);
+    let proof = validator_possession_proof_sign(
+        keypair.as_ref(),
+        &NetworkDefinition::simulator(),
+        validator,
+    )
+    .expect("sign");
+    let (operator, _) = vm_pool_operator();
+    submit_committed(
+        c,
+        build_vm_register_tx(
+            &operator,
+            pool,
+            validator,
+            &keypair.public_key(),
+            &proof,
+            validity_around(c.now()),
+        ),
+    );
 }
 
 /// A `RegisterValidator` event for `dummy_pubkey(seed)` under
@@ -161,23 +207,14 @@ const DELEGATION: u128 = 250_000;
 pub fn register_validator_pools_a_node(c: &mut impl Cluster) {
     warm_up(c);
 
-    // Fund a fresh pool well above min_stake so it can support a validator.
-    let pool = StakePoolId::new(7777);
     let newcomer = ValidatorId::new(1000);
-    submit_action(
+    delegate(
         c,
-        1,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: pool,
-            amount: Stake::from_whole_tokens(10_000_000),
-        },
+        VM_STAKE_POOL,
+        VM_STAKE_POOL_ID,
+        MIN_STAKE_FLOOR.attos() * 10,
     );
-    assert!(
-        c.run_until(epochs(8), |c| pool_total_stake(c, pool).is_some()),
-        "deposit never folded",
-    );
-
-    submit_action(c, 2, &dummy_registration(c, 9, pool, newcomer));
+    register(c, VM_STAKE_POOL, 9, newcomer);
     assert!(
         c.run_until(epochs(8), |c| validator_status(c, newcomer)
             == Some(ValidatorStatus::Pooled)),
@@ -197,29 +234,44 @@ pub fn register_without_capacity_is_rejected(c: &mut impl Cluster) {
 
     // The pool exists but holds less than one min_stake, so it can support no
     // validator — the registration must be rejected on the capacity gate.
-    let pool = StakePoolId::new(8888);
     let newcomer = ValidatorId::new(2000);
-    submit_action(
+    delegate(
         c,
-        1,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: pool,
-            amount: Stake::from_whole_tokens(500_000),
-        },
-    );
-    assert!(
-        c.run_until(epochs(8), |c| pool_total_stake(c, pool).is_some()),
-        "deposit never folded",
+        VM_STAKE_POOL,
+        VM_STAKE_POOL_ID,
+        MIN_STAKE_FLOOR.attos() / 2,
     );
 
-    submit_action(c, 2, &dummy_registration(c, 11, pool, newcomer));
-    // Run long enough that the registration has committed and folded; an
-    // accepted one would surface within a couple of epochs.
+    // The registration itself commits — it is a well-formed action by the
+    // pool's own operator, and what refuses it is the beacon's capacity
+    // gate rather than anything the transaction did wrong.
+    register(c, VM_STAKE_POOL, 11, newcomer);
+    // Run long enough that the registration has folded; an accepted one
+    // would surface within a couple of epochs.
     c.run_until(epochs(5), |_| false);
     assert_eq!(
         validator_status(c, newcomer),
         None,
         "under-capacity registration must not create a validator record",
+    );
+
+    // The control, without which the assertion above is satisfied by a
+    // rail that carries nothing at all: buy the capacity that was
+    // missing and the very next registration takes. A fresh id, because
+    // the refused one is not spent — nothing recorded it — but a pool
+    // that already holds a record for an id refuses to ask again.
+    let funded = ValidatorId::new(2001);
+    delegate(
+        c,
+        VM_STAKE_POOL,
+        VM_STAKE_POOL_ID,
+        MIN_STAKE_FLOOR.attos() * 2,
+    );
+    register(c, VM_STAKE_POOL, 12, funded);
+    assert!(
+        c.run_until(epochs(8), |c| validator_status(c, funded)
+            == Some(ValidatorStatus::Pooled)),
+        "a registration against capacity must take",
     );
 }
 
@@ -417,47 +469,42 @@ pub fn withdrawal_ejects_a_validator_that_a_deposit_reactivates(c: &mut impl Clu
     );
 }
 
-/// Re-registering a live validator id is a no-op: the record keeps its first
-/// key, since the id is dead for the life of the chain.
+/// A validator id another pool already registered is dead: the record
+/// keeps its first key, whoever asks for it next.
+///
+/// The claim needs two pools to state. A pool refuses to register an id
+/// it already holds — the record under its own prefix says it does — so
+/// the only party that can ask for a live id is a pool that has never
+/// seen it, and what refuses *that* is the beacon's rule that an id is
+/// spent for the life of the chain.
 ///
 /// # Panics
 ///
-/// Panics if the first registration never folds, or if the re-registration
+/// Panics if the first registration never folds, or if the second
 /// overwrites the existing record.
 pub fn re_registration_of_a_live_validator_is_a_no_op(c: &mut impl Cluster) {
     warm_up(c);
 
-    let pool = StakePoolId::new(7777);
     let id = ValidatorId::new(1000);
     let first = dummy_pubkey(c, 9);
+    let capacity = MIN_STAKE_FLOOR.attos() * 10;
+    delegate(c, VM_STAKE_POOL, VM_STAKE_POOL_ID, capacity);
+    delegate(c, VM_SECOND_POOL, VM_SECOND_POOL_ID, capacity);
 
-    submit_action(
-        c,
-        1,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: pool,
-            amount: Stake::from_whole_tokens(10_000_000),
-        },
-    );
-    assert!(
-        c.run_until(epochs(8), |c| pool_total_stake(c, pool).is_some()),
-        "deposit never folded",
-    );
-
-    submit_action(c, 2, &dummy_registration(c, 9, pool, id));
+    register(c, VM_STAKE_POOL, 9, id);
     assert!(
         c.run_until(epochs(8), |c| validator_pubkey(c, id) == Some(first)),
         "validator never registered",
     );
 
-    // Re-register the same id with a different key; the id is dead for the life
-    // of the chain, so the record keeps its first key.
-    submit_action(c, 3, &dummy_registration(c, 99, pool, id));
+    // A second pool, funded and with capacity to spare, claims the same
+    // id under a different key. The id is dead, so the record stands.
+    register(c, VM_SECOND_POOL, 99, id);
     c.run_until(epochs(5), |_| false);
     assert_eq!(
         validator_pubkey(c, id),
         Some(first),
-        "re-registration must not overwrite the existing record",
+        "a second pool's claim must not overwrite the existing record",
     );
 }
 
@@ -471,35 +518,25 @@ pub fn re_registration_of_a_live_validator_is_a_no_op(c: &mut impl Cluster) {
 pub fn pool_capacity_caps_registrations(c: &mut impl Cluster) {
     warm_up(c);
 
-    // Fund the pool for exactly three validators at the 1M floor.
-    let pool = StakePoolId::new(7777);
+    // Fund the pool for exactly three validators at the floor.
     let candidates = [
         ValidatorId::new(1000),
         ValidatorId::new(1001),
         ValidatorId::new(1002),
         ValidatorId::new(1003),
     ];
-    submit_action(
+    delegate(
         c,
-        1,
-        &BeaconWitnessEvent::StakeDeposit {
-            pool_id: pool,
-            amount: Stake::from_whole_tokens(3_000_000),
-        },
-    );
-    assert!(
-        c.run_until(epochs(8), |c| pool_total_stake(c, pool).is_some()),
-        "deposit never folded",
+        VM_STAKE_POOL,
+        VM_STAKE_POOL_ID,
+        MIN_STAKE_FLOOR.attos() * 3,
     );
 
-    // Four registrations against capacity three: exactly three take.
+    // Four registrations against capacity three: every one is a valid
+    // action by the pool's own operator, and exactly three take.
     for (i, id) in candidates.iter().enumerate() {
         let offset = u8::try_from(i).expect("candidate index fits u8");
-        submit_action(
-            c,
-            u32::from(offset) + 2,
-            &dummy_registration(c, 20 + offset, pool, *id),
-        );
+        register(c, VM_STAKE_POOL, 20 + offset, *id);
     }
     assert!(
         c.run_until(epochs(8), |c| candidates

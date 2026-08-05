@@ -1131,15 +1131,25 @@ fn vm_delegation_folds_into_beacon_state_sim() {
 
 #[test]
 fn register_validator_pools_a_node_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(4), 0x5EED, &witness_genesis_balances());
+    let mut cluster = SimCluster::with_vm_pools(
+        &witness_config(4),
+        0x5EED,
+        &witness_genesis_balances(),
+        &vm_staking_genesis_accounts(),
+        &vm_staking_pools(),
+    );
     register_validator_pools_a_node(&mut cluster);
 }
 
 #[test]
 fn register_without_capacity_is_rejected_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(4), 0x0CA9, &witness_genesis_balances());
+    let mut cluster = SimCluster::with_vm_pools(
+        &witness_config(4),
+        0x0CA9,
+        &witness_genesis_balances(),
+        &vm_staking_genesis_accounts(),
+        &vm_staking_pools(),
+    );
     register_without_capacity_is_rejected(&mut cluster);
 }
 
@@ -1173,15 +1183,25 @@ fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_sim() {
 
 #[test]
 fn re_registration_of_a_live_validator_is_a_no_op_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(4), 0xDEAD, &witness_genesis_balances());
+    let mut cluster = SimCluster::with_vm_pools(
+        &witness_config(4),
+        0xDEAD,
+        &witness_genesis_balances(),
+        &vm_staking_genesis_accounts(),
+        &vm_staking_pools(),
+    );
     re_registration_of_a_live_validator_is_a_no_op(&mut cluster);
 }
 
 #[test]
 fn pool_capacity_caps_registrations_sim() {
-    let mut cluster =
-        SimCluster::with_balances(&witness_config(4), 0xCA9A, &witness_genesis_balances());
+    let mut cluster = SimCluster::with_vm_pools(
+        &witness_config(4),
+        0xCA9A,
+        &witness_genesis_balances(),
+        &vm_staking_genesis_accounts(),
+        &vm_staking_pools(),
+    );
     pool_capacity_caps_registrations(&mut cluster);
 }
 

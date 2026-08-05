@@ -12,12 +12,13 @@ use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata, encode_tree};
 use hyperscale_engine_vm::genesis::stake_unit;
 use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
-    BeaconWitnessEvent, Ed25519PrivateKey, Epoch, MIN_STAKE_FLOOR, NetworkParams, NodeId,
-    NotarizeOptions, ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId,
-    ShardTrie, StakePoolId, StakePoolSeat, TimestampRange, VmBody, VmSubintentSig, VmTransaction,
-    WeightedTimestamp, build_transfer_tx as build_transfer, ed25519_keypair_from_seed,
-    encode_system_action, routable_from_notarized_v1, sign_and_notarize,
-    sign_and_notarize_with_options, uniform_shard_for_node,
+    BeaconWitnessEvent, ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, Epoch,
+    MIN_STAKE_FLOOR, NetworkParams, NodeId, NotarizeOptions, ParamProposal, ParamVote,
+    ReshapeThresholds, RoutableTransaction, ShardId, ShardTrie, StakePoolId, StakePoolSeat,
+    TimestampRange, ValidatorId, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
+    build_transfer_tx as build_transfer, ed25519_keypair_from_seed, encode_system_action,
+    routable_from_notarized_v1, sign_and_notarize, sign_and_notarize_with_options,
+    uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -1164,14 +1165,82 @@ pub fn vm_staking_genesis_accounts() -> Vec<([u8; 16], u128)> {
     ]
 }
 
+/// A second seated pool, for the scenarios whose claim needs two pools
+/// that disagree.
+pub const VM_SECOND_POOL: [u8; 16] = [0x51; 16];
+
+/// The identifier the beacon folds [`VM_SECOND_POOL`] under.
+pub const VM_SECOND_POOL_ID: StakePoolId = StakePoolId::new(7778);
+
 /// The pools a staking cluster seats.
+///
+/// Both name the same operator, which is an entity running two pools
+/// rather than a shortcut: what a pool's operator field admits is
+/// exercised where it can be isolated, and here the interesting question
+/// is what two *pools* may say about each other.
 #[must_use]
 pub fn vm_staking_pools() -> Vec<StakePoolSeat> {
-    vec![StakePoolSeat {
-        address: VM_STAKE_POOL,
-        id: VM_STAKE_POOL_ID,
-        operator: vm_pool_operator().1,
-    }]
+    let operator = vm_pool_operator().1;
+    vec![
+        StakePoolSeat {
+            address: VM_STAKE_POOL,
+            id: VM_STAKE_POOL_ID,
+            operator,
+        },
+        StakePoolSeat {
+            address: VM_SECOND_POOL,
+            id: VM_SECOND_POOL_ID,
+            operator,
+        },
+    ]
+}
+
+/// Register `validator` against `pool`, carrying the consensus key it
+/// will be known by and the proof it holds that key.
+///
+/// Signed by the pool's operator, which is the whole of the action's
+/// authority: the manifest names a method only that principal may call,
+/// and admission refuses the envelope otherwise.
+#[must_use]
+pub fn build_vm_register_tx(
+    operator: &Ed25519PrivateKey,
+    pool: [u8; 16],
+    validator: ValidatorId,
+    pubkey: &ConsensusPublicKey,
+    possession_proof: &ConsensusSignature,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    build_vm_operator_tx(
+        operator,
+        pool,
+        "register-validator",
+        vec![
+            GraphArg::Literal(Value::U64(validator.inner())),
+            GraphArg::Literal(Value::Bytes(pubkey.as_bytes().to_vec())),
+            GraphArg::Literal(Value::Bytes(possession_proof.as_bytes().to_vec())),
+        ],
+        validity,
+    )
+}
+
+/// One operator action on `pool`: a single node, no funds, and the
+/// operator's own signature as its authority.
+#[must_use]
+pub fn build_vm_operator_tx(
+    operator: &Ed25519PrivateKey,
+    pool: [u8; 16],
+    method: &str,
+    args: Vec<GraphArg>,
+    validity: TimestampRange,
+) -> RoutableTransaction {
+    let graph = ManifestGraph {
+        nodes: vec![GraphNode {
+            target: Address(pool),
+            method: method.into(),
+            args,
+        }],
+    };
+    RoutableTransaction::new_vm(vm_envelope(graph, operator, validity))
 }
 
 /// Return `amount` worth of stake units to `pool`, moving that much of
