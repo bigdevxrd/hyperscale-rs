@@ -24,6 +24,8 @@ The mempool (`MempoolCoordinator`) admits transactions into a hash-ordered pool 
 
 An in-flight cap (`MAX_TX_IN_FLIGHT`) bounds the total lock-holding population, providing backpressure.
 
+**Authorization is admission's business.** A VM manifest node names its target by address, and an address is public — naming one is evidence of nothing. Each method a package publishes declares whether reaching it requires the target's own authority: `deposit` does not, because being paid is not a decision the recipient makes, while `withdraw` and the entropy stamp do, because spending an account's funds and writing its leaves are. A gated node is well-formed only inside an intent its target signed — the composer's account for a root-intent node, the declared signer's for a subintent node — so moving a second party's funds takes a subintent that party signed, and an ordinary transfer still settles under the sender's single signature (INV-VM-12). The verdict reads only signed content and content-addressed package metadata, never state, so it sits beside the rest of derivation, ahead of ordering and ahead of any fee exposure: an envelope that fails it never enters a block and nobody pays for it. Accessibility is a declaration the package makes about its own methods, carried in the metadata section its content address covers, so no transaction can weaken it and every shard reads the same one.
+
 ## 2. Provision: proven state transfer
 
 When a source shard commits a block containing cross-shard transactions, its proposer broadcasts **`Provisions`** to each destination shard — one bundle per (source block, destination shard):
@@ -98,4 +100,4 @@ Any deviation lands in an abort path whose verdict both sides compute identicall
 
 ## 8. Properties
 
-The atomic-commitment invariants this document motivates — INV-EXEC-1 through INV-EXEC-10 — are stated precisely in [08-invariants.md](08-invariants.md).
+The atomic-commitment invariants this document motivates — INV-EXEC-1 through INV-EXEC-10, and the VM's target-authority rule INV-VM-12 — are stated precisely in [08-invariants.md](08-invariants.md).
