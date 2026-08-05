@@ -9,7 +9,6 @@
 //!   (private helpers used by [`constructors`]).
 //! - [`notarize`]: helpers for signing and notarizing a `TransactionManifestV1`.
 //! - [`limits`]: per-transaction wire-limit constants.
-//! - [`system_action`]: beacon actions carried in a transaction's plaintext message.
 //! - [`transfer`]: the XRD transfer manifest every client sends.
 
 pub mod constructors;
@@ -19,6 +18,5 @@ mod manifest_analysis;
 pub mod notarize;
 pub mod routable;
 pub mod status;
-pub mod system_action;
 pub mod transfer;
 pub mod vm;

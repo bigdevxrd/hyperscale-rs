@@ -214,10 +214,6 @@ pub use transaction::routable::{
 pub use transaction::status::{
     TransactionDecision, TransactionError, TransactionStatus, TransactionStatusParseError,
 };
-pub use transaction::system_action::{
-    SYSTEM_ACTION_TAG, decode_system_action, encode_system_action, plaintext_message_bytes,
-    system_action,
-};
 pub use transaction::transfer::{build_fan_out_transfer_tx, build_transfer_tx};
 pub use transaction::vm::{
     MAX_VM_MESSAGE_LEN, VmBody, VmDerived, VmRouting, VmStatics, VmStaticsError, VmSubintentSig,
