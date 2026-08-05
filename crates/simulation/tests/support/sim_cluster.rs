@@ -30,7 +30,7 @@ use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, ReshapeThresholds,
-    RoutableTransaction, ShardId, Signer, StakePoolId, StateRoot, TransactionDecision,
+    RoutableTransaction, ShardId, Signer, StakePoolSeat, StateRoot, TransactionDecision,
     TransactionStatus, TxHash, ValidatorId, VmEvent,
 };
 use radix_common::math::Decimal;
@@ -58,7 +58,7 @@ struct BuildArgs<'a> {
     share_declared_reads: bool,
     vm_accounts: &'a [([u8; 16], u128)],
     vm_execution_mode: ExecutionMode,
-    vm_pools: &'a [([u8; 16], StakePoolId)],
+    vm_pools: &'a [StakePoolSeat],
 }
 
 /// The simulation adaptor: a [`Cluster`] over a [`SimulationRunner`].
@@ -163,7 +163,7 @@ impl SimCluster {
         seed: u64,
         balances: &[(ComponentAddress, Decimal)],
         vm_accounts: &[([u8; 16], u128)],
-        vm_pools: &[([u8; 16], StakePoolId)],
+        vm_pools: &[StakePoolSeat],
     ) -> Self {
         Self::build_full(&BuildArgs {
             config,

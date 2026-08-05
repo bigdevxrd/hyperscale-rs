@@ -18,8 +18,8 @@ use hyperscale_engine_vm::{ExecutionMode, VM_XRD, VmExecutor, vm_genesis_updates
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, SubstateDatabase};
 use hyperscale_types::{
     BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, Hash, RevealChain,
-    RoutableTransaction, ShardId, ShardTrie, Stake, StakePoolId, Verified, VmBody, VmTransaction,
-    WeightedTimestamp,
+    RoutableTransaction, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, Verified, VmBody,
+    VmTransaction, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -36,6 +36,10 @@ const IMPOSTOR: [u8; 16] = [0x51; 16];
 const POOL_ID: u32 = 7;
 /// The delegator's signing seed.
 const DELEGATOR: u8 = 7;
+/// The signing seed of the principal `POOL`'s operator surface admits.
+const OPERATOR: u8 = 8;
+/// The signing seed of a funded account that operates nothing.
+const OUTSIDER: u8 = 9;
 
 /// A snapshot over the flattened genesis updates.
 struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
@@ -88,14 +92,34 @@ impl SubstateDatabase for MapDb {
     }
 }
 
+fn key_of(seed: u8) -> Ed25519PrivateKey {
+    Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap()
+}
+
+fn account_of(seed: u8) -> [u8; 16] {
+    vm_account_address(&key_of(seed).public_key().0)
+}
+
 fn delegator() -> [u8; 16] {
-    let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
-    vm_account_address(&key.public_key().0)
+    account_of(DELEGATOR)
 }
 
 /// Every address any test in this binary transacts with, pools included.
 fn world_accounts() -> Vec<([u8; 16], u128)> {
-    vec![(delegator(), 10_000)]
+    vec![
+        (delegator(), 10_000),
+        (account_of(OPERATOR), 10_000),
+        (account_of(OUTSIDER), 10_000),
+    ]
+}
+
+/// A pool seat and the principal its operator surface admits.
+fn seat(address: [u8; 16], id: u32) -> StakePoolSeat {
+    StakePoolSeat {
+        address,
+        id: StakePoolId::new(id),
+        operator: account_of(OPERATOR),
+    }
 }
 
 fn withdraw(target: [u8; 16], resource: Address, amount: u128) -> GraphNode {
@@ -200,10 +224,7 @@ fn witnesses(executed: &ExecutedTx) -> Vec<BeaconWitnessEvent> {
 fn a_delegation_to_a_seated_pool_reaches_the_witness_channel() {
     let executor = VmExecutor::with_pools(
         &world_accounts(),
-        &[
-            (POOL, StakePoolId::new(POOL_ID)),
-            (IMPOSTOR, StakePoolId::new(99)),
-        ],
+        &[seat(POOL, POOL_ID), seat(IMPOSTOR, 99)],
         ExecutionMode::Serial,
     );
     let executed = execute(&executor, signed_stake(POOL, 500));
@@ -223,7 +244,7 @@ fn a_delegation_to_a_seated_pool_reaches_the_witness_channel() {
 fn an_unseated_instance_of_the_same_package_reaches_nobody() {
     let executor = VmExecutor::with_pools(
         &world_accounts(),
-        &[(POOL, StakePoolId::new(POOL_ID))],
+        &[seat(POOL, POOL_ID)],
         ExecutionMode::Serial,
     );
     // `IMPOSTOR` is not in the pool set, so it was never registered as an
@@ -244,7 +265,7 @@ fn an_unseated_instance_of_the_same_package_reaches_nobody() {
 fn an_ordinary_transfer_is_not_a_beacon_fact() {
     let executor = VmExecutor::with_pools(
         &world_accounts(),
-        &[(POOL, StakePoolId::new(POOL_ID))],
+        &[seat(POOL, POOL_ID)],
         ExecutionMode::Serial,
     );
     let key = Ed25519PrivateKey::from_bytes(&[DELEGATOR; 32]).unwrap();
@@ -287,4 +308,87 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
         witnesses(&executed[0]).is_empty(),
         "an account's own events are not the beacon's business",
     );
+}
+
+/// `pool.register-validator(id, pubkey, proof)`, signed and paid for by
+/// `seed` whatever the pool's configuration says.
+fn signed_registration(pool: [u8; 16], seed: u8) -> RoutableTransaction {
+    let key = key_of(seed);
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph: ManifestGraph {
+                nodes: vec![GraphNode {
+                    target: Address(pool),
+                    method: "register-validator".into(),
+                    args: vec![
+                        GraphArg::Literal(Value::U64(11)),
+                        GraphArg::Literal(Value::Bytes(vec![0xC1; 48])),
+                        GraphArg::Literal(Value::Bytes(vec![0xC2; 96])),
+                    ],
+                }],
+            },
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    RoutableTransaction::new_vm(
+        VmTransaction {
+            body: VmBody::Call(encode_tree(&tree).into()),
+            subintent_sigs: Vec::new(),
+            fee_payer: account_of(seed),
+            max_fee: 1_000,
+            gas_limit: 1_000_000,
+            validity_start_ms: 0,
+            validity_end_ms: u64::MAX,
+            message: Vec::new().into(),
+            signer: [0; 32],
+            signature: [0; 64],
+        }
+        .sign(&key),
+    )
+}
+
+/// A pool instance is owned by nobody, so its own authority is
+/// unsatisfiable and the surface would be uncallable if it asked for one.
+/// It names a principal its configuration carries instead, and only that
+/// principal's signature reaches it.
+#[test]
+fn only_the_configured_operator_may_register_a_validator() {
+    let _ = VmExecutor::with_pools(
+        &world_accounts(),
+        &[seat(POOL, POOL_ID)],
+        ExecutionMode::Serial,
+    );
+
+    let outsider = signed_registration(POOL, OUTSIDER);
+    assert!(outsider.vm().expect("a VM envelope").signature_is_valid());
+    let refused = outsider
+        .try_vm_derived()
+        .expect_err("an outsider's registration refuses");
+    assert!(refused.0.contains("register-validator"), "{}", refused.0);
+    assert!(
+        refused.0.contains("authority"),
+        "the refusal names its reason: {}",
+        refused.0
+    );
+
+    // The control: the same manifest, the same fee, one signature
+    // different. What bites is whose key signed it and not the shape.
+    assert!(
+        signed_registration(POOL, OPERATOR).try_vm_derived().is_ok(),
+        "the configured operator's own registration admits",
+    );
+}
+
+/// The delegation surface is unmoved: `stake` supplies its own authority
+/// in the funds it carries, so anyone may delegate to any seated pool.
+#[test]
+fn a_delegation_needs_no_operator() {
+    let _ = VmExecutor::with_pools(
+        &world_accounts(),
+        &[seat(POOL, POOL_ID)],
+        ExecutionMode::Serial,
+    );
+    assert!(signed_stake(POOL, 500).try_vm_derived().is_ok());
 }

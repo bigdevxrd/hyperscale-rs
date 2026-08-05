@@ -462,8 +462,8 @@ impl BridgeStatics {
     }
 }
 
-/// Refuse a node whose target's method requires that target's own
-/// authority unless the intent that carries the node is the target's own.
+/// Refuse a node whose target's method admits a principal the intent
+/// carrying the node is not.
 ///
 /// One authority per intent: the composer's account covers the root
 /// intent's nodes, and a subintent's declared signer covers its own.
@@ -479,16 +479,20 @@ impl BridgeStatics {
 /// content: no state read, no rule evaluation, and a refusal that costs
 /// the sender nothing because the transaction never enters a block.
 ///
-/// An account's address *is* the hash of the key that owns it, so the
-/// target's own signature is the only satisfier the rule could have. A
-/// gated method on a target no key derives — a component instance, say —
-/// is therefore uncallable rather than open, which is the safe direction
-/// for the degenerate case to fall.
+/// A method may name its principal two ways, and both resolve here
+/// against content that cannot change after the target exists. The
+/// target's own authority is satisfiable only by the key its address
+/// derives from, so a gated method on a target no key derives — a
+/// component instance, say — is uncallable rather than open. A method
+/// naming a configuration field reaches a principal the instance was
+/// created with, which is how an object nobody owns admits somebody at
+/// all; a field that holds no address names nobody, and the method is
+/// uncallable for the same reason. Both fall the safe way.
 ///
 /// # Errors
 ///
-/// [`VmStaticsError`] naming the first node whose target the envelope
-/// does not reach.
+/// [`VmStaticsError`] naming the first node whose principal the envelope
+/// does not carry.
 pub fn check_target_authority(
     tree: &EnvelopeTree,
     composer: Address,
@@ -505,16 +509,26 @@ pub fn check_target_authority(
         for (position, node) in decl.graph.nodes.iter().enumerate() {
             // A target that resolves to nothing is admission's refusal to
             // make, and admission makes it.
-            let Some(signature) = instances
-                .get(node.target)
-                .and_then(|meta| packages.get(meta.package))
+            let Some(meta) = instances.get(node.target) else {
+                continue;
+            };
+            let Some(signature) = packages
+                .get(meta.package)
                 .and_then(|package| package.methods.get(&node.method))
             else {
                 continue;
             };
-            if signature.accessibility != Accessibility::RequiresTargetAuth
-                || node.target == authority
-            {
+            let admits = match signature.accessibility {
+                Accessibility::Public => continue,
+                Accessibility::RequiresTargetAuth => Some(node.target),
+                Accessibility::RequiresConfiguredAuth(field) => {
+                    match meta.config.get(field as usize) {
+                        Some(Value::Address(principal)) => Some(*principal),
+                        _ => None,
+                    }
+                }
+            };
+            if admits == Some(authority) {
                 continue;
             }
             let intent = subintent.map_or_else(
@@ -522,8 +536,8 @@ pub fn check_target_authority(
                 |index| format!("subintent {index}"),
             );
             return Err(VmStaticsError(format!(
-                "{intent} node {position} calls `{}` on an account whose authority the envelope \
-                 does not carry",
+                "{intent} node {position} calls `{}`, which admits an authority the envelope does \
+                 not carry",
                 node.method
             )));
         }

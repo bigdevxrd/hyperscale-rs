@@ -34,8 +34,9 @@ use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates, Su
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, EventRoot, ExecutionMetadata,
-    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, RoutableTransaction, StakePoolId,
-    SubstateEntry, TxHash, Verified, VmEvent, compute_merkle_root, install_vm_statics,
+    FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, RoutableTransaction,
+    StakePoolSeat, SubstateEntry, TxHash, Verified, VmEvent, compute_merkle_root,
+    install_vm_statics,
 };
 use hyperscale_vm_effects::{
     Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
@@ -183,7 +184,7 @@ impl VmExecutor {
     #[must_use]
     pub fn with_pools(
         accounts: &[([u8; 16], u128)],
-        pools: &[([u8; 16], StakePoolId)],
+        pools: &[StakePoolSeat],
         mode: ExecutionMode,
     ) -> Self {
         let world = genesis_world_with_pools(accounts, pools);

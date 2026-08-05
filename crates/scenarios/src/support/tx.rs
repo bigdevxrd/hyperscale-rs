@@ -14,10 +14,10 @@ use hyperscale_engine_vm::{VM_XRD, vm_account_address};
 use hyperscale_types::{
     BeaconWitnessEvent, Ed25519PrivateKey, Epoch, NetworkParams, NodeId, NotarizeOptions,
     ParamProposal, ParamVote, ReshapeThresholds, RoutableTransaction, ShardId, ShardTrie,
-    StakePoolId, TimestampRange, VmBody, VmSubintentSig, VmTransaction, WeightedTimestamp,
-    build_transfer_tx as build_transfer, ed25519_keypair_from_seed, encode_system_action,
-    routable_from_notarized_v1, sign_and_notarize, sign_and_notarize_with_options,
-    uniform_shard_for_node,
+    StakePoolId, StakePoolSeat, TimestampRange, VmBody, VmSubintentSig, VmTransaction,
+    WeightedTimestamp, build_transfer_tx as build_transfer, ed25519_keypair_from_seed,
+    encode_system_action, routable_from_notarized_v1, sign_and_notarize,
+    sign_and_notarize_with_options, uniform_shard_for_node,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -1044,7 +1044,7 @@ pub fn vm_world_accounts() -> Vec<([u8; 16], u128)> {
 /// and a pool nobody delegates to emits nothing, so recognising one
 /// everywhere costs a registry entry.
 #[must_use]
-pub fn vm_world_pools() -> Vec<([u8; 16], StakePoolId)> {
+pub fn vm_world_pools() -> Vec<StakePoolSeat> {
     vm_staking_pools()
 }
 
@@ -1151,8 +1151,21 @@ pub fn vm_staking_genesis_accounts() -> Vec<([u8; 16], u128)> {
 
 /// The pools a staking cluster seats.
 #[must_use]
-pub fn vm_staking_pools() -> Vec<([u8; 16], StakePoolId)> {
-    vec![(VM_STAKE_POOL, VM_STAKE_POOL_ID)]
+pub fn vm_staking_pools() -> Vec<StakePoolSeat> {
+    vec![StakePoolSeat {
+        address: VM_STAKE_POOL,
+        id: VM_STAKE_POOL_ID,
+        operator: vm_pool_operator().1,
+    }]
+}
+
+/// The principal the staking scenario's pool admits on its operator
+/// surface, and the key that satisfies it.
+#[must_use]
+pub fn vm_pool_operator() -> (Ed25519PrivateKey, [u8; 16]) {
+    let key = signer_from_seed(181);
+    let account = vm_account_address(&key.public_key().0);
+    (key, account)
 }
 
 /// Build a delegation: withdraw `amount` from the delegator's native

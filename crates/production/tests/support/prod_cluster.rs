@@ -22,7 +22,7 @@ use hyperscale_scenarios::{
 };
 use hyperscale_types::{
     BeaconChainConfig, BeaconState, BlockHeight, ReshapeThresholds, RoutableTransaction, ShardId,
-    StakePoolId, StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
+    StakePoolSeat, StateRoot, TransactionDecision, TransactionStatus, TxHash, ValidatorId,
 };
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
@@ -45,7 +45,7 @@ struct StartArgs<'a> {
     epoch_ms: u64,
     balances: Vec<(ComponentAddress, Decimal)>,
     vm_accounts: Vec<([u8; 16], u128)>,
-    vm_pools: Vec<([u8; 16], StakePoolId)>,
+    vm_pools: Vec<StakePoolSeat>,
 }
 
 /// The production adaptor: a [`Cluster`] over the real QUIC + `RocksDB` harness.
@@ -112,7 +112,7 @@ impl ProdCluster {
         epoch_ms: u64,
         balances: Vec<(ComponentAddress, Decimal)>,
         vm_accounts: Vec<([u8; 16], u128)>,
-        vm_pools: Vec<([u8; 16], StakePoolId)>,
+        vm_pools: Vec<StakePoolSeat>,
     ) -> Self {
         Self::start_full(&StartArgs {
             config,

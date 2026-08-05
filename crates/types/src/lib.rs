@@ -94,7 +94,7 @@ pub use primitives::hash_kinds::{
 pub use primitives::identifiers::{
     Attempt, BeaconWitnessLeafCount, BlockHeight, Epoch, HeaderFetchCount, InFlightCount,
     LeafIndex, NodeId, PartitionNumber, RatifyRound, Round, ShardId, SpcView, Stake, StakePoolId,
-    ValidatorId, VoteCount,
+    StakePoolSeat, ValidatorId, VoteCount,
 };
 pub use primitives::merkle::{
     compute_merkle_root, compute_merkle_root_with_proof, compute_range_proof,

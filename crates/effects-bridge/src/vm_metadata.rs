@@ -152,6 +152,7 @@ enum WireAbiParam {
 enum WireAccessibility {
     Public,
     RequiresTargetAuth,
+    RequiresConfiguredAuth(u32),
 }
 
 /// Wire mirror of [`MethodSignature`], carrying the name it is filed
@@ -316,6 +317,9 @@ const fn wire_accessibility(accessibility: Accessibility) -> WireAccessibility {
     match accessibility {
         Accessibility::Public => WireAccessibility::Public,
         Accessibility::RequiresTargetAuth => WireAccessibility::RequiresTargetAuth,
+        Accessibility::RequiresConfiguredAuth(field) => {
+            WireAccessibility::RequiresConfiguredAuth(field)
+        }
     }
 }
 
@@ -323,6 +327,9 @@ const fn accessibility(wire: WireAccessibility) -> Accessibility {
     match wire {
         WireAccessibility::Public => Accessibility::Public,
         WireAccessibility::RequiresTargetAuth => Accessibility::RequiresTargetAuth,
+        WireAccessibility::RequiresConfiguredAuth(field) => {
+            Accessibility::RequiresConfiguredAuth(field)
+        }
     }
 }
 

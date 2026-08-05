@@ -12,7 +12,7 @@ use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
 use hyperscale_effects_bridge::{PoolRegistry, ProtocolHasher, admit_package, attach_metadata};
 pub use hyperscale_effects_bridge::{VM_XRD, entropy_key, vault_key};
 use hyperscale_storage::{DatabaseUpdate, DbSortKey, PartitionDatabaseUpdates};
-use hyperscale_types::StakePoolId;
+use hyperscale_types::StakePoolSeat;
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_vm_effects::{
     Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, Value, package_hash,
@@ -113,10 +113,7 @@ pub fn genesis_world(accounts: &[([u8; 16], u128)]) -> VmWorld {
 /// Panics if a stdlib artifact would not be admissible as a published
 /// package — a build defect, not a runtime condition.
 #[must_use]
-pub fn genesis_world_with_pools(
-    accounts: &[([u8; 16], u128)],
-    pools: &[([u8; 16], StakePoolId)],
-) -> VmWorld {
+pub fn genesis_world_with_pools(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> VmWorld {
     let artifact = account_artifact();
     let account_package = package_hash(&ProtocolHasher, artifact);
     let metadata =
@@ -143,18 +140,23 @@ pub fn genesis_world_with_pools(
         );
     }
     let mut registry = PoolRegistry::new();
-    for (address, id) in pools {
+    for seat in pools {
         instances.register(
-            Address(*address),
+            Address(seat.address),
             InstanceMeta {
                 package: staking_package,
-                // The resource a delegation is denominated in, and the one
-                // the pool issues against it. The pool's own identity is
-                // its address, so nothing here names it.
-                config: vec![Value::Address(VM_XRD), Value::Address(stake_unit(*address))],
+                // The resource a delegation is denominated in, the one the
+                // pool issues against it, and the principal its operator
+                // surface admits. The pool's own identity is its address,
+                // so nothing here names it.
+                config: vec![
+                    Value::Address(VM_XRD),
+                    Value::Address(stake_unit(seat.address)),
+                    Value::Address(Address(seat.operator)),
+                ],
             },
         );
-        registry.register(*address, *id);
+        registry.register(seat.address, seat.id);
     }
     VmWorld {
         cache,

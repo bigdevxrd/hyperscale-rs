@@ -492,6 +492,27 @@ impl Display for StakePoolId {
     }
 }
 
+/// A stake pool the network seats: the VM instance whose events it reads
+/// as beacon facts, the identifier it folds them under, and the principal
+/// its operator surface admits.
+///
+/// Seating one is a governance act — admitting a pool is admitting a new
+/// source of beacon facts — so the whole seat is fixed where the network
+/// is defined rather than assembled from anything a transaction can
+/// reach. The two addresses are different kinds of thing and easy to
+/// confuse: `address` derives from no key and is the pool's identity,
+/// while `operator` derives from one and is the only satisfier of the
+/// pool's validator surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, BasicSbor)]
+pub struct StakePoolSeat {
+    /// The pool instance's owner prefix.
+    pub address: [u8; 16],
+    /// The identifier the beacon folds this pool's facts under.
+    pub id: StakePoolId,
+    /// The account whose signature the pool's operator methods admit.
+    pub operator: [u8; 16],
+}
+
 /// Position in a shard's monotonic beacon-witness accumulator.
 ///
 /// Stable across the shard's lifetime — leaf `N` is leaf `N` forever.

@@ -58,7 +58,7 @@ use hyperscale_storage::{BeaconStorage, ShardChainReader};
 use hyperscale_storage_rocksdb::{RocksDbShardStorage, SharedStorage};
 use hyperscale_types::{
     BeaconChainConfig, BlockHeight, GenesisValidators, InFlightCount, LocalTimestamp,
-    MAX_TX_IN_FLIGHT, RoutableTransaction, ShardId, Signer, StakePoolId, ValidatorId,
+    MAX_TX_IN_FLIGHT, RoutableTransaction, ShardId, Signer, StakePoolSeat, ValidatorId,
     ValidatorStatus, Verifier,
 };
 use libp2p::identity::Keypair;
@@ -213,7 +213,7 @@ pub struct ProductionRunnerBuilder {
     vm_world_accounts: Vec<([u8; 16], u128)>,
     /// Pool instances the process-wide statics seat, when that set must be
     /// wider than this cluster's own genesis seating.
-    vm_world_pools: Vec<([u8; 16], StakePoolId)>,
+    vm_world_pools: Vec<StakePoolSeat>,
     /// Radix network definition for transaction validation.
     /// Defaults to simulator network if not set.
     network_definition: Option<NetworkDefinition>,
@@ -370,7 +370,7 @@ impl ProductionRunnerBuilder {
     /// nobody delegates to emits nothing, so recognising one everywhere
     /// costs a registry entry.
     #[must_use]
-    pub fn vm_world_pools(mut self, pools: Vec<([u8; 16], StakePoolId)>) -> Self {
+    pub fn vm_world_pools(mut self, pools: Vec<StakePoolSeat>) -> Self {
         self.vm_world_pools = pools;
         self
     }

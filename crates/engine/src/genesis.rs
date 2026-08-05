@@ -12,7 +12,7 @@
 //! should always go through [`crate::prepared_genesis`] for caching;
 //! direct `bootstrap` calls bypass it and pay the ~2.5s cost every time.
 
-use hyperscale_types::StakePoolId;
+use hyperscale_types::StakePoolSeat;
 use radix_common::math::Decimal;
 use radix_common::network::NetworkDefinition;
 use radix_common::prelude::Epoch;
@@ -70,7 +70,7 @@ pub struct GenesisConfig {
     /// package instances in the process's VM statics, which is what makes
     /// their emitted events beacon facts — running the package never
     /// does, because anyone may run the package.
-    pub vm_pools: Vec<([u8; 16], StakePoolId)>,
+    pub vm_pools: Vec<StakePoolSeat>,
 }
 
 impl GenesisConfig {
