@@ -82,8 +82,11 @@ pub enum ShardWitnessPayload {
     },
     /// The pool operator deactivates one of their validator nodes.
     /// Transitions the validator out of any active role; if currently
-    /// on a shard, frees the epoch for a pool draw.
+    /// on a shard, frees the epoch for a pool draw. Dropped unless the
+    /// named validator belongs to `pool_id`.
     DeactivateValidator {
+        /// Pool speaking, and the one the validator must belong to.
+        pool_id: StakePoolId,
         /// Validator being deactivated.
         validator_id: ValidatorId,
     },
@@ -92,8 +95,11 @@ pub enum ShardWitnessPayload {
     /// the cooldown has elapsed, and the pool can still support the
     /// additional active epoch at the current dynamic `min_stake`,
     /// transition back to the pool. Otherwise silently dropped.
-    /// A revoked key is never restored.
+    /// A revoked key is never restored. Dropped unless the named
+    /// validator belongs to `pool_id`.
     Unjail {
+        /// Pool speaking, and the one the validator must belong to.
+        pool_id: StakePoolId,
         /// Validator requesting unjail.
         id: ValidatorId,
     },
@@ -229,11 +235,15 @@ pub enum BeaconWitnessEvent {
     },
     /// Mirrors [`ShardWitnessPayload::DeactivateValidator`].
     DeactivateValidator {
+        /// Pool speaking, and the one the validator must belong to.
+        pool_id: StakePoolId,
         /// Validator being deactivated.
         validator_id: ValidatorId,
     },
     /// Mirrors [`ShardWitnessPayload::Unjail`].
     Unjail {
+        /// Pool speaking, and the one the validator must belong to.
+        pool_id: StakePoolId,
         /// Validator requesting unjail.
         id: ValidatorId,
     },
@@ -261,10 +271,14 @@ impl From<BeaconWitnessEvent> for ShardWitnessPayload {
                 pubkey,
                 possession_proof,
             },
-            BeaconWitnessEvent::DeactivateValidator { validator_id } => {
-                Self::DeactivateValidator { validator_id }
-            }
-            BeaconWitnessEvent::Unjail { id } => Self::Unjail { id },
+            BeaconWitnessEvent::DeactivateValidator {
+                pool_id,
+                validator_id,
+            } => Self::DeactivateValidator {
+                pool_id,
+                validator_id,
+            },
+            BeaconWitnessEvent::Unjail { pool_id, id } => Self::Unjail { pool_id, id },
             BeaconWitnessEvent::ParamVote(vote) => Self::ParamVote(vote),
         }
     }
@@ -307,9 +321,11 @@ mod tests {
                 possession_proof: ConsensusSignature::new([0xAB; 96]),
             },
             ShardWitnessPayload::DeactivateValidator {
+                pool_id: StakePoolId::new(3),
                 validator_id: ValidatorId::new(8),
             },
             ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(3),
                 id: ValidatorId::new(10),
             },
             ShardWitnessPayload::Ready {
@@ -358,9 +374,11 @@ mod tests {
                 possession_proof: ConsensusSignature::new([0xCD; 96]),
             },
             BeaconWitnessEvent::DeactivateValidator {
+                pool_id: StakePoolId::new(3),
                 validator_id: ValidatorId::new(8),
             },
             BeaconWitnessEvent::Unjail {
+                pool_id: StakePoolId::new(3),
                 id: ValidatorId::new(10),
             },
             BeaconWitnessEvent::ParamVote(sample_param_vote()),
@@ -417,17 +435,21 @@ mod tests {
             ),
             (
                 BeaconWitnessEvent::DeactivateValidator {
+                    pool_id: StakePoolId::new(3),
                     validator_id: ValidatorId::new(8),
                 },
                 ShardWitnessPayload::DeactivateValidator {
+                    pool_id: StakePoolId::new(3),
                     validator_id: ValidatorId::new(8),
                 },
             ),
             (
                 BeaconWitnessEvent::Unjail {
+                    pool_id: StakePoolId::new(3),
                     id: ValidatorId::new(10),
                 },
                 ShardWitnessPayload::Unjail {
+                    pool_id: StakePoolId::new(3),
                     id: ValidatorId::new(10),
                 },
             ),

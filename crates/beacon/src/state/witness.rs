@@ -297,7 +297,10 @@ pub(super) fn apply_shard_payload(
                 .insert(*validator_id);
             Some(HostEvent::Registered(*validator_id))
         }
-        ShardWitnessPayload::DeactivateValidator { validator_id } => {
+        ShardWitnessPayload::DeactivateValidator {
+            pool_id,
+            validator_id,
+        } => {
             // Operator-initiated retirement. Flips to
             // `InsufficientStake` from every status except those that
             // already represent "not consuming an epoch" or "permanently
@@ -307,6 +310,15 @@ pub(super) fn apply_shard_payload(
             // deactivated — the operator chooses to retire a jailed
             // validator rather than wait out the cooldown.
             let rec = state.validators.get(validator_id)?;
+            // A pool speaks only about its own validators. The witness
+            // names its emitting pool, which the shard derived from the
+            // emitter rather than from anything the payload chose, so
+            // this is the beacon end of a binding the lift cannot make:
+            // the shard that emits has no view of which pool owns a
+            // validator, and this does.
+            if rec.pool != *pool_id {
+                return None;
+            }
             let should_deactivate = !matches!(
                 rec.status,
                 ValidatorStatus::InsufficientStake | ValidatorStatus::Revoked { .. }
@@ -317,7 +329,7 @@ pub(super) fn apply_shard_payload(
             deactivate_to_insufficient_stake(state, *validator_id);
             Some(HostEvent::Deactivated(*validator_id))
         }
-        ShardWitnessPayload::Unjail { id } => {
+        ShardWitnessPayload::Unjail { pool_id, id } => {
             // Every jail returns to `Pooled` once its cooldown has
             // elapsed AND the pool can still support the additional
             // active epoch at the current dynamic `min_stake`. A pool
@@ -330,6 +342,11 @@ pub(super) fn apply_shard_payload(
             // where a plain performance jail lifts after the short
             // fixed cooldown.
             let rec = state.validators.get(id)?;
+            // Same binding as a deactivation: the lift stamps the pool
+            // and the fold checks the validator is that pool's.
+            if rec.pool != *pool_id {
+                return None;
+            }
             let ValidatorStatus::Jailed {
                 since_epoch,
                 reason,
@@ -344,8 +361,7 @@ pub(super) fn apply_shard_payload(
             if state.current_epoch.inner() < since_epoch.inner().saturating_add(cooldown) {
                 return None;
             }
-            let pool_id = rec.pool;
-            let pool = state.pools.get(&pool_id)?;
+            let pool = state.pools.get(pool_id)?;
             if pool.conviction.is_some() {
                 return None;
             }
@@ -1027,6 +1043,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(10),
             }],
         );
@@ -1050,6 +1067,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::DeactivateValidator {
+                pool_id: StakePoolId::new(0),
                 validator_id: target,
             }],
         );
@@ -1362,6 +1380,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::DeactivateValidator {
+                pool_id: StakePoolId::new(0),
                 validator_id: ValidatorId::new(0),
             }],
         );
@@ -1375,6 +1394,75 @@ mod tests {
         assert_eq!(members.len(), 4);
         assert!(!members.contains(&ValidatorId::new(0)));
         assert!(members.contains(&ValidatorId::new(4)));
+    }
+
+    /// A pool speaks only about its own validators.
+    ///
+    /// The witness names the pool that emitted it, stamped by the shard
+    /// from the emitting instance rather than taken from a payload, so a
+    /// contract cannot claim another pool's. What it can do is name
+    /// someone else's validator — and that is refused here, because the
+    /// shard that emitted has no view of who operates whom and this does.
+    #[test]
+    fn an_operator_action_naming_another_pools_validator_is_a_no_op() {
+        let mut state = single_pool_state(4);
+        let stranger = StakePoolId::new(1);
+        state.pools.insert(
+            stranger,
+            StakePool {
+                id: stranger,
+                total_stake: Stake::from_attos(MIN_STAKE_FLOOR.attos()),
+                validators: BTreeSet::new(),
+                pending_withdrawals: Vec::new(),
+                released_cumulative: Stake::ZERO,
+                conviction: None,
+            },
+        );
+
+        // Every field but the pool matches the deactivation that works.
+        let effects = apply_witness_chunk(
+            &mut state,
+            0,
+            vec![ShardWitnessPayload::DeactivateValidator {
+                pool_id: stranger,
+                validator_id: ValidatorId::new(0),
+            }],
+        );
+        assert!(effects.deactivated.is_empty());
+        assert!(matches!(
+            state.validators.get(&ValidatorId::new(0)).unwrap().status,
+            ValidatorStatus::OnShard { .. },
+        ));
+
+        // And an unjail the same way: the cooldown has elapsed and the
+        // only thing wrong is who is asking.
+        let since = Epoch::new(1);
+        let mut jailed = state_with_jailed(since, JailReason::Performance);
+        jailed.pools.insert(
+            stranger,
+            StakePool {
+                id: stranger,
+                total_stake: Stake::from_attos(MIN_STAKE_FLOOR.attos()),
+                validators: BTreeSet::new(),
+                pending_withdrawals: Vec::new(),
+                released_cumulative: Stake::ZERO,
+                conviction: None,
+            },
+        );
+        jailed.current_epoch = Epoch::new(since.inner() + JAIL_COOLDOWN_EPOCHS);
+        let effects = apply_witness_chunk(
+            &mut jailed,
+            0,
+            vec![ShardWitnessPayload::Unjail {
+                pool_id: stranger,
+                id: ValidatorId::new(10),
+            }],
+        );
+        assert!(effects.unjailed.is_empty());
+        assert!(matches!(
+            jailed.validators.get(&ValidatorId::new(10)).unwrap().status,
+            ValidatorStatus::Jailed { .. },
+        ));
     }
 
     /// `DeactivateValidator` from `Pooled` flips status; no cascade.
@@ -1402,6 +1490,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::DeactivateValidator {
+                pool_id: StakePoolId::new(0),
                 validator_id: ValidatorId::new(5),
             }],
         );
@@ -1443,9 +1532,11 @@ mod tests {
             0,
             vec![
                 ShardWitnessPayload::DeactivateValidator {
+                    pool_id: StakePoolId::new(0),
                     validator_id: ValidatorId::new(10),
                 },
                 ShardWitnessPayload::DeactivateValidator {
+                    pool_id: StakePoolId::new(0),
                     validator_id: ValidatorId::new(11),
                 },
             ],
@@ -1486,6 +1577,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::DeactivateValidator {
+                pool_id: StakePoolId::new(0),
                 validator_id: ValidatorId::new(10),
             }],
         );
@@ -1536,6 +1628,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(10),
             }],
         );
@@ -1558,6 +1651,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(10),
             }],
         );
@@ -1660,6 +1754,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(500),
             }],
         );
@@ -1693,6 +1788,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(10),
             }],
         );
@@ -1734,6 +1830,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(10),
             }],
         );
@@ -1757,6 +1854,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(0),
             }],
         );
@@ -2133,6 +2231,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::DeactivateValidator {
+                pool_id: StakePoolId::new(0),
                 validator_id: ValidatorId::new(0),
             }],
         );
@@ -2508,6 +2607,7 @@ mod tests {
             &net(),
             p,
             &ShardWitnessPayload::DeactivateValidator {
+                pool_id: StakePoolId::new(0),
                 validator_id: victim,
             },
         );

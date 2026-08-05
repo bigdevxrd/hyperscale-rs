@@ -488,6 +488,7 @@ mod tests {
             &mut state,
             0,
             vec![ShardWitnessPayload::Unjail {
+                pool_id: StakePoolId::new(0),
                 id: ValidatorId::new(0),
             }],
         );

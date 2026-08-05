@@ -344,6 +344,7 @@ pub fn registered_validator_activates_onto_a_shard(c: &mut impl Cluster) {
         c,
         3,
         &BeaconWitnessEvent::DeactivateValidator {
+            pool_id: GENESIS_POOL,
             validator_id: ValidatorId::new(0),
         },
     );
