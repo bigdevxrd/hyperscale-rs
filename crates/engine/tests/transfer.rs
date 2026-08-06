@@ -888,6 +888,99 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
     );
 }
 
+/// A fan-out: two withdrawals from one account funding two deposits in
+/// a single manifest — the shape a multi-recipient cross-shard payment
+/// takes.
+#[test]
+fn a_two_recipient_fan_out_executes() {
+    let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
+    let graph = ManifestGraph {
+        nodes: vec![
+            GraphNode {
+                target: Address(alice()),
+                method: "withdraw".into(),
+                args: vec![
+                    GraphArg::Literal(Value::Address(XRD)),
+                    GraphArg::Literal(Value::U128(5)),
+                ],
+            },
+            GraphNode {
+                target: Address(bob()),
+                method: "deposit".into(),
+                args: vec![GraphArg::Edge {
+                    edge: EdgeRef {
+                        producer: 0,
+                        output: 0,
+                    },
+                    constraints: vec![Constraint::ResourceIs(XRD)],
+                }],
+            },
+            GraphNode {
+                target: Address(alice()),
+                method: "withdraw".into(),
+                args: vec![
+                    GraphArg::Literal(Value::Address(XRD)),
+                    GraphArg::Literal(Value::U128(6)),
+                ],
+            },
+            GraphNode {
+                target: Address(fee_payer(7)),
+                method: "deposit".into(),
+                args: vec![GraphArg::Edge {
+                    edge: EdgeRef {
+                        producer: 2,
+                        output: 0,
+                    },
+                    constraints: vec![Constraint::ResourceIs(XRD)],
+                }],
+            },
+        ],
+    };
+    let key = Ed25519PrivateKey::from_bytes(&[ALICE_SEED; 32]).unwrap();
+    let tree = EnvelopeTree {
+        root: IntentDecl {
+            graph,
+            params: Vec::new(),
+        },
+        root_bindings: Vec::new(),
+        subintents: Vec::new(),
+    };
+    let vm = TransactionEnvelope {
+        body: TransactionBody::Call(encode_tree(&tree)),
+        subintent_sigs: Vec::new(),
+        fee_payer: Address(alice()),
+        max_fee: 10,
+        gas_limit: 1_000_000,
+        validity_start_ms: 0,
+        validity_end_ms: u64::MAX,
+        message: Vec::new(),
+        network: NetworkId(242),
+        signer: [0; 32],
+        signature: [0; 64],
+    }
+    .sign(&key);
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(Transaction::new(
+        vm,
+    )));
+    let executed = execute_on(
+        &[(alice(), 1_000), (bob(), 50), (fee_payer(7), 1_000)],
+        &executor,
+        &[tx],
+    );
+    let ConsensusReceipt::Succeeded { writes, .. } = &executed[0].consensus else {
+        panic!("the fan-out must succeed: {:?}", executed[0].consensus);
+    };
+    assert_eq!(
+        vault_cell(writes, alice()),
+        Some(encode_amount(1_000 - 5 - 6 - 10).to_vec())
+    );
+    assert_eq!(vault_cell(writes, bob()), Some(encode_amount(55).to_vec()));
+    assert_eq!(
+        vault_cell(writes, fee_payer(7)),
+        Some(encode_amount(1_006).to_vec())
+    );
+}
+
 /// A signed publish of `artifact`, paid for by `seed`'s account.
 fn signed_publish(seed: u8, artifact: Vec<u8>) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();

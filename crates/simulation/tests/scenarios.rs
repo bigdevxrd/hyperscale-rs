@@ -353,12 +353,35 @@ fn read_share_leaves_write_traffic_decisions_unchanged_sim() {
     assert!(shared.total_deferral_wait >= exclusive.total_deferral_wait);
 }
 
+/// Four stable leaves for the participant sweep: grown like
+/// [`grow_config`] seats it, then the threshold disarms so the sweep
+/// runs on a settled topology rather than a hair-trigger one.
+const fn sweep_config() -> ScenarioConfig {
+    ScenarioConfig {
+        shard_size: 4,
+        vnodes_per_host: 1,
+        pool_surplus: 14,
+        num_shards: 4,
+        split_bytes: u64::MAX,
+        latency: Duration::from_millis(150),
+    }
+}
+
 #[test]
 fn participant_count_sweep_sim() {
-    let mut cluster =
-        SimCluster::with_accounts(&split_config(), 11, &participant_sweep_genesis_accounts(2));
-    let latencies = participant_count_sweep(&mut cluster, 2, 2);
-    println!("participant_count_sweep shards=2: {latencies:?}");
+    // The lifecycle ballast keeps the grow's split generations in step
+    // (the sweep accounts alone would skew the byte spread); the sweep
+    // walk funds the payer plus one recipient per leaf. Four leaves so
+    // the sweep reaches a genuine fan-out — three recipients on three
+    // counterparty shards — rather than stopping at the pairwise case.
+    let accounts = [
+        reshape_lifecycle_accounts(),
+        participant_sweep_genesis_accounts(4),
+    ]
+    .concat();
+    let mut cluster = SimCluster::with_grown_accounts(&sweep_config(), 11, &accounts);
+    let latencies = participant_count_sweep(&mut cluster, 4, 4);
+    println!("participant_count_sweep shards=4: {latencies:?}");
 }
 
 #[test]

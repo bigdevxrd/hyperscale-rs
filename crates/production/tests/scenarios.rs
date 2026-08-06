@@ -13,14 +13,16 @@ use std::time::Duration;
 
 use hyperscale_scenarios::tx::{
     CROSS_FRACTION_SENDERS, cross_fraction_genesis_accounts, cross_shard_fault_genesis_accounts,
-    genesis_accounts, halt_straddler_setup, livelock_genesis_accounts, merge_straddler_setup,
-    participant_sweep_genesis_accounts, reshape_lifecycle_accounts, split_straddler_setup,
+    cross_shard_genesis_accounts, genesis_accounts, halt_straddler_setup,
+    livelock_genesis_accounts, merge_straddler_setup, participant_sweep_genesis_accounts,
+    reshape_lifecycle_accounts, split_straddler_setup,
 };
 use hyperscale_scenarios::{
-    ScenarioConfig, abort_converges, beacon_pool_partition_stalls_epoch_production,
-    cross_shard_compound_drop_fetch_fallback, cross_shard_exec_cert_drop_fetch_fallback,
-    cross_shard_fraction, cross_shard_header_fetch_fallback,
-    cross_shard_provisions_drop_fetch_fallback, cross_shard_provisions_fetch_with_request_loss,
+    ScenarioConfig, abort_converges, abort_floor_settles_on_deadline,
+    beacon_pool_partition_stalls_epoch_production, cross_shard_compound_drop_fetch_fallback,
+    cross_shard_exec_cert_drop_fetch_fallback, cross_shard_fraction,
+    cross_shard_header_fetch_fallback, cross_shard_provisions_drop_fetch_fallback,
+    cross_shard_provisions_fetch_with_request_loss,
     cross_shard_provisions_recovers_after_transient_outage,
     cross_shard_transaction_da_fetch_fallback, delegation_folds_into_beacon_state,
     gossip_drop_engages_fetch_fallback, grow_reaches_four_shard_topology,
@@ -257,6 +259,35 @@ fn cross_shard_fraction_prod() {
     );
     let report = cross_shard_fraction(&mut cluster, CROSS_FRACTION_SENDERS, 500);
     println!("cross_shard_fraction total=16 cross=50%: {report:?}");
+}
+
+/// Two shards with the reshape threshold disarmed after the grow — the
+/// simulation's cross-shard shape on the production harness.
+const fn cross_shard_config() -> ScenarioConfig {
+    ScenarioConfig {
+        shard_size: 4,
+        vnodes_per_host: 1,
+        pool_surplus: 4,
+        num_shards: 2,
+        split_bytes: u64::MAX,
+        latency: Duration::from_millis(60),
+    }
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn abort_floor_settles_on_deadline_prod() {
+    let mut cluster = ProdCluster::start_with_grown_accounts(
+        &cross_shard_config(),
+        42,
+        EPOCH_MS,
+        cross_shard_genesis_accounts(),
+    );
+    cluster.run_faultable(abort_floor_settles_on_deadline);
 }
 
 #[test]
