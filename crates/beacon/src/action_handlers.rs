@@ -138,13 +138,15 @@ where
         } => {
             let view = proposal.view;
             let proposal_hash = proposal.hash();
-            let signing_msg = signed_bytes(&SpcRelayMessage::new(
+            let signing_msg = signed_bytes(
+                &SpcRelayMessage {
+                    kind: SpcRelayKind::NewView,
+                    epoch,
+                    view,
+                    content_hash: proposal_hash,
+                },
                 network,
-                SpcRelayKind::NewView,
-                epoch,
-                view,
-                proposal_hash,
-            ));
+            );
             let Ok(sig) = ctx.signer.sign(&signing_msg) else {
                 tracing::error!(?view, "cannot sign SPC new-view relay; skipping");
                 return;
@@ -161,13 +163,15 @@ where
         } => {
             let view = msg.view;
             let msg_hash = msg.hash();
-            let signing_msg = signed_bytes(&SpcRelayMessage::new(
+            let signing_msg = signed_bytes(
+                &SpcRelayMessage {
+                    kind: SpcRelayKind::NewCommit,
+                    epoch,
+                    view,
+                    content_hash: msg_hash,
+                },
                 network,
-                SpcRelayKind::NewCommit,
-                epoch,
-                view,
-                msg_hash,
-            ));
+            );
             let Ok(sig) = ctx.signer.sign(&signing_msg) else {
                 tracing::error!(?view, "cannot sign SPC new-commit relay; skipping");
                 return;

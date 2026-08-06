@@ -9,7 +9,7 @@
 //! shard's beacon-witness accumulator surfaces it.
 //!
 //! The signal is signed over canonical bytes whose layout lives in
-//! [`crate::signing::ReadySignalMessage::new`].
+//! [`crate::signing::ReadySignalMessage`].
 
 use std::time::Duration;
 
@@ -63,7 +63,7 @@ pub struct ReadySignal {
     /// [`ready_signal_window`]; validators re-emit if the window passes
     /// uncollected.
     wt_window_end: WeightedTimestamp,
-    /// signature over [`crate::signing::ReadySignalMessage::new`].
+    /// signature over [`crate::signing::ReadySignalMessage`].
     sig: ConsensusSignature,
 }
 

@@ -3,37 +3,22 @@
 use hyperscale_crypto::{SignError, Signer, Verifier};
 use hyperscale_hbor::Hbor;
 
-use crate::signing::signed_bytes;
+use crate::signing::{NetworkId, signed_bytes};
 use crate::{ConsensusPublicKey, ConsensusSignature, NetworkDefinition, ValidatorId};
 
 /// What a proof-of-possession signature covers: the registering
 /// validator's id and the public key itself, so a registration cannot
 /// adopt a key its owner never offered for that identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_VALIDATOR_POSSESSION_PROOF_v1")]
+#[hbor(
+    signing_domain = "HYPERSCALE_VALIDATOR_POSSESSION_PROOF_v1",
+    signing_context = NetworkId
+)]
 pub struct ValidatorPossessionProofMessage {
-    /// Network the registration binds to.
-    pub network_id: u8,
     /// The registering validator.
     pub validator_id: ValidatorId,
     /// The consensus public key being registered.
     pub pubkey: ConsensusPublicKey,
-}
-
-impl ValidatorPossessionProofMessage {
-    /// Assemble the message a possession proof signs.
-    #[must_use]
-    pub const fn new(
-        network: &NetworkDefinition,
-        validator_id: ValidatorId,
-        pubkey: ConsensusPublicKey,
-    ) -> Self {
-        Self {
-            network_id: network.id,
-            validator_id,
-            pubkey,
-        }
-    }
 }
 
 /// Sign the possession proof for `validator_id` with `signer`'s own key.
@@ -46,11 +31,13 @@ pub fn validator_possession_proof_sign(
     network: &NetworkDefinition,
     validator_id: ValidatorId,
 ) -> Result<ConsensusSignature, SignError> {
-    let msg = signed_bytes(&ValidatorPossessionProofMessage::new(
+    let msg = signed_bytes(
+        &ValidatorPossessionProofMessage {
+            validator_id,
+            pubkey: signer.public_key(),
+        },
         network,
-        validator_id,
-        signer.public_key(),
-    ));
+    );
     signer.sign(&msg)
 }
 
@@ -64,11 +51,13 @@ pub fn validator_possession_proof_verify(
     pubkey: &ConsensusPublicKey,
     possession_proof: &ConsensusSignature,
 ) -> bool {
-    let msg = signed_bytes(&ValidatorPossessionProofMessage::new(
+    let msg = signed_bytes(
+        &ValidatorPossessionProofMessage {
+            validator_id,
+            pubkey: *pubkey,
+        },
         network,
-        validator_id,
-        *pubkey,
-    ));
+    );
     verifier.verify(pubkey, &msg, possession_proof)
 }
 

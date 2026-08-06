@@ -76,7 +76,13 @@ impl Signed for SpcEmptyViewMsgNotification {
         let msg = self.msg.as_unverified();
         let value_hash = hash_high_value(&msg.reported.value);
         let target = skip_target(msg.view, msg.reported.view, value_hash);
-        signed_bytes(&SpcEmptyViewMessage::new(network, self.epoch, target))
+        signed_bytes(
+            &SpcEmptyViewMessage {
+                epoch: self.epoch,
+                vector: target,
+            },
+            network,
+        )
     }
 }
 

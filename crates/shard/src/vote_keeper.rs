@@ -527,7 +527,7 @@ impl VoteKeeper {
 
 /// A received verified vote, retained per `(height, validator)` for
 /// equivocation detection. Carries what reconstructs the vote's signing
-/// message (`BlockVoteMessage::new`) so a conflicting sibling assembles into
+/// message (`BlockVoteMessage`) so a conflicting sibling assembles into
 /// [`ShardVoteEquivocation`] evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoredVote {

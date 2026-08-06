@@ -80,11 +80,10 @@ impl Signed for ExecutionCertificatesNotification {
             .certificates
             .first()
             .map_or(ShardId::ROOT, ExecutionCertificate::shard_id);
-        signed_bytes(&ExecCertBatchMessage::new(
+        signed_bytes(
+            &ExecCertBatchMessage::new(shard, &self.certificates),
             network,
-            shard,
-            &self.certificates,
-        ))
+        )
     }
 }
 

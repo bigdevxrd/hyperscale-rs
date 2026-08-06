@@ -517,13 +517,15 @@ where
                         );
                         return;
                     };
-                    let msg = signed_bytes(&ReadySignalMessage::new(
+                    let msg = signed_bytes(
+                        &ReadySignalMessage {
+                            validator_id: sender,
+                            shard: signal.shard(),
+                            wt_window_start: signal.wt_window_start(),
+                            wt_window_end: signal.wt_window_end(),
+                        },
                         topo.network(),
-                        sender,
-                        signal.shard(),
-                        signal.wt_window_start(),
-                        signal.wt_window_end(),
-                    ));
+                    );
                     if !verify_sig_with_metrics(
                         verifier.as_ref(),
                         &msg,

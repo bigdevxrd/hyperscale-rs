@@ -3,33 +3,19 @@
 use hyperscale_crypto::{SignError, Signer, Verifier};
 use hyperscale_hbor::Hbor;
 
-use crate::signing::signed_bytes;
+use crate::signing::{NetworkId, signed_bytes};
 use crate::{BlockHeight, ConsensusPublicKey, NetworkDefinition, ShardId, VrfProof};
 
 /// What a shard reveal covers: `(shard, height)`, under the network. The
 /// proposer's deterministic signature over it seeds the block's reveal
 /// chain.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_SHARD_REVEAL_v1")]
+#[hbor(signing_domain = "HYPERSCALE_SHARD_REVEAL_v1", signing_context = NetworkId)]
 pub struct ShardRevealMessage {
-    /// Network the reveal binds to.
-    pub network_id: u8,
     /// Shard whose chain the reveal extends.
     pub shard: ShardId,
     /// Height the reveal belongs to.
     pub height: BlockHeight,
-}
-
-impl ShardRevealMessage {
-    /// Assemble the message a shard reveal signs.
-    #[must_use]
-    pub const fn new(network: &NetworkDefinition, shard: ShardId, height: BlockHeight) -> Self {
-        Self {
-            network_id: network.id,
-            shard,
-            height,
-        }
-    }
 }
 
 /// Sign `(network, shard, height)` and return the reveal proof.
@@ -43,7 +29,7 @@ pub fn shard_reveal_sign(
     shard: ShardId,
     height: BlockHeight,
 ) -> Result<VrfProof, SignError> {
-    let msg = signed_bytes(&ShardRevealMessage::new(network, shard, height));
+    let msg = signed_bytes(&ShardRevealMessage { shard, height }, network);
     signer.vrf_sign(&msg)
 }
 
@@ -58,7 +44,7 @@ pub fn shard_reveal_verify(
     height: BlockHeight,
     proof: &VrfProof,
 ) -> bool {
-    let msg = signed_bytes(&ShardRevealMessage::new(network, shard, height));
+    let msg = signed_bytes(&ShardRevealMessage { shard, height }, network);
     verifier.verify_vrf(pk, &msg, proof)
 }
 

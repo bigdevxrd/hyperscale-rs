@@ -198,12 +198,10 @@ mod tests {
                 .to_vec(),
         ];
         let signature = keypair()
-            .sign(&signed_bytes(&ValidatorAddressMessage::new(
+            .sign(&signed_bytes(
+                &ValidatorAddressMessage::new(&peer_bytes, &addresses, sequence),
                 &net(),
-                &peer_bytes,
-                &addresses,
-                sequence,
-            )))
+            ))
             .expect("sign");
         ValidatorAddressGossip {
             validator: vid,
@@ -338,12 +336,10 @@ mod tests {
                 .to_vec(),
         ];
         let signature = keypair()
-            .sign(&signed_bytes(&ValidatorAddressMessage::new(
+            .sign(&signed_bytes(
+                &ValidatorAddressMessage::new(&bogus_peer_bytes, &addresses, 3),
                 &net(),
-                &bogus_peer_bytes,
-                &addresses,
-                3,
-            )))
+            ))
             .expect("sign");
         let unparseable = ValidatorAddressGossip {
             validator: vid,

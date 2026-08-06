@@ -78,11 +78,10 @@ impl Signed for ExecutionVotesNotification {
     /// verification, so this branch is defensive only.
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
         let shard = self.votes.first().map_or(ShardId::ROOT, |v| v.shard_id());
-        signed_bytes(&ExecVoteBatchMessage::new(
+        signed_bytes(
+            &ExecVoteBatchMessage::new(shard, self.votes.iter().map(Verifiable::as_unverified)),
             network,
-            shard,
-            self.votes.iter().map(Verifiable::as_unverified),
-        ))
+        )
     }
 }
 

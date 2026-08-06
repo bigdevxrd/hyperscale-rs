@@ -38,7 +38,7 @@ use crate::{
 ///
 /// Each side carries the block it voted, the parent hash the vote bound
 /// in (needed to reconstruct the signing message —
-/// [`BlockVoteMessage::new`] binds the parent), and the signature. The
+/// [`BlockVoteMessage`] binds the parent), and the signature. The
 /// contradiction is `block_hash_a != block_hash_b`: an honest validator
 /// votes at most once per round, so two valid signatures over different
 /// block hashes at the same slot prove the key voted twice.
@@ -56,13 +56,13 @@ pub struct ShardVoteEquivocation {
     pub block_hash_a: BlockHash,
     /// First side's parent hash, bound into the signing message.
     pub parent_block_hash_a: BlockHash,
-    /// First side's signature over `BlockVoteMessage::new` for side A.
+    /// First side's signature over `BlockVoteMessage` for side A.
     pub sig_a: ConsensusSignature,
     /// Second side's voted block (must differ from `block_hash_a`).
     pub block_hash_b: BlockHash,
     /// Second side's parent hash, bound into the signing message.
     pub parent_block_hash_b: BlockHash,
-    /// Second side's signature over `BlockVoteMessage::new` for side B.
+    /// Second side's signature over `BlockVoteMessage` for side B.
     pub sig_b: ConsensusSignature,
 }
 
@@ -81,7 +81,7 @@ pub enum ShardVoteEquivocationVerifyError {
 /// Verify shard vote-equivocation evidence against the signer's pubkey.
 ///
 /// The two block hashes must differ, and both signatures must verify
-/// over their respective [`BlockVoteMessage::new`] under `pubkey`. The
+/// over their respective [`BlockVoteMessage`] under `pubkey`. The
 /// caller resolves `pubkey` for `ev.validator` from the validator
 /// registry (the beacon fold) or the topology snapshot (a gossip
 /// receiver); no committee resolution is needed because no honest key
@@ -101,22 +101,26 @@ pub fn verify_shard_vote_equivocation(
     if ev.block_hash_a == ev.block_hash_b {
         return Err(ShardVoteEquivocationVerifyError::BlocksEqual);
     }
-    let msg_a = signed_bytes(&BlockVoteMessage::new(
+    let msg_a = signed_bytes(
+        &BlockVoteMessage {
+            shard_group: ev.shard,
+            height: ev.height,
+            round: ev.round,
+            block_hash: ev.block_hash_a,
+            parent_block_hash: ev.parent_block_hash_a,
+        },
         network,
-        ev.shard,
-        ev.height,
-        ev.round,
-        ev.block_hash_a,
-        ev.parent_block_hash_a,
-    ));
-    let msg_b = signed_bytes(&BlockVoteMessage::new(
+    );
+    let msg_b = signed_bytes(
+        &BlockVoteMessage {
+            shard_group: ev.shard,
+            height: ev.height,
+            round: ev.round,
+            block_hash: ev.block_hash_b,
+            parent_block_hash: ev.parent_block_hash_b,
+        },
         network,
-        ev.shard,
-        ev.height,
-        ev.round,
-        ev.block_hash_b,
-        ev.parent_block_hash_b,
-    ));
+    );
     if verifier.verify(pubkey, &msg_a, &ev.sig_a) && verifier.verify(pubkey, &msg_b, &ev.sig_b) {
         Ok(())
     } else {

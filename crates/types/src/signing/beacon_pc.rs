@@ -1,22 +1,23 @@
 //! Signing messages for beacon PC inner-consensus votes.
 //!
-//! Every PC-level signature covers a typed message naming the epoch, the
-//! SPC view, the round the vote belongs to, and the vector voted on. The
-//! round rides inside the signed content: under a canonical encoding two
-//! distinct rounds produce distinct preimages, so a round-1 signature can
-//! never verify as a round-3 signature — the same guarantee per-round
+//! Every PC-level signature covers a typed message naming the scope it
+//! runs under, the round the vote belongs to, and the vector voted on.
+//! The round rides inside the signed content: under a canonical encoding
+//! two distinct rounds produce distinct preimages, so a round-1 signature
+//! can never verify as a round-3 signature — the same guarantee per-round
 //! domain tags gave, with one domain for the family.
 
 use hyperscale_hbor::Hbor;
 
-use crate::{Epoch, Hash, NetworkDefinition, PcVector, SpcView};
+use crate::signing::NetworkId;
+use crate::{Epoch, Hash, PcVector, SpcView};
 
 /// One PC instance's identity: the epoch and SPC view it runs under.
 ///
 /// Passing the pair as one typed value keeps sign and verify sites from
 /// silently cross-feeding an epoch where a view belongs — the same
 /// mistake-proofing the signing messages get from their typed fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
 pub struct PcScope {
     /// The epoch whose SPC instance the PC run belongs to.
     pub epoch: Epoch,
@@ -46,41 +47,18 @@ pub enum PcRound {
 
 /// What a PC round vote's signature covers.
 ///
-/// The `(epoch, view)` pair binds the vote to one PC instance: the same
-/// vector signed in one view will not verify against another.
+/// The scope binds the vote to one PC instance: the same vector signed in
+/// one view will not verify against another.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_PC_VOTE_v1")]
+#[hbor(signing_domain = "HYPERSCALE_PC_VOTE_v1", signing_context = NetworkId)]
 pub struct PcVoteMessage {
-    /// Network the vote binds to.
-    pub network_id: u8,
     /// The round the vote belongs to — inside the signed content, so
     /// rounds cannot replay against each other.
     pub round: PcRound,
-    /// The epoch whose SPC instance the vote belongs to.
-    pub epoch: Epoch,
-    /// The SPC view whose PC instance the vote belongs to.
-    pub view: SpcView,
+    /// The PC instance the vote belongs to.
+    pub scope: PcScope,
     /// The vector voted on.
     pub vector: PcVector,
-}
-
-impl PcVoteMessage {
-    /// Assemble the message a PC round vote signs.
-    #[must_use]
-    pub const fn new(
-        network: &NetworkDefinition,
-        round: PcRound,
-        instance: PcScope,
-        vector: PcVector,
-    ) -> Self {
-        Self {
-            network_id: network.id,
-            round,
-            epoch: instance.epoch,
-            view: instance.view,
-            vector,
-        }
-    }
 }
 
 /// What an SPC empty-view skip statement's signature covers.
@@ -89,26 +67,12 @@ impl PcVoteMessage {
 /// view-change protocol; the binding is per-epoch — an empty-view
 /// statement is about views, so it cannot be scoped to one.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_PC_EMPTY_VIEW_v1")]
+#[hbor(signing_domain = "HYPERSCALE_PC_EMPTY_VIEW_v1", signing_context = NetworkId)]
 pub struct SpcEmptyViewMessage {
-    /// Network the statement binds to.
-    pub network_id: u8,
     /// The epoch whose SPC instance the statement belongs to.
     pub epoch: Epoch,
     /// The `(empty_view, reported_max_view)` pair, as a vector.
     pub vector: PcVector,
-}
-
-impl SpcEmptyViewMessage {
-    /// Assemble the message an empty-view skip statement signs.
-    #[must_use]
-    pub const fn new(network: &NetworkDefinition, epoch: Epoch, vector: PcVector) -> Self {
-        Self {
-            network_id: network.id,
-            epoch,
-            vector,
-        }
-    }
 }
 
 /// Which SPC relay notification a sender attestation covers.
@@ -129,10 +93,8 @@ pub enum SpcRelayKind {
 /// authentication. A swapped payload or a replay across `(epoch, view)`
 /// invalidates the sig.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_SPC_RELAY_v1")]
+#[hbor(signing_domain = "HYPERSCALE_SPC_RELAY_v1", signing_context = NetworkId)]
 pub struct SpcRelayMessage {
-    /// Network the relay binds to.
-    pub network_id: u8,
     /// Which notification kind is being relayed.
     pub kind: SpcRelayKind,
     /// The epoch the relay belongs to.
@@ -143,32 +105,11 @@ pub struct SpcRelayMessage {
     pub content_hash: Hash,
 }
 
-impl SpcRelayMessage {
-    /// Assemble the message a relay attestation signs.
-    #[must_use]
-    pub const fn new(
-        network: &NetworkDefinition,
-        kind: SpcRelayKind,
-        epoch: Epoch,
-        view: SpcView,
-        content_hash: Hash,
-    ) -> Self {
-        Self {
-            network_id: network.id,
-            kind,
-            epoch,
-            view,
-            content_hash,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use hyperscale_hbor::HborSigned;
-
     use super::*;
-    use crate::{PC_VALUE_ELEMENT_BYTES, PcValueElement};
+    use crate::signing::signed_bytes;
+    use crate::{NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcValueElement};
 
     fn net() -> NetworkDefinition {
         NetworkDefinition::simulator()
@@ -179,23 +120,23 @@ mod tests {
     }
 
     /// Distinct rounds must produce distinct signing bytes for the same
-    /// `(epoch, view, vector)`. Cross-round replay protection inside a
-    /// single SPC view depends on this.
+    /// `(scope, vector)`. Cross-round replay protection inside a single
+    /// SPC view depends on this.
     #[test]
     fn pc_vote_message_separates_rounds() {
         let v = PcVector::new(vec![ve(7)]);
         let mk = |round| {
-            PcVoteMessage::new(
-                &net(),
-                round,
-                PcScope {
-                    epoch: Epoch::new(1),
-                    view: SpcView::new(1),
+            signed_bytes(
+                &PcVoteMessage {
+                    round,
+                    scope: PcScope {
+                        epoch: Epoch::new(1),
+                        view: SpcView::new(1),
+                    },
+                    vector: v.clone(),
                 },
-                v.clone(),
+                &net(),
             )
-            .signing_bytes()
-            .unwrap()
         };
         let all = [
             mk(PcRound::Vote1),
@@ -215,9 +156,15 @@ mod tests {
     fn relay_kinds_separate() {
         let hash = Hash::from_bytes(b"payload");
         let mk = |kind| {
-            SpcRelayMessage::new(&net(), kind, Epoch::new(1), SpcView::new(2), hash)
-                .signing_bytes()
-                .unwrap()
+            signed_bytes(
+                &SpcRelayMessage {
+                    kind,
+                    epoch: Epoch::new(1),
+                    view: SpcView::new(2),
+                    content_hash: hash,
+                },
+                &net(),
+            )
         };
         assert_ne!(mk(SpcRelayKind::NewView), mk(SpcRelayKind::NewCommit));
     }

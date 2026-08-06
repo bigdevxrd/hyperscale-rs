@@ -58,12 +58,10 @@ pub(super) fn announce_validator_addresses(
     let topic =
         IdentTopic::new(Topic::global(ValidatorAddressGossip::message_type_id()).to_string());
     for (validator, key) in vnodes {
-        let signature = match key.sign(&signed_bytes(&ValidatorAddressMessage::new(
+        let signature = match key.sign(&signed_bytes(
+            &ValidatorAddressMessage::new(&peer_bytes, &address_bytes, sequence),
             network,
-            &peer_bytes,
-            &address_bytes,
-            sequence,
-        ))) {
+        )) {
             Ok(sig) => sig,
             Err(err) => {
                 error!(

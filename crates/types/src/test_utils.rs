@@ -499,14 +499,16 @@ pub(crate) fn certify_header(
 ) -> CertifiedBlockHeader {
     let net = NetworkDefinition::simulator();
     let block_hash = header.hash();
-    let msg = signed_bytes(&BlockVoteMessage::new(
+    let msg = signed_bytes(
+        &BlockVoteMessage {
+            shard_group: header.shard_id(),
+            height: header.height(),
+            round: header.round(),
+            block_hash,
+            parent_block_hash: header.parent_block_hash(),
+        },
         &net,
-        header.shard_id(),
-        header.height(),
-        header.round(),
-        block_hash,
-        header.parent_block_hash(),
-    ));
+    );
     let sigs: Vec<ConsensusSignature> = signers
         .iter()
         .map(|&i| committee.signer(i).sign(&msg).expect("sign"))
@@ -696,14 +698,16 @@ fn live_certify(
 ) -> CertifiedBlockHeader {
     let net = NetworkDefinition::simulator();
     let block_hash = header.hash();
-    let msg = signed_bytes(&BlockVoteMessage::new(
+    let msg = signed_bytes(
+        &BlockVoteMessage {
+            shard_group: header.shard_id(),
+            height: header.height(),
+            round: header.round(),
+            block_hash,
+            parent_block_hash: header.parent_block_hash(),
+        },
         &net,
-        header.shard_id(),
-        header.height(),
-        header.round(),
-        block_hash,
-        header.parent_block_hash(),
-    ));
+    );
     let sigs: Vec<ConsensusSignature> = committee_keys
         .iter()
         .map(|k| k.sign(&msg).expect("sign"))

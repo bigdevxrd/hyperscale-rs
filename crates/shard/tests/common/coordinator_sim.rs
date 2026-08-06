@@ -782,13 +782,15 @@ impl ShardCoordinatorSim {
     ) {
         let validator = self.members[signer_idx].0;
         let sk = &self.sks[signer_idx];
-        let msg = signed_bytes(&ReadySignalMessage::new(
+        let msg = signed_bytes(
+            &ReadySignalMessage {
+                validator_id: validator,
+                shard,
+                wt_window_start,
+                wt_window_end,
+            },
             &self.network,
-            validator,
-            shard,
-            wt_window_start,
-            wt_window_end,
-        ));
+        );
         let sig = sk.as_ref().sign(&msg).expect("sign");
         let signal = ReadySignal::new(validator, shard, wt_window_start, wt_window_end, sig);
         for idx in 0..self.n() {

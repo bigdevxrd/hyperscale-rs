@@ -13,16 +13,15 @@
 
 use hyperscale_hbor::Hbor;
 
-use crate::{BeaconBlockHash, Epoch, NetworkDefinition, RatifyPhase, RatifyRound};
+use crate::signing::NetworkId;
+use crate::{BeaconBlockHash, Epoch, RatifyPhase, RatifyRound};
 
 /// What a ratify vote's signature covers — also the message behind the
 /// aggregate signature on the assembled
 /// [`RatifyCert`](crate::RatifyCert).
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_RATIFY_VOTE_v1")]
+#[hbor(signing_domain = "HYPERSCALE_RATIFY_VOTE_v1", signing_context = NetworkId)]
 pub struct RatifyVoteMessage {
-    /// Network the vote binds to.
-    pub network_id: u8,
     /// The commit-anchor hash the ratification round runs under.
     pub anchor_hash: BeaconBlockHash,
     /// The epoch being ratified.
@@ -36,62 +35,27 @@ pub struct RatifyVoteMessage {
     pub block_hash: BeaconBlockHash,
 }
 
-impl RatifyVoteMessage {
-    /// Assemble the message a ratify vote signs.
-    #[must_use]
-    pub const fn new(
-        network: &NetworkDefinition,
-        anchor_hash: BeaconBlockHash,
-        epoch: Epoch,
-        round: RatifyRound,
-        phase: RatifyPhase,
-        block_hash: BeaconBlockHash,
-    ) -> Self {
-        Self {
-            network_id: network.id,
-            anchor_hash,
-            epoch,
-            round,
-            phase,
-            block_hash,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use hyperscale_hbor::HborSigned;
-
     use super::*;
-    use crate::Hash;
-
-    fn net() -> NetworkDefinition {
-        NetworkDefinition::simulator()
-    }
-
-    fn anchor() -> BeaconBlockHash {
-        BeaconBlockHash::from_raw(Hash::from_bytes(b"anchor"))
-    }
-
-    fn block() -> BeaconBlockHash {
-        BeaconBlockHash::from_raw(Hash::from_bytes(b"block"))
-    }
+    use crate::signing::signed_bytes;
+    use crate::{Hash, NetworkDefinition};
 
     /// A prevote and a precommit over the same tuple sign different
     /// bytes.
     #[test]
     fn ratify_vote_message_differs_across_phases() {
         let mk = |phase| {
-            RatifyVoteMessage::new(
-                &net(),
-                anchor(),
-                Epoch::new(5),
-                RatifyRound::INITIAL,
-                phase,
-                block(),
+            signed_bytes(
+                &RatifyVoteMessage {
+                    anchor_hash: BeaconBlockHash::from_raw(Hash::from_bytes(b"anchor")),
+                    epoch: Epoch::new(5),
+                    round: RatifyRound::INITIAL,
+                    phase,
+                    block_hash: BeaconBlockHash::from_raw(Hash::from_bytes(b"block")),
+                },
+                &NetworkDefinition::simulator(),
             )
-            .signing_bytes()
-            .unwrap()
         };
         assert_ne!(mk(RatifyPhase::Prevote), mk(RatifyPhase::Precommit));
     }

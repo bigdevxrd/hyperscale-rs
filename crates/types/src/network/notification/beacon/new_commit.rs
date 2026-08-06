@@ -79,13 +79,15 @@ impl Signed for SpcNewCommitNotification {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(&SpcRelayMessage::new(
+        signed_bytes(
+            &SpcRelayMessage {
+                kind: SpcRelayKind::NewCommit,
+                epoch: self.epoch,
+                view: self.msg.as_unverified().view,
+                content_hash: self.msg.as_unverified().hash(),
+            },
             network,
-            SpcRelayKind::NewCommit,
-            self.epoch,
-            self.msg.as_unverified().view,
-            self.msg.as_unverified().hash(),
-        ))
+        )
     }
 }
 

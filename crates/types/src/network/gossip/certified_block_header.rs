@@ -38,12 +38,14 @@ impl Signed for CertifiedBlockHeaderGossip {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(&CertifiedBlockHeaderMessage::new(
+        signed_bytes(
+            &CertifiedBlockHeaderMessage {
+                shard_id: self.certified_header.header().shard_id(),
+                height: self.certified_header.header().height(),
+                block_hash: self.certified_header.header().hash(),
+            },
             network,
-            self.certified_header.header().shard_id(),
-            self.certified_header.header().height(),
-            self.certified_header.header().hash(),
-        ))
+        )
     }
 }
 

@@ -62,13 +62,15 @@ impl Signed for BlockHeaderNotification {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(&BlockHeaderMessage::new(
+        signed_bytes(
+            &BlockHeaderMessage {
+                shard_group: self.header.shard_id(),
+                height: self.header.height(),
+                round: self.header.round(),
+                block_hash: self.header.hash(),
+            },
             network,
-            self.header.shard_id(),
-            self.header.height(),
-            self.header.round(),
-            self.header.hash(),
-        ))
+        )
     }
 }
 

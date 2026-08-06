@@ -348,7 +348,13 @@ pub fn verify_empty_view_msg(
     // Sig over the canonical skip target.
     let value_hash = hash_high_value(&msg.reported.value);
     let target = skip_target(msg.view, msg.reported.view, value_hash);
-    let signed = signed_bytes(&SpcEmptyViewMessage::new(network, epoch, target));
+    let signed = signed_bytes(
+        &SpcEmptyViewMessage {
+            epoch,
+            vector: target,
+        },
+        network,
+    );
     if verifier.verify(&pk, &signed, &msg.sig) {
         Ok(())
     } else {
@@ -550,9 +556,13 @@ fn verify_indirect_cert(
             return Err(SpcCertVerifyError::IndirectSignerOutOfRange);
         };
         let target = skip_target(empty_view, report.reported_view, report.reported_value_hash);
-        messages_owned.push(signed_bytes(&SpcEmptyViewMessage::new(
-            network, epoch, target,
-        )));
+        messages_owned.push(signed_bytes(
+            &SpcEmptyViewMessage {
+                epoch,
+                vector: target,
+            },
+            network,
+        ));
         pks.push(*pk);
     }
     let messages: Vec<&[u8]> = messages_owned.iter().map(Vec::as_slice).collect();
@@ -625,7 +635,13 @@ pub fn sign_empty_view_msg(
 ) -> Result<SpcEmptyViewMsg, SignError> {
     let value_hash = hash_high_value(&reported.value);
     let target = skip_target(empty_view, reported.view, value_hash);
-    let msg = signed_bytes(&SpcEmptyViewMessage::new(network, epoch, target));
+    let msg = signed_bytes(
+        &SpcEmptyViewMessage {
+            epoch,
+            vector: target,
+        },
+        network,
+    );
     let sig = signer.sign(&msg)?;
     Ok(SpcEmptyViewMsg {
         view: empty_view,

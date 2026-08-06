@@ -2,7 +2,8 @@
 
 use hyperscale_hbor::Hbor;
 
-use crate::{NetworkDefinition, ShardId, ValidatorId, WeightedTimestamp};
+use crate::signing::NetworkId;
+use crate::{ShardId, ValidatorId, WeightedTimestamp};
 
 /// What a [`ReadySignal`](crate::ReadySignal) signature covers.
 ///
@@ -15,10 +16,8 @@ use crate::{NetworkDefinition, ShardId, ValidatorId, WeightedTimestamp};
 /// their local pool. The weighted-time window bounds replay surface — a
 /// signal hoarded past `wt_window_end` no longer validates.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_READY_SIGNAL_v1")]
+#[hbor(signing_domain = "HYPERSCALE_READY_SIGNAL_v1", signing_context = NetworkId)]
 pub struct ReadySignalMessage {
-    /// Network the signal binds to.
-    pub network_id: u8,
     /// The validator declaring readiness.
     pub validator_id: ValidatorId,
     /// The shard whose synced state the signal attests.
@@ -27,24 +26,4 @@ pub struct ReadySignalMessage {
     pub wt_window_start: WeightedTimestamp,
     /// End of the weighted-time validity window.
     pub wt_window_end: WeightedTimestamp,
-}
-
-impl ReadySignalMessage {
-    /// Assemble the message a ready signal signs.
-    #[must_use]
-    pub const fn new(
-        network: &NetworkDefinition,
-        validator_id: ValidatorId,
-        shard: ShardId,
-        wt_window_start: WeightedTimestamp,
-        wt_window_end: WeightedTimestamp,
-    ) -> Self {
-        Self {
-            network_id: network.id,
-            validator_id,
-            shard,
-            wt_window_start,
-            wt_window_end,
-        }
-    }
 }

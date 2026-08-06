@@ -73,14 +73,16 @@ pub fn verify_and_build_qc(
     already_verified: Vec<(usize, Verified<BlockVote>)>,
     total_votes: VoteCount,
 ) -> QcVerificationResult {
-    let signing_message = signed_bytes(&BlockVoteMessage::new(
+    let signing_message = signed_bytes(
+        &BlockVoteMessage {
+            shard_group: shard_id,
+            height,
+            round,
+            block_hash,
+            parent_block_hash,
+        },
         network,
-        shard_id,
-        height,
-        round,
-        block_hash,
-        parent_block_hash,
-    ));
+    );
 
     let all_verified = verify_vote_batch(
         verifier,
@@ -988,13 +990,15 @@ where
         // ── Sign + broadcast actions ──────────────────────────────────────
         Action::BroadcastBlockHeader { header, manifest } => {
             let block_hash = header.hash();
-            let msg = signed_bytes(&BlockHeaderMessage::new(
+            let msg = signed_bytes(
+                &BlockHeaderMessage {
+                    shard_group: header.shard_id(),
+                    height: header.height(),
+                    round: header.round(),
+                    block_hash,
+                },
                 ctx.topology_snapshot.network(),
-                header.shard_id(),
-                header.height(),
-                header.round(),
-                block_hash,
-            ));
+            );
             let Ok(sig) = ctx.signer.sign(&msg) else {
                 tracing::error!(?block_hash, "cannot sign block header; skipping broadcast");
                 return;
@@ -1077,13 +1081,15 @@ where
             wt_window_end,
             recipients,
         } => {
-            let msg = signed_bytes(&ReadySignalMessage::new(
+            let msg = signed_bytes(
+                &ReadySignalMessage {
+                    validator_id: ctx.me,
+                    shard,
+                    wt_window_start,
+                    wt_window_end,
+                },
                 ctx.topology_snapshot.network(),
-                ctx.me,
-                shard,
-                wt_window_start,
-                wt_window_end,
-            ));
+            );
             let Ok(sig) = ctx.signer.sign(&msg) else {
                 tracing::error!(?shard, "cannot sign ready signal; skipping");
                 return;
@@ -1120,12 +1126,14 @@ where
         }
 
         Action::BroadcastCertifiedBlockHeader { certified_header } => {
-            let msg = signed_bytes(&CertifiedBlockHeaderMessage::new(
+            let msg = signed_bytes(
+                &CertifiedBlockHeaderMessage {
+                    shard_id: certified_header.header().shard_id(),
+                    height: certified_header.header().height(),
+                    block_hash: certified_header.header().hash(),
+                },
                 ctx.topology_snapshot.network(),
-                certified_header.header().shard_id(),
-                certified_header.header().height(),
-                certified_header.header().hash(),
-            ));
+            );
             let Ok(sig) = ctx.signer.sign(&msg) else {
                 tracing::error!("cannot sign certified header gossip; skipping");
                 return;
@@ -1230,14 +1238,16 @@ mod tests {
         let block_hash = BlockHash::from_raw(Hash::from_bytes(b"b1"));
         let height = BlockHeight::new(1);
         let round = Round::INITIAL;
-        let msg = signed_bytes(&BlockVoteMessage::new(
+        let msg = signed_bytes(
+            &BlockVoteMessage {
+                shard_group: shard(),
+                height,
+                round,
+                block_hash,
+                parent_block_hash: BlockHash::ZERO,
+            },
             &net(),
-            shard(),
-            height,
-            round,
-            block_hash,
-            BlockHash::ZERO,
-        ));
+        );
 
         let to_verify: Vec<_> = (0..3)
             .map(|i| {
@@ -1256,14 +1266,16 @@ mod tests {
         let block_hash = BlockHash::from_raw(Hash::from_bytes(b"b1"));
         let height = BlockHeight::new(1);
         let round = Round::INITIAL;
-        let msg = signed_bytes(&BlockVoteMessage::new(
+        let msg = signed_bytes(
+            &BlockVoteMessage {
+                shard_group: shard(),
+                height,
+                round,
+                block_hash,
+                parent_block_hash: BlockHash::ZERO,
+            },
             &net(),
-            shard(),
-            height,
-            round,
-            block_hash,
-            BlockHash::ZERO,
-        ));
+        );
 
         // Vote 1's signature is replaced by a signature over a different block.
         let other_hash = BlockHash::from_raw(Hash::from_bytes(b"other"));

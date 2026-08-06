@@ -60,12 +60,10 @@ impl Signed for ValidatorAddressGossip {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(&ValidatorAddressMessage::new(
+        signed_bytes(
+            &ValidatorAddressMessage::new(&self.peer_id, &self.addresses, self.sequence),
             network,
-            &self.peer_id,
-            &self.addresses,
-            self.sequence,
-        ))
+        )
     }
 }
 
@@ -115,12 +113,10 @@ mod tests {
         let key = BlsSigner::from_seed(&[7u8; 32]);
         let peer_id = b"peer-id".to_vec();
         let addresses = vec![b"addr".to_vec()];
-        let message = signed_bytes(&ValidatorAddressMessage::new(
+        let message = signed_bytes(
+            &ValidatorAddressMessage::new(&peer_id, &addresses, sequence),
             &net(),
-            &peer_id,
-            &addresses,
-            sequence,
-        ));
+        );
         let gossip = ValidatorAddressGossip {
             validator: ValidatorId::new(3),
             peer_id,

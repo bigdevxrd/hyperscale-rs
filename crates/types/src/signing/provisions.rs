@@ -3,7 +3,8 @@
 use blake3::Hasher;
 use hyperscale_hbor::Hbor;
 
-use crate::{BlockHeight, Hash, NetworkDefinition, Provisions, ShardId};
+use crate::signing::NetworkId;
+use crate::{BlockHeight, Hash, Provisions, ShardId};
 
 /// What a state-provisions gossip signature covers: the route, the source
 /// height, and a digest of the transaction hashes in the bundle.
@@ -12,10 +13,8 @@ use crate::{BlockHeight, Hash, NetworkDefinition, Provisions, ShardId};
 /// specific bundle contents, so unauthenticated provision spam is rejected
 /// before expensive merkle proof verification.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "STATE_PROVISION_BATCH")]
+#[hbor(signing_domain = "STATE_PROVISION_BATCH", signing_context = NetworkId)]
 pub struct StateProvisionsMessage {
-    /// Network the bundle binds to.
-    pub network_id: u8,
     /// Shard the bundle was produced on.
     pub source_shard: ShardId,
     /// Shard the bundle serves.
@@ -29,13 +28,12 @@ pub struct StateProvisionsMessage {
 impl StateProvisionsMessage {
     /// Assemble the message a provisions broadcast signs.
     #[must_use]
-    pub fn new(network: &NetworkDefinition, provisions: &Provisions) -> Self {
+    pub fn new(provisions: &Provisions) -> Self {
         let mut hasher = Hasher::new();
         for tx in provisions.transactions() {
             hasher.update(tx.tx_hash.as_bytes());
         }
         Self {
-            network_id: network.id,
             source_shard: provisions.source_shard(),
             target_shard: provisions.target_shard(),
             block_height: provisions.block_height(),

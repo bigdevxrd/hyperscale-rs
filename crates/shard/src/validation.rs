@@ -51,7 +51,7 @@ pub fn qc_has_local_quorum_power(
 /// True if `qc`'s `weighted_timestamp` is implausibly far ahead of `now`.
 ///
 /// The weighted timestamp rides outside the QC's signed message
-/// (`BlockVoteMessage::new` covers only shard/height/round/hashes), so a Byzantine
+/// (`BlockVoteMessage` covers only shard/height/round/hashes), so a Byzantine
 /// proposer or forwarder can rewrite it on an otherwise-genuine QC and still
 /// pass `VerifyQcSignature`. A far-future value poisons the BFT clock that
 /// anchors transaction-validity windows — honest transactions fall outside the

@@ -1,7 +1,7 @@
 //! Signing message for beacon-chain VRF reveals.
 //!
-//! Each committee member signs `(network, epoch)` to produce an
-//! epoch-bound VRF reveal. The 96-byte signature is the
+//! Each committee member signs the epoch, under the network context, to
+//! produce an epoch-bound VRF reveal. The 96-byte signature is the
 //! [`VrfProof`](crate::VrfProof); its digest is the
 //! [`VrfOutput`](crate::VrfOutput) mixed into beacon randomness.
 //!
@@ -14,28 +14,15 @@ pub use hyperscale_crypto::vrf_output_from_proof;
 use hyperscale_crypto::{SignError, Signer, Verifier};
 use hyperscale_hbor::Hbor;
 
-use crate::signing::signed_bytes;
+use crate::signing::{NetworkId, signed_bytes};
 use crate::{ConsensusPublicKey, Epoch, NetworkDefinition, VrfProof};
 
 /// What a VRF reveal covers: the epoch, under the network.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_PC_VRF_v1")]
+#[hbor(signing_domain = "HYPERSCALE_PC_VRF_v1", signing_context = NetworkId)]
 pub struct VrfRevealMessage {
-    /// Network the reveal binds to.
-    pub network_id: u8,
     /// The epoch whose randomness the reveal contributes to.
     pub epoch: Epoch,
-}
-
-impl VrfRevealMessage {
-    /// Assemble the message a VRF reveal signs.
-    #[must_use]
-    pub const fn new(network: &NetworkDefinition, epoch: Epoch) -> Self {
-        Self {
-            network_id: network.id,
-            epoch,
-        }
-    }
 }
 
 /// Sign `(network, epoch)` and return the VRF proof. The output is
@@ -54,7 +41,7 @@ pub fn vrf_sign(
     network: &NetworkDefinition,
     epoch: Epoch,
 ) -> Result<VrfProof, SignError> {
-    let msg = signed_bytes(&VrfRevealMessage::new(network, epoch));
+    let msg = signed_bytes(&VrfRevealMessage { epoch }, network);
     signer.vrf_sign(&msg)
 }
 
@@ -72,7 +59,7 @@ pub fn vrf_verify(
     epoch: Epoch,
     proof: &VrfProof,
 ) -> bool {
-    let msg = signed_bytes(&VrfRevealMessage::new(network, epoch));
+    let msg = signed_bytes(&VrfRevealMessage { epoch }, network);
     verifier.verify_vrf(pk, &msg, proof)
 }
 

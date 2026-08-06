@@ -44,14 +44,16 @@ impl BlockVote {
         signer: &dyn Signer,
         timestamp: ProposerTimestamp,
     ) -> Result<Self, SignError> {
-        let message = signed_bytes(&BlockVoteMessage::new(
+        let message = signed_bytes(
+            &BlockVoteMessage {
+                shard_group: shard_id,
+                height,
+                round,
+                block_hash,
+                parent_block_hash,
+            },
             network,
-            shard_id,
-            height,
-            round,
-            block_hash,
-            parent_block_hash,
-        ));
+        );
         let signature = signer.sign(&message)?;
         Ok(Self {
             block_hash,
@@ -167,14 +169,16 @@ impl BlockVote {
         network: &NetworkDefinition,
         parent_block_hash: &BlockHash,
     ) -> Vec<u8> {
-        signed_bytes(&BlockVoteMessage::new(
+        signed_bytes(
+            &BlockVoteMessage {
+                shard_group: self.shard_id,
+                height: self.height,
+                round: self.round,
+                block_hash: self.block_hash,
+                parent_block_hash: *parent_block_hash,
+            },
             network,
-            self.shard_id,
-            self.height,
-            self.round,
-            self.block_hash,
-            *parent_block_hash,
-        ))
+        )
     }
 }
 
@@ -203,7 +207,7 @@ pub enum BlockVoteVerifyError {
 
 /// Construction asserts: the signature on the vote validates against
 /// the voter's public key for the domain-separated signing message
-/// `BlockVoteMessage::new(network, shard, height, round, block_hash)`.
+/// `BlockVoteMessage`.
 ///
 /// Construction goes through one of three gates:
 ///
@@ -234,7 +238,7 @@ impl Verified<BlockVote> {
     /// form.
     ///
     /// The predicate holds by construction: the signature over the
-    /// canonical `BlockVoteMessage::new` is produced by `signer` inside
+    /// canonical `BlockVoteMessage` is produced by `signer` inside
     /// this call, so any later
     /// [`<BlockVote as Verify>::verify`](Verify::verify) call against
     /// the matching public key would succeed. Used at proposer/voter
@@ -258,7 +262,7 @@ impl Verified<BlockVote> {
         timestamp: ProposerTimestamp,
     ) -> Result<Self, SignError> {
         // SAFETY: the signature is produced by `signer` over the
-        // canonical `BlockVoteMessage::new`, which is exactly the
+        // canonical `BlockVoteMessage`, which is exactly the
         // `BlockVote::verify` predicate's check against this voter's
         // matching pubkey.
         Ok(Self::new_unchecked(BlockVote::new(
@@ -278,7 +282,7 @@ impl Verified<BlockVote> {
     /// `signing_message` using the same-message batch optimisation.
     ///
     /// Every vote in the batch must have been signed over `signing_message`
-    /// (the canonical [`BlockVoteMessage::new`] for some `block_hash`,
+    /// (the canonical [`BlockVoteMessage`] for some `block_hash`,
     /// `height`, `round`, `shard_id`). The caller is responsible
     /// for assembling the batch with matching messages — mismatched
     /// votes will simply fail to verify.
@@ -329,14 +333,16 @@ mod tests {
     #[test]
     fn verify_batch_all_valid_returns_all_verified() {
         let net = NetworkDefinition::simulator();
-        let message = signed_bytes(&BlockVoteMessage::new(
+        let message = signed_bytes(
+            &BlockVoteMessage {
+                shard_group: ShardId::ROOT,
+                height: BlockHeight::new(1),
+                round: Round::INITIAL,
+                block_hash: BlockHash::from_raw(Hash::from_bytes(&[1u8; 32])),
+                parent_block_hash: BlockHash::from_raw(Hash::from_bytes(b"parent")),
+            },
             &net,
-            ShardId::ROOT,
-            BlockHeight::new(1),
-            Round::INITIAL,
-            BlockHash::from_raw(Hash::from_bytes(&[1u8; 32])),
-            BlockHash::from_raw(Hash::from_bytes(b"parent")),
-        ));
+        );
         let votes: Vec<_> = (0..3)
             .map(|i| {
                 let signer = BlsSigner::generate();
@@ -366,14 +372,16 @@ mod tests {
     #[test]
     fn verify_batch_falls_back_and_drops_only_the_forged_vote() {
         let net = NetworkDefinition::simulator();
-        let message = signed_bytes(&BlockVoteMessage::new(
+        let message = signed_bytes(
+            &BlockVoteMessage {
+                shard_group: ShardId::ROOT,
+                height: BlockHeight::new(1),
+                round: Round::INITIAL,
+                block_hash: BlockHash::from_raw(Hash::from_bytes(&[2u8; 32])),
+                parent_block_hash: BlockHash::from_raw(Hash::from_bytes(b"parent")),
+            },
             &net,
-            ShardId::ROOT,
-            BlockHeight::new(1),
-            Round::INITIAL,
-            BlockHash::from_raw(Hash::from_bytes(&[2u8; 32])),
-            BlockHash::from_raw(Hash::from_bytes(b"parent")),
-        ));
+        );
         let mut votes: Vec<(BlockVote, ConsensusPublicKey)> = Vec::new();
         for i in 0..3u64 {
             let signer = BlsSigner::generate();

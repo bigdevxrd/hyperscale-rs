@@ -152,10 +152,10 @@ where
                     provisions,
                 )));
 
-                let msg = signed_bytes(&StateProvisionsMessage::new(
+                let msg = signed_bytes(
+                    &StateProvisionsMessage::new(&verified),
                     ctx.topology_snapshot.network(),
-                    &verified,
-                ));
+                );
                 let Ok(sig) = ctx.signer.sign(&msg) else {
                     tracing::error!("cannot sign provisions broadcast; skipping");
                     return;

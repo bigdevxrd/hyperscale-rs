@@ -45,7 +45,7 @@ use crate::{
 /// Which of the two ratification vote kinds a signature commits to.
 ///
 /// The tag is baked into the signing bytes
-/// ([`RatifyVoteMessage::new`](crate::RatifyVoteMessage::new)), so a prevote
+/// ([`RatifyVoteMessage`](crate::RatifyVoteMessage)), so a prevote
 /// can never be counted as a precommit or vice versa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub enum RatifyPhase {
@@ -354,14 +354,16 @@ pub fn verify_ratify_vote(
     else {
         return Err(RatifyVoteVerifyError::SignerNotInPool);
     };
-    let msg = signed_bytes(&RatifyVoteMessage::new(
+    let msg = signed_bytes(
+        &RatifyVoteMessage {
+            anchor_hash: vote.anchor_hash(),
+            epoch: vote.epoch(),
+            round: vote.round(),
+            phase: vote.phase(),
+            block_hash: vote.block_hash(),
+        },
         network,
-        vote.anchor_hash(),
-        vote.epoch(),
-        vote.round(),
-        vote.phase(),
-        vote.block_hash(),
-    ));
+    );
     if verifier.verify(&signer_pk, &msg, &vote.sig()) {
         Ok(())
     } else {
@@ -410,14 +412,16 @@ pub fn verify_ratify_cert(
     if signer_pks.is_empty() {
         return Err(RatifyCertVerifyError::EmptySignerSet);
     }
-    let msg = signed_bytes(&RatifyVoteMessage::new(
+    let msg = signed_bytes(
+        &RatifyVoteMessage {
+            anchor_hash: cert.anchor_hash(),
+            epoch: cert.epoch(),
+            round: cert.round(),
+            phase: RatifyPhase::Precommit,
+            block_hash: cert.block_hash(),
+        },
         network,
-        cert.anchor_hash(),
-        cert.epoch(),
-        cert.round(),
-        RatifyPhase::Precommit,
-        cert.block_hash(),
-    ));
+    );
     let msgs: Vec<&[u8]> = std::iter::repeat_n(msg.as_slice(), signer_pks.len()).collect();
     if verifier.verify_aggregate_different_messages(&msgs, &cert.aggregate_sig(), &signer_pks) {
         Ok(())
@@ -444,14 +448,16 @@ pub fn sign_ratify_vote(
     phase: RatifyPhase,
     block_hash: BeaconBlockHash,
 ) -> Result<RatifyVote, SignError> {
-    let msg = signed_bytes(&RatifyVoteMessage::new(
+    let msg = signed_bytes(
+        &RatifyVoteMessage {
+            anchor_hash,
+            epoch,
+            round,
+            phase,
+            block_hash,
+        },
         network,
-        anchor_hash,
-        epoch,
-        round,
-        phase,
-        block_hash,
-    ));
+    );
     let sig = signer.sign(&msg)?;
     Ok(RatifyVote::new(
         anchor_hash,

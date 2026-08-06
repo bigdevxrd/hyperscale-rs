@@ -88,13 +88,15 @@ impl Signed for SpcNewViewNotification {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(&SpcRelayMessage::new(
+        signed_bytes(
+            &SpcRelayMessage {
+                kind: SpcRelayKind::NewView,
+                epoch: self.epoch,
+                view: self.proposal.as_unverified().view,
+                content_hash: self.proposal.as_unverified().hash(),
+            },
             network,
-            SpcRelayKind::NewView,
-            self.epoch,
-            self.proposal.as_unverified().view,
-            self.proposal.as_unverified().hash(),
-        ))
+        )
     }
 }
 

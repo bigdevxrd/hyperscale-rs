@@ -2322,18 +2322,22 @@ mod tests {
         let instance = PcScope { epoch, view };
         let value_a = PcVector::new([PcValueElement::new([0xAA; 32])]);
         let value_b = PcVector::new([PcValueElement::new([0xBB; 32])]);
-        let msg_a = signed_bytes(&PcVoteMessage::new(
+        let msg_a = signed_bytes(
+            &PcVoteMessage {
+                round: PcRound::Vote1,
+                scope: instance,
+                vector: value_a.clone(),
+            },
             &net(),
-            PcRound::Vote1,
-            instance,
-            value_a.clone(),
-        ));
-        let msg_b = signed_bytes(&PcVoteMessage::new(
+        );
+        let msg_b = signed_bytes(
+            &PcVoteMessage {
+                round: PcRound::Vote1,
+                scope: instance,
+                vector: value_b.clone(),
+            },
             &net(),
-            PcRound::Vote1,
-            instance,
-            value_b.clone(),
-        ));
+        );
         PcVoteEquivocation {
             validator: ValidatorId::new(equivocator),
             epoch,

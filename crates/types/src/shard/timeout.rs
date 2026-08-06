@@ -50,7 +50,13 @@ impl Timeout {
         voter: ValidatorId,
         signer: &dyn Signer,
     ) -> Result<Self, SignError> {
-        let message = signed_bytes(&TimeoutMessage::new(network, shard_id, round));
+        let message = signed_bytes(
+            &TimeoutMessage {
+                shard_group: shard_id,
+                round,
+            },
+            network,
+        );
         let signature = signer.sign(&message)?;
         Ok(Self {
             shard_id,
@@ -140,7 +146,13 @@ impl Timeout {
     /// Build the canonical signing message for this timeout.
     #[must_use]
     pub fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(&TimeoutMessage::new(network, self.shard_id, self.round))
+        signed_bytes(
+            &TimeoutMessage {
+                shard_group: self.shard_id,
+                round: self.round,
+            },
+            network,
+        )
     }
 }
 
@@ -171,7 +183,7 @@ pub enum TimeoutVerifyError {
 
 /// Construction asserts: the signature on the timeout validates against
 /// the voter's public key for the domain-separated signing message
-/// `TimeoutMessage::new(network, shard, round)`. It does **not** assert anything
+/// `TimeoutMessage`. It does **not** assert anything
 /// about the carried `high_qc` — that is verified as a QC where it is adopted.
 ///
 /// Construction goes through one of two gates:
@@ -199,7 +211,7 @@ impl Verified<Timeout> {
     /// Sign a fresh [`Timeout`] with `signer` and return its verified form.
     ///
     /// The predicate holds by construction: the signature over the
-    /// canonical `TimeoutMessage::new` is produced by `signer` inside this
+    /// canonical `TimeoutMessage` is produced by `signer` inside this
     /// call. Used at the pacemaker site that echoes the signed timeout back to
     /// the local `TimeoutKeeper`.
     ///
@@ -215,7 +227,7 @@ impl Verified<Timeout> {
         signer: &dyn Signer,
     ) -> Result<Self, SignError> {
         // SAFETY: the signature is produced by `signer` over the
-        // canonical `TimeoutMessage::new`, which is exactly the `Timeout::verify`
+        // canonical `TimeoutMessage`, which is exactly the `Timeout::verify`
         // predicate's check against this voter's matching pubkey.
         Ok(Self::new_unchecked(Timeout::new(
             network, shard_id, round, high_qc, voter, signer,

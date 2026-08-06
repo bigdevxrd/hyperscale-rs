@@ -348,14 +348,16 @@ mod tests {
     fn make_vote(wave_id: WaveId, anchor_ts: WeightedTimestamp) -> ExecutionVote {
         let tx_outcomes = vec![make_tx_outcome(TxHash::from(Hash::from_bytes(b"tx")))];
         let global_receipt_root = GlobalReceiptRoot::from_raw(Hash::from_bytes(b"root"));
-        let msg = signed_bytes(&ExecVoteMessage::new(
+        let msg = signed_bytes(
+            &ExecVoteMessage {
+                vote_anchor_ts: anchor_ts,
+                wave_id: wave_id.clone(),
+                shard_group: wave_id.shard_id(),
+                global_receipt_root,
+                tx_count: u32::try_from(tx_outcomes.len()).unwrap_or(u32::MAX),
+            },
             &NetworkDefinition::simulator(),
-            anchor_ts,
-            wave_id.clone(),
-            wave_id.shard_id(),
-            global_receipt_root,
-            u32::try_from(tx_outcomes.len()).unwrap_or(u32::MAX),
-        ));
+        );
         let kp = BlsSigner::from_seed(&[7u8; 32]);
         let signature = kp.sign(&msg).expect("sign");
         ExecutionVote::new(

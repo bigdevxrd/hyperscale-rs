@@ -1,16 +1,32 @@
 //! Signing messages for every signature the consensus protocol gathers.
 //!
 //! Each signable artifact pairs with a message struct deriving
-//! `#[hbor(signing_domain = "...")]`: the bytes a signature covers are
-//! [`HborSigned::signing_bytes`](hyperscale_hbor::HborSigned) — the
-//! framed domain, then the canonical encoding of the fields. Domain
-//! separation prevents cross-protocol replay; injectivity of the
+//! `#[hbor(signing_domain = "...", signing_context = NetworkId)]`: the
+//! bytes a signature covers are
+//! [`HborSignedWith::signing_bytes`](hyperscale_hbor::HborSignedWith) —
+//! the framed domain, the network the session is for, then the canonical
+//! encoding of the fields. Domain separation prevents cross-protocol
+//! replay; the context prevents cross-network replay; injectivity of the
 //! canonical encoding makes every field binding, with no per-message
 //! framing argument.
 
-use hyperscale_hbor::HborSigned;
+use hyperscale_hbor::{Hbor, HborSignedWith};
 
-/// The bytes a signature over `message` covers.
+use crate::NetworkDefinition;
+
+/// The network a signing session is for — the context every consensus
+/// preimage mixes in ahead of its fields, so a signature produced for
+/// one network can never verify against another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
+pub struct NetworkId(pub u8);
+
+impl From<&NetworkDefinition> for NetworkId {
+    fn from(network: &NetworkDefinition) -> Self {
+        Self(network.id)
+    }
+}
+
+/// The bytes a signature over `message` covers, in `network`'s sessions.
 ///
 /// Every signing message is a small closed struct, so encoding cannot
 /// hit a length or depth cap; the panic is unreachable.
@@ -20,9 +36,12 @@ use hyperscale_hbor::HborSigned;
 /// Panics if encoding the message fails, which the message shapes rule
 /// out.
 #[must_use]
-pub fn signed_bytes<M: HborSigned>(message: &M) -> Vec<u8> {
+pub fn signed_bytes<M: HborSignedWith<Context = NetworkId>>(
+    message: &M,
+    network: &NetworkDefinition,
+) -> Vec<u8> {
     message
-        .signing_bytes()
+        .signing_bytes(&NetworkId::from(network))
         .expect("signing messages are small closed structs")
 }
 
@@ -59,10 +78,29 @@ pub use validator_possession_proof::{
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_hbor::HborSigned;
+    use hyperscale_hbor::HborSigned as _;
 
     use super::*;
-    use crate::TransactionEnvelope;
+    use crate::{BlockHash, BlockHeight, Hash, Round, ShardId, TransactionEnvelope};
+
+    /// The context is covered: the same message signed for two networks
+    /// commits to two byte strings, which is what makes a cross-network
+    /// replay fail. One message type stands in for all — the context
+    /// enters every preimage the same way.
+    #[test]
+    fn context_enters_the_preimage() {
+        let message = BlockVoteMessage {
+            shard_group: ShardId::ROOT,
+            height: BlockHeight::new(10),
+            round: Round::INITIAL,
+            block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
+            parent_block_hash: BlockHash::from_raw(Hash::from_bytes(b"parent")),
+        };
+        assert_ne!(
+            signed_bytes(&message, &NetworkDefinition::mainnet()),
+            signed_bytes(&message, &NetworkDefinition::stokenet())
+        );
+    }
 
     /// Every signing domain in the crate, pairwise distinct. The domain is
     /// framed into the preimage, so distinct domains give disjoint preimage

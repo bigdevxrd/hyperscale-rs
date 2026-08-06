@@ -867,7 +867,14 @@ fn prefix_signing_messages(
     (0..=v.len())
         .map(|k| {
             let prefix = PcVector::new(v.iter().take(k).copied());
-            signed_bytes(&PcVoteMessage::new(network, round, instance, prefix))
+            signed_bytes(
+                &PcVoteMessage {
+                    round,
+                    scope: instance,
+                    vector: prefix,
+                },
+                network,
+            )
         })
         .collect()
 }
@@ -887,12 +894,14 @@ fn length_attestation_message(
         bytes
     });
     let v = PcVector::new(std::iter::once(len_element));
-    signed_bytes(&PcVoteMessage::new(
+    signed_bytes(
+        &PcVoteMessage {
+            round: PcRound::Vote2Length,
+            scope: instance,
+            vector: v,
+        },
         network,
-        PcRound::Vote2Length,
-        instance,
-        v,
-    ))
+    )
 }
 
 /// Verify a round-2 length attestation against a signer's pubkey.
@@ -999,12 +1008,14 @@ pub fn verify_qc1(
     let messages_owned: Vec<Vec<u8>> = values
         .iter()
         .map(|v| {
-            signed_bytes(&PcVoteMessage::new(
+            signed_bytes(
+                &PcVoteMessage {
+                    round: PcRound::Vote1,
+                    scope: instance,
+                    vector: v.clone(),
+                },
                 network,
-                PcRound::Vote1,
-                instance,
-                v.clone(),
-            ))
+            )
         })
         .collect();
     let messages: Vec<&[u8]> = messages_owned.iter().map(Vec::as_slice).collect();
@@ -1143,12 +1154,14 @@ pub fn verify_qc2(
     let signer_ids: BTreeSet<ValidatorId> =
         signer_indices.iter().map(|&i| committee[i].0).collect();
 
-    let x_p_message = signed_bytes(&PcVoteMessage::new(
+    let x_p_message = signed_bytes(
+        &PcVoteMessage {
+            round: PcRound::Vote2,
+            scope: instance,
+            vector: qc2.x_p().clone(),
+        },
         network,
-        PcRound::Vote2,
-        instance,
-        qc2.x_p().clone(),
-    ));
+    );
 
     match qc2.pi() {
         PcXpProof::Full => {
@@ -1251,18 +1264,22 @@ fn verify_diverging_proof(
     if !j_vec.is_prefix_of(proof.qc1_j.x()) || !k_vec.is_prefix_of(proof.qc1_k.x()) {
         return false;
     }
-    let j_msg = signed_bytes(&PcVoteMessage::new(
+    let j_msg = signed_bytes(
+        &PcVoteMessage {
+            round: PcRound::Vote2,
+            scope: instance,
+            vector: j_vec,
+        },
         network,
-        PcRound::Vote2,
-        instance,
-        j_vec,
-    ));
-    let k_msg = signed_bytes(&PcVoteMessage::new(
+    );
+    let k_msg = signed_bytes(
+        &PcVoteMessage {
+            round: PcRound::Vote2,
+            scope: instance,
+            vector: k_vec,
+        },
         network,
-        PcRound::Vote2,
-        instance,
-        k_vec,
-    ));
+    );
     verifier.verify_aggregate_different_messages(
         &[j_msg.as_slice(), k_msg.as_slice()],
         &proof.combined_sig,
@@ -1289,12 +1306,14 @@ pub fn verify_vote3(
     let Some(pk) = pubkey_in_committee(committee, v3.validator()) else {
         return Err(PcVote3VerifyError::SignerNotInCommittee);
     };
-    let msg = signed_bytes(&PcVoteMessage::new(
+    let msg = signed_bytes(
+        &PcVoteMessage {
+            round: PcRound::Vote3,
+            scope: instance,
+            vector: v3.x_p().clone(),
+        },
         network,
-        PcRound::Vote3,
-        instance,
-        v3.x_p().clone(),
-    ));
+    );
     if !verifier.verify(&pk, &msg, &v3.sig_xp()) {
         return Err(PcVote3VerifyError::BadSignatureOverXp);
     }
@@ -1394,12 +1413,14 @@ pub fn verify_qc3(
     let messages_owned: Vec<Vec<u8>> = values
         .iter()
         .map(|v| {
-            signed_bytes(&PcVoteMessage::new(
+            signed_bytes(
+                &PcVoteMessage {
+                    round: PcRound::Vote3,
+                    scope: instance,
+                    vector: v.clone(),
+                },
                 network,
-                PcRound::Vote3,
-                instance,
-                v.clone(),
-            ))
+            )
         })
         .collect();
     let messages: Vec<&[u8]> = messages_owned.iter().map(Vec::as_slice).collect();
@@ -1450,18 +1471,22 @@ pub fn verify_vote_equivocation(
         epoch: ev.epoch,
         view: ev.view,
     };
-    let msg_a = signed_bytes(&PcVoteMessage::new(
+    let msg_a = signed_bytes(
+        &PcVoteMessage {
+            round,
+            scope: instance,
+            vector: ev.value_a.clone(),
+        },
         network,
-        round,
-        instance,
-        ev.value_a.clone(),
-    ));
-    let msg_b = signed_bytes(&PcVoteMessage::new(
+    );
+    let msg_b = signed_bytes(
+        &PcVoteMessage {
+            round,
+            scope: instance,
+            vector: ev.value_b.clone(),
+        },
         network,
-        round,
-        instance,
-        ev.value_b.clone(),
-    ));
+    );
     if verifier.verify(&pk, &msg_a, &ev.sig_a) && verifier.verify(&pk, &msg_b, &ev.sig_b) {
         Ok(())
     } else {
@@ -1542,12 +1567,14 @@ pub fn sign_vote3(
 ) -> Result<PcVote3, SignError> {
     let qc2: Verifiable<PcQc2> = qc2.into();
     let x_p = qc2.x_p().clone();
-    let sig_xp = signer.sign(&signed_bytes(&PcVoteMessage::new(
+    let sig_xp = signer.sign(&signed_bytes(
+        &PcVoteMessage {
+            round: PcRound::Vote3,
+            scope: instance,
+            vector: x_p.clone(),
+        },
         network,
-        PcRound::Vote3,
-        instance,
-        x_p.clone(),
-    )))?;
+    ))?;
     Ok(PcVote3::new(validator, x_p, sig_xp, qc2))
 }
 
@@ -1562,9 +1589,14 @@ fn sign_all_prefixes(
     (0..=v.len())
         .map(|k| {
             let prefix = PcVector::new(v.iter().take(k).copied());
-            signer.sign(&signed_bytes(&PcVoteMessage::new(
-                network, round, instance, prefix,
-            )))
+            signer.sign(&signed_bytes(
+                &PcVoteMessage {
+                    round,
+                    scope: instance,
+                    vector: prefix,
+                },
+                network,
+            ))
         })
         .collect()
 }

@@ -68,9 +68,15 @@ pub fn observer_ready_signal(
 ) -> Result<ReadySignal, SignError> {
     let start = anchor.weighted_timestamp;
     let end = start.plus(ready_signal_window(epoch_duration_ms));
-    let msg = signed_bytes(&ReadySignalMessage::new(
-        network, validator, child, start, end,
-    ));
+    let msg = signed_bytes(
+        &ReadySignalMessage {
+            validator_id: validator,
+            shard: child,
+            wt_window_start: start,
+            wt_window_end: end,
+        },
+        network,
+    );
     let sig = signer.sign(&msg)?;
     Ok(ReadySignal::new(validator, child, start, end, sig))
 }

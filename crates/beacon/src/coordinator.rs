@@ -1541,7 +1541,7 @@ impl BeaconCoordinator {
     ///
     /// Async (on the crypto pool):
     /// - signature verifies against the canonical
-    ///   [`RatifyVoteMessage::new`](hyperscale_types::RatifyVoteMessage::new)
+    ///   [`RatifyVoteMessage`](hyperscale_types::RatifyVoteMessage)
     ///   under the signer's pubkey.
     pub fn on_unverified_ratify_vote_received(
         &mut self,

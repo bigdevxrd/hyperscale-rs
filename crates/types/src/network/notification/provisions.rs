@@ -53,10 +53,10 @@ impl Signed for ProvisionsNotification {
     }
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(&StateProvisionsMessage::new(
+        signed_bytes(
+            &StateProvisionsMessage::new(self.provisions.as_unverified()),
             network,
-            self.provisions.as_unverified(),
-        ))
+        )
     }
 }
 
