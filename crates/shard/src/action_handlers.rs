@@ -15,11 +15,11 @@ use hyperscale_types::network::notification::{
     BlockHeaderNotification, BlockVoteNotification, ReadySignalNotification, TimeoutNotification,
 };
 use hyperscale_types::{
-    BeaconWitnessLeafCount, BeaconWitnessRootContext, Block, BlockHash, BlockHeader,
-    BlockHeaderMessage, BlockHeight, BlockVote, BlockVoteMessage, CertificateRoot,
-    CertificateRootContext, CertifiedBlockHeader, CertifiedBlockHeaderMessage,
-    CertifiedHeaderVerifyError, ConsensusPublicKey, ConsensusReceipt, Epoch, FinalizedWave, Hash,
-    InFlightCount, LocalReceiptRoot, LocalReceiptRootContext, NetworkDefinition, PreparedCommit,
+    BeaconWitnessLeafCount, BeaconWitnessRootContext, Block, BlockHash, BlockHeader, BlockHeight,
+    BlockProposalMessage, BlockVote, BlockVoteMessage, CertificateRoot, CertificateRootContext,
+    CertifiedBlockHeader, CertifiedBlockHeaderSenderMessage, CertifiedHeaderVerifyError,
+    ConsensusPublicKey, ConsensusReceipt, Epoch, FinalizedWave, Hash, InFlightCount,
+    LocalReceiptRoot, LocalReceiptRootContext, NetworkDefinition, PreparedCommit,
     ProposerTimestamp, ProvisionHash, ProvisionTxRootsContext, ProvisionTxRootsMap, Provisions,
     ProvisionsRoot, ProvisionsRootContext, QcContext, QuorumCertificate, ReadySignal,
     ReshapeTrigger, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad, SplitChildRoots,
@@ -991,7 +991,7 @@ where
         Action::BroadcastBlockHeader { header, manifest } => {
             let block_hash = header.hash();
             let msg = signed_bytes(
-                &BlockHeaderMessage {
+                &BlockProposalMessage {
                     shard_group: header.shard_id(),
                     height: header.height(),
                     round: header.round(),
@@ -1124,7 +1124,7 @@ where
 
         Action::BroadcastCertifiedBlockHeader { certified_header } => {
             let msg = signed_bytes(
-                &CertifiedBlockHeaderMessage {
+                &CertifiedBlockHeaderSenderMessage {
                     shard_id: certified_header.header().shard_id(),
                     height: certified_header.header().height(),
                     block_hash: certified_header.header().hash(),

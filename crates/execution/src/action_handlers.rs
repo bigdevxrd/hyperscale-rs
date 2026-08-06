@@ -19,9 +19,9 @@ use hyperscale_types::network::notification::{
     ExecutionCertificatesNotification, ExecutionVotesNotification,
 };
 use hyperscale_types::{
-    ExecCertBatchMessage, ExecVoteBatchMessage, ExecutionCertificate, ExecutionCertificateContext,
-    ExecutionVote, FinalizedWaveContext, Stopwatch, StoredReceipt, TxHash, TxOutcome, Verifiable,
-    Verified, signed_bytes,
+    ExecutionCertificate, ExecutionCertificateContext, ExecutionCertificatesSenderMessage,
+    ExecutionVote, ExecutionVotesSenderMessage, FinalizedWaveContext, Stopwatch, StoredReceipt,
+    TxHash, TxOutcome, Verifiable, Verified, signed_bytes,
 };
 
 // ============================================================================
@@ -266,7 +266,7 @@ where
             // re-verification of our own signature.
             if leader != validator_id {
                 let batch_msg = signed_bytes(
-                    &ExecVoteBatchMessage::new(local_shard, std::iter::once(&*verified)),
+                    &ExecutionVotesSenderMessage::new(local_shard, std::iter::once(&*verified)),
                     network,
                 );
                 let Ok(batch_sig) = ctx.signer.sign(&batch_msg) else {
@@ -299,7 +299,10 @@ where
         } => {
             let cert = Arc::unwrap_or_clone(certificate).into_inner();
             let msg = signed_bytes(
-                &ExecCertBatchMessage::new(cert.shard_id(), std::slice::from_ref(&cert)),
+                &ExecutionCertificatesSenderMessage::new(
+                    cert.shard_id(),
+                    std::slice::from_ref(&cert),
+                ),
                 ctx.topology_snapshot.network(),
             );
             let Ok(sig) = ctx.signer.sign(&msg) else {

@@ -17,7 +17,7 @@ use crate::{
     ConsensusPublicKey, Epoch, MAX_EQUIVOCATIONS_PER_PROPOSER, MAX_SHARDS, NetworkDefinition,
     PC_VALUE_ELEMENT_BYTES, PcValueElement, PcVoteEquivocation, QuorumCertificate, ShardForkProof,
     ShardId, ShardVoteEquivocation, Verifiable, Verified, Verify, VrfOutput, VrfProof,
-    vrf_output_from_proof, vrf_sign, vrf_verify,
+    beacon_reveal_sign, beacon_reveal_verify, vrf_output_from_proof,
 };
 
 /// One committee member's slot submission.
@@ -233,7 +233,7 @@ impl Verify<&BeaconProposalVerifyContext<'_>> for BeaconProposal {
     /// `CertifiedBeaconBlock` boundary and isn't part of this
     /// predicate.
     fn verify(&self, ctx: &BeaconProposalVerifyContext<'_>) -> Result<Verified<Self>, Self::Error> {
-        if !vrf_verify(
+        if !beacon_reveal_verify(
             ctx.verifier,
             &ctx.sender_pk,
             ctx.network,
@@ -271,7 +271,7 @@ impl Verified<BeaconProposal> {
         fork_proofs: BTreeMap<ShardId, ShardForkProof>,
         vote_equivocations: Vec<ShardVoteEquivocation>,
     ) -> Result<Self, SignError> {
-        let vrf_proof = vrf_sign(signer, network, epoch)?;
+        let vrf_proof = beacon_reveal_sign(signer, network, epoch)?;
         Ok(Self::new_unchecked(BeaconProposal::new(
             boundary_qcs,
             equivocations,

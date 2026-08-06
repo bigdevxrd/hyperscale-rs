@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use blake3::Hasher;
 use hyperscale_types::{
     BeaconProposal, BeaconState, Epoch, JailReason, NetworkDefinition, Randomness, RevealChain,
-    ShardId, ValidatorId, ValidatorStatus, Verifier, VrfOutput, byzantine_threshold, vrf_verify,
+    ShardId, ValidatorId, ValidatorStatus, Verifier, VrfOutput, beacon_reveal_verify,
+    byzantine_threshold,
 };
 
 use crate::state::pool::exit_placement;
@@ -105,7 +106,7 @@ pub(super) fn filter_and_roll_randomness<'a>(
             rejected_reveals.push(*party);
             continue;
         };
-        if vrf_verify(verifier, &pk, network, epoch, &prop.vrf_proof()) {
+        if beacon_reveal_verify(verifier, &pk, network, epoch, &prop.vrf_proof()) {
             accepted_outputs.push(prop.vrf_output());
             accepted.push(entry);
         } else {

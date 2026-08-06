@@ -11,7 +11,7 @@ use crate::{ConsensusPublicKey, ConsensusSignature, NetworkDefinition, Validator
 /// adopt a key its owner never offered for that identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 #[hbor(
-    signing_domain = "HYPERSCALE_VALIDATOR_POSSESSION_PROOF_v1",
+    signing_domain = "hyperscale-validator-possession-proof-v1",
     signing_context = NetworkId
 )]
 pub struct ValidatorPossessionProofMessage {

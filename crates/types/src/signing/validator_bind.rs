@@ -11,7 +11,7 @@ pub const VALIDATOR_BIND_NONCE_LEN: usize = 32;
 /// bound plus the challenger's nonce, so a bind signature cannot be
 /// replayed for a different peer or a different challenge.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "VALIDATOR_BIND", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-validator-bind-v1", signing_context = NetworkId)]
 pub struct ValidatorBindMessage {
     /// The libp2p peer id being bound to the validator key.
     pub peer_id: Vec<u8>,

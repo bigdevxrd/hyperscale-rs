@@ -13,7 +13,7 @@ use crate::signing::NetworkId;
 /// The digest keeps the signed message fixed-width while binding the
 /// signature to the specific announcement contents.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "VALIDATOR_ADDRESS", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-validator-address-v1", signing_context = NetworkId)]
 pub struct ValidatorAddressMessage {
     /// Monotonic announcement sequence — receivers keep the highest.
     pub sequence: u64,

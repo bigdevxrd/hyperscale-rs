@@ -159,13 +159,13 @@ pub use shard::{
     work_over_certificates,
 };
 pub use signing::{
-    BlockHeaderMessage, BlockVoteMessage, CertifiedBlockHeaderMessage, ExecCertBatchMessage,
-    ExecVoteBatchMessage, ExecVoteMessage, PcRound, PcScope, PcVoteMessage, RatifyVoteMessage,
-    ShardRevealMessage, SpcEmptyViewMessage, SpcRelayKind, SpcRelayMessage, StateProvisionsMessage,
-    VALIDATOR_BIND_NONCE_LEN, ValidatorAddressMessage, ValidatorBindMessage,
-    ValidatorPossessionProofMessage, VrfRevealMessage, shard_reveal_sign, shard_reveal_verify,
-    signed_bytes, validator_possession_proof_sign, validator_possession_proof_verify,
-    vrf_output_from_proof, vrf_sign, vrf_verify,
+    BeaconRevealMessage, BlockProposalMessage, BlockVoteMessage, CertifiedBlockHeaderSenderMessage,
+    ExecutionCertificatesSenderMessage, ExecutionVoteMessage, ExecutionVotesSenderMessage, PcRound,
+    PcScope, PcVoteMessage, ProvisionsSenderMessage, RatifyVoteMessage, ShardRevealMessage,
+    SpcEmptyViewMessage, SpcRelayKind, SpcRelayMessage, VALIDATOR_BIND_NONCE_LEN,
+    ValidatorAddressMessage, ValidatorBindMessage, ValidatorPossessionProofMessage,
+    beacon_reveal_sign, beacon_reveal_verify, shard_reveal_sign, shard_reveal_verify, signed_bytes,
+    validator_possession_proof_sign, validator_possession_proof_verify, vrf_output_from_proof,
 };
 pub use time::epoch_windows::EpochWindows;
 pub use time::limits::{MAX_TIMESTAMP_DELAY, MAX_TIMESTAMP_RUSH};

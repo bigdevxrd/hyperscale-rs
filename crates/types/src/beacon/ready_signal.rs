@@ -53,7 +53,7 @@ pub const fn ready_signal_window(epoch_duration_ms: u64) -> Duration {
 /// emitter never synced. Window enforcement is the proposer/voter's job;
 /// the type itself just carries the parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_READY_SIGNAL_v1", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-ready-signal-v1", signing_context = NetworkId)]
 pub struct ReadySignal {
     /// Validator emitting the signal.
     validator_id: ValidatorId,

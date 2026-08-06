@@ -295,8 +295,8 @@ mod tests {
 
     use hyperscale_crypto_bls::BlsSigner;
     use hyperscale_types::{
-        AggregateSignature, BlockHash, BlockHeight, ConsensusSignature, ExecVoteMessage,
-        ExecutionOutcome, GlobalReceiptHash, GlobalReceiptRoot, Hash, NetworkDefinition,
+        AggregateSignature, BlockHash, BlockHeight, ConsensusSignature, ExecutionOutcome,
+        ExecutionVoteMessage, GlobalReceiptHash, GlobalReceiptRoot, Hash, NetworkDefinition,
         RETENTION_HORIZON, ShardId, Signer, SignerBitfield, TxHash, TxOutcome, ValidatorId,
         signed_bytes,
     };
@@ -349,7 +349,7 @@ mod tests {
         let tx_outcomes = vec![make_tx_outcome(TxHash::from(Hash::from_bytes(b"tx")))];
         let global_receipt_root = GlobalReceiptRoot::from_raw(Hash::from_bytes(b"root"));
         let msg = signed_bytes(
-            &ExecVoteMessage {
+            &ExecutionVoteMessage {
                 vote_anchor_ts: anchor_ts,
                 wave_id: wave_id.clone(),
                 shard_group: wave_id.shard_id(),

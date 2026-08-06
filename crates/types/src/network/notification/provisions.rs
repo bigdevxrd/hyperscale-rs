@@ -5,8 +5,8 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    ConsensusSignature, MessageClass, NetworkDefinition, NetworkMessage, Provisions, Signed,
-    StateProvisionsMessage, ValidatorId, Verifiable, signed_bytes,
+    ConsensusSignature, MessageClass, NetworkDefinition, NetworkMessage, Provisions,
+    ProvisionsSenderMessage, Signed, ValidatorId, Verifiable, signed_bytes,
 };
 
 /// Cross-shard state provisions for one (`source_block`, `target_shard`) pair.
@@ -54,7 +54,7 @@ impl Signed for ProvisionsNotification {
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
         signed_bytes(
-            &StateProvisionsMessage::new(self.provisions.as_unverified()),
+            &ProvisionsSenderMessage::new(self.provisions.as_unverified()),
             network,
         )
     }

@@ -10,7 +10,7 @@ use crate::{BlockHeight, ConsensusPublicKey, NetworkDefinition, ShardId, VrfProo
 /// proposer's deterministic signature over it seeds the block's reveal
 /// chain.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_SHARD_REVEAL_v1", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-shard-reveal-v1", signing_context = NetworkId)]
 pub struct ShardRevealMessage {
     /// Shard whose chain the reveal extends.
     pub shard: ShardId,

@@ -19,8 +19,8 @@ use crate::{ConsensusPublicKey, Epoch, NetworkDefinition, VrfProof};
 
 /// What a VRF reveal covers: the epoch, under the network.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_PC_VRF_v1", signing_context = NetworkId)]
-pub struct VrfRevealMessage {
+#[hbor(signing_domain = "hyperscale-beacon-reveal-v1", signing_context = NetworkId)]
+pub struct BeaconRevealMessage {
     /// The epoch whose randomness the reveal contributes to.
     pub epoch: Epoch,
 }
@@ -36,12 +36,12 @@ pub struct VrfRevealMessage {
 /// # Errors
 ///
 /// Propagates [`SignError`] when the signer cannot sign.
-pub fn vrf_sign(
+pub fn beacon_reveal_sign(
     signer: &dyn Signer,
     network: &NetworkDefinition,
     epoch: Epoch,
 ) -> Result<VrfProof, SignError> {
-    let msg = signed_bytes(&VrfRevealMessage { epoch }, network);
+    let msg = signed_bytes(&BeaconRevealMessage { epoch }, network);
     signer.vrf_sign(&msg)
 }
 
@@ -52,14 +52,14 @@ pub fn vrf_sign(
 /// check: the proof, as a signature, verifies against `pk` over the
 /// reveal message at `(network, epoch)`.
 #[must_use]
-pub fn vrf_verify(
+pub fn beacon_reveal_verify(
     verifier: &dyn Verifier,
     pk: &ConsensusPublicKey,
     network: &NetworkDefinition,
     epoch: Epoch,
     proof: &VrfProof,
 ) -> bool {
-    let msg = signed_bytes(&VrfRevealMessage { epoch }, network);
+    let msg = signed_bytes(&BeaconRevealMessage { epoch }, network);
     verifier.verify_vrf(pk, &msg, proof)
 }
 
@@ -76,8 +76,8 @@ mod tests {
     #[test]
     fn vrf_sign_verify_round_trip() {
         let signer = signer_from_u64_seed(3);
-        let proof = vrf_sign(&signer, &net(), Epoch::new(42)).expect("sign");
-        assert!(vrf_verify(
+        let proof = beacon_reveal_sign(&signer, &net(), Epoch::new(42)).expect("sign");
+        assert!(beacon_reveal_verify(
             &BlsVerifier,
             &signer.public_key(),
             &net(),
@@ -90,8 +90,8 @@ mod tests {
     #[test]
     fn vrf_sign_is_deterministic() {
         let signer = signer_from_u64_seed(7);
-        let a = vrf_sign(&signer, &net(), Epoch::new(100)).expect("sign");
-        let b = vrf_sign(&signer, &net(), Epoch::new(100)).expect("sign");
+        let a = beacon_reveal_sign(&signer, &net(), Epoch::new(100)).expect("sign");
+        let b = beacon_reveal_sign(&signer, &net(), Epoch::new(100)).expect("sign");
         assert_eq!(a, b);
     }
 
@@ -100,8 +100,8 @@ mod tests {
     #[test]
     fn vrf_verify_rejects_wrong_epoch() {
         let signer = signer_from_u64_seed(3);
-        let proof = vrf_sign(&signer, &net(), Epoch::new(42)).expect("sign");
-        assert!(!vrf_verify(
+        let proof = beacon_reveal_sign(&signer, &net(), Epoch::new(42)).expect("sign");
+        assert!(!beacon_reveal_verify(
             &BlsVerifier,
             &signer.public_key(),
             &net(),

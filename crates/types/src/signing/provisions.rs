@@ -13,8 +13,8 @@ use crate::{BlockHeight, Hash, Provisions, ShardId};
 /// specific bundle contents, so unauthenticated provision spam is rejected
 /// before expensive merkle proof verification.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "STATE_PROVISION_BATCH", signing_context = NetworkId)]
-pub struct StateProvisionsMessage {
+#[hbor(signing_domain = "hyperscale-provisions-sender-v1", signing_context = NetworkId)]
+pub struct ProvisionsSenderMessage {
     /// Shard the bundle was produced on.
     pub source_shard: ShardId,
     /// Shard the bundle serves.
@@ -25,7 +25,7 @@ pub struct StateProvisionsMessage {
     pub tx_digest: Hash,
 }
 
-impl StateProvisionsMessage {
+impl ProvisionsSenderMessage {
     /// Assemble the message a provisions broadcast signs.
     #[must_use]
     pub fn new(provisions: &Provisions) -> Self {

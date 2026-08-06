@@ -16,8 +16,8 @@ use crate::{
 /// `wave_id` is self-contained (shard + block height + remote shards), so
 /// no separate block hash is needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "EXEC_VOTE", signing_context = NetworkId)]
-pub struct ExecVoteMessage {
+#[hbor(signing_domain = "hyperscale-execution-vote-v1", signing_context = NetworkId)]
+pub struct ExecutionVoteMessage {
     /// BFT-authenticated anchor the vote was cast at.
     pub vote_anchor_ts: WeightedTimestamp,
     /// The wave being voted on.
@@ -33,15 +33,15 @@ pub struct ExecVoteMessage {
 /// What an execution-vote batch gossip signature covers: the shard plus a
 /// digest of the batch's receipt roots.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "EXEC_VOTE_BATCH", signing_context = NetworkId)]
-pub struct ExecVoteBatchMessage {
+#[hbor(signing_domain = "hyperscale-execution-votes-sender-v1", signing_context = NetworkId)]
+pub struct ExecutionVotesSenderMessage {
     /// Shard the votes belong to.
     pub shard_group: ShardId,
     /// Digest over the batch's `global_receipt_root`s, in batch order.
     pub roots_digest: Hash,
 }
 
-impl ExecVoteBatchMessage {
+impl ExecutionVotesSenderMessage {
     /// Assemble the message an execution-vote batch signs.
     #[must_use]
     pub fn new<'a, I>(shard_group: ShardId, votes: I) -> Self
@@ -60,17 +60,17 @@ impl ExecVoteBatchMessage {
 }
 
 /// What an execution-certificate batch gossip signature covers — same
-/// shape as [`ExecVoteBatchMessage`] under its own domain.
+/// shape as [`ExecutionVotesSenderMessage`] under its own domain.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "EXEC_CERT_BATCH", signing_context = NetworkId)]
-pub struct ExecCertBatchMessage {
+#[hbor(signing_domain = "hyperscale-execution-certificates-sender-v1", signing_context = NetworkId)]
+pub struct ExecutionCertificatesSenderMessage {
     /// Shard the certificates belong to.
     pub shard_group: ShardId,
     /// Digest over the batch's `global_receipt_root`s, in batch order.
     pub roots_digest: Hash,
 }
 
-impl ExecCertBatchMessage {
+impl ExecutionCertificatesSenderMessage {
     /// Assemble the message an execution-certificate batch signs.
     #[must_use]
     pub fn new(shard_group: ShardId, certificates: &[ExecutionCertificate]) -> Self {

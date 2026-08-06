@@ -32,9 +32,9 @@ use hyperscale_types::{
     RatifyVerifyContext, RatifyVote, RevealChain, Round, SKIP_TIMEOUT, ShardId, ShardLoad,
     ShardVoteEquivocation, ShardWitnessPayload, Signer, SignerBitfield, SpcEmptyViewMsg,
     SpcNewCommitMsg, SpcProposalObject, SpcVerifyContext, SpcView, Stake, StakePoolId, StateRoot,
-    TransactionRoot, ValidatorId, Verifiable, Verified, WeightedTimestamp, compute_merkle_root,
-    compute_range_proof, genesis_config_hash, sign_empty_view_msg, sign_vote1, sign_vote2,
-    sign_vote3, vrf_sign,
+    TransactionRoot, ValidatorId, Verifiable, Verified, WeightedTimestamp, beacon_reveal_sign,
+    compute_merkle_root, compute_range_proof, genesis_config_hash, sign_empty_view_msg, sign_vote1,
+    sign_vote2, sign_vote3,
 };
 
 use super::fixtures::Committee;
@@ -898,7 +898,7 @@ impl CoordinatorSim {
                     vote_equivocations.extend(extra);
                 }
                 let sk = self.sks[emitter_idx].as_ref();
-                let vrf_proof = vrf_sign(sk, &self.network, epoch).expect("sign");
+                let vrf_proof = beacon_reveal_sign(sk, &self.network, epoch).expect("sign");
                 let proposal = Arc::new(Verified::new_unchecked_for_test(BeaconProposal::new(
                     boundary_qcs,
                     equivocations,

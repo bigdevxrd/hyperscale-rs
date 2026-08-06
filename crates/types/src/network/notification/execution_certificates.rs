@@ -3,7 +3,7 @@
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    ConsensusSignature, ExecCertBatchMessage, ExecutionCertificate, MessageClass,
+    ConsensusSignature, ExecutionCertificate, ExecutionCertificatesSenderMessage, MessageClass,
     NetworkDefinition, NetworkMessage, ShardId, Signed, ValidatorId, signed_bytes,
 };
 
@@ -81,7 +81,7 @@ impl Signed for ExecutionCertificatesNotification {
             .first()
             .map_or(ShardId::ROOT, ExecutionCertificate::shard_id);
         signed_bytes(
-            &ExecCertBatchMessage::new(shard, &self.certificates),
+            &ExecutionCertificatesSenderMessage::new(shard, &self.certificates),
             network,
         )
     }

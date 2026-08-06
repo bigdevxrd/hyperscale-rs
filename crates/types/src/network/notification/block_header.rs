@@ -5,7 +5,7 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    BlockHeader, BlockHeaderMessage, BlockManifest, ConsensusSignature, MessageClass,
+    BlockHeader, BlockManifest, BlockProposalMessage, ConsensusSignature, MessageClass,
     NetworkDefinition, NetworkMessage, Signed, ValidatorId, signed_bytes,
 };
 
@@ -63,7 +63,7 @@ impl Signed for BlockHeaderNotification {
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
         signed_bytes(
-            &BlockHeaderMessage {
+            &BlockProposalMessage {
                 shard_group: self.header.shard_id(),
                 height: self.header.height(),
                 round: self.header.round(),

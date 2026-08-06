@@ -28,7 +28,7 @@
 //! validator's consensus pubkey from the topology; any failure rejects the whole
 //! exchange.
 //!
-//! Where `sig_x_i = sign(x_i_key, "VALIDATOR_BIND" || x_peer_id ||
+//! Where `sig_x_i = sign(x_i_key, "hyperscale-validator-bind-v1" || x_peer_id ||
 //! their_nonce)`. Each side signs over the **other** side's nonce, so
 //! signatures are fresh per session and cannot be replayed against the same
 //! `(validator_id, peer_id)` pair across different sessions.
@@ -64,7 +64,7 @@ pub type LocalVnodeIdentity = (ValidatorId, Arc<dyn Signer>);
 
 /// List of `(validator_id, signature)` attestations carried in one bind
 /// frame. Each entry proves that the holder of `validator_id`'s consensus key
-/// signed `("VALIDATOR_BIND" || peer_id || nonce)` for this session.
+/// signed `("hyperscale-validator-bind-v1" || peer_id || nonce)` for this session.
 type Attestations = Vec<(ValidatorId, ConsensusSignature)>;
 
 /// Shared validator key map, updated atomically on topology changes.
@@ -212,7 +212,7 @@ fn fresh_nonce() -> [u8; VALIDATOR_BIND_NONCE_LEN] {
 
 // ─── Verification ───────────────────────────────────────────────────────
 
-/// Verify a bind signature: the signature over `("VALIDATOR_BIND" ||
+/// Verify a bind signature: the signature over `("hyperscale-validator-bind-v1" ||
 /// peer_id_bytes || nonce)` must be valid for the claimed `ValidatorId`'s
 /// public key.
 ///

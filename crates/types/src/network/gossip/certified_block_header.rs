@@ -6,7 +6,7 @@ use hyperscale_hbor::Hbor;
 
 use crate::network::{GossipMessage, TopicScope};
 use crate::{
-    CertifiedBlockHeader, CertifiedBlockHeaderMessage, ConsensusSignature, MessageClass,
+    CertifiedBlockHeader, CertifiedBlockHeaderSenderMessage, ConsensusSignature, MessageClass,
     NetworkDefinition, NetworkMessage, ShardId, Signed, ValidatorId, Verifiable, signed_bytes,
 };
 
@@ -39,7 +39,7 @@ impl Signed for CertifiedBlockHeaderGossip {
 
     fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
         signed_bytes(
-            &CertifiedBlockHeaderMessage {
+            &CertifiedBlockHeaderSenderMessage {
                 shard_id: self.certified_header.header().shard_id(),
                 height: self.certified_header.header().height(),
                 block_hash: self.certified_header.header().hash(),

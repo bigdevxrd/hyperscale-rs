@@ -20,7 +20,7 @@ use crate::{BeaconBlockHash, Epoch, RatifyPhase, RatifyRound};
 /// aggregate signature on the assembled
 /// [`RatifyCert`](crate::RatifyCert).
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_RATIFY_VOTE_v1", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-ratify-vote-v1", signing_context = NetworkId)]
 pub struct RatifyVoteMessage {
     /// The commit-anchor hash the ratification round runs under.
     pub anchor_hash: BeaconBlockHash,

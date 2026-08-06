@@ -54,7 +54,7 @@ use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
 use hyperscale_types::{
     BeaconChainConfig, BeaconProposal, BeaconState, Epoch, MIN_STAKE_FLOOR, NetworkDefinition,
     Randomness, ShardCommittee, ShardId, Signer, Stake, StakePool, StakePoolId, ValidatorId,
-    ValidatorRecord, ValidatorStatus, byzantine_threshold, vrf_sign,
+    ValidatorRecord, ValidatorStatus, beacon_reveal_sign, byzantine_threshold,
 };
 
 // ─── Analytic model (ported from committee_security.py) ──────────────────────
@@ -432,7 +432,7 @@ fn proposal(
     epoch: Epoch,
 ) -> BeaconProposal {
     let sk = &keys[usize::try_from(id.inner()).expect("id fits")];
-    BeaconProposal::vrf_only(vrf_sign(sk, net, epoch).expect("sign"))
+    BeaconProposal::vrf_only(beacon_reveal_sign(sk, net, epoch).expect("sign"))
 }
 
 /// The committed proposal set for a grinder subset `mask`: the honest

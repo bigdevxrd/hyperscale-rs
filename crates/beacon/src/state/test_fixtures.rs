@@ -20,8 +20,8 @@ use hyperscale_types::{
     RevealChain, Round, ShardCommittee, ShardEpochContribution, ShardId, ShardLoad,
     ShardVoteEquivocation, ShardWitnessPayload, SignerBitfield, SlotEffects, Stake, StakePool,
     StakePoolId, StateRoot, TransactionRoot, ValidatorId, ValidatorRecord, ValidatorStatus,
-    VrfProof, WeightedTimestamp, compute_merkle_root, compute_range_proof,
-    validator_possession_proof_sign, vrf_sign,
+    VrfProof, WeightedTimestamp, beacon_reveal_sign, compute_merkle_root, compute_range_proof,
+    validator_possession_proof_sign,
 };
 
 use crate::state::{ApplyEpochInput, apply_epoch};
@@ -40,7 +40,7 @@ pub fn possession_proof(seed: u64, id: ValidatorId) -> ConsensusSignature {
 /// stage); just a deterministic VRF reveal.
 pub fn vrf_proposal(id: u64, epoch: Epoch) -> BeaconProposal {
     let sk = keypair(id);
-    let proof = vrf_sign(&sk, &net(), epoch).expect("sign");
+    let proof = beacon_reveal_sign(&sk, &net(), epoch).expect("sign");
     BeaconProposal::new(
         BTreeMap::new(),
         Vec::new(),
@@ -163,7 +163,7 @@ pub fn vrf_proposal_with_equivocations(
     equivocations: Vec<PcVoteEquivocation>,
 ) -> BeaconProposal {
     let sk = keypair(id);
-    let proof = vrf_sign(&sk, &net(), epoch).expect("sign");
+    let proof = beacon_reveal_sign(&sk, &net(), epoch).expect("sign");
     BeaconProposal::new(
         BTreeMap::new(),
         equivocations,
@@ -181,7 +181,7 @@ pub fn vrf_proposal_with_vote_equivocations(
     vote_equivocations: Vec<ShardVoteEquivocation>,
 ) -> BeaconProposal {
     let sk = keypair(id);
-    let proof = vrf_sign(&sk, &net(), epoch).expect("sign");
+    let proof = beacon_reveal_sign(&sk, &net(), epoch).expect("sign");
     BeaconProposal::new(
         BTreeMap::new(),
         Vec::new(),
@@ -282,7 +282,7 @@ pub fn apply_witness_chunk(
                     Vec::new(),
                     BTreeMap::new(),
                     Vec::new(),
-                    vrf_sign(&keypair(id.inner()), &net(), next_epoch).expect("sign"),
+                    beacon_reveal_sign(&keypair(id.inner()), &net(), next_epoch).expect("sign"),
                 ),
             )
         })

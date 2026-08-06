@@ -11,7 +11,7 @@ use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
 use crate::{
-    BlockHash, BlockHeight, ConsensusPublicKey, ConsensusSignature, ExecVoteMessage,
+    BlockHash, BlockHeight, ConsensusPublicKey, ConsensusSignature, ExecutionVoteMessage,
     GlobalReceiptRoot, MAX_TXS_PER_BLOCK, NetworkDefinition, ShardId, TxOutcome, ValidatorId,
     Verified, Verify, WaveId, WeightedTimestamp, compute_global_receipt_root, signed_bytes,
 };
@@ -174,12 +174,12 @@ impl ExecutionVote {
 
     /// Build the canonical signing message for this vote.
     ///
-    /// The [`ExecVoteMessage`] domain separates it from every other signature. Same message
+    /// The [`ExecutionVoteMessage`] domain separates it from every other signature. Same message
     /// used for `ExecutionCertificate` aggregated signature verification.
     #[must_use]
     pub fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
         signed_bytes(
-            &ExecVoteMessage {
+            &ExecutionVoteMessage {
                 vote_anchor_ts: self.vote_anchor_ts,
                 wave_id: self.wave_id.clone(),
                 shard_group: self.shard_id,
@@ -228,7 +228,7 @@ pub enum ExecutionVoteVerifyError {
 ///    self.global_receipt_root()` — binds the unsigned outcomes
 ///    payload to the signed root.
 /// 2. The signature validates against the voter's public key for
-///    the canonical [`ExecVoteMessage`].
+///    the canonical [`ExecutionVoteMessage`].
 ///
 /// Construction goes through one of three gates:
 ///
@@ -269,7 +269,7 @@ impl Verified<ExecutionVote> {
     /// by the caller and the `global_receipt_root` is derived from
     /// them via [`compute_global_receipt_root`], so the binding check
     /// is trivially satisfied. The signature over the canonical
-    /// [`ExecVoteMessage`] is produced by `signer` inside this
+    /// [`ExecutionVoteMessage`] is produced by `signer` inside this
     /// call, so any later
     /// [`<ExecutionVote as Verify>::verify`](Verify::verify) call
     /// against the matching public key would succeed.
@@ -292,7 +292,7 @@ impl Verified<ExecutionVote> {
         let global_receipt_root = compute_global_receipt_root(&tx_outcomes);
         let tx_count = u32::try_from(tx_outcomes.len()).unwrap_or(u32::MAX);
         let message = signed_bytes(
-            &ExecVoteMessage {
+            &ExecutionVoteMessage {
                 vote_anchor_ts,
                 wave_id: wave_id.clone(),
                 shard_group: shard_id,
@@ -305,7 +305,7 @@ impl Verified<ExecutionVote> {
         // SAFETY: outcomes-root binding holds by construction
         // (root is derived from `tx_outcomes` above); the signature
         // is produced by `signer` over the canonical
-        // `ExecVoteMessage`, which is exactly the verify
+        // `ExecutionVoteMessage`, which is exactly the verify
         // predicate's check against this voter's matching pubkey.
         Ok(Self::new_unchecked(ExecutionVote::new(
             block_hash,
@@ -454,7 +454,7 @@ mod tests {
         let global_receipt_root = compute_global_receipt_root(&outcomes);
         let tx_count = u32::try_from(outcomes.len()).unwrap();
         let message = signed_bytes(
-            &ExecVoteMessage {
+            &ExecutionVoteMessage {
                 vote_anchor_ts,
                 wave_id: wave_id.clone(),
                 shard_group: shard_id,

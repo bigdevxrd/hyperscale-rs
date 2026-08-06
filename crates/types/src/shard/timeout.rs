@@ -33,7 +33,7 @@ use crate::{
 /// self-authenticating, and `voter` is held out so every timeout for a
 /// round signs the same bytes — which is what lets shares aggregate.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "TIMEOUT", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-timeout-v1", signing_context = NetworkId)]
 pub struct Timeout {
     shard_id: ShardId,
     round: Round,

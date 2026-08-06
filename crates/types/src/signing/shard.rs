@@ -13,7 +13,7 @@ use crate::{BlockHash, BlockHeight, Round, ShardId};
 /// (the two-chain rule) is authenticated by the quorum, not merely
 /// trusted.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "BLOCK_VOTE", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-block-vote-v1", signing_context = NetworkId)]
 pub struct BlockVoteMessage {
     /// Shard whose consensus the vote belongs to.
     pub shard_group: ShardId,
@@ -33,8 +33,8 @@ pub struct BlockVoteMessage {
 /// verified before admitting the proposal into shard consensus. A domain
 /// of its own so a proposal signature can't stand in for a vote.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "BLOCK_HEADER", signing_context = NetworkId)]
-pub struct BlockHeaderMessage {
+#[hbor(signing_domain = "hyperscale-block-proposal-v1", signing_context = NetworkId)]
+pub struct BlockProposalMessage {
     /// Shard whose consensus the proposal belongs to.
     pub shard_group: ShardId,
     /// Height of the proposed block.
@@ -50,8 +50,8 @@ pub struct BlockHeaderMessage {
 /// Signed by the sender when broadcasting committed block headers
 /// globally; verified before admitting them to the state machine.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "COMMITTED_BLOCK_HEADER", signing_context = NetworkId)]
-pub struct CertifiedBlockHeaderMessage {
+#[hbor(signing_domain = "hyperscale-certified-block-header-sender-v1", signing_context = NetworkId)]
+pub struct CertifiedBlockHeaderSenderMessage {
     /// Shard the committed block belongs to.
     pub shard_id: ShardId,
     /// Height of the committed block.

@@ -50,7 +50,7 @@ pub enum PcRound {
 /// The scope binds the vote to one PC instance: the same vector signed in
 /// one view will not verify against another.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_PC_VOTE_v1", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-pc-vote-v1", signing_context = NetworkId)]
 pub struct PcVoteMessage {
     /// The round the vote belongs to — inside the signed content, so
     /// rounds cannot replay against each other.
@@ -67,7 +67,7 @@ pub struct PcVoteMessage {
 /// view-change protocol; the binding is per-epoch — an empty-view
 /// statement is about views, so it cannot be scoped to one.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_PC_EMPTY_VIEW_v1", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-spc-empty-view-v1", signing_context = NetworkId)]
 pub struct SpcEmptyViewMessage {
     /// The epoch whose SPC instance the statement belongs to.
     pub epoch: Epoch,
@@ -93,7 +93,7 @@ pub enum SpcRelayKind {
 /// authentication. A swapped payload or a replay across `(epoch, view)`
 /// invalidates the sig.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "HYPERSCALE_SPC_RELAY_v1", signing_context = NetworkId)]
+#[hbor(signing_domain = "hyperscale-spc-relay-v1", signing_context = NetworkId)]
 pub struct SpcRelayMessage {
     /// Which notification kind is being relayed.
     pub kind: SpcRelayKind,

@@ -229,10 +229,14 @@ fn vnode_moves_through_a_committee_rotation() {
         .expect("joined shard is hosted")
         .shard_coordinator()
         .committed_height();
-    let (peer, _) = committee_member_host(&*runner, to, Some(node));
     let proposed_deadline = runner.now() + Duration::from_millis(EPOCH_MS * PROPOSAL_BUDGET_EPOCHS);
     let proposed = run_until_or(&mut *runner, proposed_deadline, &mut moves, |r| {
         assert_at_strength(r, to);
+        // Resolve the observer afresh each poll: a shuffle can rotate
+        // the member chosen at watch start out of the committee, and an
+        // ex-member's vnode freezes below the heights where the mover's
+        // proposals commit.
+        let (peer, _) = committee_member_host(r, to, Some(node));
         let tip = r
             .vnode_state_in(peer, to)
             .expect("member host carries the shard")
@@ -248,6 +252,7 @@ fn vnode_moves_through_a_committee_rotation() {
         })
     });
     if !proposed {
+        let (peer, _) = committee_member_host(&*runner, to, Some(node));
         let peer_tip = runner
             .vnode_state_in(peer, to)
             .map(|s| s.shard_coordinator().committed_height());
