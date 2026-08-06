@@ -2145,8 +2145,8 @@ mod tests {
         assert!(members.contains(&ValidatorId::new(4)));
     }
 
-    /// A miss that crosses the threshold while the proposer's shard is
-    /// missing boundary crossings counts but does not jail: the misses
+    /// A miss that crosses the threshold while the proposer's shard sits
+    /// past the halt threshold counts but does not jail: the misses
     /// arrive through the halted shard's drained witness backlog, and
     /// jailing on them exits custody holders the halt recovery needs.
     /// The counter keeps the observation; a jail lands only on evidence
@@ -2154,8 +2154,8 @@ mod tests {
     #[test]
     fn missed_proposal_threshold_defers_jail_while_shard_misses_crossings() {
         use hyperscale_types::{
-            BeaconWitnessLeafCount, BlockHash, BlockHeight, ShardBoundary, StateRoot,
-            WeightedTimestamp,
+            BeaconWitnessLeafCount, BlockHash, BlockHeight, HALT_THRESHOLD_EPOCHS, ShardBoundary,
+            StateRoot, WeightedTimestamp,
         };
 
         let mut state = single_pool_state(4);
@@ -2173,7 +2173,7 @@ mod tests {
                 attested_work: 0,
                 substate_bytes: 0,
                 last_live_epoch: Epoch::new(1),
-                consecutive_misses: 3,
+                consecutive_misses: u32::try_from(HALT_THRESHOLD_EPOCHS).expect("fits") + 1,
                 terminal_epoch: None,
                 terminal_delivered: false,
                 settled_waves_root: None,

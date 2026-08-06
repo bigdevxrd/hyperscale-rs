@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use blake3::Hasher;
 use hyperscale_types::{
-    BeaconProposal, BeaconState, Epoch, JailReason, NetworkDefinition, Randomness, RevealChain,
-    ShardId, ValidatorId, ValidatorStatus, Verifier, VrfOutput, beacon_reveal_verify,
-    byzantine_threshold,
+    BeaconProposal, BeaconState, Epoch, HALT_THRESHOLD_EPOCHS, JailReason, NetworkDefinition,
+    Randomness, RevealChain, ShardId, ValidatorId, ValidatorStatus, Verifier, VrfOutput,
+    beacon_reveal_verify, byzantine_threshold,
 };
 
 use crate::state::pool::exit_placement;
@@ -210,16 +210,21 @@ pub(super) fn filter_and_roll_randomness<'a>(
     }
 }
 
-/// Whether `party` sits on a shard whose boundary is missing crossings
-/// — the shield against halt-collateral jailing for the
-/// liveness-inferred penalties (ceremony absence, the missed-proposal
-/// ratchet). A halted shard silences its members through no fault of
-/// theirs, and every jail exits one from the committee — tearing down a
-/// copy of the frozen tip the halt recovery needs its retained members
-/// to serve. The shield is bounded: a shard past the halt threshold is
-/// fully re-drawn and its members pooled, where these jails never
-/// reach. Cryptographic faults — a malformed reveal, an equivocation —
-/// stay jailable; a halt cannot manufacture those.
+/// Whether `party` sits on a shard whose missed crossings have reached
+/// the halt threshold — the shield against halt-collateral jailing for
+/// the liveness-inferred penalties (ceremony absence, the
+/// missed-proposal ratchet). A halted shard silences its members
+/// through no fault of theirs, and every jail exits one from the
+/// committee — tearing down a copy of the frozen tip the halt recovery
+/// needs its retained members to serve.
+///
+/// The gate is the halt condition itself, not any missed crossing: a
+/// transient miss is routine and must not mute the jails that suppress
+/// reveal grinding and chronic missed proposals. The shield covers the
+/// window between the halt flagging and the recovery redraw pooling the
+/// members, where these jails would otherwise strand the frozen tip.
+/// Cryptographic faults — a malformed reveal, an equivocation — stay
+/// jailable; a halt cannot manufacture those.
 pub(super) fn on_missing_crossings_shard(state: &BeaconState, party: ValidatorId) -> bool {
     let Some(ValidatorStatus::OnShard { shard, .. }) =
         state.validators.get(&party).map(|r| r.status)
@@ -229,7 +234,7 @@ pub(super) fn on_missing_crossings_shard(state: &BeaconState, party: ValidatorId
     state
         .boundaries
         .get(&shard)
-        .is_some_and(|b| b.consecutive_misses > 0)
+        .is_some_and(|b| u64::from(b.consecutive_misses) > HALT_THRESHOLD_EPOCHS)
 }
 
 /// Transition `victim` to `Jailed { since_epoch, reason }`, then run
@@ -468,16 +473,16 @@ mod tests {
     }
 
     /// A committee member absent from the committed set is spared the
-    /// withholding jail while its shard is missing boundary crossings: a
-    /// halted shard silences its members through no fault of theirs, and
-    /// jailing them exits each from the committee in turn — tearing down
-    /// the frozen tip's last copies before the halt recovery can retain
-    /// them.
+    /// withholding jail while its shard's missed crossings have reached
+    /// the halt threshold: a halted shard silences its members through
+    /// no fault of theirs, and jailing them exits each from the
+    /// committee in turn — tearing down the frozen tip's last copies
+    /// before the halt recovery can retain them.
     #[test]
     fn absence_on_a_missing_crossings_shard_does_not_jail() {
         use hyperscale_types::{
-            BeaconWitnessLeafCount, BlockHash, BlockHeight, ShardBoundary, StateRoot,
-            WeightedTimestamp,
+            BeaconWitnessLeafCount, BlockHash, BlockHeight, HALT_THRESHOLD_EPOCHS, ShardBoundary,
+            StateRoot, WeightedTimestamp,
         };
 
         let mut state = single_pool_state(4);
@@ -495,7 +500,7 @@ mod tests {
                 attested_work: 0,
                 substate_bytes: 0,
                 last_live_epoch: Epoch::new(1),
-                consecutive_misses: 3,
+                consecutive_misses: u32::try_from(HALT_THRESHOLD_EPOCHS).expect("fits") + 1,
                 terminal_epoch: None,
                 terminal_delivered: false,
                 settled_waves_root: None,
@@ -521,6 +526,52 @@ mod tests {
         ));
         let members = &state.next_shard_committees[&ShardId::leaf(1, 0)].members;
         assert!(members.contains(&ValidatorId::new(0)));
+    }
+
+    /// A shard one crossing behind is routine, not halted: its silent
+    /// member still jails for withholding. The shield engages only at
+    /// the halt threshold, so a benign transient miss cannot mute the
+    /// grinding-suppression jail.
+    #[test]
+    fn absence_with_one_missed_crossing_still_jails() {
+        use hyperscale_types::{
+            BeaconWitnessLeafCount, BlockHash, BlockHeight, ShardBoundary, StateRoot,
+            WeightedTimestamp,
+        };
+
+        let mut state = single_pool_state(4);
+        state.committee = (0u64..4).map(ValidatorId::new).collect();
+        state.boundaries.insert(
+            ShardId::leaf(1, 0),
+            ShardBoundary {
+                state_root: StateRoot::ZERO,
+                block_hash: BlockHash::from_raw(Hash::from_bytes(b"live")),
+                height: BlockHeight::new(5),
+                weighted_timestamp: WeightedTimestamp::ZERO,
+                witness_leaf_count: BeaconWitnessLeafCount::ZERO,
+                witness_base: BeaconWitnessLeafCount::ZERO,
+                attested_work: 0,
+                substate_bytes: 0,
+                last_live_epoch: Epoch::new(1),
+                consecutive_misses: 1,
+                terminal_epoch: None,
+                terminal_delivered: false,
+                settled_waves_root: None,
+                reshape_admitted_epoch: None,
+            },
+        );
+
+        let target = state.current_epoch.next();
+        let committed: Vec<_> = (1u64..4)
+            .map(|i| (ValidatorId::new(i), vrf_proposal(i, target)))
+            .collect();
+        let effects = apply_next_epoch(&mut state, &committed);
+
+        assert_eq!(
+            effects.jailed,
+            vec![ValidatorId::new(0)],
+            "one missed crossing must not shield a withholding member",
+        );
     }
 
     /// An honest member cut off for one epoch — the async-window case —
