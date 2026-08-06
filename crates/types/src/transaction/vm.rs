@@ -82,9 +82,9 @@ impl EnvelopeExt for TransactionEnvelope {
 /// A transaction's derived routing identity.
 ///
 /// Admission conflict keys and the owner prefixes that place it on
-/// shards. A pure function of the envelope and genesis-static metadata
-/// (INV-VM-2) — derived locally at every node, never carried on the
-/// wire. Nullifier creation writes are in the write keys: committing a
+/// shards. A pure function of the envelope and genesis-static metadata —
+/// derived locally at every node, never carried on the wire, so a
+/// sender cannot claim a placement its content does not earn. Nullifier creation writes are in the write keys: committing a
 /// subintent is an exclusive write at its canonical nullifier address.
 /// Snapshot reads appear nowhere here: they are lock-free and
 /// client-proven, so a snapshot-only shard is not a participant at all.

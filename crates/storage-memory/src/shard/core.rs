@@ -31,9 +31,9 @@ use super::state::{ConsensusState, SharedState, apply_writes};
 /// capturing per-write prior values for historical reads. This mirrors
 /// `RocksDbShardStorage`'s two-CF layout.
 ///
-/// Implements Radix's `SubstateDatabase` directly, plus our `SubstateStore` /
-/// `VersionedStore` extensions for snapshots, node listing, and JMT state
-/// roots.
+/// Implements `SubstateDatabase` directly, plus the `SubstateStore` /
+/// `VersionedStore` extensions for snapshots, owner-prefix listing, and
+/// JMT state roots.
 ///
 /// # Locking Strategy
 ///

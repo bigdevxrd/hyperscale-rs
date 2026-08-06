@@ -134,9 +134,8 @@ pub fn nullifier_race_admits_exactly_one(c: &mut impl Cluster) {
 /// it accepts and lands state.
 ///
 /// The committed state root must move off its pre-submission value: the
-/// transfer's identity-keyed vault cells (INV-VM-4's leaf form) entered
-/// the shard's JMT on every replica, or the commit could not have
-/// certified.
+/// transfer's identity-keyed vault cells entered the shard's JMT on
+/// every replica, or the commit could not have certified.
 ///
 /// # Panics
 ///
@@ -171,7 +170,10 @@ pub fn single_transfer(c: &mut impl Cluster) {
 }
 
 /// An uncovered withdrawal aborts deterministically on every replica
-/// and the chain carries on — the consensus half of INV-VM-1.
+/// and the chain carries on.
+///
+/// Every replica reaches the same verdict from the same committed
+/// state, so a failure is consensus content like any success.
 ///
 /// The over-withdrawal's reservation is infeasible against committed
 /// state, so every replica derives the identical `Failed` receipt and
@@ -464,8 +466,8 @@ pub fn events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
 /// that carries the rule is the counterpart's mark moving at all.
 ///
 /// The byte level is checked for stability rather than for conservation
-/// across a reshape: bonds do not exist yet, so INV-VM-7's own clause has
-/// nothing to conserve. What is checkable today is that the channel
+/// across a reshape: storage bonds do not exist yet, so there is no
+/// conserved quantity to balance. What is checkable today is that the channel
 /// neither invents nor loses state — a quiesced network's recorded levels
 /// do not drift.
 ///
@@ -570,9 +572,9 @@ pub fn a_failed_attempt_still_attests_work(c: &mut impl Cluster) {
         "an uncovered VM withdrawal must reject deterministically; status = {status:?}"
     );
 
-    // The attempt applied nothing, so under the old shape — work carried on
-    // the receipt — there was no receipt to carry it and the mark stood
-    // still.
+    // The attempt applied nothing and still attests work: a failed
+    // verdict produces no receipt, so the attestation must ride the
+    // outcome itself for the mark to move.
     assert!(
         c.run_until(epochs(24), |c| recorded_gas(c, shard)
             .is_some_and(|now| now > before)),

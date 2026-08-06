@@ -36,7 +36,7 @@ Three time types, three roles, no blending:
 
 The central rule: **state machines never read a clock; they are told the time** (INV-DET-2). In production, runners stamp `LocalTimestamp` from the system clock at the event boundary; in simulation, from the event queue. Any `Instant::now()` inside an FSM is a determinism bug by definition. One such call (in the shared sync FSM) caused a genuinely load-dependent test flake — exactly the class of defect the rule exists to make structurally impossible.
 
-The same discipline covers randomness (consensus randomness comes only from the beacon's attested accumulator; harness randomness only from seeds) and encoding: all wire and hashed types use SBOR with ordered collections (`BTreeMap`/`BTreeSet`, never hash-ordered iteration), so serialization is a pure function of value (INV-DET-5).
+The same discipline covers randomness (consensus randomness comes only from the beacon's attested accumulator; harness randomness only from seeds) and encoding: all wire and hashed types use HBOR, whose canonical encoding admits only ordered collections (`BTreeMap`/`BTreeSet`, never hash-ordered iteration), so serialization is a pure function of value (INV-DET-5).
 
 ## 3. The two harnesses
 

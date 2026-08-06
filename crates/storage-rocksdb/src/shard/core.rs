@@ -209,13 +209,13 @@ impl RocksDbShardStorage {
                     cf_opts.set_compression_type(config.compression.to_rocksdb());
                 }
 
-                // StateHistoryCf: fixed 51-byte prefix
-                // (entity_key[50] + partition_num[1]) gates historical
-                // reads and `list_at_prefix` scans. Keys carry an 8-byte
+                // StateHistoryCf: fixed 32-byte prefix (the substate
+                // key's owner ++ local halves) gates historical reads
+                // and `list_at_prefix` scans. Keys carry an 8-byte
                 // write_version suffix beyond the prefix, so historical
-                // seeks at `storage_key ++ BE8(V+1)` and partition
-                // scans both benefit from per-substate SST pruning via
-                // prefix bloom over the 32-byte key ahead of the version
+                // seeks at `storage_key ++ BE8(V+1)` and prefix scans
+                // both benefit from per-substate SST pruning via prefix
+                // bloom over the 32-byte key ahead of the version
                 // suffix. StateCf is point-read dominated and uses
                 // whole-key bloom only — see its type doc.
                 if name == STATE_HISTORY_CF {

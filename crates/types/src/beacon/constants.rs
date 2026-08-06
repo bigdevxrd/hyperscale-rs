@@ -322,7 +322,7 @@ pub const EMISSION_PARTICIPATION_WEIGHT: u64 = 1_000_000;
 /// A *share*, not a rate: the term is `weight × shard_work / total_gas`, so
 /// the constant is a dimensionless ratio against
 /// [`EMISSION_PARTICIPATION_WEIGHT`] rather than a guess at what a gas unit
-/// is worth. Phase 6 sets the ratio against measured baselines.
+/// is worth. The ratio is a placeholder until measured baselines set it.
 pub const EMISSION_WORK_WEIGHT: u64 = 1_000_000;
 
 /// Weight distributed across shards by their share of committed stored
@@ -330,5 +330,5 @@ pub const EMISSION_WORK_WEIGHT: u64 = 1_000_000;
 ///
 /// Keys on bytes rather than bond value, so a later move in the per-byte
 /// storage rate grandfathers nobody. A share on the same footing as
-/// [`EMISSION_WORK_WEIGHT`]; phase 6 sets the ratio.
+/// [`EMISSION_WORK_WEIGHT`], placeholder like it.
 pub const EMISSION_STORAGE_WEIGHT: u64 = 1_000_000;

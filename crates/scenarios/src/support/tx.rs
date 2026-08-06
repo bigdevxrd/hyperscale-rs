@@ -469,9 +469,8 @@ pub fn recipient(index: u8) -> [u8; 16] {
 /// `recipients` payees.
 ///
 /// Recipients must be genesis accounts too — an instance the registry
-/// does not know cannot be a deposit target, so there is no
-/// instantiate-on-deposit path to race (the account-creation flow is
-/// later-phase scope).
+/// does not know cannot be a deposit target; there is no
+/// instantiate-on-deposit flow.
 #[must_use]
 pub fn genesis_accounts(senders: u8, recipients: u8) -> Vec<([u8; 16], u128)> {
     (0..senders)
@@ -1395,8 +1394,8 @@ pub fn build_composed_tx(
 
 /// The fee ceiling every built call envelope signs.
 ///
-/// A placeholder — the constants are phase 6 scope, the structure is signed
-/// now — but a load-bearing one: the payer shard's reservation check demands
+/// A placeholder awaiting measured pricing, but a load-bearing one: the
+/// payer shard's reservation check demands
 /// the ceiling be coverable, so it must sit below the funded balances, and a
 /// scenario probing for a stale reservation sizes its funding against it.
 pub const MAX_FEE: u128 = 1_000;

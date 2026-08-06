@@ -507,7 +507,7 @@ impl TopologySnapshot {
 // ═══════════════════════════════════════════════════════════════════════════
 
 impl TopologySnapshot {
-    /// Get the Radix network this topology is operating on.
+    /// Get the network this topology is operating on.
     ///
     /// Used by signing-message construction sites to bind `network.id`
     /// into signed consensus messages, so signatures don't replay

@@ -21,7 +21,7 @@ use crate::support::{Cluster, epochs};
 /// **A symmetric pair resolves by deadline, not by a loser.** There is no
 /// cycle detector: each payer's shard holds a lock the other's wave needs,
 /// neither can engage, and the deadline abort is what breaks it — the
-/// backstop D21 names, doing the job it exists for. So both aborting is
+/// fee model's backstop doing the job it exists for. So both aborting is
 /// the expected shape, and asserting "at most one aborts" would be
 /// asserting a mechanism this engine does not have.
 ///

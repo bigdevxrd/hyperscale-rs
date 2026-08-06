@@ -121,7 +121,7 @@ impl SpcDriver {
     /// Declines (leaves the instance cleared) when `committee.len() <
     /// MIN_BEACON_COMMITTEE_SIZE`: a committee that can't tolerate a single
     /// Byzantine fault must not run PC. Rather than panic in
-    /// [`PcScope::new`](crate::pc), the driver skips the bootstrap and
+    /// [`PcInstance::new`](crate::pc), the driver skips the bootstrap and
     /// lets the skip path carry the epoch — the ready on-shard set has
     /// collapsed below the BFT floor, an operator-visible degradation the
     /// chain recovers from once enough validators ready up.

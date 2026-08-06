@@ -3636,7 +3636,7 @@ mod tests {
 
     /// A beacon-eligible set that resampled below the BFT minimum
     /// (`n < MIN_BEACON_COMMITTEE_SIZE`) must not bootstrap an SPC instance —
-    /// `PcScope::new` would panic on it. The coordinator declines and
+    /// `PcInstance::new` would panic on it. The coordinator declines and
     /// leaves `spc` cleared so the skip path can carry the epoch.
     #[test]
     fn bootstrap_below_bft_minimum_declines_without_panicking() {

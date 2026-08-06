@@ -7,8 +7,9 @@
 //! Signing and hashing-to-curve use the proof-of-possession ciphersuite
 //! ([`CIPHERSUITE`]). That suffix is what makes it sound to aggregate
 //! keys that were never checked against each other in a rogue-key sense
-//! — registration proves possession separately (INV-SEC-10), and the
-//! ciphersuite records which regime the signature was made under.
+//! — validator registration proves possession of every key separately,
+//! and the ciphersuite records which regime the signature was made
+//! under.
 
 use blst::BLST_ERROR;
 use blst::min_pk::{
@@ -33,7 +34,7 @@ impl PublicKey {
     ///
     /// `validate` runs the G1 subgroup check on every input. Callers pass
     /// `false` only where the keys are already possession-proven — a
-    /// registered topology key (INV-SEC-10) or genesis config — because
+    /// registered topology key or genesis config — because
     /// that is exactly what forecloses the rogue-key construction the
     /// check would otherwise be defending against, and it is a per-key
     /// cost on a hot path.

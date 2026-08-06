@@ -377,11 +377,11 @@ impl Display for Epoch {
 /// per-pool aggregate `Stake` deltas via `ShardWitnessPayload::StakeDeposit`
 /// / `StakeWithdraw`.
 ///
-/// Denominated in **attos** (10⁻¹⁸ whole tokens) for lossless interop
-/// with Radix's [`Decimal`](https://docs.rs/radix-common). `u128` gives
-/// ~3.4 × 10²⁰ whole tokens of headroom — vastly more than any realistic
-/// supply, so arithmetic doesn't need to be defensive against overflow
-/// at protocol-reasonable values.
+/// Denominated in **attos** (10⁻¹⁸ whole tokens), matching the amount
+/// cells the engine settles. `u128` gives ~3.4 × 10²⁰ whole tokens of
+/// headroom — vastly more than any realistic supply, so arithmetic
+/// doesn't need to be defensive against overflow at protocol-reasonable
+/// values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
 #[hbor(transparent)]
 pub struct Stake(u128);

@@ -3,7 +3,7 @@
 
 use crate::{NetworkDefinition, ValidatorId, ValidatorSet};
 
-/// The validators that exist at genesis: the Radix network, the full registered
+/// The validators that exist at genesis: the network, the full registered
 /// set (every validator, seated or pooled), and the genesis ROOT committee.
 ///
 /// Genesis is always a single ROOT shard — the network launches at one shard and
@@ -15,7 +15,7 @@ use crate::{NetworkDefinition, ValidatorId, ValidatorSet};
 /// alongside a beacon state it has to be kept in agreement with.
 #[derive(Clone, Debug)]
 pub struct GenesisValidators {
-    /// Radix network bound into the projected topology (the consensus-signature
+    /// Network bound into the projected topology (the consensus-signature
     /// domain) and the genesis beacon config hash.
     pub network: NetworkDefinition,
     /// Every registered validator at genesis — the ROOT committee plus the

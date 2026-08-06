@@ -75,7 +75,7 @@ fn batch_all_or_nothing(
 
     let result = BlstSignature::verify_multiple_aggregate_signatures(
         messages,
-        CIPHERSUITE, // DST must match sign_v1/verify_bls12381_v1
+        CIPHERSUITE, // DST must match `sign`/`verify`
         &pk_refs,
         false, // pks_validate - possession-proven or genesis-trusted
         &sig_refs,

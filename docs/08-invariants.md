@@ -134,7 +134,7 @@ The consolidated register of the system's safety and liveness properties, with s
 | **INV-DET-2** | Determinism | **Fed time.** Time is an input; consensus randomness is beacon-attested; harness randomness is seeded. No FSM reads a clock. |
 | **INV-DET-3** | Determinism | **Harness parity.** Identical protocol code runs under simulation and production; behavioral scenarios are portable, and cross-harness divergence always indicates a real defect. |
 | **INV-DET-4** | Determinism | **Seeded reproducibility.** A simulation run, fault injection included, is byte-identical for a given seed. |
-| **INV-DET-5** | Determinism | **Deterministic encoding.** All hashed/signed/wire values encode deterministically (SBOR, ordered collections, bounded lengths). |
+| **INV-DET-5** | Determinism | **Deterministic encoding.** All hashed/signed/wire values encode deterministically (canonical HBOR, ordered collections, bounded lengths). |
 | **INV-DET-6** | Safety | **Typestate verification.** Verification status is a type-level marker (`Verifiable<T>`/`Verified<T>`): a verified value cannot be constructed by decoding wire bytes (decode always lands unverified), and the marker is preserved only across in-process handoffs within one trust domain (one process = one operator). Nothing is re-verified locally; nothing unverified can masquerade as verified. |
 
 ---

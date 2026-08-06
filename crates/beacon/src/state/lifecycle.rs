@@ -705,9 +705,9 @@ mod tests {
     /// Deterministic: two states with byte-identical inputs produce
     /// byte-identical credits.
     /// The weighting moves emission toward the shard that did the work,
-    /// and it degrades to its predecessor when no shard attested any: with
-    /// an empty work map and no recorded bytes, only the participation floor
-    /// applies, which is the pro-rata-by-ready-validator split.
+    /// and with an empty work map and no recorded bytes only the
+    /// participation floor applies, which is the
+    /// pro-rata-by-ready-validator split.
     #[test]
     fn emission_weights_follow_attested_work_and_fall_back_to_participation() {
         use hyperscale_types::{
@@ -745,8 +745,8 @@ mod tests {
             ),
         );
 
-        // No attested work anywhere: the floor alone, so the two pools split
-        // evenly — exactly the pre-weighting behaviour.
+        // No attested work anywhere: the floor alone, so the two pools
+        // split evenly.
         let flat = distribute_epoch_rewards(&mut state, &BTreeMap::new());
         assert_eq!(flat[&StakePoolId::new(0)], flat[&second_pool]);
 

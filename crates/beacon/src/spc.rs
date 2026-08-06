@@ -1802,7 +1802,7 @@ mod tests {
     fn heartbeat_replays_own_empty_view() {
         let (sks, members) = fsm_committee(4);
         let mut fsm = fsm_instance(0);
-        let spc_ctx = Epoch::new(1);
+        let epoch = Epoch::new(1);
 
         // Enter view 2 so the empty-view targets the current view.
         let entry = SpcCert::Direct {
@@ -1827,7 +1827,7 @@ mod tests {
             sks[0].as_ref(),
             members[0].0,
             &net(),
-            spc_ctx,
+            epoch,
             SpcView::new(2),
             Verified::<SpcHighTriple>::new_unchecked_for_test(reported.clone()),
         )
@@ -1920,7 +1920,7 @@ mod tests {
     fn empty_view_with_non_progressing_reported_view_rejected() {
         let mut fsm = fsm_instance(0);
         let (sks, members) = fsm_committee(4);
-        let spc_ctx = Epoch::new(1);
+        let epoch = Epoch::new(1);
         let reported = SpcHighTriple {
             view: SpcView::new(5),
             value: PcVector::empty(),
@@ -1931,7 +1931,7 @@ mod tests {
             sks[1].as_ref(),
             members[1].0,
             &net(),
-            spc_ctx,
+            epoch,
             SpcView::new(3),
             Verified::<SpcHighTriple>::new_unchecked_for_test(reported),
         )

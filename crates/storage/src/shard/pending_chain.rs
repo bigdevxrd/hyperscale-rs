@@ -30,7 +30,7 @@ use crate::{
 /// Populated lazily on every overlay-miss read; captured at commit time
 /// and handed to `append_substate_writes_to_batch` so `capture_history`
 /// can source priors without a fresh `multi_get_cf` on `StateCf`. Entries
-/// are `(partition_key, sort_key) → value-at-anchor`.
+/// are `SubstateKey → value-at-anchor`.
 pub type BaseReadCache = HashMap<SubstateKey, Option<Vec<u8>>>;
 
 /// One block's worth of pending state, indexed by block hash in
@@ -615,8 +615,8 @@ where
 
 // ─── SubstateView ───────────────────────────────────────────────────────
 
-/// Flattened overlay entries: `(partition_key, sort_key) → Some(value)`
-/// or `None` (tombstone).
+/// Flattened overlay entries: `SubstateKey → Some(value)` or `None`
+/// (tombstone).
 type OverlayEntries = HashMap<SubstateKey, Option<Vec<u8>>>;
 
 /// JMT node index for O(1) tree-node lookup during proof generation.
@@ -843,8 +843,8 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         }
 
         // Base value at the persisted tip, then pending receipts in
-        // commit order up to `block_height` — the same overlay walk as
-        // the node-level listing, narrowed to one key.
+        // commit order up to `block_height` — the view's overlay walk,
+        // narrowed to one key.
         let mut value = (*self.base).get_substate_at_height(key, persisted_version)?;
         for (h, receipt) in &self.versioned_receipts {
             if *h > block_height {

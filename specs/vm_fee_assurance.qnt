@@ -65,8 +65,7 @@
 // from, which is what makes a reservation's encumbrance indistinguishable
 // from a conflict lock in any end-to-end test.
 //
-// Code anchors (intended seams — the echo and vote-gating machinery is
-// milestone 3 unit 4b; anchors firm up as it lands):
+// Code anchors:
 //   - Reservation as block validity: the `VerifyVmReservations`
 //     verification (crates/shard) demanded from chain content.
 //   - Engagement gate: the proposal seam consults the
