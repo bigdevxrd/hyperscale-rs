@@ -5,31 +5,34 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use blake3::{Hasher, hash as blake3_hash};
 use hex::{decode_to_slice as hex_decode_to_slice, encode as hex_encode};
-use hyperscale_hbor::Hbor;
+use hyperscale_hbor::{Hash32, Hbor};
 
 /// A 32-byte cryptographic hash using Blake3.
 ///
 /// Provides constant-time comparison and is safe to use as a `HashMap` key.
 /// All hashing operations are deterministic.
+///
+/// Wraps hbor's [`Hash32`] — the 32-byte primitive the VM workspace
+/// speaks — so crossing that seam is a wrapper flip, never a byte copy.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Hbor)]
 #[hbor(transparent)]
-pub struct Hash([u8; 32]);
+pub struct Hash(Hash32);
 
 impl Hash {
     /// Size of hash in bytes.
     pub const BYTES: usize = 32;
 
     /// Zero hash (all bytes are 0x00).
-    pub const ZERO: Self = Self([0u8; 32]);
+    pub const ZERO: Self = Self(Hash32([0u8; 32]));
 
     /// Max hash (all bytes are 0xFF).
-    pub const MAX: Self = Self([0xFFu8; 32]);
+    pub const MAX: Self = Self(Hash32([0xFFu8; 32]));
 
     /// Create hash from bytes using Blake3.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let hash = blake3_hash(bytes);
-        Self(*hash.as_bytes())
+        Self(Hash32(*hash.as_bytes()))
     }
 
     /// Create a Hash from raw hash bytes (without hashing).
@@ -42,7 +45,7 @@ impl Hash {
         assert_eq!(bytes.len(), 32, "Hash must be exactly 32 bytes");
         let mut arr = [0u8; 32];
         arr.copy_from_slice(bytes);
-        Self(arr)
+        Self(Hash32(arr))
     }
 
     /// Create hash from multiple byte slices.
@@ -52,7 +55,7 @@ impl Hash {
         for part in parts {
             hasher.update(part);
         }
-        Self(*hasher.finalize().as_bytes())
+        Self(Hash32(*hasher.finalize().as_bytes()))
     }
 
     /// Parse hash from hex string.
@@ -72,24 +75,30 @@ impl Hash {
         let mut bytes = [0u8; 32];
         hex_decode_to_slice(hex, &mut bytes).map_err(|_| HexError::InvalidHex)?;
 
-        Ok(Self(bytes))
+        Ok(Self(Hash32(bytes)))
     }
 
     /// Convert hash to hex string.
     #[must_use]
     pub fn to_hex(&self) -> String {
-        hex_encode(self.0)
+        hex_encode(self.0.0)
     }
 
     /// Get bytes as slice reference.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+        &self.0.0
     }
 
     /// Convert to bytes array.
     #[must_use]
     pub const fn to_bytes(self) -> [u8; 32] {
+        self.0.0
+    }
+
+    /// The hash as the shared 32-byte primitive, without copying.
+    #[must_use]
+    pub const fn as_hash32(self) -> Hash32 {
         self.0
     }
 
@@ -97,7 +106,7 @@ impl Hash {
     #[must_use]
     pub fn leading_zero_bits(&self) -> u32 {
         let mut count = 0u32;
-        for &byte in &self.0 {
+        for &byte in &self.0.0 {
             if byte == 0 {
                 count += 8;
             } else {
@@ -115,23 +124,35 @@ impl Hash {
     /// Cannot panic: a `Hash` is 32 bytes so the first 8 always exist.
     #[must_use]
     pub fn as_u64(&self) -> u64 {
-        u64::from_le_bytes(self.0[0..8].try_into().unwrap())
+        u64::from_le_bytes(self.0.0[0..8].try_into().unwrap())
     }
 
     /// Check if this is the zero hash.
     #[must_use]
     pub fn is_zero(&self) -> bool {
-        self.0.iter().all(|&b| b == 0)
+        self.0.0.iter().all(|&b| b == 0)
     }
 
     /// Compute a 64-bit value from all 32 bytes using polynomial hash.
     #[must_use]
     pub fn as_long(&self) -> i64 {
         let mut hash: i64 = 17;
-        for &byte in &self.0 {
+        for &byte in &self.0.0 {
             hash = hash.wrapping_mul(31).wrapping_add(i64::from(byte));
         }
         hash
+    }
+}
+
+impl From<Hash32> for Hash {
+    fn from(raw: Hash32) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<Hash> for Hash32 {
+    fn from(hash: Hash) -> Self {
+        hash.0
     }
 }
 
@@ -319,5 +340,14 @@ mod tests {
         assert!(Hash::ZERO.is_zero());
         assert!(!Hash::MAX.is_zero());
         assert!(!Hash::from_bytes(b"test").is_zero());
+    }
+
+    #[test]
+    fn test_hash32_round_trip() {
+        let hash = Hash::from_bytes(b"seam");
+        let raw: Hash32 = hash.into();
+        assert_eq!(raw.0, *hash.as_bytes());
+        assert_eq!(Hash::from(raw), hash);
+        assert_eq!(hash.as_hash32(), raw);
     }
 }

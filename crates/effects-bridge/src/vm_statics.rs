@@ -23,9 +23,9 @@ use hyperscale_types::{
 };
 use hyperscale_vm_effects::stdlib::{ENTROPY, VALIDATORS, VAULT};
 use hyperscale_vm_effects::{
-    Accessibility, Address, EffectSet, EffectTarget, EnvelopeTree, Hash32, InstanceRegistry,
-    ManifestHash, MetadataCache, Mode, PackageHash, PackageMetadata, PrefixShardResolver, RoleId,
-    SubstateKey, Value, admit_tree, child_key, package_hash, route_tree,
+    Accessibility, Address, EffectSet, EffectTarget, EnvelopeTree, InstanceRegistry, ManifestHash,
+    MetadataCache, Mode, PackageHash, PackageMetadata, PrefixShardResolver, RoleId, SubstateKey,
+    Value, admit_tree, child_key, package_hash, route_tree,
 };
 
 use crate::ProtocolHasher;
@@ -148,7 +148,7 @@ const fn admission_key(target: &EffectTarget) -> DeclaredKey {
 /// protocol hash, as the vocabulary's hash type.
 #[must_use]
 pub fn envelope_identity(vm: &TransactionEnvelope) -> ManifestHash {
-    ManifestHash(Hash32(*vm.signing_hash().as_bytes()))
+    ManifestHash(vm.signing_hash().as_hash32())
 }
 
 /// The bridge's [`VmStatics`]: `decode → admit → route` over the
