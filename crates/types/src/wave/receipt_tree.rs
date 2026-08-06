@@ -13,10 +13,12 @@ use crate::{
 ///
 /// The domain tags ensure the three variants can never collide.
 ///
-/// A settled fee receipt extends the leaf under its own domain tag. The
-/// vote signature covers only the receipt root, and decoding recomputes
-/// that root from the outcomes — so a hash outside the leaf would be an
-/// aggregator's to forge.
+/// The attested `work` scalar and any settled fee receipt extend the
+/// leaf under their own domain tags. The vote signature covers only the
+/// receipt root, and decoding recomputes that root from the outcomes —
+/// so a field outside the leaf would be an aggregator's to forge. Work
+/// in particular feeds emission weighting and the reshape load
+/// predicate, so it must sit under the signed root.
 #[must_use]
 pub fn tx_outcome_leaf(outcome: &TxOutcome) -> Hash {
     let base = match outcome.outcome() {
@@ -26,8 +28,9 @@ pub fn tx_outcome_leaf(outcome: &TxOutcome) -> Hash {
         ExecutionOutcome::Failed => Hash::from_parts(&[outcome.tx_hash().as_bytes(), b"FAILED:"]),
         ExecutionOutcome::Aborted => Hash::from_parts(&[outcome.tx_hash().as_bytes(), b"ABORTED:"]),
     };
-    outcome.fee_receipt().map_or(base, |fee_receipt| {
-        Hash::from_parts(&[base.as_bytes(), b"FEE:", fee_receipt.as_bytes()])
+    let with_work = Hash::from_parts(&[base.as_bytes(), b"WORK:", &outcome.work().to_le_bytes()]);
+    outcome.fee_receipt().map_or(with_work, |fee_receipt| {
+        Hash::from_parts(&[with_work.as_bytes(), b"FEE:", fee_receipt.as_bytes()])
     })
 }
 
@@ -58,4 +61,40 @@ pub fn compute_global_receipt_root_with_proof(
     let leaf_hash = leaves[tx_index];
     let (root, siblings, leaf_index) = compute_merkle_root_with_proof(&leaves, tx_index);
     (root, siblings, leaf_index, leaf_hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{GlobalReceiptHash, TxHash};
+
+    fn tx_hash() -> TxHash {
+        TxHash::from(Hash::from_bytes(b"leaf-tx"))
+    }
+
+    /// `work` is folded into the leaf: outcomes identical but for their
+    /// attested work hash to different leaves, so a forged work fails
+    /// the receipt-root recompute every EC decode runs.
+    #[test]
+    fn leaf_covers_attested_work() {
+        let outcome = |work| TxOutcome::attesting(tx_hash(), ExecutionOutcome::Aborted, work);
+        assert_ne!(
+            tx_outcome_leaf(&outcome(7)),
+            tx_outcome_leaf(&outcome(8)),
+            "work must be covered by the leaf"
+        );
+    }
+
+    /// The fee-receipt extension composes with the work fold — a forged
+    /// work is still caught on outcomes that settle a fee receipt.
+    #[test]
+    fn leaf_covers_attested_work_with_fee_receipt() {
+        let fee = GlobalReceiptHash::from_raw(Hash::from_bytes(b"fee"));
+        let outcome = |work| TxOutcome::with_fee(tx_hash(), ExecutionOutcome::Failed, fee, work);
+        assert_ne!(
+            tx_outcome_leaf(&outcome(7)),
+            tx_outcome_leaf(&outcome(8)),
+            "work must be covered by the leaf on fee-settling outcomes"
+        );
+    }
 }

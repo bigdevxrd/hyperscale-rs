@@ -462,6 +462,7 @@ impl Verified<ExecutionCertificate> {
 mod tests {
     use hyperscale_crypto::Signer;
     use hyperscale_crypto_bls::{BlsSigner, BlsVerifier};
+    use hyperscale_hbor::from_slice as hbor_from_slice;
 
     use super::*;
     use crate::{BlockHash, BlockHeight, ExecutionOutcome, GlobalReceiptHash, TxHash};
@@ -700,6 +701,38 @@ mod tests {
         assert!(cert.signers().is_set(0));
         assert!(!cert.signers().is_set(1));
         assert_eq!(cert.signers().count_ones(), 1);
+    }
+
+    /// An EC whose outcomes' `work` was mutated after the root was
+    /// fixed fails the decode-side receipt-root recompute — the leaf
+    /// covers work, so an aggregator cannot ship a signature-valid EC
+    /// with forged work.
+    #[test]
+    fn decode_rejects_tampered_work() {
+        let outcomes = vec![TxOutcome::attesting(
+            TxHash::from(Hash::from_bytes(b"worked-tx")),
+            ExecutionOutcome::Aborted,
+            7,
+        )];
+        let root = compute_global_receipt_root(&outcomes);
+
+        let forged: Vec<TxOutcome> = outcomes
+            .iter()
+            .map(|o| TxOutcome::attesting(o.tx_hash(), o.outcome().clone(), 999))
+            .collect();
+        let cert = ExecutionCertificate::new(
+            wave_id(),
+            WeightedTimestamp::from_millis(11),
+            root,
+            forged,
+            AggregateSignature::ZERO,
+            SignerBitfield::new(4),
+        );
+
+        let bytes = hbor_to_vec(&cert).expect("encode");
+        let err = hbor_from_slice::<ExecutionCertificate>(&bytes)
+            .expect_err("tampered work must fail the receipt-root recompute");
+        assert!(matches!(err, HborDecodeError::FailedValidation(_)));
     }
 
     /// An EC verified against a public-key slice that doesn't match the
