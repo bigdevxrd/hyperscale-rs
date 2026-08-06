@@ -22,11 +22,11 @@ use hyperscale_types::{
     InFlightCount, LocalReceiptRoot, LocalReceiptRootContext, NetworkDefinition, PreparedCommit,
     ProposerTimestamp, ProvisionHash, ProvisionTxRootsContext, ProvisionTxRootsMap, Provisions,
     ProvisionsRoot, ProvisionsRootContext, QcContext, QuorumCertificate, ReadySignal,
-    ReadySignalMessage, ReshapeTrigger, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad,
-    SplitChildRoots, StateRoot, StateRootContext, Stopwatch, StoredReceipt, SubstateKey, Timeout,
-    TimeoutContext, TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext,
-    ValidatorId, Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp,
-    WitnessSources, absorb_committed_cells, commit_witness_window, compute_waves, derive_leaves,
+    ReshapeTrigger, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad, SplitChildRoots,
+    StateRoot, StateRootContext, Stopwatch, StoredReceipt, SubstateKey, Timeout, TimeoutContext,
+    TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext, ValidatorId,
+    Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp, WitnessSources,
+    absorb_committed_cells, commit_witness_window, compute_waves, derive_leaves,
     local_settled_wave_ids, missed_proposals_since_prev_commit, next_reveal_chain,
     shard_reveal_sign, signed_bytes, vrf_output_from_proof, work_over_certificates,
 };
@@ -1081,20 +1081,17 @@ where
             wt_window_end,
             recipients,
         } => {
-            let msg = signed_bytes(
-                &ReadySignalMessage {
-                    validator_id: ctx.me,
-                    shard,
-                    wt_window_start,
-                    wt_window_end,
-                },
+            let Ok(signal) = ReadySignal::sign(
                 ctx.topology_snapshot.network(),
-            );
-            let Ok(sig) = ctx.signer.sign(&msg) else {
+                ctx.me,
+                shard,
+                wt_window_start,
+                wt_window_end,
+                ctx.signer.as_ref(),
+            ) else {
                 tracing::error!(?shard, "cannot sign ready signal; skipping");
                 return;
             };
-            let signal = ReadySignal::new(ctx.me, shard, wt_window_start, wt_window_end, sig);
             // No local feedback: the sender is outside the consensus
             // subset, so it never proposes and its own pool entry would
             // never drain — only the recipients' pools matter.

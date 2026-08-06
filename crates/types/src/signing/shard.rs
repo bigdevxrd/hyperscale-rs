@@ -45,20 +45,6 @@ pub struct BlockHeaderMessage {
     pub block_hash: BlockHash,
 }
 
-/// What a shard consensus timeout's signature covers.
-///
-/// Only `(shard, round)` — the timeout also carries the signer's
-/// `high_qc`, but a QC is self-authenticating (it is its own 2f+1
-/// aggregate), so its round need not be bound here.
-#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-#[hbor(signing_domain = "TIMEOUT", signing_context = NetworkId)]
-pub struct TimeoutMessage {
-    /// Shard whose round timed out.
-    pub shard_group: ShardId,
-    /// The round that timed out.
-    pub round: Round,
-}
-
 /// What a committed block header gossip's signature covers.
 ///
 /// Signed by the sender when broadcasting committed block headers

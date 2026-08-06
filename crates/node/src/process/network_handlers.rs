@@ -29,9 +29,7 @@ use hyperscale_types::network::request::{
     GetExecutionCertsRequest, GetFinalizedWavesRequest, GetLocalProvisionsRequest,
 };
 use hyperscale_types::network::response::GetProvisionResponse;
-use hyperscale_types::{
-    ExecutionCertificate, ReadySignalMessage, ShardId, Verifiable, signed_bytes,
-};
+use hyperscale_types::{ExecutionCertificate, ShardId, Verifiable, signed_bytes};
 use tracing::warn;
 
 use crate::beacon::gossip::register_beacon_gossip_handlers;
@@ -517,15 +515,7 @@ where
                         );
                         return;
                     };
-                    let msg = signed_bytes(
-                        &ReadySignalMessage {
-                            validator_id: sender,
-                            shard: signal.shard(),
-                            wt_window_start: signal.wt_window_start(),
-                            wt_window_end: signal.wt_window_end(),
-                        },
-                        topo.network(),
-                    );
+                    let msg = signed_bytes(&signal, topo.network());
                     if !verify_sig_with_metrics(
                         verifier.as_ref(),
                         &msg,

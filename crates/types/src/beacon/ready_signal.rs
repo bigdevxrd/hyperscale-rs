@@ -8,14 +8,18 @@
 //! `OnShard { ready: false }` to `OnShard { ready: true }` once the
 //! shard's beacon-witness accumulator surfaces it.
 //!
-//! The signal is signed over canonical bytes whose layout lives in
-//! [`crate::signing::ReadySignalMessage`].
+//! The signal hosts its own signing domain: a signature covers every
+//! field but itself, under the network context.
 
 use std::time::Duration;
 
+use hyperscale_crypto::{SignError, Signer};
 use hyperscale_hbor::Hbor;
 
-use crate::{ConsensusSignature, ShardId, ValidatorId, WeightedTimestamp};
+use crate::signing::NetworkId;
+use crate::{
+    ConsensusSignature, NetworkDefinition, ShardId, ValidatorId, WeightedTimestamp, signed_bytes,
+};
 
 /// The weighted-time span a [`ReadySignal`]'s `[start, end]` validity
 /// window covers, scaled to the running network's `epoch_duration_ms`.
@@ -38,17 +42,18 @@ pub const fn ready_signal_window(epoch_duration_ms: u64) -> Duration {
 /// Validator-emitted attestation that they're synced and ready to sign
 /// on a specific shard.
 ///
-/// The signed message binds `(network.id, validator_id, shard, wt_window)`
-/// so the signal can't be replayed across networks and can't be hoarded
-/// past its `[start, end]` weighted-time window. The `shard` binding names
-/// the shard whose state the emitter attests it has synced — its own shard
-/// for an ordinary member, the pending child for a split observer, the
-/// child it runs for a merge keeper. The beacon fold credits the readiness
-/// only to a seat whose target matches `shard`, so a signal retained across
-/// a reshape lapse cannot mark a seat the emitter never synced. Window
-/// enforcement is the proposer/voter's job; the type itself just carries
-/// the parameters.
+/// The signature binds `(validator_id, shard, wt_window)` under the
+/// network context, so the signal can't be replayed across networks and
+/// can't be hoarded past its `[start, end]` weighted-time window. The
+/// `shard` binding names the shard whose state the emitter attests it has
+/// synced — its own shard for an ordinary member, the pending child for a
+/// split observer, the child it runs for a merge keeper. The beacon fold
+/// credits the readiness only to a seat whose target matches `shard`, so
+/// a signal retained across a reshape lapse cannot mark a seat the
+/// emitter never synced. Window enforcement is the proposer/voter's job;
+/// the type itself just carries the parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "HYPERSCALE_READY_SIGNAL_v1", signing_context = NetworkId)]
 pub struct ReadySignal {
     /// Validator emitting the signal.
     validator_id: ValidatorId,
@@ -63,7 +68,8 @@ pub struct ReadySignal {
     /// [`ready_signal_window`]; validators re-emit if the window passes
     /// uncollected.
     wt_window_end: WeightedTimestamp,
-    /// signature over [`crate::signing::ReadySignalMessage`].
+    /// Signature over the signal's own signing bytes.
+    #[hbor(unsigned)]
     sig: ConsensusSignature,
 }
 
@@ -84,6 +90,32 @@ impl ReadySignal {
             wt_window_end,
             sig,
         }
+    }
+
+    /// Build and sign a fresh `ReadySignal` with `signer`'s key.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`SignError`] when the signer cannot sign.
+    pub fn sign(
+        network: &NetworkDefinition,
+        validator_id: ValidatorId,
+        shard: ShardId,
+        wt_window_start: WeightedTimestamp,
+        wt_window_end: WeightedTimestamp,
+        signer: &dyn Signer,
+    ) -> Result<Self, SignError> {
+        // The signature is unsigned content, so the placeholder never
+        // enters the bytes being signed.
+        let mut signal = Self {
+            validator_id,
+            shard,
+            wt_window_start,
+            wt_window_end,
+            sig: ConsensusSignature::ZERO,
+        };
+        signal.sig = signer.sign(&signed_bytes(&signal, network))?;
+        Ok(signal)
     }
 
     /// Validator emitting the signal.

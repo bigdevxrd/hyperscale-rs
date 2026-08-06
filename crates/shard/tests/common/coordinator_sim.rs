@@ -43,7 +43,7 @@ use hyperscale_types::{
     LocalReceiptRootVerifyError, LocalTimestamp, NetworkDefinition, ProposerTimestamp,
     ProvisionRootVerifyError, ProvisionTxRootsContext, ProvisionTxRootsMap,
     ProvisionTxRootsVerifyError, Provisions, ProvisionsRoot, ProvisionsRootContext, QcContext,
-    QcVerifyError, QuorumCertificate, ReadySignal, ReadySignalMessage, Round, ShardId, ShardLoad,
+    QcVerifyError, QuorumCertificate, ReadySignal, Round, ShardId, ShardLoad,
     ShardVoteEquivocation, ShardWitnessPayload, Signer, StateRoot, StateRootContext,
     StateRootVerifyError, StoredReceipt, Timeout, TimeoutContext, TopologySchedule,
     TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext, TxHash,
@@ -782,17 +782,15 @@ impl ShardCoordinatorSim {
     ) {
         let validator = self.members[signer_idx].0;
         let sk = &self.sks[signer_idx];
-        let msg = signed_bytes(
-            &ReadySignalMessage {
-                validator_id: validator,
-                shard,
-                wt_window_start,
-                wt_window_end,
-            },
+        let signal = ReadySignal::sign(
             &self.network,
-        );
-        let sig = sk.as_ref().sign(&msg).expect("sign");
-        let signal = ReadySignal::new(validator, shard, wt_window_start, wt_window_end, sig);
+            validator,
+            shard,
+            wt_window_start,
+            wt_window_end,
+            sk.as_ref(),
+        )
+        .expect("sign");
         for idx in 0..self.n() {
             self.coordinators[idx]
                 .on_ready_signal_received(&self.topology_schedule, signal.clone());

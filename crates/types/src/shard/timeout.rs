@@ -15,7 +15,7 @@ use hyperscale_crypto::{SignError, Signer, Verifier};
 use hyperscale_hbor::Hbor;
 use thiserror::Error;
 
-use crate::signing::TimeoutMessage;
+use crate::signing::NetworkId;
 use crate::{
     ConsensusPublicKey, ConsensusSignature, NetworkDefinition, QuorumCertificate, Round, ShardId,
     ValidatorId, Verified, Verify, signed_bytes,
@@ -27,12 +27,21 @@ use crate::{
 /// `2f+1` timeouts for a round, every honest replica adopts the maximum
 /// `high_qc` among them and advances together — the quorum-driven view change
 /// that keeps voters synchronised.
+///
+/// The type hosts its own signing domain: a signature covers `(shard_id,
+/// round)` under the network context. `high_qc` is held out as
+/// self-authenticating, and `voter` is held out so every timeout for a
+/// round signs the same bytes — which is what lets shares aggregate.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
+#[hbor(signing_domain = "TIMEOUT", signing_context = NetworkId)]
 pub struct Timeout {
     shard_id: ShardId,
     round: Round,
+    #[hbor(unsigned)]
     high_qc: QuorumCertificate,
+    #[hbor(unsigned)]
     voter: ValidatorId,
+    #[hbor(unsigned)]
     signature: ConsensusSignature,
 }
 
@@ -50,21 +59,17 @@ impl Timeout {
         voter: ValidatorId,
         signer: &dyn Signer,
     ) -> Result<Self, SignError> {
-        let message = signed_bytes(
-            &TimeoutMessage {
-                shard_group: shard_id,
-                round,
-            },
-            network,
-        );
-        let signature = signer.sign(&message)?;
-        Ok(Self {
+        // The signature is unsigned content, so the placeholder never
+        // enters the bytes being signed.
+        let mut timeout = Self {
             shard_id,
             round,
             high_qc,
             voter,
-            signature,
-        })
+            signature: ConsensusSignature::ZERO,
+        };
+        timeout.signature = signer.sign(&signed_bytes(&timeout, network))?;
+        Ok(timeout)
     }
 
     /// Build a `Timeout` from its parts without re-signing. Caller is
@@ -146,13 +151,7 @@ impl Timeout {
     /// Build the canonical signing message for this timeout.
     #[must_use]
     pub fn signing_message(&self, network: &NetworkDefinition) -> Vec<u8> {
-        signed_bytes(
-            &TimeoutMessage {
-                shard_group: self.shard_id,
-                round: self.round,
-            },
-            network,
-        )
+        signed_bytes(self, network)
     }
 }
 
@@ -182,9 +181,9 @@ pub enum TimeoutVerifyError {
 }
 
 /// Construction asserts: the signature on the timeout validates against
-/// the voter's public key for the domain-separated signing message
-/// `TimeoutMessage`. It does **not** assert anything
-/// about the carried `high_qc` — that is verified as a QC where it is adopted.
+/// the voter's public key for the timeout's own domain-separated signing
+/// bytes. It does **not** assert anything about the carried `high_qc` —
+/// that is verified as a QC where it is adopted.
 ///
 /// Construction goes through one of two gates:
 ///
@@ -211,9 +210,9 @@ impl Verified<Timeout> {
     /// Sign a fresh [`Timeout`] with `signer` and return its verified form.
     ///
     /// The predicate holds by construction: the signature over the
-    /// canonical `TimeoutMessage` is produced by `signer` inside this
-    /// call. Used at the pacemaker site that echoes the signed timeout back to
-    /// the local `TimeoutKeeper`.
+    /// timeout's canonical signing bytes is produced by `signer` inside
+    /// this call. Used at the pacemaker site that echoes the signed
+    /// timeout back to the local `TimeoutKeeper`.
     ///
     /// # Errors
     ///
@@ -227,8 +226,9 @@ impl Verified<Timeout> {
         signer: &dyn Signer,
     ) -> Result<Self, SignError> {
         // SAFETY: the signature is produced by `signer` over the
-        // canonical `TimeoutMessage`, which is exactly the `Timeout::verify`
-        // predicate's check against this voter's matching pubkey.
+        // timeout's canonical signing bytes, which is exactly the
+        // `Timeout::verify` predicate's check against this voter's
+        // matching pubkey.
         Ok(Self::new_unchecked(Timeout::new(
             network, shard_id, round, high_qc, voter, signer,
         )?))
