@@ -12,7 +12,7 @@
 //! This provides a strong DA guarantee: if a QC forms, at least 2f+1 validators have
 //! the complete block data, making it recoverable from any honest validator in that set.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hyperscale_core::{Action, CommitSource, FeeDemand, ProtocolEvent, TimerId};
 use hyperscale_types::{
@@ -150,6 +150,14 @@ use crate::vote_keeper::VoteKeeper;
 /// votable under the floor or a header flood could park the shard at a round
 /// where every candidate is gap-skipped.
 pub const SPECULATIVE_VERIFY_GAP: u64 = 1024;
+
+/// Heights of committed-round history retained for the fee anchor's
+/// ancestry walk (`ancestry_committed_height`). Covers the deepest
+/// non-contiguous stretch a live vote's walk can descend through —
+/// far past the consensus pipeline plus any view-change window — so
+/// the beyond-horizon fallback only ever names a height every replica
+/// committed long ago.
+const COMMITTED_ROUNDS_HORIZON: usize = 128;
 
 /// Cap on distinct pending headers retained per `(height, round)`. An honest
 /// proposer signs exactly one block per round, so anything beyond a small
@@ -290,6 +298,18 @@ pub struct ShardCoordinator {
     /// In-flight fee reservations at this (payer) shard — committed VM
     /// transactions whose waves have not yet finalized.
     fee_ledger: FeeReservationLedger,
+    /// Fee-reservation verifications whose balance-read anchor the local
+    /// commit pipeline hasn't materialized yet: block hash → (demands,
+    /// anchor). The anchor is ancestry-proven, so the commit that
+    /// materializes it is coming; `record_block_committed` dispatches
+    /// these as it lands.
+    deferred_reservation_checks: HashMap<BlockHash, (Vec<FeeDemand>, BlockHeight)>,
+    /// Rounds of recently committed blocks by height — the committed
+    /// half of the ancestry walk in
+    /// [`Self::ancestry_committed_height`], covering ancestors already
+    /// pruned from pending. Bounded to a fixed horizon; anything older
+    /// is committed far beyond any live vote's reach.
+    committed_rounds: BTreeMap<BlockHeight, Round>,
 
     /// Net substate delta per uncommitted block. Entries retire into
     /// the byte frontier at commit and are pruned with their blocks.
@@ -456,6 +476,8 @@ impl ShardCoordinator {
             committed_state_root: recovered.jmt_root.unwrap_or(StateRoot::ZERO),
             substate_bytes_frontier: (recovered.committed_height, recovered.substate_bytes),
             pending_bytes_deltas: HashMap::new(),
+            deferred_reservation_checks: HashMap::new(),
+            committed_rounds: BTreeMap::new(),
             committed_in_flight: recovered.committed_in_flight,
             // A fresh start's tip is the chain's genesis, whose header
             // carries `ZERO` — known, not guessed. A restart with a real
@@ -1997,7 +2019,7 @@ impl ShardCoordinator {
                 .settled_window_floor(self.local_shard, parent_qc.weighted_timestamp()),
             Arc::clone(committee),
             fee_checks,
-            self.committed_height,
+            self.ancestry_committed_height(&parent_qc),
             substate_bytes,
         );
 
@@ -2948,6 +2970,16 @@ impl ShardCoordinator {
                     .map(|tx| (tx.fee_vault(), tx.body().max_fee)),
             );
             let fee_demands = self.fee_demands(&block_fees, block.header().parent_block_hash());
+            let fee_read_height = self.ancestry_committed_height(block.header().parent_qc());
+            let fee_read_ready = fee_read_height <= self.committed_height;
+            if !fee_read_ready && !fee_demands.is_empty() {
+                // The anchor's commit is proven but hasn't landed in the
+                // local pipeline yet; hold the demands and dispatch from
+                // `record_block_committed` when it does.
+                self.deferred_reservation_checks
+                    .entry(block_hash)
+                    .or_insert_with(|| (fee_demands.clone(), fee_read_height));
+            }
             let verification_actions = self.verification.initiate_block_verifications(
                 committee,
                 topology_schedule,
@@ -2969,7 +3001,8 @@ impl ShardCoordinator {
                 split_child_roots_required,
                 settled_waves_root_required,
                 fee_demands,
-                self.committed_height,
+                fee_read_height,
+                fee_read_ready,
             );
 
             // Wait for initiated verifications, or exit early when we're
@@ -3030,8 +3063,7 @@ impl ShardCoordinator {
         fees: &[(SubstateKey, u128)],
         parent_block_hash: BlockHash,
     ) -> Vec<FeeDemand> {
-        let mut demands: std::collections::BTreeMap<SubstateKey, u128> =
-            std::collections::BTreeMap::new();
+        let mut demands: BTreeMap<SubstateKey, u128> = BTreeMap::new();
         for (vault, max_fee) in fees {
             let entry = demands.entry(*vault).or_insert(0);
             *entry = entry.saturating_add(*max_fee);
@@ -3061,6 +3093,50 @@ impl ShardCoordinator {
             .into_iter()
             .map(|(vault, demand)| FeeDemand { vault, demand })
             .collect()
+    }
+
+    /// The highest height a block's own ancestry proves committed,
+    /// walking down from the QC certifying its parent: a certified block
+    /// commits its parent when their rounds are contiguous, and
+    /// committing a block commits its whole prefix. The walk reads only
+    /// chain content — block rounds along the parent line — so every
+    /// replica holding the block derives the same height, which is what
+    /// lets fee-reservation balance reads anchor here rather than at the
+    /// local commit tip, where pipelined voters legitimately differ.
+    ///
+    /// Ancestors already committed and pruned from pending resolve
+    /// through [`Self::committed_rounds`]; the committed chain is
+    /// linear, so height alone identifies them. Past that ring's
+    /// horizon the candidate is committed far beyond any live vote's
+    /// pipeline and is returned as-is.
+    fn ancestry_committed_height(&self, parent_qc: &QuorumCertificate) -> BlockHeight {
+        // A genesis QC proves nothing above the chain origin.
+        let Some(mut candidate_height) = parent_qc.committable_height() else {
+            return parent_qc.height();
+        };
+        let mut candidate_hash = parent_qc.committable_hash();
+        // The certified block's round — a QC certifies its block at the
+        // block's own round.
+        let mut child_round = parent_qc.round();
+        loop {
+            let (round, parent) =
+                match candidate_hash.and_then(|hash| self.pending_blocks.get_header(hash)) {
+                    Some(header) => (header.round(), Some(header.parent_block_hash())),
+                    None => match self.committed_rounds.get(&candidate_height) {
+                        Some(round) => (*round, None),
+                        None => return candidate_height,
+                    },
+                };
+            if child_round == round.next() {
+                return candidate_height;
+            }
+            let Some(next_height) = candidate_height.prev() else {
+                return candidate_height;
+            };
+            child_round = round;
+            candidate_hash = parent;
+            candidate_height = next_height;
+        }
     }
 
     /// The `(vault, max_fee)` pairs of `transactions` whose fee payer
@@ -4403,6 +4479,10 @@ impl ShardCoordinator {
         self.committed_height = height;
         self.committed_hash = block_hash;
         self.committed_ts = commit_ts;
+        self.committed_rounds.insert(height, block.header().round());
+        while self.committed_rounds.len() > COMMITTED_ROUNDS_HORIZON {
+            self.committed_rounds.pop_first();
+        }
 
         // Retain both anchors across the prune: the tip's own, which anchors
         // the committee of the block extending it, and the one its parent
@@ -4453,20 +4533,7 @@ impl ShardCoordinator {
         // conservatively across that gap.
         self.dedup_index
             .register_committed_provision_txs(block.provisions(), commit_ts);
-        // Fee reservations engage at commit and release when the
-        // resolving wave certificate commits; deadline pruning covers
-        // resolution paths that never produce one (a reshape terminal's
-        // abort by omission).
-        {
-            let trie = topology_schedule.head().shard_trie();
-            let local_shard = self.local_shard;
-            self.fee_ledger
-                .register_committed(block.transactions(), |payer| {
-                    trie.shard_for_prefix(payer) == local_shard
-                });
-        }
-        self.fee_ledger.release_finalized(block.certificates());
-        self.fee_ledger.prune(commit_ts);
+        self.register_fee_holds(topology_schedule, block, commit_ts);
 
         // Derive this block's beacon-witness leaves from the same
         // canonical sources the proposer used (receipts from finalized
@@ -4551,7 +4618,56 @@ impl ShardCoordinator {
         // Reset backoff tracking — new height means fresh round counting.
         self.view_change.reset_for_height_advance();
 
-        (self.cleanup_old_state(height), witness)
+        let mut actions = self.cleanup_old_state(height);
+        self.drain_deferred_reservation_checks(height, &mut actions);
+        (actions, witness)
+    }
+
+    /// Commit-time fee-ledger bookkeeping: engage reservations for the
+    /// block's local payers, release those its wave certificates
+    /// resolve, and prune holds whose deadlines passed — the cover for
+    /// resolution paths that never produce a certificate (a reshape
+    /// terminal's abort by omission).
+    fn register_fee_holds(
+        &mut self,
+        topology_schedule: &TopologySchedule,
+        block: &Block,
+        commit_ts: WeightedTimestamp,
+    ) {
+        let trie = topology_schedule.head().shard_trie();
+        let local_shard = self.local_shard;
+        self.fee_ledger
+            .register_committed(block.transactions(), |payer| {
+                trie.shard_for_prefix(payer) == local_shard
+            });
+        self.fee_ledger.release_finalized(block.certificates());
+        self.fee_ledger.prune(commit_ts);
+    }
+
+    /// Dispatch fee-reservation verifications whose ancestry-proven
+    /// balance anchor the commit at `height` just materialized. A
+    /// deferred block that has since left pending (pruned, replaced)
+    /// drops its entry.
+    fn drain_deferred_reservation_checks(
+        &mut self,
+        height: BlockHeight,
+        actions: &mut Vec<Action>,
+    ) {
+        let pending_blocks = &self.pending_blocks;
+        self.deferred_reservation_checks
+            .retain(|deferred_hash, (demands, anchor)| {
+                if *anchor > height {
+                    return true;
+                }
+                if pending_blocks.get(*deferred_hash).is_some() {
+                    actions.push(Action::VerifyReservations {
+                        block_hash: *deferred_hash,
+                        demands: std::mem::take(demands),
+                        read_height: *anchor,
+                    });
+                }
+                false
+            });
     }
 
     /// Drive the commit chain: commit the given block, then any buffered
@@ -10792,6 +10908,183 @@ mod tests {
         assert!(
             !released.is_empty(),
             "recording the settled set must release the deferred block into verification",
+        );
+    }
+
+    /// A chain block for the fee-anchor walk: explicit round and parent
+    /// linkage, everything else zeroed.
+    fn round_chain_block(height: u64, round: u64, parent: &Block, parent_round: u64) -> Block {
+        let parent_qc = QuorumCertificate::new(
+            parent.hash(),
+            ShardId::ROOT,
+            parent.height(),
+            parent.header().parent_block_hash(),
+            Round::new(parent_round),
+            SignerBitfield::new(4),
+            AggregateSignature::ZERO,
+            WeightedTimestamp::ZERO,
+        );
+        let header = BlockHeader::new(
+            ShardId::ROOT,
+            BlockHeight::new(height),
+            parent.hash(),
+            parent_qc,
+            ValidatorId::new(0),
+            ProposerTimestamp::from_millis(height),
+            Round::new(round),
+            false,
+            StateRoot::ZERO,
+            TransactionRoot::ZERO,
+            CertificateRoot::ZERO,
+            LocalReceiptRoot::ZERO,
+            ProvisionsRoot::ZERO,
+            Vec::new(),
+            BTreeMap::new(),
+            InFlightCount::ZERO,
+            BeaconWitnessRoot::ZERO,
+            BeaconWitnessLeafCount::ZERO,
+            BeaconWitnessLeafCount::ZERO,
+            RevealChain::ZERO,
+            None,
+            None,
+            ShardLoad::ZERO,
+        );
+        Block::Live {
+            header,
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
+            witness_sources: Arc::new(WitnessSources::empty()),
+        }
+    }
+
+    /// The genesis-parented root of a fee-anchor test chain.
+    fn round_chain_genesis_child(round: u64) -> Block {
+        let genesis_qc = QuorumCertificate::genesis(ShardId::ROOT, ChainOrigin::ROOT);
+        let header = BlockHeader::new(
+            ShardId::ROOT,
+            BlockHeight::new(1),
+            BlockHash::ZERO,
+            genesis_qc,
+            ValidatorId::new(0),
+            ProposerTimestamp::from_millis(1),
+            Round::new(round),
+            false,
+            StateRoot::ZERO,
+            TransactionRoot::ZERO,
+            CertificateRoot::ZERO,
+            LocalReceiptRoot::ZERO,
+            ProvisionsRoot::ZERO,
+            Vec::new(),
+            BTreeMap::new(),
+            InFlightCount::ZERO,
+            BeaconWitnessRoot::ZERO,
+            BeaconWitnessLeafCount::ZERO,
+            BeaconWitnessLeafCount::ZERO,
+            RevealChain::ZERO,
+            None,
+            None,
+            ShardLoad::ZERO,
+        );
+        Block::Live {
+            header,
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
+            witness_sources: Arc::new(WitnessSources::empty()),
+        }
+    }
+
+    /// The fee anchor is a function of chain content alone: coordinators
+    /// at different committed tips — one holding every ancestor in
+    /// pending, the other having committed and pruned the anchor block
+    /// into the round ring — derive the same balance-read height for the
+    /// same block.
+    #[test]
+    fn fee_anchor_is_chain_derived_not_tip_derived() {
+        let b1 = round_chain_genesis_child(1);
+        let b2 = round_chain_block(2, 2, &b1, 1);
+        let b3 = round_chain_block(3, 3, &b2, 2);
+        // The QC a block at height 4 would carry: certifies b3.
+        let parent_qc = QuorumCertificate::new(
+            b3.hash(),
+            ShardId::ROOT,
+            b3.height(),
+            b2.hash(),
+            Round::new(3),
+            SignerBitfield::new(4),
+            AggregateSignature::ZERO,
+            WeightedTimestamp::ZERO,
+        );
+
+        // Coordinator A: nothing committed, the whole chain pending.
+        let (mut a, _) = make_test_state();
+        for block in [&b1, &b2, &b3] {
+            install_complete_block(&mut a, block);
+        }
+
+        // Coordinator B: b1 and b2 committed (pruned from pending, rounds
+        // ringed), the rest pending.
+        let (mut b, _) = make_test_state();
+        b.committed_height = BlockHeight::new(2);
+        b.committed_rounds
+            .insert(BlockHeight::new(1), Round::new(1));
+        b.committed_rounds
+            .insert(BlockHeight::new(2), Round::new(2));
+        install_complete_block(&mut b, &b3);
+
+        let anchor_a = a.ancestry_committed_height(&parent_qc);
+        let anchor_b = b.ancestry_committed_height(&parent_qc);
+        assert_eq!(anchor_a, anchor_b, "the anchor must not depend on the tip");
+        assert_eq!(
+            anchor_a,
+            BlockHeight::new(2),
+            "contiguous rounds prove the parent QC's committable height"
+        );
+    }
+
+    /// A view-change round gap defers the anchor to the first
+    /// round-contiguous pair below it — the same height the two-chain
+    /// commit rule proves, so the anchor is never ahead of what every
+    /// replica processing the chain has committed.
+    #[test]
+    fn fee_anchor_descends_past_view_change_gaps() {
+        let b1 = round_chain_genesis_child(1);
+        let b2 = round_chain_block(2, 2, &b1, 1);
+        // b3 proposed after view changes: rounds 3 and 4 burned.
+        let b3 = round_chain_block(3, 5, &b2, 2);
+        let parent_qc = QuorumCertificate::new(
+            b3.hash(),
+            ShardId::ROOT,
+            b3.height(),
+            b2.hash(),
+            Round::new(5),
+            SignerBitfield::new(4),
+            AggregateSignature::ZERO,
+            WeightedTimestamp::ZERO,
+        );
+
+        let (mut state, _) = make_test_state();
+        for block in [&b1, &b2, &b3] {
+            install_complete_block(&mut state, block);
+        }
+        assert_eq!(
+            state.ancestry_committed_height(&parent_qc),
+            BlockHeight::new(1),
+            "the non-contiguous (b3, b2) pair proves nothing; (b2, b1) is \
+             the first contiguous pair"
+        );
+    }
+
+    /// A genesis parent QC anchors at the chain origin: nothing above it
+    /// is proven, and the origin state is what every replica shares.
+    #[test]
+    fn fee_anchor_of_a_genesis_extending_block_is_the_origin() {
+        let (state, _) = make_test_state();
+        let genesis_qc = QuorumCertificate::genesis(ShardId::ROOT, ChainOrigin::ROOT);
+        assert_eq!(
+            state.ancestry_committed_height(&genesis_qc),
+            BlockHeight::GENESIS
         );
     }
 }

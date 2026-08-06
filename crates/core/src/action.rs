@@ -825,18 +825,21 @@ pub enum Action {
 
     /// Verify a block's payer-shard fee reservations.
     ///
-    /// Reads each demanded payer's native vault at the deterministic
-    /// committed frontier and checks it covers the reservation demand
-    /// the coordinator derived from chain content. Storage-anchored at
-    /// `committed_height`, so every replica reads identical state.
+    /// Reads each demanded payer's native vault at `read_height` and
+    /// checks it covers the reservation demand the coordinator derived
+    /// from chain content. The height is the one the block's own
+    /// ancestry proves committed, so every replica verifying the block
+    /// reads the same vault version regardless of local commit progress;
+    /// the coordinator holds the dispatch until its own commit pipeline
+    /// has materialized that height.
     /// Returns `ProtocolEvent::ReservationsVerified`.
     VerifyReservations {
         /// Block whose reservations are being verified.
         block_hash: BlockHash,
         /// Per-payer demands; empty demands never dispatch.
         demands: Vec<FeeDemand>,
-        /// The committed height every replica reads balances at.
-        committed_height: BlockHeight,
+        /// The ancestry-proven committed height balances are read at.
+        read_height: BlockHeight,
     },
 
     /// Build a complete block proposal.
@@ -882,7 +885,9 @@ pub enum Action {
         /// their payer cannot cover, so a proposal never self-rejects
         /// the voters' reservation verification.
         fee_checks: Vec<FeeDemand>,
-        /// The committed height the builder reads payer balances at.
+        /// The height the builder reads payer balances at — the height
+        /// its parent QC's chain proves committed, matching the anchor
+        /// voters verify the reservations against.
         fee_read_height: BlockHeight,
         /// Parent block's in-flight count (for deterministic computation).
         parent_in_flight: InFlightCount,

@@ -1275,23 +1275,27 @@ impl VerificationPipeline {
 
     /// Initiate payer-shard fee-reservation verification for a block.
     /// `demands` comes from the coordinator's chain-content derivation;
-    /// callers skip the dispatch entirely when it is empty.
+    /// callers skip the dispatch entirely when it is empty. `read_height`
+    /// is the balance-read anchor: the height the block's own ancestry
+    /// proves committed, so every replica verifying the block reads the
+    /// same vault version.
     pub fn initiate_reservations_verification(
         &mut self,
         block_hash: BlockHash,
         demands: Vec<FeeDemand>,
-        committed_height: BlockHeight,
+        read_height: BlockHeight,
     ) -> Vec<Action> {
         debug!(
             ?block_hash,
             payer_count = demands.len(),
+            read_height = read_height.inner(),
             "Initiating VM fee-reservation verification"
         );
         self.mark_root_in_flight(block_hash, VerificationKind::Reservations);
         vec![Action::VerifyReservations {
             block_hash,
             demands,
-            committed_height,
+            read_height,
         }]
     }
 
@@ -1842,7 +1846,8 @@ impl VerificationPipeline {
         split_child_roots_required: bool,
         settled_waves_root_required: bool,
         fee_demands: Vec<FeeDemand>,
-        committed_height: BlockHeight,
+        fee_read_height: BlockHeight,
+        fee_read_ready: bool,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         let h = block.header();
@@ -1915,11 +1920,21 @@ impl VerificationPipeline {
             VerificationKind::Reservations,
             !fee_demands.is_empty(),
         ) {
-            actions.extend(self.initiate_reservations_verification(
-                block_hash,
-                fee_demands,
-                committed_height,
-            ));
+            if fee_read_ready {
+                actions.extend(self.initiate_reservations_verification(
+                    block_hash,
+                    fee_demands,
+                    fee_read_height,
+                ));
+            } else {
+                // The anchor height isn't materialized locally yet — the
+                // ancestry proves its commit but the commit pipeline
+                // hasn't landed it. Mark the root in flight so the block
+                // stays unvotable; the coordinator holds the demands and
+                // re-dispatches when the commit that materializes the
+                // anchor lands.
+                self.mark_root_in_flight(block_hash, VerificationKind::Reservations);
+            }
         }
 
         if self.needs_root(block_hash, VerificationKind::BeaconWitnessRoot, true)

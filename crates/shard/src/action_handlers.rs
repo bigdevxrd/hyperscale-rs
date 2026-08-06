@@ -572,20 +572,21 @@ where
         Action::VerifyReservations {
             block_hash,
             demands,
-            committed_height,
+            read_height,
         } => {
-            // Balance reads anchor at the committed height the
-            // coordinator derived from the block's ancestry, so every
+            // Balance reads anchor at the height the block's ancestry
+            // proves committed — the coordinator dispatches only once
+            // its own commit pipeline has materialized it — so every
             // replica reads identical state regardless of local commit
             // or persistence progress.
             let view = ctx.pending_chain.view_at_committed_tip();
             let mut result: Result<(), String> = Ok(());
             for demand in &demands {
-                let Some(cell) = view.get_substate_at_height(demand.vault, committed_height) else {
+                let Some(cell) = view.get_substate_at_height(demand.vault, read_height) else {
                     result = Err(format!(
                         "payer {:?}: balance history unavailable at height {}",
                         demand.vault.owner,
-                        committed_height.inner()
+                        read_height.inner()
                     ));
                     break;
                 };
