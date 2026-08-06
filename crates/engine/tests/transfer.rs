@@ -648,6 +648,80 @@ fn a_call_that_never_touches_its_payers_vault_still_pays() {
     );
 }
 
+/// A batch with two distinct payers keeps each burn in its own receipt:
+/// a receipt is one transaction's effect record, so a sibling payer's
+/// vault never appears in it — however the batch's canonical fold
+/// happens to order the two.
+#[test]
+fn a_receipt_carries_only_its_own_payers_burn() {
+    let payer_a = fee_payer(31);
+    let payer_b = fee_payer(32);
+    let accounts = [(payer_a, 1_000), (payer_b, 1_000), (bob(), 50)];
+    let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
+    let txs = vec![
+        Arc::new(Verified::<Transaction>::from_persisted(
+            signed_transfer_with_fee(31, payer_a, bob(), 100, 10),
+        )),
+        Arc::new(Verified::<Transaction>::from_persisted(
+            signed_transfer_with_fee(32, payer_b, bob(), 100, 10),
+        )),
+    ];
+    let executed = execute_on(&accounts, &executor, &txs);
+
+    for (own, sibling, tx) in [
+        (payer_a, payer_b, &executed[0]),
+        (payer_b, payer_a, &executed[1]),
+    ] {
+        let ConsensusReceipt::Succeeded { writes, .. } = &tx.consensus else {
+            panic!("both transfers must succeed: {:?}", tx.consensus);
+        };
+        assert_eq!(
+            vault_cell(writes, own),
+            Some(encode_amount(1_000 - 100 - 10).to_vec()),
+            "a receipt carries its own payer's burn"
+        );
+        assert!(
+            !writes.cells.contains_key(&vault_key(sibling, XRD)),
+            "a receipt never carries a sibling payer's vault"
+        );
+    }
+}
+
+/// Three transactions sharing one payer settle to the sum of their
+/// burns: each receipt's vault write carries the cumulative debit at its
+/// position in the batch's canonical order, so applying the receipts in
+/// block order — which is that same order, blocks being strictly
+/// hash-sorted — loses none of them.
+#[test]
+fn shared_payer_burns_accumulate_across_a_batch() {
+    let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
+    // Distinct ceilings make three distinct stamps; the stamp's fuel
+    // exceeds all of them, so each burns exactly its ceiling.
+    let mut txs: Vec<Arc<Verified<Transaction>>> = [10u128, 11, 12]
+        .into_iter()
+        .map(|fee| {
+            Arc::new(Verified::<Transaction>::from_persisted(
+                signed_stamp_with_fee(ALICE_SEED, alice(), fee),
+            ))
+        })
+        .collect();
+    txs.sort_by_key(|tx| tx.hash());
+
+    let mut store = MapDb::genesis(&[(alice(), 1_000), (bob(), 50)]);
+    let executed = execute_batch_on(&store, &executor, &txs);
+    for tx in &executed {
+        let ConsensusReceipt::Succeeded { writes, .. } = &tx.consensus else {
+            panic!("every stamp must succeed: {:?}", tx.consensus);
+        };
+        store.apply(writes);
+    }
+    assert_eq!(
+        store.substate(vault_key(alice(), XRD)),
+        Some(encode_amount(1_000 - 10 - 11 - 12).to_vec()),
+        "every burn in the batch reaches the committed balance"
+    );
+}
+
 /// A missed edge bound is an infeasibility, not a defect: the sender
 /// declared what it would accept and the world moved between signing and
 /// execution, so nothing but the class floor leaves its vault.

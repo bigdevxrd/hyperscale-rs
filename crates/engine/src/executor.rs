@@ -325,33 +325,46 @@ fn apply_fee_burn(
 ) {
     // The transaction's own burn first: the attested actual — fuel, until
     // real pricing lands — capped at the signed ceiling.
+    let mut own_vault = None;
     if let Some(payer) = fee {
         let burn = u128::from(fuel).min(payer.max_fee);
         if burn > 0 {
             *fees_applied.entry(payer.vault).or_insert(0) += burn;
+            own_vault = Some(payer.vault);
         }
     }
-    // Re-derive every fee-bearing cell this transaction's update set
-    // covers from the pre-fee fold: later writes of a debited cell must
-    // carry the cumulative burn, or their absolute updates would revert
-    // earlier debits at commit.
-    for (vault, fees) in fees_applied.iter() {
+    // Re-derive the fee-bearing cells this transaction itself carries —
+    // its own payer's vault, plus any earlier-debited vault its update
+    // set covers — from the pre-fee fold: a write of a debited cell must
+    // carry the cumulative burn, or its absolute update would revert
+    // earlier debits at commit. Cells only *other* transactions debited
+    // stay out: a receipt is one transaction's effect record, and
+    // stamping a sibling's vault into it would put a write in it the
+    // transaction never made.
+    let touched: Vec<SubstateKey> = writes
+        .keys()
+        .filter(|key| fees_applied.contains_key(*key))
+        .copied()
+        .chain(own_vault.filter(|vault| !writes.contains_key(vault)))
+        .collect();
+    for vault in touched {
+        let fees = fees_applied[&vault];
         let prefee = writes
-            .get(vault)
+            .get(&vault)
             .cloned()
-            .or_else(|| running.get(vault).cloned())
-            .unwrap_or_else(|| base.cells.get(vault).cloned());
+            .or_else(|| running.get(&vault).cloned())
+            .unwrap_or_else(|| base.cells.get(&vault).cloned());
         let Some(bytes) = prefee else {
             continue;
         };
         let Ok(cell): Result<[u8; 16], _> = bytes.as_slice().try_into() else {
             continue;
         };
-        let debited = u128::from_le_bytes(cell).saturating_sub(*fees);
+        let debited = u128::from_le_bytes(cell).saturating_sub(fees);
         // The burn folds outside the kernel store, so it applies the
         // store's own rule itself: a zero balance is an absent cell, and
         // the leaf goes with the bond it carried.
-        writes.insert(*vault, amount_cell(debited).map(|cell| cell.to_vec()));
+        writes.insert(vault, amount_cell(debited).map(|cell| cell.to_vec()));
     }
 }
 
