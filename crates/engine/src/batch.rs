@@ -2,8 +2,7 @@
 //!
 //! The snapshot borrow, the per-wave context, and the cross-shard input
 //! an [`Executor`](crate::Executor) reads besides the transactions
-//! themselves — plus the cache walk that turns an already-computed
-//! output into this shard's [`ExecutedTx`](crate::ExecutedTx).
+//! themselves.
 //!
 //! Storage is NOT owned by the executor — the runner provides it as a
 //! method argument so the same executor can serve multiple snapshots
@@ -22,16 +21,11 @@ use hyperscale_types::{
     WeightedTimestamp,
 };
 
-use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
-use crate::receipt::CachedOutput;
-
 /// Per-wave inputs an engine's batch execution reads besides the
 /// transactions themselves.
 pub struct WaveBatchContext<'a> {
     /// Batch fan-out strategy, sourced from the dispatch backend.
     pub par: Parallelism,
-    /// Process-scope cache of shard-invariant execution outputs.
-    pub cache: &'a ProcessExecutionCache,
     /// The executing vnode's shard — the projection target.
     pub local_shard: ShardId,
     /// The active shard partition.
@@ -61,70 +55,4 @@ pub struct CrossShardTxInput<'a> {
     /// The randomness anchor: the same block's reveal chain, likewise
     /// identical on every participant.
     pub randomness: RevealChain,
-}
-
-/// Shards this transaction reads or writes, routed via the active
-/// `ShardTrie`.
-///
-/// Drives the execution cache's per-entry pending-shards set: the cache
-/// narrows this to the host's hosted shards and decrements per-shard as
-/// finalised waves arrive.
-pub fn participating_shards<'a>(
-    tx: &'a Transaction,
-    shard_trie: &'a ShardTrie,
-) -> impl Iterator<Item = ShardId> + 'a {
-    tx.routing()
-        .all_prefixes()
-        .into_iter()
-        .map(move |prefix| shard_trie.shard_for_prefix(prefix))
-}
-
-/// Plan derived for each position in a batch by classifying its
-/// `ProcessExecutionCache` slot up-front. `Done` skips work; `Claimed`
-/// runs `compute` and fills the slot; `Pending` blocks on another
-/// worker's slot via `get_or_init` (the closure only fires if the
-/// claimant abandoned the slot without setting a value).
-enum Plan {
-    Done(Arc<CachedOutput>),
-    Claimed(CachedSlot),
-    Pending(CachedSlot),
-}
-
-/// Two-phase cache acquisition for a batch of transactions.
-///
-/// Phase 1 classifies every position sequentially via `try_acquire` —
-/// cheap `DashMap` lookups that publish all Claimed slots to other
-/// concurrent batches before any compute starts. Phase 2 fans out via
-/// `par.map`: `Done` returns the cached value, `Claimed` runs `compute`
-/// and fills the slot, `Pending` blocks via `OnceLock::get_or_init`
-/// (each blocked worker waits only on its own slot, so the wait
-/// parallelises across the pool).
-pub fn batch_compute_cached(
-    par: Parallelism,
-    cache: &ProcessExecutionCache,
-    txs: &[Arc<Verified<Transaction>>],
-    shard_trie: &ShardTrie,
-    compute: impl Fn(usize) -> CachedOutput + Send + Sync,
-) -> Vec<Arc<CachedOutput>> {
-    let plans: Vec<(usize, Plan)> = txs
-        .iter()
-        .enumerate()
-        .map(
-            |(i, tx)| match cache.try_acquire(tx.hash(), participating_shards(tx, shard_trie)) {
-                SlotStatus::Completed(v) => (i, Plan::Done(v)),
-                SlotStatus::Claimed(slot) => (i, Plan::Claimed(slot)),
-                SlotStatus::Pending(slot) => (i, Plan::Pending(slot)),
-            },
-        )
-        .collect();
-
-    par.map(plans, |(i, plan)| match plan {
-        Plan::Done(v) => v,
-        Plan::Claimed(slot) => {
-            let value = Arc::new(compute(i));
-            let _ = slot.set(Arc::clone(&value));
-            value
-        }
-        Plan::Pending(slot) => Arc::clone(slot.get_or_init(|| Arc::new(compute(i)))),
-    })
 }

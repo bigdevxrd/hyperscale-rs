@@ -156,7 +156,6 @@ where
             let view_snap = <SubstateView<_> as SubstateStore>::snapshot(&*view);
             let wave_ctx = WaveBatchContext {
                 par: ctx.par,
-                cache: ctx.execution_cache.as_ref(),
                 local_shard: ctx.shard,
                 shard_trie,
                 block_hash,
@@ -204,7 +203,6 @@ where
             let view_snap = <SubstateView<_> as SubstateStore>::snapshot(&*view);
             let wave_ctx = WaveBatchContext {
                 par: ctx.par,
-                cache: ctx.execution_cache.as_ref(),
                 local_shard: ctx.shard,
                 shard_trie,
                 block_hash,

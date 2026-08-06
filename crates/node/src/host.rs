@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use crossbeam::channel::Sender;
 use hyperscale_dispatch::Dispatch;
-use hyperscale_engine::{Executor, ProcessExecutionCache};
+use hyperscale_engine::Executor;
 use hyperscale_network::Network;
 use hyperscale_storage::{BeaconStorage, PendingChain, ShardStorage};
 use hyperscale_types::{
@@ -198,11 +198,9 @@ where
             shard_builds.insert(*shard, (io, vnodes));
         }
 
-        let execution_cache = Arc::new(ProcessExecutionCache::new(hosted_shards.clone()));
         let dispatch_handles = Arc::new(DispatchHandles {
             executor,
             network: Arc::clone(&network),
-            execution_cache,
             beacon_proposal_cache: Arc::new(BeaconProposalCache::new(beacon_network)),
             beacon_storage: Arc::clone(&beacon_storage),
             per_shard: ArcSwap::from_pointee(per_shard_dispatch),
@@ -646,10 +644,6 @@ where
     process.insert_shard_sender(shard, sender.clone());
     let (io, handles) = build_shard_io(shard, &vnodes, storage, config);
     process.dispatch_handles.insert_shard(shard, handles);
-    process
-        .dispatch_handles
-        .execution_cache
-        .add_hosted_shard(shard);
     process.network.subscribe_shard(shard);
 
     let shard_loop = ShardLoop {
@@ -686,10 +680,6 @@ where
     process.network.unsubscribe_shard(shard);
     process.remove_shard_sender(shard);
     process.dispatch_handles.remove_shard(shard);
-    process
-        .dispatch_handles
-        .execution_cache
-        .remove_hosted_shard(shard);
 }
 
 /// Build one shard's `ShardIo` plus its dispatch-handle entry from the

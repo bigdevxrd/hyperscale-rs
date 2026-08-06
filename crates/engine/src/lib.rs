@@ -7,9 +7,7 @@
 //! State machines emit `Action::ExecuteTransactions`; the runner drives
 //! the executor over the wave's batch, which projects the shard-invariant
 //! [`CachedOutput`] into the local shard's [`ExecutedTx`] via
-//! [`project_to_shard`]. The process-scope [`ProcessExecutionCache`]
-//! short-circuits execution when same-shard vnodes (or hosted
-//! participating shards) replay an already-executed transaction.
+//! [`project_to_shard`].
 //!
 //! Execution itself is derivation through the effects bridge, an owned
 //! committed base pre-read from the wave's JMT-backed snapshot, the
@@ -27,7 +25,6 @@
 
 mod backend;
 mod batch;
-mod cache;
 mod executor;
 mod host;
 mod output;
@@ -39,8 +36,7 @@ pub mod genesis;
 /// Shard assignment and write filtering for `StateWrites`.
 pub mod sharding;
 
-pub use batch::{CrossShardTxInput, WaveBatchContext, batch_compute_cached, participating_shards};
-pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
+pub use batch::{CrossShardTxInput, WaveBatchContext};
 pub use executor::Executor;
 pub use genesis::{GenesisConfig, World, XRD, genesis_world, genesis_writes};
 // Re-export the fan-out strategy `WaveBatchContext` carries, so callers

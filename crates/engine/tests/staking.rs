@@ -6,14 +6,13 @@
 //! pool in it is a different world, and sharing a process would make
 //! whichever executor was built first decide what the other one can see.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hyperscale_effects_bridge::{account_address, encode_tree};
 use hyperscale_engine::genesis::stake_unit;
 use hyperscale_engine::{
-    ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext, XRD,
-    genesis_writes,
+    ExecutedTx, ExecutionMode, Executor, Parallelism, WaveBatchContext, XRD, genesis_writes,
 };
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
@@ -159,11 +158,9 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> Transaction {
 
 fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
     let store = MapDb::genesis(&[(delegator(), 10_000)], &[]);
-    let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
     let ctx = WaveBatchContext {
         par: Parallelism::Sequential,
-        cache: &cache,
         local_shard: ShardId::ROOT,
         shard_trie: &trie,
         block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),

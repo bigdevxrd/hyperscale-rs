@@ -12,7 +12,6 @@ hyperscale-metrics.workspace = true
 hyperscale-types.workspace = true
 rocksdb.workspace = true
 hyperscale-hbor.workspace = true
-indexmap.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

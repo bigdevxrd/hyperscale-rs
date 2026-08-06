@@ -2,7 +2,7 @@
 //! derivation, the batch executor, and the movement fold, against a
 //! genesis-seeded snapshot.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hyperscale_effects_bridge::vm_statics::package_key;
@@ -12,7 +12,7 @@ use hyperscale_effects_bridge::{
 use hyperscale_engine::genesis::{account_artifact, entropy_key, vault_key};
 use hyperscale_engine::{
     ExecutedTx, ExecutionMode, Executor, Parallelism, PreviewGrants, PreviewInputs, PreviewOutcome,
-    PreviewReport, ProcessExecutionCache, ResourceChange, WaveBatchContext, XRD, genesis_writes,
+    PreviewReport, ResourceChange, WaveBatchContext, XRD, genesis_writes,
 };
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
@@ -267,11 +267,9 @@ fn execute_anchored(
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (bob(), 50)]);
-    let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
     let ctx = WaveBatchContext {
         par: Parallelism::Sequential,
-        cache: &cache,
         local_shard: ShardId::ROOT,
         shard_trie: &trie,
         block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
@@ -416,11 +414,9 @@ fn execute_batch_on(
     executor: &Executor,
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
-    let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
     let ctx = WaveBatchContext {
         par: Parallelism::Sequential,
-        cache: &cache,
         local_shard: ShardId::ROOT,
         shard_trie: &trie,
         block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
@@ -820,11 +816,9 @@ fn execute_on_shard(
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (far(), 50)]);
-    let cache = ProcessExecutionCache::new(HashSet::from([local_shard]));
     let trie = ShardTrie::uniform(1);
     let ctx = WaveBatchContext {
         par: Parallelism::Sequential,
-        cache: &cache,
         local_shard,
         shard_trie: &trie,
         block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),

@@ -50,7 +50,7 @@ use arc_swap::ArcSwap;
 use crossbeam::channel::Sender;
 use hyperscale_core::{Action, ParticipationChange, ProtocolEvent, StateMachine, TimerId};
 use hyperscale_dispatch::Dispatch;
-use hyperscale_engine::{Executor, ProcessExecutionCache};
+use hyperscale_engine::Executor;
 use hyperscale_network::Network;
 use hyperscale_storage::{BeaconStorage, PendingChain, RecoveredState, ShardStorage};
 use hyperscale_types::{
@@ -100,7 +100,6 @@ pub type SharedTopologySnapshot = Arc<ArcSwap<TopologySnapshot>>;
 pub(crate) struct DispatchHandles<S: ShardStorage, N> {
     pub(crate) executor: Arc<Executor>,
     pub(crate) network: Arc<N>,
-    pub(crate) execution_cache: Arc<ProcessExecutionCache>,
     /// Process-level serve cache for beacon proposals — fed by the
     /// `BuildAndBroadcastBeaconProposal` handler and the wire
     /// notification handler, read by the `GetBeaconProposalRequest`

@@ -85,19 +85,6 @@ impl<S> ShardStorage for S where
 {
 }
 
-/// An empty `SubstateDatabase` for use in tests and single-shard contexts
-/// where no storage reads are needed.
-#[must_use]
-pub fn empty_substate_database() -> impl SubstateDatabase {
-    struct Empty;
-    impl SubstateDatabase for Empty {
-        fn substate(&self, _key: SubstateKey) -> Option<Vec<u8>> {
-            None
-        }
-    }
-    Empty
-}
-
 /// Read access to a substate store.
 ///
 /// Object-safe: the execution seam borrows one as `dyn SubstateDatabase`

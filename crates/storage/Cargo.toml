@@ -15,9 +15,6 @@ blake3.workspace = true
 # Parallelism
 rayon.workspace = true
 
-# Key encoding
-indexmap.workspace = true
-
 # Error derive
 thiserror.workspace = true
 

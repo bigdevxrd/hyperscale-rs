@@ -97,18 +97,6 @@ impl CachedOutput {
     }
 }
 
-#[cfg(test)]
-impl CachedOutput {
-    /// Build a `Failed` output for cache-mechanics tests. The body
-    /// content doesn't matter for cache-identity assertions.
-    pub(crate) fn failed_for_tests() -> Self {
-        Self {
-            metadata: ExecutionMetadata::empty(),
-            body: CachedOutputBody::Failed,
-        }
-    }
-}
-
 /// Build an [`ExecutedTx`] for `local_shard` from a [`CachedOutput`].
 ///
 /// Runs the per-shard step: `filter_writes_for_shard` over the cached

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use hyperscale_dispatch::Parallelism;
-use hyperscale_engine::{Executor, ProcessExecutionCache};
+use hyperscale_engine::Executor;
 use hyperscale_network::Network;
 use hyperscale_storage::{
     JmtSnapshot, PendingChain, RatifyRegisterStore, SafeVoteRegisterStore, ShardStorage,
@@ -51,10 +51,6 @@ pub struct ActionContext<'a, S: ShardStorage, N: Network> {
     /// the same persist-before-sign contract as `vote_registers`, for
     /// the ratify-vote sign handler.
     pub ratify_registers: &'a dyn RatifyRegisterStore,
-    /// Process-scope cache of shard-invariant execution outputs.
-    /// Execute handlers consult this before dispatching to `executor`;
-    /// hits skip execution and only run the per-shard projection step.
-    pub execution_cache: &'a Arc<ProcessExecutionCache>,
     /// Network handle for broadcast/notify/request actions.
     pub network: &'a Arc<N>,
     /// Local validator's signing identity. Used by handlers that sign

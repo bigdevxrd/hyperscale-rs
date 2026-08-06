@@ -274,10 +274,6 @@ where
                     .caches
                     .finalized_wave
                     .insert(wave.wave_id().clone(), Arc::clone(wave));
-                self.process
-                    .dispatch_handles
-                    .execution_cache
-                    .on_finalized_wave(self.shard, wave.tx_hashes());
             }
         }
 
@@ -532,16 +528,11 @@ where
                     .handle(BlockSyncInput::Admitted { scope: (), height });
                 self.process_block_sync_outputs(outputs);
 
-                let weighted_ts = certified.block().header().parent_qc().weighted_timestamp();
                 let block_hash = certified.block().hash();
                 self.io
                     .pending_chain
                     .attach_certified_block(block_hash, Arc::clone(&certified));
                 if notify_now {
-                    self.process
-                        .dispatch_handles
-                        .execution_cache
-                        .on_block_committed(weighted_ts);
                     self.dispatch_event(ProtocolEvent::BlockCommitted { certified });
                 }
             }
@@ -813,7 +804,6 @@ where
                 pending_chain: &shard_handles.pending_chain,
                 vote_registers: shard_handles.storage.as_ref(),
                 ratify_registers: handles.beacon_storage.as_ref(),
-                execution_cache: &handles.execution_cache,
                 network: &handles.network,
                 signer: &signer,
                 verifier: verifier.as_ref(),
