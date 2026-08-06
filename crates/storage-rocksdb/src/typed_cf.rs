@@ -343,71 +343,6 @@ where
     raw_iter_to_typed::<CF>(iter)
 }
 
-/// Typed prefix-scan iterator over a column family.
-///
-/// Seeks to `prefix` and yields decoded entries until the key leaves the
-/// prefix range. The end bound is computed by incrementing the last byte
-/// of the prefix (standard `RocksDB` prefix scan pattern).
-pub fn prefix_iter<'a, CF: TypedCf>(
-    db: &'a DB,
-    cf: &ColumnFamily,
-    prefix: &[u8],
-) -> impl Iterator<Item = (CF::Key, CF::Value)> + 'a
-where
-    CF::KeyCodec: DbCodec<CF::Key>,
-{
-    prefix_iter_from::<CF>(db, cf, prefix, prefix)
-}
-
-/// Typed prefix-scan iterator starting from a custom seek position.
-///
-/// Like [`prefix_iter`], but seeks to `start` instead of the prefix.
-/// `start` must be >= `prefix`. The end bound is still `next_prefix(prefix)`.
-pub fn prefix_iter_from<'a, CF: TypedCf>(
-    db: &'a DB,
-    cf: &ColumnFamily,
-    prefix: &[u8],
-    start: &[u8],
-) -> impl Iterator<Item = (CF::Key, CF::Value)> + 'a
-where
-    CF::KeyCodec: DbCodec<CF::Key>,
-{
-    let mut iter = db.raw_iterator_cf(cf);
-    iter.seek(start);
-    let end = next_prefix(prefix);
-    bounded_iter_to_typed::<CF>(iter, end)
-}
-
-/// Typed prefix-scan iterator over a `RocksDB` snapshot.
-///
-/// Same as [`prefix_iter`] but reads from a point-in-time snapshot.
-pub fn prefix_iter_snap<'a, CF: TypedCf>(
-    snapshot: &'a Snapshot<'_>,
-    cf: &ColumnFamily,
-    prefix: &[u8],
-) -> impl Iterator<Item = (CF::Key, CF::Value)> + 'a
-where
-    CF::KeyCodec: DbCodec<CF::Key>,
-{
-    prefix_iter_from_snap::<CF>(snapshot, cf, prefix, prefix)
-}
-
-/// Typed prefix-scan iterator over a `RocksDB` snapshot with custom seek position.
-pub fn prefix_iter_from_snap<'a, CF: TypedCf>(
-    snapshot: &'a Snapshot<'_>,
-    cf: &ColumnFamily,
-    prefix: &[u8],
-    start: &[u8],
-) -> impl Iterator<Item = (CF::Key, CF::Value)> + 'a
-where
-    CF::KeyCodec: DbCodec<CF::Key>,
-{
-    let mut iter = snapshot.raw_iterator_cf(cf);
-    iter.seek(start);
-    let end = next_prefix(prefix);
-    bounded_iter_to_typed::<CF>(iter, end)
-}
-
 /// Convert a raw iterator (already seeked) into a typed iterator that yields
 /// all remaining entries.
 fn raw_iter_to_typed<CF: TypedCf>(
@@ -437,61 +372,6 @@ where
             None
         }
     })
-}
-
-/// Convert a raw iterator (already seeked) into a typed iterator bounded by
-/// an exclusive end key. `None` end means unbounded (iterate to end).
-fn bounded_iter_to_typed<CF: TypedCf>(
-    mut iter: DBRawIteratorWithThreadMode<'_, DB>,
-    end: Option<Vec<u8>>,
-) -> impl Iterator<Item = (CF::Key, CF::Value)> + '_
-where
-    CF::KeyCodec: DbCodec<CF::Key>,
-{
-    let key_codec = CF::KeyCodec::default();
-    let value_codec = CF::ValueCodec::default();
-    let mut done = false;
-
-    std::iter::from_fn(move || {
-        if done {
-            return None;
-        }
-        if iter.valid() {
-            let raw_key = iter.key()?;
-            // Check end bound
-            if let Some(ref end) = end
-                && raw_key >= end.as_slice()
-            {
-                done = true;
-                return None;
-            }
-            let key = key_codec.decode(raw_key);
-            let value = value_codec.decode(iter.value()?);
-            iter.next();
-            Some((key, value))
-        } else {
-            done = true;
-            if let Err(e) = iter.status() {
-                panic!("BFT CRITICAL: RocksDB iterator error: {e}");
-            }
-            None
-        }
-    })
-}
-
-/// Increment a byte prefix to produce the exclusive end bound for a range scan.
-///
-/// Returns `None` if the prefix is all `0xFF` bytes (no valid exclusive upper bound).
-fn next_prefix(prefix: &[u8]) -> Option<Vec<u8>> {
-    let mut next = prefix.to_vec();
-    for i in (0..next.len()).rev() {
-        if next[i] < 255 {
-            next[i] += 1;
-            return Some(next);
-        }
-        next[i] = 0;
-    }
-    None
 }
 
 // ─── Metadata entries (default CF) ───────────────────────────────────────────

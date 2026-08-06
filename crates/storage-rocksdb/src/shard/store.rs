@@ -6,7 +6,7 @@ use hex::encode as hex_encode;
 use hyperscale_metrics::{record_storage_operation, record_storage_write};
 use hyperscale_storage::tree::carry_noop_root;
 use hyperscale_storage::tree::proofs::generate_proof;
-use hyperscale_storage::{DbSortKey, JmtSnapshot, SubstateStore, VersionedStore};
+use hyperscale_storage::{JmtSnapshot, SubstateStore, VersionedStore};
 use hyperscale_types::{
     Block, BlockHeight, MerkleInclusionProof, QuorumCertificate, StateRoot, Verified,
 };
@@ -49,8 +49,8 @@ impl SubstateStore for RocksDbShardStorage {
         local: [u8; 16],
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        use hyperscale_storage::{DbPartitionKey, SubstateDatabase};
-        use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+        use hyperscale_storage::SubstateDatabase;
+        use hyperscale_types::{Address, LocalKey, SubstateKey};
         let snapshot = self.db.snapshot();
         let (current_version, _) = read_jmt_metadata(&snapshot);
         if block_height.inner() > current_version {
@@ -66,13 +66,10 @@ impl SubstateStore for RocksDbShardStorage {
             version: block_height.inner(),
             current_version,
         };
-        Some(snap.get_raw_substate_by_db_key(
-            &DbPartitionKey {
-                node_key: vm_db_node_key(owner),
-                partition_num: VM_PARTITION,
-            },
-            &DbSortKey(local.to_vec()),
-        ))
+        Some(snap.substate(SubstateKey {
+            owner: Address(owner),
+            local: LocalKey(local),
+        }))
     }
 
     fn generate_merkle_proofs(

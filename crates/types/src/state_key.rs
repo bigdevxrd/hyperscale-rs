@@ -144,14 +144,13 @@ pub fn jmt_value_hash(value: &[u8]) -> [u8; 32] {
 
 /// Whether `leaf_key` binds `storage_key`.
 ///
-/// Both halves of the leaf derive from the key itself, so the whole
-/// identity leaf is checked — which is what ties a peer-shipped raw key
-/// to a proven leaf (snap-sync chunk verification). A key that is not
-/// flat-shaped binds nothing.
+/// A leaf key is the substate key's own 32 bytes, so the binding is
+/// byte equality — which is what ties a peer-shipped raw key to a
+/// proven leaf (snap-sync chunk verification). A key of any other
+/// length binds nothing.
 #[must_use]
 pub fn leaf_key_binds_storage_key(leaf_key: &[u8; 32], storage_key: &[u8]) -> bool {
-    vm_flat_key_parts(storage_key)
-        .is_some_and(|(owner, local)| *leaf_key == vm_leaf_key(owner, local))
+    storage_key == leaf_key
 }
 
 #[cfg(test)]
@@ -239,18 +238,17 @@ mod tests {
     }
 
     #[test]
-    fn leaf_key_binds_vm_storage_key_on_both_halves() {
-        let key = vm_flat_key([0x11u8; 16], [0x22u8; 16]);
-        let leaf = jmt_leaf_key(&key);
-        assert!(leaf_key_binds_storage_key(&leaf, &key));
+    fn leaf_key_binds_its_own_bytes_on_both_halves() {
+        let leaf = vm_leaf_key([0x11u8; 16], [0x22u8; 16]);
+        assert!(leaf_key_binds_storage_key(&leaf, &leaf));
 
         let mut wrong_owner = leaf;
         wrong_owner[0] ^= 1;
-        assert!(!leaf_key_binds_storage_key(&wrong_owner, &key));
+        assert!(!leaf_key_binds_storage_key(&wrong_owner, &leaf));
 
         let mut wrong_local = leaf;
         wrong_local[16] ^= 1;
-        assert!(!leaf_key_binds_storage_key(&wrong_local, &key));
+        assert!(!leaf_key_binds_storage_key(&wrong_local, &leaf));
     }
 
     /// A peer-shipped key that is not flat-shaped binds no leaf at all —

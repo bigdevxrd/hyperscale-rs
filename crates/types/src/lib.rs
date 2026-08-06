@@ -23,7 +23,6 @@ mod primitives;
 mod provisioning;
 mod signing;
 pub mod state_key;
-pub mod substate;
 mod time;
 mod verifiable;
 
@@ -169,10 +168,6 @@ pub use signing::{
     validator_possession_proof_verify, vrf_output_from_proof, vrf_sign, vrf_verify,
 };
 pub use state_key::{MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
-pub use substate::{
-    DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue,
-    NodeDatabaseUpdates, PartitionDatabaseUpdates, PartitionEntry,
-};
 pub use time::epoch_windows::EpochWindows;
 pub use time::limits::{MAX_TIMESTAMP_DELAY, MAX_TIMESTAMP_RUSH};
 pub use time::range::{MAX_VALIDITY_RANGE, TimestampRange};

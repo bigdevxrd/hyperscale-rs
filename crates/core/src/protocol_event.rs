@@ -529,7 +529,7 @@ pub enum ProtocolEvent {
     // ═══════════════════════════════════════════════════════════════════════
     /// Batch of execution results from an `ExecuteTransactions` / `ExecuteCrossShardTransactions` dispatch.
     ///
-    /// Results carry the full execution output (`DatabaseUpdates`, receipts) — stays local.
+    /// Results carry the full execution output (writes, receipts) — stays local.
     /// Every result in this batch belongs to `wave_id`; the wave gets exactly
     /// one `ExecutionBatchCompleted` and no further results arrive for it.
     ///

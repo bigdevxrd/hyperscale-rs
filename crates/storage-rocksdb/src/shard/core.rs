@@ -21,13 +21,11 @@ use std::time::Instant;
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_metrics::record_storage_read;
 use hyperscale_storage::{
-    BaseReadCache, DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue,
-    GenesisCommit, JmtSnapshot, PartitionDatabaseUpdates, PartitionEntry, SubstateDatabase,
-    SubstateStore, tree,
+    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateDatabase, SubstateStore, tree,
 };
 use hyperscale_types::{
     Block, BlockHeight, ChainOrigin, Hash, QuorumCertificate, SafeVoteRegisters, StateRoot,
-    ValidatorId, Verified,
+    StateWrites, SubstateKey, ValidatorId, Verified,
 };
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamilyDescriptor, DB, DBCompressionType, Options,
@@ -47,16 +45,10 @@ use super::metadata::{
     read_jmt_metadata, write_committed_hash, write_committed_height, write_committed_qc,
     write_jmt_metadata,
 };
-use super::substate_key::partition_prefix;
 use super::versioned_key::VersionedSubstateKeyCodec;
 use crate::StorageError;
 use crate::config::RocksDbConfig;
-use crate::typed_cf::{DbEncode, TypedCf, batch_delete, batch_put, get, multi_get, prefix_iter};
-
-/// Sort keys deleted by partition Reset operations, keyed by `(entity_key, partition_num)`.
-/// Passed to `put_at_version` so the JMT can reconstruct full storage keys and
-/// generate deletes for the hashed keys.
-pub type ResetOldKeys = HashMap<(Vec<u8>, u8), Vec<DbSortKey>>;
+use crate::typed_cf::{DbEncode, TypedCf, batch_delete, batch_put, get, multi_get};
 
 /// RocksDB-based storage for production use.
 ///
@@ -449,33 +441,28 @@ impl RocksDbShardStorage {
         write_committed_qc(batch, qc.as_ref());
     }
 
-    /// Build a `WriteBatch` containing all substate puts/deletes from `updates`.
+    /// Build a `WriteBatch` containing all substate puts/deletes from `writes`.
     ///
     /// For each write, captures the prior value (if `write_history`) into
-    /// `StateHistoryCf` at `((pk, sk), version)` before mutating `StateCf`.
+    /// `StateHistoryCf` at `(key, version)` before mutating `StateCf`.
     /// The `write_history` flag lets the genesis / bootstrap path skip
     /// history writes (no pre-state to preserve).
-    ///
-    /// Returns `(batch, reset_old_keys)` where `reset_old_keys` maps
-    /// `(entity_key, partition_num)` to the old storage keys in the
-    /// partition before the Reset — needed downstream for JMT delete
-    /// generation.
     pub(crate) fn build_substate_write_batch(
         &self,
-        updates: &DatabaseUpdates,
+        writes: &StateWrites,
         version: u64,
         write_history: bool,
         base_reads: Option<&BaseReadCache>,
-    ) -> (WriteBatch, ResetOldKeys) {
+    ) -> WriteBatch {
         let mut batch = WriteBatch::default();
-        let reset_old_keys = self.append_substate_writes_to_batch(
+        self.append_substate_writes_to_batch(
             &mut batch,
-            updates,
+            writes,
             version,
             write_history,
             base_reads,
         );
-        (batch, reset_old_keys)
+        batch
     }
 
     /// Same as `build_substate_write_batch` but appends to an existing
@@ -488,146 +475,38 @@ impl RocksDbShardStorage {
     /// already in the cache skip the fallback `multi_get_cf`; only keys
     /// NOT in the cache (typically blind writes that weren't preceded
     /// by a read) require a `StateCf` lookup.
-    #[allow(clippy::too_many_lines)] // single dispatch over read/write paths; splitting hurts locality
     pub(crate) fn append_substate_writes_to_batch(
         &self,
         batch: &mut WriteBatch,
-        updates: &DatabaseUpdates,
+        writes: &StateWrites,
         version: u64,
         write_history: bool,
         base_reads: Option<&BaseReadCache>,
-    ) -> ResetOldKeys {
+    ) {
         let cf = self.cf();
         let state_cf = StateCf::handle(&cf);
         let history_cf = StateHistoryCf::handle(&cf);
         let stale_history_cf = StaleStateHistoryCf::handle(&cf);
 
-        // Each update needs its prior value for the state-history entry.
+        // Each write needs its prior value for the state-history entry.
         // Fast path: the view-cache (`base_reads`) already has it from
         // execution — zero extra reads. Slow path: collect keys with no
         // cache entry, batch-`multi_get_cf` them in one FFI call.
-        #[allow(clippy::items_after_statements)] // local enum is scoped to this function
-        enum Op<'a> {
-            Set {
-                state_key: (DbPartitionKey, DbSortKey),
-                new_value: &'a Vec<u8>,
-            },
-            Delete {
-                state_key: (DbPartitionKey, DbSortKey),
-            },
-        }
-
-        let mut ops: Vec<Op<'_>> = Vec::with_capacity(updates.node_updates.len());
-        // Priors aligned 1:1 with `ops` in pass-1 iteration order.
+        // Priors aligned 1:1 with `writes.cells` iteration order;
         // `None` entry = cache miss, needs multi_get fallback.
-        let mut priors: Vec<Option<Option<Vec<u8>>>> =
-            Vec::with_capacity(updates.node_updates.len());
-        // Cache-miss keys, recorded once per op with None prior. Paired
-        // with `miss_indices` to write results back after multi_get.
-        let mut miss_keys: Vec<(DbPartitionKey, DbSortKey)> = Vec::new();
+        let mut priors: Vec<Option<Option<Vec<u8>>>> = Vec::with_capacity(writes.cells.len());
+        let mut miss_keys: Vec<SubstateKey> = Vec::new();
         let mut miss_indices: Vec<usize> = Vec::new();
-        let mut reset_old_keys = ResetOldKeys::new();
-
-        let record_prior = |ops_len: usize,
-                            priors: &mut Vec<Option<Option<Vec<u8>>>>,
-                            miss_keys: &mut Vec<(DbPartitionKey, DbSortKey)>,
-                            miss_indices: &mut Vec<usize>,
-                            state_key: &(DbPartitionKey, DbSortKey)| {
+        for (index, key) in writes.cells.keys().enumerate() {
             if let Some(cache) = base_reads
-                && let Some(cached) = cache.get(state_key)
+                && let Some(cached) = cache.get(key)
             {
                 priors.push(Some(cached.clone()));
-                return;
+                continue;
             }
-            // Cache miss (or no cache provided) — defer to multi_get.
             priors.push(None);
-            miss_keys.push(state_key.clone());
-            miss_indices.push(ops_len);
-        };
-
-        // Pass 1: walk updates, collect ops + priors (from cache or deferred).
-        for (node_key, node_updates) in &updates.node_updates {
-            for (partition_num, partition_updates) in &node_updates.partition_updates {
-                let partition_key = DbPartitionKey {
-                    node_key: node_key.clone(),
-                    partition_num: *partition_num,
-                };
-
-                match partition_updates {
-                    PartitionDatabaseUpdates::Delta { substate_updates } => {
-                        for (sort_key, update) in substate_updates {
-                            let state_key = (partition_key.clone(), sort_key.clone());
-                            let idx = ops.len();
-                            record_prior(
-                                idx,
-                                &mut priors,
-                                &mut miss_keys,
-                                &mut miss_indices,
-                                &state_key,
-                            );
-                            match update {
-                                DatabaseUpdate::Set(value) => ops.push(Op::Set {
-                                    state_key,
-                                    new_value: value,
-                                }),
-                                DatabaseUpdate::Delete => ops.push(Op::Delete { state_key }),
-                            }
-                        }
-                    }
-                    PartitionDatabaseUpdates::Reset {
-                        new_substate_values,
-                    } => {
-                        // Enumerate current live keys from StateCf (one
-                        // entry per key). This is a prefix scan — the
-                        // only non-batchable read, unavoidable for Reset.
-                        let old_sort_keys = self.list_partition_sort_keys(&partition_key);
-                        let new_keys_set: std::collections::HashSet<DbSortKey> =
-                            new_substate_values
-                                .iter()
-                                .map(|(sk, _)| sk.clone())
-                                .collect();
-
-                        // Removed keys: old ∖ new → capture prior, delete.
-                        for sk in &old_sort_keys {
-                            if !new_keys_set.contains(sk) {
-                                let state_key = (partition_key.clone(), sk.clone());
-                                let idx = ops.len();
-                                record_prior(
-                                    idx,
-                                    &mut priors,
-                                    &mut miss_keys,
-                                    &mut miss_indices,
-                                    &state_key,
-                                );
-                                ops.push(Op::Delete { state_key });
-                            }
-                        }
-
-                        if !old_sort_keys.is_empty() {
-                            reset_old_keys
-                                .insert((node_key.clone(), *partition_num), old_sort_keys);
-                        }
-
-                        // New values: capture prior (Some if overwriting,
-                        // None if the key was absent), then write.
-                        for (sort_key, value) in new_substate_values {
-                            let state_key = (partition_key.clone(), sort_key.clone());
-                            let idx = ops.len();
-                            record_prior(
-                                idx,
-                                &mut priors,
-                                &mut miss_keys,
-                                &mut miss_indices,
-                                &state_key,
-                            );
-                            ops.push(Op::Set {
-                                state_key,
-                                new_value: value,
-                            });
-                        }
-                    }
-                }
-            }
+            miss_keys.push(*key);
+            miss_indices.push(index);
         }
 
         // Fill cache misses with a single batched StateCf read. This is
@@ -642,49 +521,42 @@ impl RocksDbShardStorage {
             }
         }
 
-        // Pass 2: emit history + state batch puts.
+        // Emit history + state batch puts.
         // Accumulate the raw history keys written so we can record the
         // stale-set entry for this version in one shot.
         let history_key_codec = VersionedSubstateKeyCodec;
         let mut stale_history_keys: Vec<Vec<u8>> = Vec::new();
-        for (op, prior_slot) in ops.into_iter().zip(priors) {
+        for ((key, change), prior_slot) in writes.cells.iter().zip(priors) {
             let prior =
-                prior_slot.expect("every op must have a resolved prior (cache hit or fetched)");
-            match op {
-                Op::Set {
-                    state_key,
-                    new_value,
-                } => {
-                    // No-op short-circuit: Set(K, X) where prior is
-                    // already Some(X) changes nothing. Skip both the
-                    // history entry (redundant — reads fall through to
-                    // StateCf which already holds X) and the StateCf
-                    // put (rocksdb would memtable/compact a useless
-                    // same-value write).
-                    let is_noop = matches!(&prior, Some(p) if p == new_value);
-                    if is_noop {
-                        continue;
-                    }
-                    if write_history {
-                        let history_key = (state_key.clone(), version);
-                        stale_history_keys.push(history_key_codec.encode(&history_key));
-                        batch_put::<StateHistoryCf>(batch, history_cf, &history_key, &prior);
-                    }
-                    batch_put::<StateCf>(batch, state_cf, &state_key, new_value);
+                prior_slot.expect("every write must have a resolved prior (cache hit or fetched)");
+            if let Some(new_value) = change {
+                // No-op short-circuit: setting a key to the value it
+                // already holds changes nothing. Skip both the history
+                // entry (redundant — reads fall through to StateCf which
+                // already holds it) and the StateCf put (rocksdb would
+                // memtable/compact a useless same-value write).
+                let is_noop = matches!(&prior, Some(p) if p == new_value);
+                if is_noop {
+                    continue;
                 }
-                Op::Delete { state_key } => {
-                    // No-op short-circuit: Delete on an absent key is a
-                    // no-op. Skip both history and state writes.
-                    if prior.is_none() {
-                        continue;
-                    }
-                    if write_history {
-                        let history_key = (state_key.clone(), version);
-                        stale_history_keys.push(history_key_codec.encode(&history_key));
-                        batch_put::<StateHistoryCf>(batch, history_cf, &history_key, &prior);
-                    }
-                    batch_delete::<StateCf>(batch, state_cf, &state_key);
+                if write_history {
+                    let history_key = (*key, version);
+                    stale_history_keys.push(history_key_codec.encode(&history_key));
+                    batch_put::<StateHistoryCf>(batch, history_cf, &history_key, &prior);
                 }
+                batch_put::<StateCf>(batch, state_cf, key, new_value);
+            } else {
+                // No-op short-circuit: deleting an absent key is a no-op.
+                // Skip both history and state writes.
+                if prior.is_none() {
+                    continue;
+                }
+                if write_history {
+                    let history_key = (*key, version);
+                    stale_history_keys.push(history_key_codec.encode(&history_key));
+                    batch_put::<StateHistoryCf>(batch, history_cf, &history_key, &prior);
+                }
+                batch_delete::<StateCf>(batch, state_cf, key);
             }
         }
 
@@ -699,20 +571,6 @@ impl RocksDbShardStorage {
                 &stale_history_keys,
             );
         }
-
-        reset_old_keys
-    }
-
-    /// Enumerate sort keys currently live in the given partition.
-    /// Direct prefix scan on `StateCf` — one entry per key.
-    fn list_partition_sort_keys(&self, partition_key: &DbPartitionKey) -> Vec<DbSortKey> {
-        let cf = self.cf();
-        let state_cf = StateCf::handle(&cf);
-        let prefix = partition_prefix(partition_key);
-
-        prefix_iter::<StateCf>(&self.db, state_cf, &prefix)
-            .map(|((_pk, sk), _value)| sk)
-            .collect()
     }
 
     /// Write substate data at version 0 (no JMT computation).
@@ -726,12 +584,12 @@ impl RocksDbShardStorage {
     /// # Panics
     ///
     /// Panics if the underlying `RocksDB` write fails.
-    pub fn commit_substates_only(&self, updates: &DatabaseUpdates) {
+    pub fn commit_substates_only(&self, writes: &StateWrites) {
         // Genesis writes at version 0. Repeat Sets to the same key
         // overwrite — idempotent by RocksDB write semantics. No history
         // entries: genesis has no pre-state to preserve.
-        let (batch, _) = self.build_substate_write_batch(
-            updates, 0, /* write_history */ false, /* base_reads */ None,
+        let batch = self.build_substate_write_batch(
+            writes, 0, /* write_history */ false, /* base_reads */ None,
         );
 
         // Substates only — no JMT, no sync (genesis isn't durability-critical).
@@ -752,8 +610,7 @@ impl RocksDbShardStorage {
     ///
     /// Panics if called after the JMT has already been initialized, or
     /// if the underlying `RocksDB` write fails.
-    #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
-    pub fn finalize_genesis_jmt(&self, merged: &DatabaseUpdates) -> StateRoot {
+    pub fn finalize_genesis_jmt(&self, merged: &StateWrites) -> StateRoot {
         let _commit_guard = self.commit_lock.lock().unwrap();
 
         // Guard: finalize_genesis_jmt must only be called once, on an uninitialized JMT.
@@ -766,8 +623,7 @@ impl RocksDbShardStorage {
         let snapshot_store = SnapshotTreeStore::new(&self.db, self.root_path.clone());
 
         // parent=None, version=0: genesis is the first JMT state.
-        let (root, collected) =
-            tree::put_at_version(&snapshot_store, None, 0, &[merged], &HashMap::new());
+        let (root, collected) = tree::put_at_version(&snapshot_store, None, 0, &[merged]);
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,
             StateRoot::ZERO,
@@ -788,16 +644,12 @@ impl RocksDbShardStorage {
 }
 
 impl GenesisCommit for RocksDbShardStorage {
-    fn install_genesis(
-        &self,
-        substates: &DatabaseUpdates,
-        jmt_updates: &DatabaseUpdates,
-    ) -> StateRoot {
+    fn install_genesis(&self, substates: &StateWrites, jmt_writes: &StateWrites) -> StateRoot {
         Self::commit_substates_only(self, substates);
-        Self::finalize_genesis_jmt(self, jmt_updates)
+        Self::finalize_genesis_jmt(self, jmt_writes)
     }
 
-    fn replicate_genesis_substates(&self, substates: &DatabaseUpdates) {
+    fn replicate_genesis_substates(&self, substates: &StateWrites) {
         Self::commit_substates_only(self, substates);
     }
 }
@@ -807,17 +659,12 @@ impl SubstateDatabase for RocksDbShardStorage {
         found = Empty,
         latency_us = Empty,
     ))]
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<DbSubstateValue> {
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
         // Default-version snapshot (= current committed tip) reads
         // the latest value for this key. Delegating to `snapshot()`
         // keeps a single read path.
         let start = Instant::now();
-        let result = <Self as SubstateStore>::snapshot(self)
-            .get_raw_substate_by_db_key(partition_key, sort_key);
+        let result = <Self as SubstateStore>::snapshot(self).substate(key);
         let elapsed = start.elapsed();
         record_storage_read(elapsed.as_secs_f64());
 
@@ -829,20 +676,6 @@ impl SubstateDatabase for RocksDbShardStorage {
         );
 
         result
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
-        // Partition scan at current version. Same rationale as `get` —
-        // one canonical read path through the snapshot.
-        #[allow(clippy::needless_collect)] // snapshot iterator borrows from temporary
-        let items: Vec<_> = <Self as SubstateStore>::snapshot(self)
-            .list_raw_values_from_db_key(partition_key, from_sort_key)
-            .collect();
-        Box::new(items.into_iter())
     }
 }
 
@@ -887,10 +720,10 @@ mod test_helpers {
         ///
         /// Panics if the commit lock is poisoned.
         #[instrument(level = Level::DEBUG, skip_all, fields(
-            node_count = updates.node_updates.len(),
+            cell_count = writes.cells.len(),
             latency_us = Empty,
         ))]
-        pub fn commit(&self, updates: &DatabaseUpdates) -> Result<(), StorageError> {
+        pub fn commit(&self, writes: &StateWrites) -> Result<(), StorageError> {
             let _commit_guard = self.commit_lock.lock().unwrap();
 
             let start = Instant::now();
@@ -905,20 +738,15 @@ mod test_helpers {
                 .map(BlockHeight::inner);
             let new_version = base_version + 1;
 
-            let (mut batch, reset_old_keys) = self.build_substate_write_batch(
-                updates,
+            let mut batch = self.build_substate_write_batch(
+                writes,
                 new_version,
                 /* write_history */ true,
                 /* base_reads */ None,
             );
 
-            let (new_root, collected) = tree::put_at_version(
-                &snapshot_store,
-                parent_version,
-                new_version,
-                &[updates],
-                &reset_old_keys,
-            );
+            let (new_root, collected) =
+                tree::put_at_version(&snapshot_store, parent_version, new_version, &[writes]);
             let jmt_snapshot = JmtSnapshot::from_collected_writes(
                 collected,
                 base_root,
@@ -949,8 +777,8 @@ mod test_helpers {
     }
 
     impl CommittableSubstateDatabase for RocksDbShardStorage {
-        fn commit(&mut self, updates: &DatabaseUpdates) {
-            Self::commit(self, updates)
+        fn commit(&mut self, writes: &StateWrites) {
+            Self::commit(self, writes)
                 .expect("Storage commit failed - cannot maintain consistent state");
         }
     }

@@ -1,8 +1,6 @@
 //! Genesis install primitive.
 
-use hyperscale_types::StateRoot;
-
-use crate::DatabaseUpdates;
+use hyperscale_types::{StateRoot, StateWrites};
 
 /// Storage backends that can install a genesis snapshot in one shot.
 ///
@@ -16,21 +14,12 @@ pub trait GenesisCommit {
     /// genesis state root.
     ///
     /// `substates` is the full genesis state, written to the substate store
-    /// for read availability on every shard. `jmt_updates` is the
-    /// shard-filtered subset (nodes routing to this shard) that builds the
+    /// for read availability on every shard. `jmt_writes` is the
+    /// shard-filtered subset (owners routing to this shard) that builds the
     /// prefix-rooted JMT, so the committed `state_root` is exactly the global
     /// tree's subtree at the shard prefix. For a single-shard (empty-prefix)
     /// store the two are identical.
-    ///
-    /// `owner_map` owner-prefixes internal nodes (vaults, KV stores) under
-    /// their owning global ancestor so each lands in its owner's prefix
-    /// subtree.
-    #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
-    fn install_genesis(
-        &self,
-        substates: &DatabaseUpdates,
-        jmt_updates: &DatabaseUpdates,
-    ) -> StateRoot;
+    fn install_genesis(&self, substates: &StateWrites, jmt_writes: &StateWrites) -> StateRoot;
 
     /// Write `substates` to the substate store without touching the JMT.
     ///
@@ -42,5 +31,5 @@ pub trait GenesisCommit {
     /// on a store with no substates yet — the imports that follow overwrite
     /// the replicated values for keys inside the store's prefix, never the
     /// other way around.
-    fn replicate_genesis_substates(&self, substates: &DatabaseUpdates);
+    fn replicate_genesis_substates(&self, substates: &StateWrites);
 }

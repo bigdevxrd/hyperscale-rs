@@ -1,23 +1,16 @@
-//! Utilities for merging, filtering, and reconstructing `DatabaseUpdates`.
+//! Merging and filtering [`StateWrites`].
 
 use hyperscale_jmt::NibblePath;
-use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_db_node_key_owner};
 use hyperscale_types::{StateWrites, StoredReceipt};
-use indexmap::IndexMap;
-use indexmap::map::Entry;
 
-use crate::{
-    DatabaseUpdate, DatabaseUpdates, DbSortKey, NodeDatabaseUpdates, PartitionDatabaseUpdates,
-};
-
-/// Extract and merge `DatabaseUpdates` from stored receipts.
+/// Extract and merge the writes from stored receipts.
 ///
 /// Canonical projection from receipts to JMT/substate-write input.
 /// Failed receipts contribute nothing (`ConsensusReceipt::writes`
 /// returns `None`). Later receipts win per cell, matching the receipts'
 /// commit order.
 #[must_use]
-pub fn merge_updates_from_receipts(receipts: &[StoredReceipt]) -> DatabaseUpdates {
+pub fn merge_writes_from_receipts(receipts: &[StoredReceipt]) -> StateWrites {
     let mut merged = StateWrites::default();
     for receipt in receipts {
         if let Some(writes) = receipt.consensus.writes() {
@@ -29,65 +22,43 @@ pub fn merge_updates_from_receipts(receipts: &[StoredReceipt]) -> DatabaseUpdate
             );
         }
     }
-    state_writes_to_database_updates(&merged)
+    merged
 }
 
-/// Inflate flat writes into the `DatabaseUpdates` shape the apply paths
-/// speak: every cell under its owner's node key at the VM partition.
+/// Merge writes in order; later entries win per cell.
 #[must_use]
-pub fn state_writes_to_database_updates(writes: &StateWrites) -> DatabaseUpdates {
-    let mut updates = DatabaseUpdates::default();
-    for (key, change) in &writes.cells {
-        let node = updates
-            .node_updates
-            .entry(vm_db_node_key(key.owner.0))
-            .or_default();
-        let partition = node
-            .partition_updates
-            .entry(VM_PARTITION)
-            .or_insert_with(|| PartitionDatabaseUpdates::Delta {
-                substate_updates: IndexMap::new(),
-            });
-        let PartitionDatabaseUpdates::Delta { substate_updates } = partition else {
-            unreachable!("cells land in Delta partitions only")
-        };
-        substate_updates.insert(
-            DbSortKey(key.local.0.to_vec()),
-            change
-                .clone()
-                .map_or(DatabaseUpdate::Delete, DatabaseUpdate::Set),
+pub fn merge_state_writes(list: &[&StateWrites]) -> StateWrites {
+    let mut merged = StateWrites::default();
+    for writes in list {
+        merged.cells.extend(
+            writes
+                .cells
+                .iter()
+                .map(|(key, change)| (*key, change.clone())),
         );
     }
-    updates
+    merged
 }
 
-/// Restrict `updates` to the entities whose JMT leaves fall under
-/// `prefix` — the subset of a followed chain's block writes that
-/// belongs to a store rooted there.
+/// Restrict `writes` to the cells whose JMT leaves fall under `prefix` —
+/// the subset of a followed chain's block writes that belongs to a store
+/// rooted there.
 ///
-/// An entity key carries its owner prefix — the identity leaves' routing
-/// half — so every substate of one entity shares the prefix decision and
-/// the filter is per entity. An entity key that is not owner-shaped is
-/// dropped: nothing the engine commits is shaped that way, and a store
-/// must never bucket a key it cannot route.
+/// A substate key carries its owner prefix — the identity leaf's routing
+/// half — so every cell of one owner shares the prefix decision.
 #[must_use]
-pub fn filter_updates_to_prefix(updates: &DatabaseUpdates, prefix: &NibblePath) -> DatabaseUpdates {
-    DatabaseUpdates {
-        node_updates: updates
-            .node_updates
-            .iter()
-            .filter(|(entity_key, _)| {
-                vm_db_node_key_owner(entity_key).is_some_and(|owner| {
-                    // A shard prefix is under 64 bits (trie depth bound), so
-                    // the zero-padded low half is never consulted.
-                    let mut routing = [0u8; 32];
-                    routing[..16].copy_from_slice(&owner);
-                    hash_under_prefix(&routing, prefix)
-                })
-            })
-            .map(|(entity_key, node_updates)| (entity_key.clone(), node_updates.clone()))
-            .collect(),
+pub fn filter_writes_to_prefix(writes: &StateWrites, prefix: &NibblePath) -> StateWrites {
+    let mut filtered = StateWrites::default();
+    for (key, change) in &writes.cells {
+        // A shard prefix is under 64 bits (trie depth bound), so the
+        // zero-padded low half is never consulted.
+        let mut routing = [0u8; 32];
+        routing[..16].copy_from_slice(&key.owner.0);
+        if hash_under_prefix(&routing, prefix) {
+            filtered.cells.insert(*key, change.clone());
+        }
     }
+    filtered
 }
 
 /// Whether `hash`'s leading bits equal `prefix` — the subtree-membership
@@ -99,331 +70,47 @@ fn hash_under_prefix(hash: &[u8; 32], prefix: &NibblePath) -> bool {
     })
 }
 
-/// Merge a slice of per-certificate `DatabaseUpdates` into a single combined update.
-///
-/// Later certificates take precedence for conflicting keys (last writer wins).
-/// This is deterministic: certificates are processed left-to-right.
-#[must_use]
-pub fn merge_database_updates(updates_list: &[DatabaseUpdates]) -> DatabaseUpdates {
-    if updates_list.is_empty() {
-        return DatabaseUpdates::default();
-    }
-    if updates_list.len() == 1 {
-        return updates_list[0].clone();
-    }
-    let mut merged = DatabaseUpdates::default();
-    for updates in updates_list {
-        merge_into(&mut merged, updates);
-    }
-    merged
-}
-
-/// Merge `source` into `target` in place.
-///
-/// Later entries (from `source`) take precedence for conflicting keys.
-pub fn merge_into(target: &mut DatabaseUpdates, source: &DatabaseUpdates) {
-    for (entity_key, node_updates) in &source.node_updates {
-        merge_node_updates(
-            target.node_updates.entry(entity_key.clone()).or_default(),
-            node_updates,
-        );
-    }
-}
-
-fn merge_node_updates(target: &mut NodeDatabaseUpdates, source: &NodeDatabaseUpdates) {
-    for (partition, part_updates) in &source.partition_updates {
-        match target.partition_updates.entry(*partition) {
-            Entry::Vacant(e) => {
-                e.insert(part_updates.clone());
-            }
-            Entry::Occupied(mut e) => {
-                merge_partition_updates(e.get_mut(), part_updates);
-            }
-        }
-    }
-}
-
-fn merge_partition_updates(
-    target: &mut PartitionDatabaseUpdates,
-    source: &PartitionDatabaseUpdates,
-) {
-    match (target, source) {
-        // Delta + Delta: extend substate_updates, source wins for same key.
-        (
-            PartitionDatabaseUpdates::Delta {
-                substate_updates: target_updates,
-            },
-            PartitionDatabaseUpdates::Delta {
-                substate_updates: source_updates,
-            },
-        ) => {
-            target_updates.extend(source_updates.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-        // Delta + Reset: source Reset replaces target entirely.
-        // Reset + Reset: source Reset replaces target entirely.
-        (target, PartitionDatabaseUpdates::Reset { .. }) => {
-            *target = source.clone();
-        }
-        // Reset + Delta: apply delta on top of Reset's values.
-        (
-            PartitionDatabaseUpdates::Reset {
-                new_substate_values,
-            },
-            PartitionDatabaseUpdates::Delta { substate_updates },
-        ) => {
-            for (sort_key, update) in substate_updates {
-                match update {
-                    DatabaseUpdate::Set(value) => {
-                        new_substate_values.insert(sort_key.clone(), value.clone());
-                    }
-                    DatabaseUpdate::Delete => {
-                        new_substate_values.swap_remove(sort_key);
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use indexmap::IndexMap;
+    use hyperscale_jmt::NibblePath;
+    use hyperscale_types::{Address, LocalKey, SubstateKey};
 
     use super::*;
-    use crate::{DatabaseUpdate, DbSortKey};
 
-    // Helper to create a Delta DatabaseUpdates with a single node/partition/substate.
-    fn make_delta_updates(
-        node_key: &[u8],
-        partition: u8,
-        sort_key: Vec<u8>,
-        update: DatabaseUpdate,
-    ) -> DatabaseUpdates {
-        let mut updates = DatabaseUpdates::default();
-        let node_updates = updates.node_updates.entry(node_key.to_vec()).or_default();
-        let partition_updates = node_updates
-            .partition_updates
-            .entry(partition)
-            .or_insert_with(|| PartitionDatabaseUpdates::Delta {
-                substate_updates: IndexMap::new(),
-            });
-        if let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates {
-            substate_updates.insert(DbSortKey(sort_key), update);
-        }
-        updates
-    }
-
-    fn make_reset_updates(
-        node_key: &[u8],
-        partition: u8,
-        values: Vec<(Vec<u8>, Vec<u8>)>,
-    ) -> DatabaseUpdates {
-        let mut new_substate_values = IndexMap::new();
-        for (k, v) in values {
-            new_substate_values.insert(DbSortKey(k), v);
-        }
-        let mut updates = DatabaseUpdates::default();
-        let node_updates = updates.node_updates.entry(node_key.to_vec()).or_default();
-        node_updates.partition_updates.insert(
-            partition,
-            PartitionDatabaseUpdates::Reset {
-                new_substate_values,
+    fn writes_for(owner: [u8; 16], value: u8) -> StateWrites {
+        let mut writes = StateWrites::default();
+        writes.cells.insert(
+            SubstateKey {
+                owner: Address(owner),
+                local: LocalKey([1; 16]),
             },
+            Some(vec![value]),
         );
-        updates
-    }
-
-    fn get_delta_value(
-        updates: &DatabaseUpdates,
-        node_key: &[u8],
-        partition: u8,
-        sort_key: &[u8],
-    ) -> Option<DatabaseUpdate> {
-        let nk: Vec<u8> = node_key.to_vec();
-        let pk: u8 = partition;
-        let sk = DbSortKey(sort_key.to_vec());
-        updates.node_updates.get(&nk).and_then(|n| {
-            n.partition_updates.get(&pk).and_then(|p| {
-                if let PartitionDatabaseUpdates::Delta { substate_updates } = p {
-                    substate_updates.get(&sk).cloned()
-                } else {
-                    None
-                }
-            })
-        })
-    }
-
-    fn get_reset_values(
-        updates: &DatabaseUpdates,
-        node_key: &[u8],
-        partition: u8,
-    ) -> Option<IndexMap<DbSortKey, Vec<u8>>> {
-        let nk: Vec<u8> = node_key.to_vec();
-        let pk: u8 = partition;
-        updates.node_updates.get(&nk).and_then(|n| {
-            n.partition_updates.get(&pk).and_then(|p| {
-                if let PartitionDatabaseUpdates::Reset {
-                    new_substate_values,
-                } = p
-                {
-                    Some(new_substate_values.clone())
-                } else {
-                    None
-                }
-            })
-        })
+        writes
     }
 
     #[test]
-    fn filter_routes_updates_by_their_owner_prefix() {
-        use hyperscale_types::state_key::vm_db_node_key;
-        use hyperscale_types::{ShardId, shard_prefix_path};
-
-        // Owners on either side of the top bit against a depth-1 split.
-        let under = vm_db_node_key([0x00; 16]);
-        let outside = vm_db_node_key([0x80; 16]);
-        let mut updates = make_delta_updates(&under, 0, vec![1], DatabaseUpdate::Set(vec![1]));
-        merge_into(
-            &mut updates,
-            &make_delta_updates(&outside, 0, vec![1], DatabaseUpdate::Set(vec![2])),
-        );
-
-        let left = shard_prefix_path(ShardId::leaf(1, 0));
-        let filtered = filter_updates_to_prefix(&updates, &left);
-        assert!(filtered.node_updates.contains_key(&under));
-        assert!(!filtered.node_updates.contains_key(&outside));
-
-        let right = shard_prefix_path(ShardId::leaf(1, 1));
-        let filtered = filter_updates_to_prefix(&updates, &right);
-        assert!(!filtered.node_updates.contains_key(&under));
-        assert!(filtered.node_updates.contains_key(&outside));
+    fn later_writes_win_per_cell() {
+        let merged = merge_state_writes(&[&writes_for([1; 16], 1), &writes_for([1; 16], 2)]);
+        assert_eq!(merged.cells.len(), 1);
+        assert_eq!(merged.cells.values().next().unwrap(), &Some(vec![2]));
     }
 
     #[test]
-    fn test_merge_delta_delta_same_key_last_wins() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let u2 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![20]));
-        let merged = merge_database_updates(&[u1, u2]);
-        assert!(
-            matches!(get_delta_value(&merged, b"node1", 0, &[1]), Some(DatabaseUpdate::Set(v)) if v == vec![20])
-        );
-    }
+    fn prefix_filter_splits_on_the_leading_bit() {
+        let low = writes_for([0x00; 16], 1);
+        let high = writes_for([0xFF; 16], 2);
+        let merged = merge_state_writes(&[&low, &high]);
 
-    #[test]
-    fn test_merge_delta_delta_disjoint_keys() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let u2 = make_delta_updates(b"node1", 0, vec![2], DatabaseUpdate::Set(vec![20]));
-        let merged = merge_database_updates(&[u1, u2]);
-        assert!(get_delta_value(&merged, b"node1", 0, &[1]).is_some());
-        assert!(get_delta_value(&merged, b"node1", 0, &[2]).is_some());
-    }
-
-    #[test]
-    fn test_merge_delta_then_reset_replaces() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let u2 = make_reset_updates(b"node1", 0, vec![(vec![5], vec![50])]);
-        let merged = merge_database_updates(&[u1, u2]);
-        let vals = get_reset_values(&merged, b"node1", 0).unwrap();
-        assert_eq!(vals.len(), 1);
-        assert_eq!(vals.get(&DbSortKey(vec![5])).unwrap(), &vec![50]);
-    }
-
-    #[test]
-    fn test_merge_reset_then_delta_set() {
-        let u1 = make_reset_updates(b"node1", 0, vec![(vec![1], vec![10])]);
-        let u2 = make_delta_updates(b"node1", 0, vec![2], DatabaseUpdate::Set(vec![20]));
-        let merged = merge_database_updates(&[u1, u2]);
-        let vals = get_reset_values(&merged, b"node1", 0).unwrap();
-        assert_eq!(vals.len(), 2);
-        assert_eq!(vals.get(&DbSortKey(vec![1])).unwrap(), &vec![10]);
-        assert_eq!(vals.get(&DbSortKey(vec![2])).unwrap(), &vec![20]);
-    }
-
-    #[test]
-    fn test_merge_reset_then_delta_delete() {
-        let u1 = make_reset_updates(b"node1", 0, vec![(vec![1], vec![10]), (vec![2], vec![20])]);
-        let u2 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Delete);
-        let merged = merge_database_updates(&[u1, u2]);
-        let vals = get_reset_values(&merged, b"node1", 0).unwrap();
-        assert_eq!(vals.len(), 1);
-        assert!(vals.get(&DbSortKey(vec![1])).is_none());
-        assert_eq!(vals.get(&DbSortKey(vec![2])).unwrap(), &vec![20]);
-    }
-
-    #[test]
-    fn test_merge_reset_then_reset_replaces() {
-        let u1 = make_reset_updates(b"node1", 0, vec![(vec![1], vec![10])]);
-        let u2 = make_reset_updates(b"node1", 0, vec![(vec![2], vec![20])]);
-        let merged = merge_database_updates(&[u1, u2]);
-        let vals = get_reset_values(&merged, b"node1", 0).unwrap();
-        assert_eq!(vals.len(), 1);
-        assert_eq!(vals.get(&DbSortKey(vec![2])).unwrap(), &vec![20]);
-    }
-
-    #[test]
-    fn test_merge_multi_cert_ordering() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let u2 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![20]));
-        let u3 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![30]));
-        let merged = merge_database_updates(&[u1, u2, u3]);
-        assert!(
-            matches!(get_delta_value(&merged, b"node1", 0, &[1]), Some(DatabaseUpdate::Set(v)) if v == vec![30])
-        );
-    }
-
-    #[test]
-    fn test_merge_with_empty_is_identity() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let empty = DatabaseUpdates::default();
-        let merged = merge_database_updates(&[u1, empty]);
-        assert!(get_delta_value(&merged, b"node1", 0, &[1]).is_some());
-    }
-
-    #[test]
-    fn test_merge_different_entities() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let u2 = make_delta_updates(b"node2", 0, vec![1], DatabaseUpdate::Set(vec![20]));
-        let merged = merge_database_updates(&[u1, u2]);
-        assert_eq!(merged.node_updates.len(), 2);
-        assert!(get_delta_value(&merged, b"node1", 0, &[1]).is_some());
-        assert!(get_delta_value(&merged, b"node2", 0, &[1]).is_some());
-    }
-
-    #[test]
-    fn test_merge_different_partitions_same_entity() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let u2 = make_delta_updates(b"node1", 1, vec![1], DatabaseUpdate::Set(vec![20]));
-        let merged = merge_database_updates(&[u1, u2]);
-        assert_eq!(merged.node_updates.len(), 1);
-        let nk: Vec<u8> = b"node1".to_vec();
-        let node = merged.node_updates.get(&nk).unwrap();
-        assert_eq!(node.partition_updates.len(), 2);
-    }
-
-    #[test]
-    fn test_merge_delta_set_then_delete() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let u2 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Delete);
-        let merged = merge_database_updates(&[u1, u2]);
-        assert!(matches!(
-            get_delta_value(&merged, b"node1", 0, &[1]),
-            Some(DatabaseUpdate::Delete)
-        ));
-    }
-
-    #[test]
-    fn test_merge_empty_list() {
-        let merged = merge_database_updates(&[]);
-        assert!(merged.node_updates.is_empty());
-    }
-
-    #[test]
-    fn test_merge_single_element_is_identity() {
-        let u1 = make_delta_updates(b"node1", 0, vec![1], DatabaseUpdate::Set(vec![10]));
-        let merged = merge_database_updates(std::slice::from_ref(&u1));
-        assert!(
-            matches!(get_delta_value(&merged, b"node1", 0, &[1]), Some(DatabaseUpdate::Set(v)) if v == vec![10]),
-            "single-element merge should be identity"
+        let mut left = NibblePath::empty();
+        left.push_bits(0, 1);
+        let mut right = NibblePath::empty();
+        right.push_bits(1, 1);
+        assert_eq!(filter_writes_to_prefix(&merged, &left), low);
+        assert_eq!(filter_writes_to_prefix(&merged, &right), high);
+        assert_eq!(
+            filter_writes_to_prefix(&merged, &NibblePath::empty()),
+            merged
         );
     }
 }

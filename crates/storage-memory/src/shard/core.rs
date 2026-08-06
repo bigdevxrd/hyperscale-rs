@@ -8,21 +8,21 @@
 //! `state_history` to find the smallest write after V; its prior value
 //! is the state at V.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 
 use hyperscale_jmt::{Key, NibblePath};
 use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::put_at_version;
 use hyperscale_storage::{
-    DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue, GenesisCommit, ImportProgress,
-    PartitionEntry, RecoveredState, SubstateDatabase, SubstateStore,
+    GenesisCommit, ImportProgress, RecoveredState, SubstateDatabase, SubstateStore,
 };
 use hyperscale_types::{
-    BeaconWitnessLeafCount, BlockHeight, Hash, QuorumCertificate, StateRoot, Verified,
+    BeaconWitnessLeafCount, BlockHeight, Hash, QuorumCertificate, StateRoot, StateWrites,
+    SubstateKey, Verified,
 };
 
-use super::state::{ConsensusState, SharedState, apply_updates};
+use super::state::{ConsensusState, SharedState, apply_writes};
 
 /// In-memory storage for simulation and testing.
 ///
@@ -262,9 +262,9 @@ impl SimShardStorage {
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
-    pub fn commit_substates_only(&self, updates: &DatabaseUpdates) {
+    pub fn commit_substates_only(&self, writes: &StateWrites) {
         let mut s = write_or_recover(&self.state);
-        apply_updates(&mut s, updates, 0, /* write_history */ false);
+        apply_writes(&mut s, writes, 0, /* write_history */ false);
     }
 
     /// Compute the JMT once at version 0 from the merged genesis updates.
@@ -281,8 +281,7 @@ impl SimShardStorage {
     /// Panics if the internal `RwLock` is poisoned, or if the JMT has
     /// already been initialized.
     #[must_use]
-    #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
-    pub fn finalize_genesis_jmt(&self, merged: &DatabaseUpdates) -> StateRoot {
+    pub fn finalize_genesis_jmt(&self, merged: &StateWrites) -> StateRoot {
         let mut s = write_or_recover(&self.state);
 
         // Guard: finalize_genesis_jmt must only be called once, on an uninitialized JMT.
@@ -293,7 +292,7 @@ impl SimShardStorage {
         );
 
         // parent=None, version=0: genesis is the first JMT state.
-        let (root, collected) = put_at_version(&s.tree_store, None, 0, &[merged], &HashMap::new());
+        let (root, collected) = put_at_version(&s.tree_store, None, 0, &[merged]);
 
         for (key, node) in &collected.nodes {
             s.tree_store.insert(key.clone(), Arc::clone(node));
@@ -323,40 +322,20 @@ impl SimShardStorage {
 }
 
 impl GenesisCommit for SimShardStorage {
-    fn install_genesis(
-        &self,
-        substates: &DatabaseUpdates,
-        jmt_updates: &DatabaseUpdates,
-    ) -> StateRoot {
+    fn install_genesis(&self, substates: &StateWrites, jmt_writes: &StateWrites) -> StateRoot {
         Self::commit_substates_only(self, substates);
-        Self::finalize_genesis_jmt(self, jmt_updates)
+        Self::finalize_genesis_jmt(self, jmt_writes)
     }
 
-    fn replicate_genesis_substates(&self, substates: &DatabaseUpdates) {
+    fn replicate_genesis_substates(&self, substates: &StateWrites) {
         Self::commit_substates_only(self, substates);
     }
 }
 
 impl SubstateDatabase for SimShardStorage {
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<DbSubstateValue> {
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
         // Default-version snapshot (= current committed tip) reads the
         // latest value from `current_state`.
-        <Self as SubstateStore>::snapshot(self).get_raw_substate_by_db_key(partition_key, sort_key)
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
-        #[allow(clippy::needless_collect)] // snapshot iterator borrows from temporary
-        let items: Vec<_> = <Self as SubstateStore>::snapshot(self)
-            .list_raw_values_from_db_key(partition_key, from_sort_key)
-            .collect();
-        Box::new(items.into_iter())
+        <Self as SubstateStore>::snapshot(self).substate(key)
     }
 }

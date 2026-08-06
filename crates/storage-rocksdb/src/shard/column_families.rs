@@ -3,11 +3,10 @@
 //! This is the single source of truth for what column families exist,
 //! what they store, and how their keys/values are encoded.
 
-use hyperscale_storage::{DbPartitionKey, DbSortKey};
 use hyperscale_types::{
     BlockMetadata, ChainOrigin, ConsensusReceipt, ExecutionCertificate, ExecutionMetadata, Hash,
-    Round, SafeVoteRegisters, ShardWitnessPayload, Transaction, ValidatorId, WaveCertificate,
-    WaveId,
+    Round, SafeVoteRegisters, ShardWitnessPayload, SubstateKey, Transaction, ValidatorId,
+    WaveCertificate, WaveId,
 };
 use rocksdb::{ColumnFamily, DB};
 
@@ -418,7 +417,7 @@ impl TypedCf for StaleStateHistoryCf {
 pub struct StateCf;
 impl TypedCf for StateCf {
     const NAME: &'static str = STATE_CF;
-    type Key = (DbPartitionKey, DbSortKey);
+    type Key = SubstateKey;
     type Value = Vec<u8>;
     type KeyCodec = SubstateKeyCodec;
     type ValueCodec = RawCodec;
@@ -447,7 +446,7 @@ impl TypedCf for StateCf {
 pub struct StateHistoryCf;
 impl TypedCf for StateHistoryCf {
     const NAME: &'static str = STATE_HISTORY_CF;
-    type Key = ((DbPartitionKey, DbSortKey), u64); // ((partition_key, sort_key), write_version)
+    type Key = (SubstateKey, u64); // (substate key, write_version)
     type Value = Option<Vec<u8>>;
     type KeyCodec = VersionedSubstateKeyCodec;
     type ValueCodec = HborCodec<Option<Vec<u8>>>;

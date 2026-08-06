@@ -25,8 +25,8 @@ use hyperscale_effects_bridge::{
     decode_tree, envelope_identity, witness_from_event,
 };
 use hyperscale_metrics::record_transaction_executed;
-use hyperscale_storage::{DbPartitionKey, DbSortKey, DbSubstateValue, SubstateDatabase};
-use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
+use hyperscale_storage::SubstateDatabase;
+use hyperscale_types::state_key::vm_flat_key_parts;
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventExt, EventRoot,
     ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, Stake,
@@ -270,15 +270,9 @@ impl Executor {
     }
 }
 
-/// Read one declared cell from the wave snapshot by its exact flat key.
-pub fn read_cell(snapshot: &DynSnapshot<'_>, key: SubstateKey) -> Option<DbSubstateValue> {
-    snapshot.get_raw_substate_by_db_key(
-        &DbPartitionKey {
-            node_key: vm_db_node_key(key.owner.0),
-            partition_num: VM_PARTITION,
-        },
-        &DbSortKey(key.local.0.to_vec()),
-    )
+/// Read one declared cell from the wave snapshot by its key.
+pub fn read_cell(snapshot: &DynSnapshot<'_>, key: SubstateKey) -> Option<Vec<u8>> {
+    snapshot.substate(key)
 }
 
 /// Fuel and the abort reason (if any) as node-local metadata.

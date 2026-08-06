@@ -1,6 +1,5 @@
 //! `ShardChainWriter` implementation for `RocksDbShardStorage`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_storage::tree::{
@@ -8,12 +7,11 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, DatabaseUpdates, JmtSnapshot, ShardChainWriter, merge_database_updates,
-    merge_updates_from_receipts, state_writes_to_database_updates,
+    BaseReadCache, JmtSnapshot, ShardChainWriter, merge_state_writes, merge_writes_from_receipts,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, Block, BlockHeight, CertifiedBlock, FinalizedWave, PreparedCommit,
-    QuorumCertificate, StateRoot, StoredReceipt, SyncHint, Verifiable, Verified,
+    QuorumCertificate, StateRoot, StateWrites, StoredReceipt, SyncHint, Verifiable, Verified,
 };
 use rocksdb::{WriteBatch, WriteOptions};
 
@@ -71,26 +69,20 @@ impl ShardChainWriter for RocksDbShardStorage {
                     .map_or(pv, |(v, _)| v)
             });
 
-        // Collect per-receipt DatabaseUpdates references — no merge needed.
+        // Collect per-receipt writes references — no merge needed.
         // State locking guarantees no key conflicts between receipts, so
         // put_at_version can flatten them directly into JMT work items.
-        //
-        // Receipt updates are Delta-only (enforced at receipt decode and in
-        // project_to_shard), so no Reset partition needs old-key JMT deletes
-        // and the empty reset_old_keys map below is exact.
-        let bridged_updates: Vec<DatabaseUpdates> = receipts
+        let per_receipt_writes: Vec<&StateWrites> = receipts
             .iter()
-            .filter_map(|r| r.consensus.writes().map(state_writes_to_database_updates))
+            .filter_map(|r| r.consensus.writes())
             .collect();
-        let per_receipt_updates: Vec<&DatabaseUpdates> = bridged_updates.iter().collect();
 
         let (computed_root, collected) = if pending_snapshots.is_empty() {
             put_at_version(
                 &snapshot_store,
                 parent_version,
                 block_height.inner(),
-                &per_receipt_updates,
-                &HashMap::new(),
+                &per_receipt_writes,
             )
         } else {
             let overlay = OverlayTreeReader::new(&snapshot_store, pending_snapshots);
@@ -98,8 +90,7 @@ impl ShardChainWriter for RocksDbShardStorage {
                 &overlay,
                 parent_version,
                 block_height.inner(),
-                &per_receipt_updates,
-                &HashMap::new(),
+                &per_receipt_writes,
             )
         };
 
@@ -111,12 +102,12 @@ impl ShardChainWriter for RocksDbShardStorage {
             block_height,
         ));
 
-        // Merge updates for the substate WriteBatch (off the state_root critical path).
-        let merged_updates = merge_database_updates(&bridged_updates);
+        // Merge writes for the substate WriteBatch (off the state_root critical path).
+        let merged_writes = merge_state_writes(&per_receipt_writes);
 
         // Pre-build substate + receipt writes into a WriteBatch for efficient commit.
-        let (mut write_batch, _reset_old_keys) = self.build_substate_write_batch(
-            &merged_updates,
+        let mut write_batch = self.build_substate_write_batch(
+            &merged_writes,
             block_height.inner(),
             /* write_history */ true,
             base_reads,
@@ -147,9 +138,9 @@ impl ShardChainWriter for RocksDbShardStorage {
             .iter()
             .flat_map(|fw| fw.receipts().iter().cloned())
             .collect();
-        let merged_updates = merge_updates_from_receipts(&receipts);
+        let merged_writes = merge_writes_from_receipts(&receipts);
         let _commit_guard = self.commit_lock.lock().unwrap();
-        self.commit_block_inner_locked(&merged_updates, block, qc, &receipts, witness)
+        self.commit_block_inner_locked(&merged_writes, block, qc, &receipts, witness)
     }
 
     fn memory_usage_bytes(&self) -> (u64, u64) {
@@ -250,8 +241,8 @@ fn build_prepared_commit(
                 .iter()
                 .flat_map(|fw| fw.receipts().iter().cloned())
                 .collect();
-            let merged_updates = merge_updates_from_receipts(&receipts);
-            storage.commit_block_inner_locked(&merged_updates, block, qc, &receipts, witness)
+            let merged_writes = merge_writes_from_receipts(&receipts);
+            storage.commit_block_inner_locked(&merged_writes, block, qc, &receipts, witness)
         },
     )
 }
@@ -266,7 +257,7 @@ impl RocksDbShardStorage {
     /// the commit see the same `base_version`.
     pub(crate) fn commit_block_inner_locked(
         &self,
-        merged_updates: &DatabaseUpdates,
+        merged_writes: &StateWrites,
         block: &Block,
         qc: &Verified<QuorumCertificate>,
         receipts: &[StoredReceipt],
@@ -288,8 +279,8 @@ impl RocksDbShardStorage {
 
         // Sync path has no view → no base-read cache → fall through to
         // multi_get_cf for all priors.
-        let (mut batch, reset_old_keys) = self.build_substate_write_batch(
-            merged_updates,
+        let mut batch = self.build_substate_write_batch(
+            merged_writes,
             block_height,
             /* write_history */ true,
             /* base_reads */ None,
@@ -314,8 +305,7 @@ impl RocksDbShardStorage {
             &snapshot_store,
             parent_version,
             block_height,
-            &[merged_updates],
-            &reset_old_keys,
+            &[merged_writes],
         );
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,

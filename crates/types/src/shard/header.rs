@@ -409,7 +409,7 @@ impl BlockHeader {
     /// ([`ConsensusReceipt::local_receipt_hash`](crate::ConsensusReceipt::local_receipt_hash))
     /// for all transactions covered by this block's wave certificates.
     ///
-    /// Commits to the specific per-tx state deltas (shard-filtered `DatabaseUpdates`)
+    /// Commits to the specific per-tx state deltas (shard-filtered writes)
     /// that were applied to produce `state_root`. Enables per-tx delta attribution
     /// and receipt integrity verification by sync nodes.
     ///

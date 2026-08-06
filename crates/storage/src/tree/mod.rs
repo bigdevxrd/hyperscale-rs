@@ -28,12 +28,12 @@ use hyperscale_jmt::{
     Blake3Hasher, Key, LeafValue, NibblePath, Node as JmtNode, NodeKey, Tree, TreeReader,
     UpdateResult, ValueHash,
 };
-use hyperscale_types::state_key::{jmt_leaf_key, jmt_value_hash};
-use hyperscale_types::{BlockHeight, Hash, StateRoot};
+use hyperscale_types::state_key::jmt_value_hash;
+use hyperscale_types::{BlockHeight, Hash, StateRoot, StateWrites, SubstateKey};
 use rayon::prelude::*;
 pub use snapshot::{JmtSnapshot, LeafSubstateKeyAssociation};
 
-use crate::{DatabaseUpdate, DatabaseUpdates, DbSortKey, ImportLeaf, PartitionDatabaseUpdates};
+use crate::ImportLeaf;
 
 /// Layered tree reader that overlays pending JMT snapshots on a base store.
 ///
@@ -87,14 +87,6 @@ impl<S: TreeReader + Sync> TreeReader for OverlayTreeReader<'_, S> {
 /// The JMT configuration this backend uses: binary arity, Blake3 hasher.
 /// Centralizing as a type alias so callers don't repeat the parameters.
 pub type Jmt = Tree<Blake3Hasher, 1>;
-
-/// The 32-byte JMT key of a storage key: its owner and local halves,
-/// by identity, so one owner's substates form a contiguous prefix
-/// subtree.
-#[must_use]
-pub fn hash_storage_key(storage_key: &[u8]) -> Key {
-    jmt_leaf_key(storage_key)
-}
 
 /// A JMT root hash as a [`StateRoot`], mapping the empty-tree sentinel
 /// (all zeroes) to `StateRoot::ZERO`.
@@ -290,62 +282,15 @@ pub fn noop_jmt_snapshot<S: TreeReader>(
     }
 }
 
-/// Build a storage key from `entity_key` + `partition_num` + `sort_key`.
-fn make_storage_key(entity_key: &[u8], partition_num: u8, sort_key: &[u8]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(entity_key.len() + 1 + sort_key.len());
-    key.extend_from_slice(entity_key);
-    key.push(partition_num);
-    key.extend_from_slice(sort_key);
-    key
-}
-
-/// Flatten database updates into `(storage_key_bytes, optional_value)`
-/// work items. `None` values are deletes; Reset partitions delete every
-/// key listed in `reset_old_keys` before writing their new values.
-fn flatten_work_items<'a>(
-    database_updates_list: &[&'a DatabaseUpdates],
-    reset_old_keys: &HashMap<(Vec<u8>, u8), Vec<DbSortKey>>,
-) -> Vec<(Vec<u8>, Option<&'a [u8]>)> {
-    let mut work_items: Vec<(Vec<u8>, Option<&[u8]>)> = Vec::new();
-
-    for database_updates in database_updates_list {
-        for (entity_key, node_updates) in &database_updates.node_updates {
-            for (&partition_num, partition_updates) in &node_updates.partition_updates {
-                match partition_updates {
-                    PartitionDatabaseUpdates::Delta { substate_updates } => {
-                        for (sort_key, update) in substate_updates {
-                            let storage_key =
-                                make_storage_key(entity_key, partition_num, &sort_key.0);
-                            let value_ref = match update {
-                                DatabaseUpdate::Set(value) => Some(value.as_slice()),
-                                DatabaseUpdate::Delete => None,
-                            };
-                            work_items.push((storage_key, value_ref));
-                        }
-                    }
-                    PartitionDatabaseUpdates::Reset {
-                        new_substate_values,
-                    } => {
-                        if let Some(old_sort_keys) =
-                            reset_old_keys.get(&(entity_key.clone(), partition_num))
-                        {
-                            for old_sk in old_sort_keys {
-                                let storage_key =
-                                    make_storage_key(entity_key, partition_num, &old_sk.0);
-                                work_items.push((storage_key, None));
-                            }
-                        }
-                        for (sort_key, value) in new_substate_values {
-                            let storage_key =
-                                make_storage_key(entity_key, partition_num, &sort_key.0);
-                            work_items.push((storage_key, Some(value.as_slice())));
-                        }
-                    }
-                }
-            }
+/// Flatten writes into `(key, optional_value)` work items; `None`
+/// values are deletes.
+fn flatten_work_items<'a>(writes_list: &[&'a StateWrites]) -> Vec<(SubstateKey, Option<&'a [u8]>)> {
+    let mut work_items: Vec<(SubstateKey, Option<&[u8]>)> = Vec::new();
+    for writes in writes_list {
+        for (key, change) in &writes.cells {
+            work_items.push((*key, change.as_deref()));
         }
     }
-
     work_items
 }
 
@@ -358,31 +303,25 @@ fn flatten_work_items<'a>(
 /// `parent_version` is the version of the existing root (`None` for initial state).
 /// `new_version` is the version to stamp on new nodes (typically block height).
 ///
-/// `reset_old_keys` provides the storage keys that existed in Reset partitions
-/// before the reset. These are needed to generate JMT deletes because hashed keys
-/// prevent tree-based enumeration.
-///
-/// Accepts multiple `DatabaseUpdates` slices — all are flattened directly
-/// into JMT work items without merging. Since transactions hold exclusive
-/// state locks, there are no key conflicts between updates.
+/// Accepts multiple [`StateWrites`] — all are flattened directly into
+/// JMT work items without merging. Since transactions hold exclusive
+/// state locks, there are no key conflicts between them.
 ///
 /// # Panics
 ///
 /// Panics if `new_version` is not strictly greater than `parent_version`.
-#[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s; generic hasher would require turbofishing every site
 pub fn put_at_version<S: TreeReader + Sync>(
     store: &S,
     parent_version: Option<u64>,
     new_version: u64,
-    database_updates_list: &[&DatabaseUpdates],
-    reset_old_keys: &HashMap<(Vec<u8>, u8), Vec<DbSortKey>>,
+    writes_list: &[&StateWrites],
 ) -> (StateRoot, CollectedWrites) {
     assert!(
         parent_version.is_none_or(|pv| new_version > pv),
         "put_at_version: new_version ({new_version}) must be greater than parent_version ({parent_version:?})"
     );
 
-    let work_items = flatten_work_items(database_updates_list, reset_old_keys);
+    let work_items = flatten_work_items(writes_list);
 
     if work_items.is_empty() {
         // No updates — carry the existing root forward to the new version.
@@ -410,30 +349,27 @@ pub fn put_at_version<S: TreeReader + Sync>(
         return (root_hash, collected);
     }
 
-    // Parallel phase: BLAKE3 hash each storage key and value. Each item is
-    // independent — this parallelizes the per-entry hashing work.
+    // Parallel phase: BLAKE3 hash each value. Each item is independent —
+    // this parallelizes the per-entry hashing work; the leaf key is the
+    // substate key's own bytes.
     let mut updates: Vec<(Key, Option<LeafValue>)> = work_items
         .par_iter()
-        .map(|(storage_key, value_ref)| {
-            let jmt_key = hash_storage_key(storage_key);
+        .map(|(key, value_ref)| {
             let jmt_value = value_ref.map(|v| LeafValue::new(hash_value(v), v.len() as u64));
-            (jmt_key, jmt_value)
+            (key.to_bytes(), jmt_value)
         })
         .collect();
 
-    // Record each write's hashed-key → raw-key association before the
-    // raw keys are consumed. `jmt_leaf_key` is one-way, so this mapping
-    // is what lets range serving resolve enumerated leaves back to raw
-    // substate pairs.
-    let leaf_associations: Vec<LeafSubstateKeyAssociation> = updates
+    // Record each write's leaf → storage-key association. The leaf is
+    // the key's own bytes, so the association is the identity — kept so
+    // range serving resolves enumerated leaves without consulting the
+    // key layout.
+    let leaf_associations: Vec<LeafSubstateKeyAssociation> = work_items
         .iter()
-        .zip(work_items)
-        .map(
-            |(&(leaf_key, _), (storage_key, value_ref))| LeafSubstateKeyAssociation {
-                leaf_key,
-                storage_key: value_ref.is_some().then_some(storage_key),
-            },
-        )
+        .map(|(key, value_ref)| LeafSubstateKeyAssociation {
+            leaf_key: key.to_bytes(),
+            storage_key: value_ref.is_some().then_some(key.to_bytes().to_vec()),
+        })
         .collect();
 
     updates.par_sort_by(|a, b| a.0.cmp(&b.0));
@@ -469,104 +405,63 @@ pub fn put_at_version<S: TreeReader + Sync>(
 #[cfg(test)]
 mod tests {
     use hyperscale_jmt::MemoryStore;
-    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key, vm_leaf_key};
+    use hyperscale_types::{Address, LocalKey};
 
     use super::*;
-    use crate::{DatabaseUpdate, DbSortKey, NodeDatabaseUpdates, PartitionDatabaseUpdates};
 
-    /// One association per work item: the leaf key paired with the raw
-    /// storage key for sets, `None` for deletes.
+    fn cell(owner: [u8; 16], local: [u8; 16]) -> SubstateKey {
+        SubstateKey {
+            owner: Address(owner),
+            local: LocalKey(local),
+        }
+    }
+
+    /// One association per work item: the leaf key paired with the key's
+    /// own bytes for sets, `None` for deletes.
     #[test]
     fn put_at_version_records_leaf_associations() {
         let store = MemoryStore::new();
 
-        let set_entity = vm_db_node_key([1u8; 16]);
-        let del_entity = vm_db_node_key([2u8; 16]);
-        let (set_local, del_local) = ([9u8; 16], [5u8; 16]);
-        let mut updates = DatabaseUpdates::default();
-        updates.node_updates.insert(
-            set_entity.clone(),
-            NodeDatabaseUpdates {
-                partition_updates: std::iter::once((
-                    VM_PARTITION,
-                    PartitionDatabaseUpdates::Delta {
-                        substate_updates: std::iter::once((
-                            DbSortKey(set_local.to_vec()),
-                            DatabaseUpdate::Set(vec![42]),
-                        ))
-                        .collect(),
-                    },
-                ))
-                .collect(),
-            },
-        );
-        updates.node_updates.insert(
-            del_entity.clone(),
-            NodeDatabaseUpdates {
-                partition_updates: std::iter::once((
-                    VM_PARTITION,
-                    PartitionDatabaseUpdates::Delta {
-                        substate_updates: std::iter::once((
-                            DbSortKey(del_local.to_vec()),
-                            DatabaseUpdate::Delete,
-                        ))
-                        .collect(),
-                    },
-                ))
-                .collect(),
-            },
-        );
+        let set_key = cell([1u8; 16], [9u8; 16]);
+        let del_key = cell([2u8; 16], [5u8; 16]);
+        let mut writes = StateWrites::default();
+        writes.cells.insert(set_key, Some(vec![42]));
+        writes.cells.insert(del_key, None);
 
-        let (_, collected) = put_at_version(&store, None, 1, &[&updates], &HashMap::new());
+        let (_, collected) = put_at_version(&store, None, 1, &[&writes]);
 
-        let set_raw = make_storage_key(&set_entity, VM_PARTITION, &set_local);
-        let del_raw = make_storage_key(&del_entity, VM_PARTITION, &del_local);
-        let by_key = |raw: &[u8]| {
-            let hashed = hash_storage_key(raw);
+        let by_key = |key: SubstateKey| {
             collected
                 .leaf_associations
                 .iter()
-                .find(|a| a.leaf_key == hashed)
+                .find(|a| a.leaf_key == key.to_bytes())
                 .expect("association recorded for every work item")
                 .clone()
         };
         assert_eq!(collected.leaf_associations.len(), 2);
-        assert_eq!(by_key(&set_raw).storage_key, Some(set_raw.clone()));
-        assert_eq!(by_key(&del_raw).storage_key, None);
+        assert_eq!(
+            by_key(set_key).storage_key,
+            Some(set_key.to_bytes().to_vec())
+        );
+        assert_eq!(by_key(del_key).storage_key, None);
     }
 
-    /// A VM update keys its leaf by identity — `[owner | local]` — and the
-    /// association records the flat key so range serving resolves it.
+    /// A write keys its leaf by identity — `[owner | local]` — so one
+    /// owner's cells form a contiguous subtree.
     #[test]
-    fn put_at_version_keys_vm_updates_by_identity() {
+    fn put_at_version_keys_writes_by_identity() {
         let store = MemoryStore::new();
-        let owner = [0xA5u8; 16];
-        let local = [0x3Cu8; 16];
+        let key = cell([0xA5u8; 16], [0x3Cu8; 16]);
 
-        let mut updates = DatabaseUpdates::default();
-        updates.node_updates.insert(
-            vm_db_node_key(owner),
-            NodeDatabaseUpdates {
-                partition_updates: std::iter::once((
-                    VM_PARTITION,
-                    PartitionDatabaseUpdates::Delta {
-                        substate_updates: std::iter::once((
-                            DbSortKey(local.to_vec()),
-                            DatabaseUpdate::Set(vec![42]),
-                        ))
-                        .collect(),
-                    },
-                ))
-                .collect(),
-            },
-        );
+        let mut writes = StateWrites::default();
+        writes.cells.insert(key, Some(vec![42]));
 
-        let (root, collected) = put_at_version(&store, None, 1, &[&updates], &HashMap::new());
+        let (root, collected) = put_at_version(&store, None, 1, &[&writes]);
 
         assert_ne!(root, StateRoot::ZERO);
         assert_eq!(collected.leaf_associations.len(), 1);
         let association = &collected.leaf_associations[0];
-        assert_eq!(association.leaf_key, vm_leaf_key(owner, local));
-        assert_eq!(association.storage_key, Some(vm_flat_key(owner, local)));
+        assert_eq!(association.leaf_key, key.to_bytes());
+        assert_eq!(association.storage_key, Some(key.to_bytes().to_vec()));
     }
 }

@@ -5,7 +5,9 @@
 //! (not an actual value change), the actual substate value must be looked
 //! up from the database.
 
-use crate::{DbPartitionKey, DbSortKey, SubstateDatabase};
+use hyperscale_types::SubstateKey;
+
+use crate::SubstateDatabase;
 
 /// Trait for looking up substate values during JMT snapshot construction.
 ///
@@ -13,12 +15,8 @@ use crate::{DbPartitionKey, DbSortKey, SubstateDatabase};
 /// leaf-to-substate associations. The lookup is needed to record what
 /// value a JMT leaf node points to, even when that value hasn't changed.
 pub trait SubstateLookup {
-    /// Look up a substate value by partition key and sort key.
-    fn lookup_substate(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<Vec<u8>>;
+    /// Look up a substate value by its key.
+    fn lookup_substate(&self, key: SubstateKey) -> Option<Vec<u8>>;
 }
 
 /// Adapter to use a `&dyn SubstateDatabase` as a [`SubstateLookup`].
@@ -28,11 +26,7 @@ pub trait SubstateLookup {
 pub struct SubstateDbLookup<'a>(pub &'a (dyn SubstateDatabase + Sync));
 
 impl SubstateLookup for SubstateDbLookup<'_> {
-    fn lookup_substate(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<Vec<u8>> {
-        self.0.get_raw_substate_by_db_key(partition_key, sort_key)
+    fn lookup_substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        self.0.substate(key)
     }
 }

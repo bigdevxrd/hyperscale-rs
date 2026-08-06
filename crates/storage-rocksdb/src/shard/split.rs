@@ -698,9 +698,7 @@ mod tests {
     fn followed_children_partition_and_recompose_the_root() {
         use std::sync::Arc;
 
-        use hyperscale_storage::test_helpers::{
-            database_updates_to_state_writes, db_node_key, make_database_update, seeded_owner,
-        };
+        use hyperscale_storage::test_helpers::{make_state_writes, seeded_owner};
         use hyperscale_types::{ConsensusReceipt, GlobalReceiptHash, Hash, StoredReceipt, TxHash};
 
         let dirs: Vec<TempDir> = (0..3).map(|_| TempDir::new().unwrap()).collect();
@@ -712,12 +710,12 @@ mod tests {
         let mut roots = (StateRoot::ZERO, StateRoot::ZERO, StateRoot::ZERO);
         for seed in 1u8..=8 {
             let owner = seeded_owner(seed);
-            let updates = make_database_update(db_node_key(owner), 0, &[seed], vec![seed; 4]);
+            let writes = make_state_writes(owner, seed, vec![seed; 4]);
             let receipts = [StoredReceipt::synced(
                 TxHash::from(Hash::from_bytes(&[seed])),
                 Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
-                    writes: database_updates_to_state_writes(&updates),
+                    writes: writes.clone(),
                     beacon_witness_events: Vec::new(),
                     events: Vec::new(),
                 }),

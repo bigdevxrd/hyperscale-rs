@@ -1,6 +1,6 @@
 //! Shared test helpers for storage crate tests.
 //!
-//! Provides reusable builder functions for `DatabaseUpdates`,
+//! Provides reusable builder functions for [`StateWrites`],
 //! `WaveCertificate`, `Block`, and `QuorumCertificate` so that
 //! storage-memory and storage-rocksdb tests can share a single source of truth.
 
@@ -8,7 +8,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hyperscale_jmt::TreeReader;
-use hyperscale_types::state_key::vm_db_node_key;
 use hyperscale_types::{
     Address, AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert, BeaconChainConfig,
     BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash,
@@ -25,8 +24,7 @@ use hyperscale_types::{
 
 use crate::tree::Jmt;
 use crate::{
-    BOUNDARY_RETAIN, BoundaryStore, DatabaseUpdate, DatabaseUpdates, DbSortKey, ImportCursor,
-    ImportLeaf, ImportProgress, NodeDatabaseUpdates, PartitionDatabaseUpdates, ResolveLeaf,
+    BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportLeaf, ImportProgress, ResolveLeaf,
     ShardChainReader, ShardChainWriter, SubstateStore, WitnessSeed,
 };
 
@@ -65,120 +63,27 @@ pub fn import_boundary_state<S: BoundaryStore>(
     storage.finalize_boundary_import(height, witnesses)
 }
 
-/// Build a `DatabaseUpdates` containing a single `Set` operation.
-///
-/// `sort_key` is zero-padded to a flat key's 16-byte local half, so a
-/// fixture can name a cell by a short seed and still produce a key the
-/// JMT can derive a leaf from.
-#[must_use]
-pub fn make_database_update(
-    node_key: Vec<u8>,
-    partition: u8,
-    sort_key: &[u8],
-    value: Vec<u8>,
-) -> DatabaseUpdates {
-    let mut updates = DatabaseUpdates::default();
-    updates.node_updates.insert(
-        node_key,
-        NodeDatabaseUpdates {
-            partition_updates: std::iter::once((
-                partition,
-                PartitionDatabaseUpdates::Delta {
-                    substate_updates: std::iter::once((
-                        DbSortKey(local_key(sort_key)),
-                        DatabaseUpdate::Set(value),
-                    ))
-                    .collect(),
-                },
-            ))
-            .collect(),
-        },
-    );
-    updates
-}
-
-/// [`make_database_update`] keyed by an owner seed rather than a raw
-/// entity key.
-#[must_use]
-pub fn make_mapped_database_update(
-    node_seed: u8,
-    partition: u8,
-    sort_key: &[u8],
-    value: Vec<u8>,
-) -> DatabaseUpdates {
-    make_database_update(db_node_key(node_seed), partition, sort_key, value)
-}
-
-/// The entity key for the owner prefix `[seed; 16]` — the same shape the
-/// engine commits, so a fixture's keys route and key like real ones.
-#[must_use]
-pub fn db_node_key(seed: u8) -> Vec<u8> {
-    vm_db_node_key([seed; 16])
-}
-
-/// A substate's local half from a short seed, zero-padded to the fixed
-/// 16 bytes a flat key's low half occupies.
-#[must_use]
-pub fn local_key(seed: &[u8]) -> Vec<u8> {
-    let mut local = vec![0u8; 16];
-    local[..seed.len().min(16)].copy_from_slice(&seed[..seed.len().min(16)]);
-    local
-}
-
-/// Test-only inverse of
-/// [`state_writes_to_database_updates`](crate::state_writes_to_database_updates),
-/// for fixtures that build the storage shape directly and wrap it in a
-/// receipt.
-///
-/// # Panics
-///
-/// Panics on a key that is not VM-flat-shaped — fixtures commit the
-/// same shape the engine does.
-#[must_use]
-pub fn database_updates_to_state_writes(updates: &DatabaseUpdates) -> StateWrites {
-    use hyperscale_types::state_key::vm_db_node_key_owner;
-
-    use crate::{DatabaseUpdate, PartitionDatabaseUpdates};
-
-    let mut writes = StateWrites::default();
-    for (node_key, node) in &updates.node_updates {
-        let owner = vm_db_node_key_owner(node_key).expect("fixture keys are owner-shaped");
-        for partition in node.partition_updates.values() {
-            let PartitionDatabaseUpdates::Delta { substate_updates } = partition else {
-                panic!("fixture updates are Delta-only");
-            };
-            for (sort_key, update) in substate_updates {
-                let local: [u8; 16] = sort_key.0.as_slice().try_into().expect("16-byte local");
-                let key = SubstateKey {
-                    owner: Address(owner),
-                    local: LocalKey(local),
-                };
-                match update {
-                    DatabaseUpdate::Set(value) => writes.cells.insert(key, Some(value.clone())),
-                    DatabaseUpdate::Delete => writes.cells.insert(key, None),
-                };
-            }
-        }
-    }
-    writes
-}
-
 /// A [`StateWrites`] holding one cell: owner `[owner_seed; 16]`, local
-/// zero-padded from `local_seed` — the receipt-side twin of
-/// [`make_database_update`].
+/// zero-padded from `local_seed`.
 #[must_use]
 pub fn make_state_writes(owner_seed: u8, local_seed: u8, value: Vec<u8>) -> StateWrites {
+    let mut writes = StateWrites::default();
+    writes
+        .cells
+        .insert(state_key(owner_seed, local_seed), Some(value));
+    writes
+}
+
+/// The substate key for owner `[owner_seed; 16]`, local zero-padded from
+/// `local_seed` — the key [`make_state_writes`] writes under.
+#[must_use]
+pub const fn state_key(owner_seed: u8, local_seed: u8) -> SubstateKey {
     let mut local = [0u8; 16];
     local[0] = local_seed;
-    let mut writes = StateWrites::default();
-    writes.cells.insert(
-        SubstateKey {
-            owner: Address([owner_seed; 16]),
-            local: LocalKey(local),
-        },
-        Some(value),
-    );
-    writes
+    SubstateKey {
+        owner: Address([owner_seed; 16]),
+        local: LocalKey(local),
+    }
 }
 
 /// Build a test `WaveCertificate` at the given height.

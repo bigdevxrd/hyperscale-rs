@@ -11,17 +11,15 @@
 //! action batch.
 //!
 //! Execution is READ-ONLY: results are returned as `ExecutedTx` values
-//! whose `DatabaseUpdates` the state machine caches and applies later,
-//! when the wave's certificate is included in a committed block.
+//! whose writes the state machine caches and applies later, when the
+//! wave's certificate is included in a committed block.
 
 use std::sync::Arc;
 
 use hyperscale_dispatch::Parallelism;
-use hyperscale_storage::{
-    DbPartitionKey, DbSortKey, DbSubstateValue, PartitionEntry, SubstateDatabase,
-};
+use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
-    BlockHash, RevealChain, ShardId, ShardTrie, SubstateEntry, Transaction, Verified,
+    BlockHash, RevealChain, ShardId, ShardTrie, SubstateEntry, SubstateKey, Transaction, Verified,
     WeightedTimestamp,
 };
 
@@ -34,21 +32,8 @@ use crate::receipt::CachedOutput;
 pub struct DynSnapshot<'a>(pub &'a (dyn SubstateDatabase + Sync));
 
 impl SubstateDatabase for DynSnapshot<'_> {
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<DbSubstateValue> {
-        self.0.get_raw_substate_by_db_key(partition_key, sort_key)
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
-        self.0
-            .list_raw_values_from_db_key(partition_key, from_sort_key)
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        self.0.substate(key)
     }
 }
 

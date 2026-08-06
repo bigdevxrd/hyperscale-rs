@@ -11,7 +11,6 @@ pub mod boundary;
 pub mod chain_reader;
 pub mod chain_writer;
 pub mod genesis;
-pub mod keys;
 pub mod overlay;
 pub mod pending_chain;
 pub mod recovered_state;

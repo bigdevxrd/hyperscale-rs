@@ -36,7 +36,7 @@ pub trait ShardChainWriter: Send + Sync + 'static {
     /// Compute speculative state root and return precomputed commit work
     /// as a closure.
     ///
-    /// Extracts and merges `DatabaseUpdates` from each finalized wave's receipts
+    /// Extracts and merges the writes from each finalized wave's receipts
     /// internally, then computes the speculative JMT root.
     ///
     /// `parent_block_height` is the height of the parent block whose state we
@@ -72,7 +72,7 @@ pub trait ShardChainWriter: Send + Sync + 'static {
     /// Commit a block's state writes from scratch (no prepared closure).
     ///
     /// Extracts receipts and execution certificates from `block.certificates`,
-    /// merges `DatabaseUpdates` internally. The `witness` carries the
+    /// merges the writes internally. The `witness` carries the
     /// beacon-witness leaves to fold into the same atomic batch. Used when
     /// no `PreparedCommit` is available (e.g. sync blocks, cache eviction).
     fn commit_block(

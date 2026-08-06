@@ -599,8 +599,7 @@ mod test_helpers {
         record_certificate_persisted, record_storage_batch_size, record_storage_operation,
         record_storage_write,
     };
-    use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates};
-    use hyperscale_types::{BlockHeight, Hash, QuorumCertificate, WaveCertificate};
+    use hyperscale_types::{BlockHeight, Hash, QuorumCertificate, StateWrites, WaveCertificate};
     use rocksdb::{WriteBatch, WriteOptions};
     use tracing::field::Empty;
     use tracing::{Level, Span, instrument};
@@ -656,7 +655,7 @@ mod test_helpers {
         pub fn commit_certificate_with_writes(
             &self,
             certificate: &WaveCertificate,
-            updates: &DatabaseUpdates,
+            writes: &StateWrites,
         ) {
             let start = Instant::now();
             let mut batch = WriteBatch::default();
@@ -670,18 +669,11 @@ mod test_helpers {
             // the state-history capture stays single-sourced with the
             // production commit path.
             let version = self.read_jmt_metadata().0;
-            let _reset_old_keys = self.append_substate_writes_to_batch(
-                &mut batch, updates, version, /* write_history */ true,
+            self.append_substate_writes_to_batch(
+                &mut batch, writes, version, /* write_history */ true,
                 /* base_reads */ None,
             );
-            for (_db_node_key, node_updates) in &updates.node_updates {
-                for (_partition_num, partition_updates) in &node_updates.partition_updates {
-                    if let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates
-                    {
-                        write_count += substate_updates.len();
-                    }
-                }
-            }
+            write_count += writes.cells.len();
 
             let mut write_opts = WriteOptions::default();
             write_opts.set_sync(true);

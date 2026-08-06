@@ -13,17 +13,15 @@ use hyperscale_types::{
     Address, BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
     CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, FinalizedWave, LocalKey,
     MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON, SettledWavesRoot,
-    ShardId, ShardWitnessPayload, StateRoot, SubstateKey, Transaction, TxHash, Verifiable,
-    Verified, WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
+    ShardId, ShardWitnessPayload, StateRoot, StateWrites, SubstateKey, Transaction, TxHash,
+    Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
     settled_waves_root_from_ids,
 };
 
 use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
-use crate::shard::writes::state_writes_to_database_updates;
 use crate::tree::proofs::generate_proof;
 use crate::{
-    BlockForSync, DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, JmtSnapshot,
-    PartitionDatabaseUpdates, ShardChainReader, ShardChainWriter, SubstateDatabase, SubstateStore,
+    BlockForSync, JmtSnapshot, ShardChainReader, ShardChainWriter, SubstateDatabase, SubstateStore,
     VersionedStore,
 };
 
@@ -33,7 +31,7 @@ use crate::{
 /// and handed to `append_substate_writes_to_batch` so `capture_history`
 /// can source priors without a fresh `multi_get_cf` on `StateCf`. Entries
 /// are `(partition_key, sort_key) → value-at-anchor`.
-pub type BaseReadCache = HashMap<(DbPartitionKey, DbSortKey), Option<Vec<u8>>>;
+pub type BaseReadCache = HashMap<SubstateKey, Option<Vec<u8>>>;
 
 /// One block's worth of pending state, indexed by block hash in
 /// [`PendingChain::entries`].
@@ -619,7 +617,7 @@ where
 
 /// Flattened overlay entries: `(partition_key, sort_key) → Some(value)`
 /// or `None` (tombstone).
-type OverlayEntries = HashMap<(DbPartitionKey, DbSortKey), Option<Vec<u8>>>;
+type OverlayEntries = HashMap<SubstateKey, Option<Vec<u8>>>;
 
 /// JMT node index for O(1) tree-node lookup during proof generation.
 type JmtNodeIndex = HashMap<JmtNodeKey, Arc<JmtNode>>;
@@ -694,7 +692,7 @@ impl<S> SubstateView<S> {
         for entry in chain {
             for receipt in &entry.receipts {
                 if let Some(writes) = receipt.writes() {
-                    apply_database_updates(&mut overlay, &state_writes_to_database_updates(writes));
+                    apply_writes(&mut overlay, writes);
                 }
                 versioned_receipts.push((entry.height, Arc::clone(receipt)));
             }
@@ -730,8 +728,8 @@ impl<S> SubstateView<S> {
 
     /// Drain the cache of base-storage reads observed through this view.
     ///
-    /// The returned map holds one entry per distinct `(partition_key,
-    /// sort_key)` that was read from base (not overlay) during the view's
+    /// The returned map holds one entry per distinct key that was read
+    /// from base (not overlay) during the view's
     /// lifetime — i.e. exactly the priors `capture_history` would
     /// otherwise re-read from `StateCf` at commit time. Called by the
     /// commit pipeline to skip the `multi_get_cf` on `StateCf` for keys
@@ -742,40 +740,11 @@ impl<S> SubstateView<S> {
     }
 }
 
-/// Flatten one receipt's `DatabaseUpdates` into the overlay map.
-/// Later calls override earlier ones for the same key (commit order).
-fn apply_database_updates(overlay: &mut OverlayEntries, updates: &DatabaseUpdates) {
-    for (node_key, node_updates) in &updates.node_updates {
-        for (&partition_num, partition_updates) in &node_updates.partition_updates {
-            let pk = DbPartitionKey {
-                node_key: node_key.clone(),
-                partition_num,
-            };
-            match partition_updates {
-                PartitionDatabaseUpdates::Delta { substate_updates } => {
-                    for (sort_key, update) in substate_updates {
-                        let value = match update {
-                            DatabaseUpdate::Set(v) => Some(v.clone()),
-                            DatabaseUpdate::Delete => None,
-                        };
-                        overlay.insert((pk.clone(), sort_key.clone()), value);
-                    }
-                }
-                PartitionDatabaseUpdates::Reset {
-                    new_substate_values,
-                } => {
-                    // Receipt updates are Delta-only (enforced at receipt
-                    // decode), so block receipts never reach this arm. The
-                    // overlay cannot tombstone a whole partition — clearing
-                    // overlay entries leaves base-store keys visible — so a
-                    // Reset over pre-existing base keys would not hide them.
-                    overlay.retain(|(epk, _), _| epk != &pk);
-                    for (sort_key, value) in new_substate_values {
-                        overlay.insert((pk.clone(), sort_key.clone()), Some(value.clone()));
-                    }
-                }
-            }
-        }
+/// Flatten one receipt's writes into the overlay map. Later calls
+/// override earlier ones for the same key (commit order).
+fn apply_writes(overlay: &mut OverlayEntries, writes: &StateWrites) {
+    for (key, change) in &writes.cells {
+        overlay.insert(*key, change.clone());
     }
 }
 
@@ -789,84 +758,24 @@ fn apply_database_updates(overlay: &mut OverlayEntries, updates: &DatabaseUpdate
 fn overlay_get(
     overlay: &OverlayEntries,
     base: &dyn SubstateDatabase,
-    partition_key: &DbPartitionKey,
-    sort_key: &DbSortKey,
+    key: SubstateKey,
     base_reads_cache: Option<&Mutex<BaseReadCache>>,
 ) -> Option<Vec<u8>> {
-    if let Some(v) = overlay.get(&(partition_key.clone(), sort_key.clone())) {
+    if let Some(v) = overlay.get(&key) {
         return v.clone();
     }
-    let value = base.get_raw_substate_by_db_key(partition_key, sort_key);
+    let value = base.substate(key);
     if let Some(cache) = base_reads_cache {
         lock_or_recover(cache)
-            .entry((partition_key.clone(), sort_key.clone()))
+            .entry(key)
             .or_insert_with(|| value.clone());
     }
     value
 }
 
-/// Apply overlay entries on top of a base `SubstateDatabase` list.
-fn overlay_list(
-    overlay: &OverlayEntries,
-    base: &dyn SubstateDatabase,
-    partition_key: &DbPartitionKey,
-    from_sort_key: Option<&DbSortKey>,
-) -> Vec<(DbSortKey, Vec<u8>)> {
-    let mut overlay_for_partition: Vec<(DbSortKey, Option<Vec<u8>>)> = overlay
-        .iter()
-        .filter(|((pk, _), _)| pk == partition_key)
-        .filter(|((_, sk), _)| from_sort_key.is_none_or(|from| sk >= from))
-        .map(|((_, sk), v)| (sk.clone(), v.clone()))
-        .collect();
-    overlay_for_partition.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    let overlay_keys: std::collections::HashSet<DbSortKey> = overlay_for_partition
-        .iter()
-        .map(|(sk, _)| sk.clone())
-        .collect();
-
-    let base_entries: Vec<(DbSortKey, Vec<u8>)> = base
-        .list_raw_values_from_db_key(partition_key, from_sort_key)
-        .filter(|(sk, _)| !overlay_keys.contains(sk))
-        .collect();
-
-    let overlay_live: Vec<(DbSortKey, Vec<u8>)> = overlay_for_partition
-        .into_iter()
-        .filter_map(|(sk, v)| v.map(|val| (sk, val)))
-        .collect();
-
-    let mut merged = Vec::with_capacity(overlay_live.len() + base_entries.len());
-    merged.extend(overlay_live);
-    merged.extend(base_entries);
-    merged.sort_by(|(a, _), (b, _)| a.cmp(b));
-    merged
-}
-
 impl<S: SubstateDatabase> SubstateDatabase for SubstateView<S> {
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<Vec<u8>> {
-        overlay_get(
-            &self.overlay,
-            &*self.base,
-            partition_key,
-            sort_key,
-            Some(&self.base_reads),
-        )
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = (DbSortKey, Vec<u8>)> + '_> {
-        // List reads intentionally bypass the base-read cache: caching a
-        // whole partition's rows per call would bloat the cache without
-        // meaningfully reducing commit-path work (capture_history is
-        // per-key, not per-partition).
-        Box::new(overlay_list(&self.overlay, &*self.base, partition_key, from_sort_key).into_iter())
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        overlay_get(&self.overlay, &*self.base, key, Some(&self.base_reads))
     }
 }
 
@@ -881,33 +790,12 @@ pub struct ViewSnapshot<Snap> {
 }
 
 impl<Snap: SubstateDatabase> SubstateDatabase for ViewSnapshot<Snap> {
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<Vec<u8>> {
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
         overlay_get(
             &self.overlay,
             &self.base_snapshot,
-            partition_key,
-            sort_key,
+            key,
             Some(&self.base_reads),
-        )
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = (DbSortKey, Vec<u8>)> + '_> {
-        Box::new(
-            overlay_list(
-                &self.overlay,
-                &self.base_snapshot,
-                partition_key,
-                from_sort_key,
-            )
-            .into_iter(),
         )
     }
 }
@@ -1080,7 +968,6 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::PoisonError;
 
-    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
     use hyperscale_types::{
         AggregateSignature, Block, CertifiedBlock, CertifiedBlockHeader, ExecutionCertificate,
         ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, Round,
@@ -1121,38 +1008,16 @@ mod tests {
     }
 
     impl SubstateDatabase for StubStore {
-        fn get_raw_substate_by_db_key(
-            &self,
-            _partition_key: &DbPartitionKey,
-            _sort_key: &DbSortKey,
-        ) -> Option<Vec<u8>> {
+        fn substate(&self, _key: SubstateKey) -> Option<Vec<u8>> {
             None
-        }
-        fn list_raw_values_from_db_key(
-            &self,
-            _partition_key: &DbPartitionKey,
-            _from_sort_key: Option<&DbSortKey>,
-        ) -> Box<dyn Iterator<Item = (DbSortKey, Vec<u8>)> + '_> {
-            Box::new(std::iter::empty())
         }
     }
 
     /// Empty snapshot for `StubStore` — returns no data.
     struct StubSnapshot;
     impl SubstateDatabase for StubSnapshot {
-        fn get_raw_substate_by_db_key(
-            &self,
-            _partition_key: &DbPartitionKey,
-            _sort_key: &DbSortKey,
-        ) -> Option<Vec<u8>> {
+        fn substate(&self, _key: SubstateKey) -> Option<Vec<u8>> {
             None
-        }
-        fn list_raw_values_from_db_key(
-            &self,
-            _partition_key: &DbPartitionKey,
-            _from_sort_key: Option<&DbSortKey>,
-        ) -> Box<dyn Iterator<Item = (DbSortKey, Vec<u8>)> + '_> {
-            Box::new(std::iter::empty())
         }
     }
 
@@ -1276,6 +1141,13 @@ mod tests {
         }
     }
 
+    fn cell(owner: [u8; 16], local: [u8; 16]) -> SubstateKey {
+        SubstateKey {
+            owner: Address(owner),
+            local: LocalKey(local),
+        }
+    }
+
     fn make_writes(owner: [u8; 16], local: [u8; 16], value: Vec<u8>) -> StateWrites {
         let mut writes = StateWrites::default();
         writes.cells.insert(
@@ -1369,10 +1241,6 @@ mod tests {
         let h2 = bh(b"h2");
 
         let owner = [7u8; 16];
-        let pk = DbPartitionKey {
-            node_key: vm_db_node_key(owner),
-            partition_num: VM_PARTITION,
-        };
 
         chain.insert(
             h1,
@@ -1393,14 +1261,8 @@ mod tests {
 
         let view = chain.view_at(h2, BlockHeight::new(2));
         // h2's parent chain: h2 → h1 → ZERO. Should see both writes.
-        assert_eq!(
-            view.get_raw_substate_by_db_key(&pk, &DbSortKey([1; 16].to_vec())),
-            Some(vec![10]),
-        );
-        assert_eq!(
-            view.get_raw_substate_by_db_key(&pk, &DbSortKey([2; 16].to_vec())),
-            Some(vec![20]),
-        );
+        assert_eq!(view.substate(cell(owner, [1; 16])), Some(vec![10]));
+        assert_eq!(view.substate(cell(owner, [2; 16])), Some(vec![20]));
     }
 
     #[test]
@@ -1410,10 +1272,6 @@ mod tests {
         let orphan = bh(b"orphan");
 
         let owner = [7u8; 16];
-        let pk = DbPartitionKey {
-            node_key: vm_db_node_key(owner),
-            partition_num: VM_PARTITION,
-        };
 
         chain.insert(
             h1,
@@ -1435,10 +1293,7 @@ mod tests {
 
         // View anchored at h1: should see h1's value, not the orphan's.
         let view = chain.view_at(h1, BlockHeight::new(1));
-        assert_eq!(
-            view.get_raw_substate_by_db_key(&pk, &DbSortKey([1; 16].to_vec())),
-            Some(vec![10]),
-        );
+        assert_eq!(view.substate(cell(owner, [1; 16])), Some(vec![10]));
     }
 
     #[test]
@@ -1506,14 +1361,7 @@ mod tests {
     fn view_at_committed_tip_with_no_commits_returns_base_only() {
         let chain = empty_chain();
         let view = chain.view_at_committed_tip();
-        let pk = DbPartitionKey {
-            node_key: b"missing".to_vec(),
-            partition_num: 0,
-        };
-        assert_eq!(
-            view.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![1])),
-            None,
-        );
+        assert_eq!(view.substate(cell([9; 16], [1; 16])), None);
     }
 
     // ── chain reader accessors ────────────────────────────────────────

@@ -13,17 +13,16 @@ use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::{
-    AdoptSource, BaseReadCache, BlockForSync, BoundaryStore, DatabaseUpdates, DbPartitionKey,
-    DbSortKey, DbSubstateValue, GenesisCommit, ImportLeaf, ImportProgress, JmtSnapshot,
-    PartitionEntry, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateDatabase,
-    SubstateStore, VersionedStore, WitnessSeed,
+    AdoptSource, BaseReadCache, BlockForSync, BoundaryStore, GenesisCommit, ImportLeaf,
+    ImportProgress, JmtSnapshot, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter,
+    SubstateDatabase, SubstateStore, VersionedStore, WitnessSeed,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock,
     CertifiedBlockHeader, ChainOrigin, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
     MerkleInclusionProof, PreparedCommit, QuorumCertificate, SafeVoteRegisters,
-    ShardWitnessPayload, StateRoot, StoredReceipt, Transaction, TxHash, ValidatorId, Verifiable,
-    Verified, WaveCertificate, WaveId,
+    ShardWitnessPayload, StateRoot, StateWrites, StoredReceipt, SubstateKey, Transaction, TxHash,
+    ValidatorId, Verifiable, Verified, WaveCertificate, WaveId,
 };
 
 use super::core::RocksDbShardStorage;
@@ -64,35 +63,18 @@ impl std::ops::Deref for SharedStorage {
 }
 
 impl SubstateDatabase for SharedStorage {
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<DbSubstateValue> {
-        self.0.get_raw_substate_by_db_key(partition_key, sort_key)
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
-        self.0
-            .list_raw_values_from_db_key(partition_key, from_sort_key)
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        self.0.substate(key)
     }
 }
 
 impl GenesisCommit for SharedStorage {
-    fn install_genesis(
-        &self,
-        substates: &DatabaseUpdates,
-        jmt_updates: &DatabaseUpdates,
-    ) -> StateRoot {
+    fn install_genesis(&self, substates: &StateWrites, jmt_writes: &StateWrites) -> StateRoot {
         self.0.commit_substates_only(substates);
-        self.0.finalize_genesis_jmt(jmt_updates)
+        self.0.finalize_genesis_jmt(jmt_writes)
     }
 
-    fn replicate_genesis_substates(&self, substates: &DatabaseUpdates) {
+    fn replicate_genesis_substates(&self, substates: &StateWrites) {
         self.0.commit_substates_only(substates);
     }
 }
@@ -324,8 +306,8 @@ mod test_helpers {
     use super::*;
 
     impl CommittableSubstateDatabase for SharedStorage {
-        fn commit(&mut self, updates: &DatabaseUpdates) {
-            RocksDbShardStorage::commit(&self.0, updates)
+        fn commit(&mut self, writes: &StateWrites) {
+            RocksDbShardStorage::commit(&self.0, writes)
                 .expect("Storage commit failed - cannot maintain consistent state");
         }
     }

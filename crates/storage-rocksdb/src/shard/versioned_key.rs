@@ -1,13 +1,13 @@
 //! Composite key type for the `state_history` column family.
 //!
-//! Layout: `[storage_key_bytes...][write_version_BE_8B]`
+//! Layout: `[substate_key_bytes (32B)][write_version_BE_8B]`
 //!
-//! The big-endian version suffix ensures that for a given storage key
+//! The big-endian version suffix ensures that for a given substate key
 //! prefix, entries sort in ascending lexicographic order on version —
 //! enabling the forward seek used by historical reads to find the
 //! smallest `write_version > V` for a key.
 
-use hyperscale_storage::{DbPartitionKey, DbSortKey};
+use hyperscale_types::SubstateKey;
 
 use super::substate_key::SubstateKeyCodec;
 use crate::typed_cf::{DbCodec, DbEncode};
@@ -15,7 +15,7 @@ use crate::typed_cf::{DbCodec, DbEncode};
 const VERSION_LEN: usize = 8;
 
 /// Key type for the versioned substates CF.
-type VersionedKey = ((DbPartitionKey, DbSortKey), u64);
+type VersionedKey = (SubstateKey, u64);
 
 /// Codec for versioned substate keys: `substate_key_bytes ++ version_BE_8B`.
 ///
@@ -28,8 +28,8 @@ pub struct VersionedSubstateKeyCodec;
 
 impl DbEncode<VersionedKey> for VersionedSubstateKeyCodec {
     fn encode_to(&self, value: &VersionedKey, buf: &mut Vec<u8>) {
-        let ((pk, sk), version) = value;
-        SubstateKeyCodec.encode_to(&(pk.clone(), sk.clone()), buf);
+        let (key, version) = value;
+        SubstateKeyCodec.encode_to(key, buf);
         buf.extend_from_slice(&version.to_be_bytes());
     }
 }
@@ -42,41 +42,34 @@ impl DbCodec<VersionedKey> for VersionedSubstateKeyCodec {
             bytes.len()
         );
         let key_len = bytes.len() - VERSION_LEN;
-        let substate_key = SubstateKeyCodec.decode(&bytes[..key_len]);
+        let key = SubstateKeyCodec.decode(&bytes[..key_len]);
         let version = u64::from_be_bytes(bytes[key_len..].try_into().unwrap());
-        (substate_key, version)
+        (key, version)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+    use hyperscale_types::{Address, LocalKey};
 
     use super::*;
 
-    fn make_test_key(local: [u8; 16]) -> (DbPartitionKey, DbSortKey) {
-        (
-            DbPartitionKey {
-                node_key: vm_db_node_key([0u8; 16]),
-                partition_num: VM_PARTITION,
-            },
-            DbSortKey(local.to_vec()),
-        )
+    fn make_test_key(local: [u8; 16]) -> SubstateKey {
+        SubstateKey {
+            owner: Address([0u8; 16]),
+            local: LocalKey(local),
+        }
     }
 
     #[test]
     fn round_trip() {
-        let local = [7u8; 16];
-        let substate_key = make_test_key(local);
+        let key = make_test_key([7u8; 16]);
         let version = 42u64;
 
-        let encoded = VersionedSubstateKeyCodec.encode(&(substate_key, version));
-        let ((decoded_pk, decoded_sort), decoded_version) =
-            VersionedSubstateKeyCodec.decode(&encoded);
+        let encoded = VersionedSubstateKeyCodec.encode(&(key, version));
+        let (decoded_key, decoded_version) = VersionedSubstateKeyCodec.decode(&encoded);
 
-        assert_eq!(decoded_pk.node_key, vm_db_node_key([0u8; 16]));
-        assert_eq!(decoded_pk.partition_num, VM_PARTITION);
-        assert_eq!(decoded_sort.0, local);
+        assert_eq!(decoded_key, key);
         assert_eq!(decoded_version, version);
     }
 
@@ -84,7 +77,7 @@ mod tests {
     fn lexicographic_version_ordering() {
         let key = make_test_key([9u8; 16]);
 
-        let buf1 = VersionedSubstateKeyCodec.encode(&(key.clone(), 1));
+        let buf1 = VersionedSubstateKeyCodec.encode(&(key, 1));
         let buf2 = VersionedSubstateKeyCodec.encode(&(key, 2));
 
         // Version 1 sorts before version 2 for the same storage key.

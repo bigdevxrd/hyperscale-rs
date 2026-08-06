@@ -648,7 +648,7 @@ pub enum Action {
         /// Expected local-receipt root (pre-flight check before JMT).
         expected_local_receipt_root: LocalReceiptRoot,
         /// Finalized waves whose receipts contribute to both the receipt
-        /// root and the state root. The thread pool merges `DatabaseUpdates`
+        /// root and the state root. The thread pool merges the receipts' writes
         /// from these.
         finalized_waves: Vec<Arc<Verifiable<FinalizedWave>>>,
         /// Block height being verified.

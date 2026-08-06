@@ -1,6 +1,5 @@
 //! `ShardChainWriter` implementation for `SimShardStorage`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
@@ -9,16 +8,15 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, DatabaseUpdates, JmtSnapshot, ShardChainWriter, merge_updates_from_receipts,
-    state_writes_to_database_updates,
+    BaseReadCache, JmtSnapshot, ShardChainWriter, merge_writes_from_receipts,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, Block, BlockHeight, CertifiedBlock, FinalizedWave, PreparedCommit,
-    QuorumCertificate, StateRoot, StoredReceipt, SyncHint, Verifiable, Verified,
+    QuorumCertificate, StateRoot, StateWrites, StoredReceipt, SyncHint, Verifiable, Verified,
 };
 
 use super::core::SimShardStorage;
-use super::state::{apply_state_writes, apply_updates};
+use super::state::{apply_state_writes, apply_writes};
 
 impl ShardChainWriter for SimShardStorage {
     fn prepare_block_commit(
@@ -53,7 +51,7 @@ impl ShardChainWriter for SimShardStorage {
             let prepared = build_prepared_commit(
                 Arc::clone(self),
                 Arc::clone(&snapshot),
-                DatabaseUpdates::default(),
+                StateWrites::default(),
                 Vec::new(),
             );
             return (parent_state_root, snapshot, prepared);
@@ -73,24 +71,19 @@ impl ShardChainWriter for SimShardStorage {
                     .map_or(pv, |(v, _)| v)
             });
 
-        // Collect per-receipt DatabaseUpdates references — no merge needed.
-        //
-        // Receipt updates are Delta-only (enforced at receipt decode and in
-        // project_to_shard), so no Reset partition needs old-key JMT deletes
-        // and the empty reset_old_keys map below is exact.
-        let bridged_updates: Vec<DatabaseUpdates> = receipts
+        // Collect per-receipt writes references — no merge needed. State
+        // locking guarantees no key conflicts between receipts.
+        let per_receipt_writes: Vec<&StateWrites> = receipts
             .iter()
-            .filter_map(|r| r.consensus.writes().map(state_writes_to_database_updates))
+            .filter_map(|r| r.consensus.writes())
             .collect();
-        let per_receipt_updates: Vec<&DatabaseUpdates> = bridged_updates.iter().collect();
 
         let (result_root, collected) = if pending_snapshots.is_empty() {
             put_at_version(
                 &s.tree_store,
                 parent_version,
                 block_height.inner(),
-                &per_receipt_updates,
-                &HashMap::new(),
+                &per_receipt_writes,
             )
         } else {
             let overlay = OverlayTreeReader::new(&s.tree_store, pending_snapshots);
@@ -98,8 +91,7 @@ impl ShardChainWriter for SimShardStorage {
                 &overlay,
                 parent_version,
                 block_height.inner(),
-                &per_receipt_updates,
-                &HashMap::new(),
+                &per_receipt_writes,
             )
         };
 
@@ -114,12 +106,12 @@ impl ShardChainWriter for SimShardStorage {
         drop(s); // Release read lock
 
         // Merge for commit-time substate writes (off the state_root critical path).
-        let merged_updates = merge_updates_from_receipts(&receipts);
+        let merged_writes = merge_writes_from_receipts(&receipts);
 
         let prepared = build_prepared_commit(
             Arc::clone(self),
             Arc::clone(&snapshot),
-            merged_updates,
+            merged_writes,
             receipts,
         );
 
@@ -138,9 +130,9 @@ impl ShardChainWriter for SimShardStorage {
             .iter()
             .flat_map(|fw| fw.receipts().iter().cloned())
             .collect();
-        let merged_updates = merge_updates_from_receipts(&receipts);
+        let merged_writes = merge_writes_from_receipts(&receipts);
         self.append_beacon_witnesses(witness);
-        self.commit_block_inner(&merged_updates, block, qc, &receipts)
+        self.commit_block_inner(&merged_writes, block, qc, &receipts)
     }
 }
 
@@ -154,7 +146,7 @@ impl ShardChainWriter for SimShardStorage {
 fn build_prepared_commit(
     storage: Arc<SimShardStorage>,
     snapshot: Arc<JmtSnapshot>,
-    merged_updates: DatabaseUpdates,
+    merged_writes: StateWrites,
     receipts: Vec<StoredReceipt>,
 ) -> PreparedCommit {
     Box::new(
@@ -174,9 +166,9 @@ fn build_prepared_commit(
             {
                 let mut s = write_or_recover(&storage.state);
                 s.apply_jmt_snapshot(snapshot);
-                apply_updates(
+                apply_writes(
                     &mut s,
-                    &merged_updates,
+                    &merged_writes,
                     block_height_u64,
                     /* write_history */ true,
                 );
@@ -246,7 +238,7 @@ impl SimShardStorage {
     /// Internal commit path used by `commit_block` (sync blocks without a `PreparedCommit`).
     fn commit_block_inner(
         &self,
-        merged_updates: &DatabaseUpdates,
+        merged_writes: &StateWrites,
         block: &Block,
         qc: &Verified<QuorumCertificate>,
         receipts: &[StoredReceipt],
@@ -264,7 +256,7 @@ impl SimShardStorage {
             s.current_block_height
         );
 
-        let new_root = apply_state_writes(&mut s, merged_updates, block_height);
+        let new_root = apply_state_writes(&mut s, merged_writes, block_height);
 
         drop(s);
 

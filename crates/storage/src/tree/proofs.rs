@@ -7,9 +7,10 @@
 //! Provisions` in `crates/types/src/provisioning/provisions.rs`.
 
 use hyperscale_jmt::{Key, NodeKey, TreeReader};
+use hyperscale_types::state_key::jmt_leaf_key;
 use hyperscale_types::{BlockHeight, MerkleInclusionProof};
 
-use super::{Jmt, hash_storage_key};
+use super::Jmt;
 
 /// Generate a batched merkle multiproof for a set of storage keys against
 /// a committed root.
@@ -23,7 +24,7 @@ pub fn generate_proof<S: TreeReader>(
 ) -> Option<MerkleInclusionProof> {
     let root_key = NodeKey::new(block_height.inner(), store.root_path());
 
-    let jmt_keys: Vec<Key> = storage_keys.iter().map(|sk| hash_storage_key(sk)).collect();
+    let jmt_keys: Vec<Key> = storage_keys.iter().map(|sk| jmt_leaf_key(sk)).collect();
 
     Jmt::prove(store, &root_key, &jmt_keys)
         .ok()

@@ -15,13 +15,10 @@ use hyperscale_engine::{
     DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache,
     WaveBatchContext, XRD, genesis_writes,
 };
-use hyperscale_storage::{
-    DbPartitionKey, DbSortKey, DbSubstateValue, PartitionEntry, SubstateDatabase,
-};
-use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
     BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash,
-    RevealChain, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, Transaction,
+    RevealChain, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, SubstateKey, Transaction,
     TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
@@ -43,7 +40,7 @@ const OPERATOR: u8 = 8;
 const OUTSIDER: u8 = 9;
 
 /// A snapshot over the flattened genesis updates.
-struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
+struct MapDb(BTreeMap<SubstateKey, Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> Self {
@@ -51,40 +48,15 @@ impl MapDb {
         let mut map = BTreeMap::new();
         for (key, change) in &writes.cells {
             let value = change.clone().expect("genesis writes are Set-only");
-            map.insert(
-                (
-                    vm_db_node_key(key.owner.0),
-                    VM_PARTITION,
-                    key.local.0.to_vec(),
-                ),
-                value,
-            );
+            map.insert(*key, value);
         }
         Self(map)
     }
 }
 
 impl SubstateDatabase for MapDb {
-    fn get_raw_substate_by_db_key(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<DbSubstateValue> {
-        self.0
-            .get(&(
-                partition_key.node_key.clone(),
-                partition_key.partition_num,
-                sort_key.0.clone(),
-            ))
-            .cloned()
-    }
-
-    fn list_raw_values_from_db_key(
-        &self,
-        _partition_key: &DbPartitionKey,
-        _from_sort_key: Option<&DbSortKey>,
-    ) -> Box<dyn Iterator<Item = PartitionEntry> + '_> {
-        Box::new(std::iter::empty())
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        self.0.get(&key).cloned()
     }
 }
 

@@ -13,7 +13,7 @@ use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::import_leaf_updates;
 use hyperscale_storage::{
     AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportLeaf, ImportProgress, ResolveLeaf,
-    WitnessSeed, filter_updates_to_prefix, merge_updates_from_receipts,
+    WitnessSeed, filter_writes_to_prefix, merge_writes_from_receipts,
 };
 use hyperscale_types::{Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt};
 
@@ -201,7 +201,7 @@ impl BoundaryStore for SimShardStorage {
         height: BlockHeight,
         receipts: &[StoredReceipt],
     ) -> Result<StateRoot, String> {
-        let merged = merge_updates_from_receipts(receipts);
+        let merged = merge_writes_from_receipts(receipts);
         let mut state = write_or_recover(&self.state);
         if height <= state.current_block_height {
             return Err(format!(
@@ -209,8 +209,8 @@ impl BoundaryStore for SimShardStorage {
                 state.current_block_height,
             ));
         }
-        let filtered = filter_updates_to_prefix(&merged, &state.tree_store.root_path());
-        if filtered.node_updates.is_empty() {
+        let filtered = filter_writes_to_prefix(&merged, &state.tree_store.root_path());
+        if filtered.is_empty() {
             return Ok(state.current_root_hash);
         }
         let root = apply_state_writes(&mut state, &filtered, height);
@@ -235,15 +235,14 @@ impl BoundaryStore for SimShardStorage {
 #[cfg(test)]
 mod tests {
     use hyperscale_jmt::{Blake3Hasher, Tree};
+    use hyperscale_storage::SubstateStore;
     use hyperscale_storage::test_helpers::{
-        database_updates_to_state_writes, db_node_key, make_database_update,
-        test_boundary_import_roundtrip, test_boundary_retention_evicts_oldest,
+        make_state_writes, test_boundary_import_roundtrip, test_boundary_retention_evicts_oldest,
         test_boundary_unpinned_height_not_served,
     };
-    use hyperscale_storage::{DatabaseUpdates, SubstateStore};
     use hyperscale_types::state_key::vm_leaf_key;
     use hyperscale_types::{
-        ConsensusReceipt, GlobalReceiptHash, Hash, ShardId, SplitChildRoots, TxHash,
+        ConsensusReceipt, GlobalReceiptHash, Hash, ShardId, SplitChildRoots, StateWrites, TxHash,
         shard_prefix_path,
     };
 
@@ -252,8 +251,7 @@ mod tests {
     type Jmt = Tree<Blake3Hasher, 1>;
 
     fn commit_one(storage: &SimShardStorage, seed: u8) {
-        let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed, seed, seed]);
-        storage.commit_shared(&updates);
+        storage.commit_shared(&make_state_writes(seed, seed, vec![seed, seed, seed]));
     }
 
     #[test]
@@ -312,13 +310,12 @@ mod tests {
     #[test]
     fn boundary_leaf_reads_resolve_at_pinned_version() {
         let storage = SimShardStorage::default();
-        let node_key = db_node_key(7);
-        let old = make_database_update(node_key.clone(), 0, &[7], vec![1]);
+        let old = make_state_writes(7, 7, vec![1]);
         storage.commit_shared(&old);
         storage.pin_boundary(BlockHeight::new(1)).unwrap();
 
         // Overwrite the same substate at height 2.
-        let new = make_database_update(node_key, 0, &[7], vec![2]);
+        let new = make_state_writes(7, 7, vec![2]);
         storage.commit_shared(&new);
 
         let boundary = storage.open_boundary(BlockHeight::new(1)).expect("pinned");
@@ -353,18 +350,18 @@ mod tests {
 
     /// One write under the owner prefix `[seed; 16]` wrapped as a synced
     /// receipt — the shape a followed parent block's writes arrive in.
-    fn follow_receipt(seed: u8) -> (DatabaseUpdates, StoredReceipt) {
-        let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed; 4]);
+    fn follow_receipt(seed: u8) -> (StateWrites, StoredReceipt) {
+        let writes = make_state_writes(seed, seed, vec![seed; 4]);
         let receipt = StoredReceipt::synced(
             TxHash::from(Hash::from_bytes(&[seed])),
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
-                writes: database_updates_to_state_writes(&updates),
+                writes: writes.clone(),
                 beacon_witness_events: Vec::new(),
                 events: Vec::new(),
             }),
         );
-        (updates, receipt)
+        (writes, receipt)
     }
 
     /// Which child of the root the owner prefix `[seed; 16]` routes to —
@@ -400,8 +397,8 @@ mod tests {
 
         let mut counts = [0u64, 0];
         for (height, seed) in straddling_seeds() {
-            let (updates, receipt) = follow_receipt(seed);
-            parent.commit_shared(&updates);
+            let (writes, receipt) = follow_receipt(seed);
+            parent.commit_shared(&writes);
             let height = BlockHeight::new(height);
             let receipts = [receipt];
 

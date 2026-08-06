@@ -36,7 +36,7 @@ mod receipt;
 
 /// Genesis seeding: the stdlib world and funded-account cells.
 pub mod genesis;
-/// Shard assignment and write filtering for `DatabaseUpdates`.
+/// Shard assignment and write filtering for `StateWrites`.
 pub mod sharding;
 
 pub use batch::{

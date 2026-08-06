@@ -6,15 +6,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use hyperscale_jmt::Key;
-use hyperscale_storage::shard::keys;
+use hyperscale_storage::JmtSnapshot;
 use hyperscale_storage::tree::{carry_noop_root, jmt_parent_height, put_at_version};
-use hyperscale_storage::{
-    DatabaseUpdate, DatabaseUpdates, DbPartitionKey, JmtSnapshot, PartitionDatabaseUpdates,
-};
 use hyperscale_types::{
     BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate,
     ExecutionMetadata, QuorumCertificate, SafeVoteRegisters, ShardWitnessPayload, StateRoot,
-    StoredReceipt, Transaction, TxHash, ValidatorId, WaveCertificate, WaveId,
+    StateWrites, StoredReceipt, Transaction, TxHash, ValidatorId, WaveCertificate, WaveId,
 };
 
 use super::tree_store::SimTreeStore;
@@ -129,23 +126,15 @@ impl SharedState {
 /// follow path.
 pub fn apply_state_writes(
     s: &mut SharedState,
-    updates: &DatabaseUpdates,
+    writes: &StateWrites,
     height: BlockHeight,
 ) -> StateRoot {
-    apply_updates(s, updates, height.inner(), /* write_history */ true);
+    apply_writes(s, writes, height.inner(), /* write_history */ true);
 
     let parent_version =
         jmt_parent_height(s.current_block_height, s.current_root_hash).map(BlockHeight::inner);
-    // Receipt updates are Delta-only (enforced at receipt decode and in
-    // project_to_shard), so no Reset partition needs old-key JMT deletes
-    // and the empty reset_old_keys map is exact.
-    let (new_root, collected) = put_at_version(
-        &s.tree_store,
-        parent_version,
-        height.inner(),
-        &[updates],
-        &HashMap::new(),
-    );
+    let (new_root, collected) =
+        put_at_version(&s.tree_store, parent_version, height.inner(), &[writes]);
 
     for (key, node) in &collected.nodes {
         s.tree_store.insert(key.clone(), Arc::clone(node));
@@ -278,93 +267,32 @@ impl ConsensusState {
 ///
 /// Each write mutates `current_state` directly. If `write_history` is
 /// true, the pre-write value (or `None` if absent) is captured into
-/// `state_history` at `(storage_key, version)` before the write is
+/// `state_history` at `(key_bytes, version)` before the write is
 /// applied — this is the mechanism that lets historical reads at any
 /// earlier version recover the value-at-that-version. Genesis and
 /// other bootstrap paths pass `write_history: false` because there is
 /// no pre-state to preserve.
-///
-/// For Reset partitions, the helper enumerates current keys in the
-/// partition (via `current_state`) and treats each the same way:
-/// capture history, then set (if re-written by `new_substate_values`)
-/// or delete.
-pub fn apply_updates(
+pub fn apply_writes(
     state: &mut SharedState,
-    updates: &DatabaseUpdates,
+    writes: &StateWrites,
     version: u64,
     write_history: bool,
 ) {
-    for (node_key, node_updates) in &updates.node_updates {
-        for (partition_num, partition_updates) in &node_updates.partition_updates {
-            let partition_key = DbPartitionKey {
-                node_key: node_key.clone(),
-                partition_num: *partition_num,
-            };
-
-            match partition_updates {
-                PartitionDatabaseUpdates::Delta { substate_updates } => {
-                    for (sort_key, update) in substate_updates {
-                        let key = keys::to_storage_key(&partition_key, sort_key);
-                        let prior = state.current_state.get(&key).cloned();
-                        if write_history {
-                            state.state_history.insert((key.clone(), version), prior);
-                        }
-                        match update {
-                            DatabaseUpdate::Set(v) => {
-                                state.current_state.insert(key, v.clone());
-                            }
-                            DatabaseUpdate::Delete => {
-                                state.current_state.remove(&key);
-                            }
-                        }
-                    }
-                }
-                PartitionDatabaseUpdates::Reset {
-                    new_substate_values,
-                } => {
-                    // Enumerate keys currently live in the partition
-                    // from `current_state` directly (one entry per key,
-                    // no version walk).
-                    let existing_keys = live_partition_keys(&state.current_state, &partition_key);
-                    let new_keys: std::collections::HashSet<Vec<u8>> = new_substate_values
-                        .iter()
-                        .map(|(sk, _)| keys::to_storage_key(&partition_key, sk))
-                        .collect();
-
-                    // Remove old keys that aren't in the new set.
-                    for key in &existing_keys {
-                        if !new_keys.contains(key) {
-                            let prior = state.current_state.remove(key);
-                            if write_history {
-                                state.state_history.insert((key.clone(), version), prior);
-                            }
-                        }
-                    }
-
-                    // Write new values; capture history for each.
-                    for (sort_key, value) in new_substate_values {
-                        let key = keys::to_storage_key(&partition_key, sort_key);
-                        let prior = state.current_state.get(&key).cloned();
-                        if write_history {
-                            state.state_history.insert((key.clone(), version), prior);
-                        }
-                        state.current_state.insert(key, value.clone());
-                    }
-                }
+    for (key, change) in &writes.cells {
+        let key_bytes = key.to_bytes().to_vec();
+        let prior = state.current_state.get(&key_bytes).cloned();
+        if write_history {
+            state
+                .state_history
+                .insert((key_bytes.clone(), version), prior);
+        }
+        match change {
+            Some(value) => {
+                state.current_state.insert(key_bytes, value.clone());
+            }
+            None => {
+                state.current_state.remove(&key_bytes);
             }
         }
     }
-}
-
-/// Return storage keys currently live in the given partition.
-pub fn live_partition_keys(
-    current_state: &BTreeMap<Vec<u8>, Vec<u8>>,
-    partition_key: &DbPartitionKey,
-) -> Vec<Vec<u8>> {
-    let prefix = keys::partition_prefix(partition_key);
-    let end = keys::next_prefix(&prefix).expect("storage key prefix overflow");
-    current_state
-        .range(prefix..end)
-        .map(|(k, _)| k.clone())
-        .collect()
 }

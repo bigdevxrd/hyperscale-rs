@@ -243,12 +243,9 @@ impl RocksDbShardStorage {
 #[cfg(test)]
 mod tests {
     use hyperscale_jmt::NibblePath;
-    use hyperscale_storage::test_helpers::{db_node_key, local_key};
-    use hyperscale_storage::{
-        DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, NodeDatabaseUpdates,
-        PartitionDatabaseUpdates, SubstateDatabase,
-    };
-    use hyperscale_types::state_key::VM_PARTITION;
+    use hyperscale_storage::SubstateDatabase;
+    use hyperscale_storage::test_helpers::state_key;
+    use hyperscale_types::StateWrites;
     use tempfile::TempDir;
 
     use super::super::core::RocksDbShardStorage;
@@ -269,44 +266,18 @@ mod tests {
             RocksDbShardStorage::open_with_config(temp_dir.path(), &config, NibblePath::empty())
                 .unwrap();
 
-        let mk_key = |seed: u8, sort: u8| {
-            (
-                DbPartitionKey {
-                    node_key: db_node_key(seed),
-                    partition_num: VM_PARTITION,
-                },
-                DbSortKey(local_key(&[sort])),
-            )
-        };
-        let (pk_a, sk_a) = mk_key(1, 10);
-        let (pk_b, sk_b) = mk_key(2, 20);
+        let key_a = state_key(1, 10);
+        let key_b = state_key(2, 20);
 
-        let mut writes = DatabaseUpdates::default();
-        for (pk, sk, v) in [
-            (pk_a.clone(), sk_a.clone(), vec![0xAA]),
-            (pk_b.clone(), sk_b.clone(), vec![0xBB]),
-        ] {
-            writes
-                .node_updates
-                .entry(pk.node_key.clone())
-                .or_insert_with(|| NodeDatabaseUpdates {
-                    #[allow(clippy::default_trait_access)] // foreign type alias varies by crate; concrete type not worth importing
-                    partition_updates: Default::default(),
-                })
-                .partition_updates
-                .insert(
-                    pk.partition_num,
-                    PartitionDatabaseUpdates::Delta {
-                        substate_updates: std::iter::once((sk, DatabaseUpdate::Set(v))).collect(),
-                    },
-                );
-        }
+        let mut writes = StateWrites::default();
+        writes.cells.insert(key_a, Some(vec![0xAA]));
+        writes.cells.insert(key_b, Some(vec![0xBB]));
         storage.commit(&writes).unwrap();
 
         // Advance JMT version past the retention window with empty
         // commits so the history cutoff is above version 1.
         for _ in 0..4 {
-            storage.commit(&DatabaseUpdates::default()).unwrap();
+            storage.commit(&StateWrites::default()).unwrap();
         }
 
         storage.run_state_history_gc();
@@ -314,12 +285,12 @@ mod tests {
         // Current-tip reads are served from StateCf — history GC
         // cannot affect them regardless of how aggressive the retention is.
         assert_eq!(
-            storage.get_raw_substate_by_db_key(&pk_a, &sk_a),
+            storage.substate(key_a),
             Some(vec![0xAA]),
             "StateCf entry for key A survives state-history GC"
         );
         assert_eq!(
-            storage.get_raw_substate_by_db_key(&pk_b, &sk_b),
+            storage.substate(key_b),
             Some(vec![0xBB]),
             "StateCf entry for key B survives state-history GC"
         );

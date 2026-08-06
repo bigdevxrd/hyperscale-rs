@@ -5,7 +5,7 @@ use std::sync::Arc;
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::lock_recover::read_or_recover;
 use hyperscale_storage::tree::proofs::generate_proof;
-use hyperscale_storage::{DbSortKey, SubstateStore, VersionedStore};
+use hyperscale_storage::{SubstateStore, VersionedStore};
 use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot};
 
 use super::core::SimShardStorage;
@@ -34,8 +34,8 @@ impl SubstateStore for SimShardStorage {
         local: [u8; 16],
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        use hyperscale_storage::{DbPartitionKey, SubstateDatabase};
-        use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+        use hyperscale_storage::SubstateDatabase;
+        use hyperscale_types::{Address, LocalKey, SubstateKey};
         let current_version = read_or_recover(&self.state).current_block_height.inner();
         if block_height.inner() > current_version {
             return None;
@@ -44,13 +44,10 @@ impl SubstateStore for SimShardStorage {
         if block_height.inner() < floor {
             return None;
         }
-        Some(self.snapshot_at(block_height).get_raw_substate_by_db_key(
-            &DbPartitionKey {
-                node_key: vm_db_node_key(owner),
-                partition_num: VM_PARTITION,
-            },
-            &DbSortKey(local.to_vec()),
-        ))
+        Some(self.snapshot_at(block_height).substate(SubstateKey {
+            owner: Address(owner),
+            local: LocalKey(local),
+        }))
     }
 
     fn generate_merkle_proofs(

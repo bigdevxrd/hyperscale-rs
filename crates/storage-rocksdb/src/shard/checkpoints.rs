@@ -19,7 +19,7 @@ use hyperscale_jmt::{Key, NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, Tr
 use hyperscale_storage::tree::{import_leaf_updates, jmt_parent_height, put_at_version};
 use hyperscale_storage::{
     AdoptSource, BoundaryStore, ImportLeaf, ImportProgress, JmtSnapshot, ResolveLeaf, WitnessSeed,
-    filter_updates_to_prefix, merge_updates_from_receipts,
+    filter_writes_to_prefix, merge_writes_from_receipts,
 };
 use hyperscale_types::{Block, BlockHeight, ChainOrigin, Hash, StateRoot, StoredReceipt};
 use rocksdb::checkpoint::Checkpoint;
@@ -583,13 +583,13 @@ impl BoundaryStore for RocksDbShardStorage {
             ));
         }
 
-        let merged = merge_updates_from_receipts(receipts);
-        let filtered = filter_updates_to_prefix(&merged, &self.root_path);
-        if filtered.node_updates.is_empty() {
+        let merged = merge_writes_from_receipts(receipts);
+        let filtered = filter_writes_to_prefix(&merged, &self.root_path);
+        if filtered.is_empty() {
             return Ok(base_root);
         }
 
-        let (mut batch, reset_old_keys) = self.build_substate_write_batch(
+        let mut batch = self.build_substate_write_batch(
             &filtered,
             height.inner(),
             /* write_history */ true,
@@ -602,7 +602,6 @@ impl BoundaryStore for RocksDbShardStorage {
             parent_version,
             height.inner(),
             &[&filtered],
-            &reset_old_keys,
         );
         let jmt_snapshot = JmtSnapshot::from_collected_writes(
             collected,
@@ -648,7 +647,7 @@ mod tests {
     use blake3::hash as blake3_hash;
     use hyperscale_jmt::{Blake3Hasher, Tree};
     use hyperscale_storage::test_helpers::{
-        completed_import_progress, db_node_key, import_boundary_state, make_database_update,
+        completed_import_progress, import_boundary_state, make_state_writes,
         test_boundary_import_roundtrip, test_boundary_retention_evicts_oldest,
         test_boundary_unpinned_height_not_served,
     };
@@ -668,8 +667,8 @@ mod tests {
     }
 
     fn commit_one(storage: &RocksDbShardStorage, seed: u8) {
-        let updates = make_database_update(db_node_key(seed), 0, &[seed], vec![seed, seed, seed]);
-        storage.commit(&updates).unwrap();
+        let writes = make_state_writes(seed, seed, vec![seed, seed, seed]);
+        storage.commit(&writes).unwrap();
     }
 
     #[test]

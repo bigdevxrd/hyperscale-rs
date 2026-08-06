@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
-use hyperscale_storage::{DbPartitionKey, DbSortKey, SubstateLookup};
-use hyperscale_types::StateRoot;
+use hyperscale_storage::SubstateLookup;
+use hyperscale_types::{StateRoot, SubstateKey};
 use rocksdb::{ColumnFamily, DB, Snapshot};
 
 use super::column_families::{CfHandles, JmtNodesCf, StateCf};
@@ -52,13 +52,8 @@ impl<'a> SnapshotTreeStore<'a> {
     /// Read the current substate value visible through this `RocksDB`
     /// snapshot. Used when collecting historical state associations
     /// during proof generation.
-    pub fn get_substate(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<Vec<u8>> {
-        let state_key = (partition_key.clone(), sort_key.clone());
-        typed_cf::get::<StateCf>(&self.snapshot, self.state_cf, &state_key)
+    pub fn get_substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        typed_cf::get::<StateCf>(&self.snapshot, self.state_cf, &key)
     }
 
     /// Read the JMT version and root hash from this snapshot. Uses the
@@ -94,11 +89,7 @@ impl TreeReader for SnapshotTreeStore<'_> {
 }
 
 impl SubstateLookup for SnapshotTreeStore<'_> {
-    fn lookup_substate(
-        &self,
-        partition_key: &DbPartitionKey,
-        sort_key: &DbSortKey,
-    ) -> Option<Vec<u8>> {
-        self.get_substate(partition_key, sort_key)
+    fn lookup_substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        self.get_substate(key)
     }
 }
