@@ -15,9 +15,9 @@ use hyperscale_engine::genesis::stake_unit;
 use hyperscale_engine::{XRD, account_address};
 use hyperscale_types::{
     ConsensusPublicKey, ConsensusSignature, Ed25519PrivateKey, EnvelopeExt, Epoch, MIN_STAKE_FLOOR,
-    NetworkParams, ShardId, ShardTrie, StakePoolId, StakePoolSeat, SubintentSig, TimestampRange,
-    Transaction, TransactionBody, TransactionEnvelope, ValidatorId, WeightedTimestamp,
-    ed25519_keypair_from_seed,
+    NetworkId, NetworkParams, ShardId, ShardTrie, StakePoolId, StakePoolSeat, SubintentSig,
+    TimestampRange, Transaction, TransactionBody, TransactionEnvelope, ValidatorId,
+    WeightedTimestamp, ed25519_keypair_from_seed,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -893,6 +893,7 @@ pub fn build_stamp_tx(
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
         message: Vec::new(),
+        network: SCENARIO_NETWORK,
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -1029,6 +1030,7 @@ pub fn build_publish_tx(
             validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
             validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
             message: Vec::new(),
+            network: SCENARIO_NETWORK,
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -1383,6 +1385,7 @@ pub fn build_composed_tx(
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
         message: Vec::new(),
+        network: SCENARIO_NETWORK,
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -1398,6 +1401,11 @@ pub fn build_composed_tx(
 /// scenario probing for a stale reservation sizes its funding against it.
 pub const MAX_FEE: u128 = 1_000;
 
+/// The network every built envelope names: both harnesses run the
+/// simulator definition, and admission refuses an envelope naming any
+/// other network.
+pub const SCENARIO_NETWORK: NetworkId = NetworkId(242);
+
 /// Wrap a single-intent graph in a signed envelope at the scenario fee
 /// terms, with no message.
 fn envelope(
@@ -1405,7 +1413,14 @@ fn envelope(
     payer: &Ed25519PrivateKey,
     validity: TimestampRange,
 ) -> TransactionEnvelope {
-    sign_call(graph, payer, MAX_FEE, validity, Vec::new())
+    sign_call(
+        graph,
+        payer,
+        MAX_FEE,
+        validity,
+        Vec::new(),
+        SCENARIO_NETWORK,
+    )
 }
 
 /// Cast the founding pool's vote to retune the reshape `split_bytes`,
@@ -1437,4 +1452,22 @@ pub fn build_reshape_threshold_vote_tx(
         ],
         validity,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use hyperscale_types::NetworkDefinition;
+
+    use super::*;
+
+    /// The hardcoded scenario network is the simulator definition's id;
+    /// drifting apart would have every built envelope refused at
+    /// admission.
+    #[test]
+    fn the_scenario_network_is_the_simulators() {
+        assert_eq!(
+            SCENARIO_NETWORK,
+            NetworkId::from(&NetworkDefinition::simulator())
+        );
+    }
 }

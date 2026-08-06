@@ -10,15 +10,15 @@
 //! canonical encoding makes every field binding, with no per-message
 //! framing argument.
 
-use hyperscale_hbor::{Hbor, HborSignedWith};
-
-use crate::NetworkDefinition;
-
+use hyperscale_hbor::HborSignedWith;
 /// The network a signing session is for — the context every consensus
 /// preimage mixes in ahead of its fields, so a signature produced for
-/// one network can never verify against another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hbor)]
-pub struct NetworkId(pub u8);
+/// one network can never verify against another. One type with the
+/// envelope's signed network field, so the session vocabulary and the
+/// transaction's own claim cannot drift apart.
+pub use hyperscale_vm_types::NetworkId;
+
+use crate::NetworkDefinition;
 
 impl From<&NetworkDefinition> for NetworkId {
     fn from(network: &NetworkDefinition) -> Self {

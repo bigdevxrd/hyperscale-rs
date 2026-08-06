@@ -464,7 +464,7 @@ impl VmStatics for BridgeStatics {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::{Ed25519PrivateKey, SubintentSig, TransactionBody};
+    use hyperscale_types::{Ed25519PrivateKey, NetworkId, SubintentSig, TransactionBody};
     use hyperscale_vm_effects::stdlib::{VAULT, account_metadata};
     use hyperscale_vm_effects::{
         Constraint, EdgeRef, GraphArg, GraphNode, Hasher, InstanceMeta, IntentDecl, ManifestGraph,
@@ -622,6 +622,7 @@ mod tests {
             validity_start_ms: 0,
             validity_end_ms: 1_000_000,
             message: Vec::new(),
+            network: NetworkId(242),
             signer: [0; 32],
             signature: [0; 64],
         }

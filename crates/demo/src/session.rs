@@ -9,9 +9,9 @@ use hyperscale_node::shard::{HostEvent, ProcessScopedInput};
 use hyperscale_simulation::{CryptoScheme, SimConfig, SimulationRunner};
 use hyperscale_storage::ShardChainReader;
 use hyperscale_types::{
-    BeaconChainConfig, BlockHeight, Ed25519PrivateKey, ReshapeThresholds, ShardId,
-    SharedCertificates, TimestampRange, Transaction, TransactionDecision, TransactionStatus,
-    TxHash, ValidatorId, WeightedTimestamp,
+    BeaconChainConfig, BlockHeight, Ed25519PrivateKey, NetworkDefinition, NetworkId,
+    ReshapeThresholds, ShardId, SharedCertificates, TimestampRange, Transaction,
+    TransactionDecision, TransactionStatus, TxHash, ValidatorId, WeightedTimestamp,
 };
 
 use crate::event::{HostRole, ObserverSeat, ShardPath, TraceEvent};
@@ -442,6 +442,7 @@ impl Session {
             TRANSFER_MAX_FEE,
             validity_around(self.now),
             self.nonce.to_le_bytes().to_vec(),
+            NetworkId::from(&NetworkDefinition::simulator()),
         )
     }
 

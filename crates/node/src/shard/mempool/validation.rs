@@ -24,7 +24,9 @@ use hyperscale_dispatch::{Dispatch, DispatchPool, Parallelism};
 use hyperscale_network::Network;
 use hyperscale_storage::{ShardStorage, SubstateStore};
 use hyperscale_types::network::gossip::TransactionGossip;
-use hyperscale_types::{ShardId, TopologySnapshot, Transaction, TxHash, Verified, Verify};
+use hyperscale_types::{
+    NetworkId, ShardId, TopologySnapshot, Transaction, TxHash, Verified, Verify,
+};
 
 use super::TransactionBinding;
 use crate::batch_accumulator::BatchAccumulator;
@@ -174,12 +176,13 @@ where
         let event_tx = self.event_sender().clone();
         let local_shard = self.shard;
         let par: Parallelism = self.process.dispatch.parallelism();
+        let network = NetworkId::from(self.process.topology_snapshot.load().network());
         self.process
             .dispatch
             .spawn(DispatchPool::Throughput, move || {
                 let results: Vec<(TxHash, Option<Verified<Transaction>>)> = par.map(batch, |tx| {
                     let hash = tx.hash();
-                    (hash, tx.verify(()).ok())
+                    (hash, tx.verify(network).ok())
                 });
 
                 let mut valid: Vec<Arc<Verified<Transaction>>> = Vec::new();
@@ -297,9 +300,17 @@ where
             .spawn(DispatchPool::Throughput, move || {
                 let results: Vec<(TxHash, Option<Verified<Transaction>>)> = par.map(batch, |tx| {
                     let hash = tx.hash();
-                    let verified = tx.verify(()).ok().filter(|v| {
-                        payer_covers_fee_ceiling(v, &topology, local_shard, storage.as_deref())
-                    });
+                    let verified =
+                        tx.verify(NetworkId::from(topology.network()))
+                            .ok()
+                            .filter(|v| {
+                                payer_covers_fee_ceiling(
+                                    v,
+                                    &topology,
+                                    local_shard,
+                                    storage.as_deref(),
+                                )
+                            });
                     (hash, verified)
                 });
 

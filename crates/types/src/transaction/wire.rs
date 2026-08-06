@@ -2,7 +2,7 @@
 //!
 //! [`Transaction`] is the raw wire form. Its verified form is
 //! `Verified<Transaction>`; predicate at
-//! [`impl Verify<()>`](Verify::verify) below.
+//! [`impl Verify<NetworkId>`](Verify::verify) below.
 //!
 //! The admission conflict keys, the owner prefixes that place the
 //! transaction on shards, and the validity window are all derived
@@ -20,8 +20,9 @@ use thiserror::Error;
 use crate::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use crate::transaction::vm::vm_statics;
 use crate::{
-    DeclaredKey, Derived, EnvelopeExt, Hash, LocalKey, MAX_TX_BYTES_LEN, Routing, ShardTrie,
-    SubstateKey, TimestampRange, TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
+    DeclaredKey, Derived, EnvelopeExt, Hash, LocalKey, MAX_TX_BYTES_LEN, NetworkId, Routing,
+    ShardTrie, SubstateKey, TimestampRange, TransactionEnvelope, TxHash, Verified, Verify,
+    VmStaticsError,
 };
 
 /// A signed transaction as the network carries it.
@@ -314,6 +315,14 @@ pub enum TransactionVerifyError {
     /// The body bytes do not decode as an envelope.
     #[error("transaction body bytes are undecodable")]
     UndecodableBody,
+    /// The envelope names a different network than this session's.
+    #[error("transaction is signed for network {signed}, not this network {session}")]
+    WrongNetwork {
+        /// The network the envelope names.
+        signed: u8,
+        /// The network this node verifies for.
+        session: u8,
+    },
     /// The envelope's composer signature does not cover its content.
     #[error("transaction signature is invalid")]
     InvalidSignature,
@@ -325,12 +334,17 @@ pub enum TransactionVerifyError {
     Derivation(#[from] VmStaticsError),
 }
 
-/// Construction asserts: the body decodes, the composer's ed25519
-/// signature covers the envelope content, the tree admits and routes
-/// under the installed [`crate::VmStatics`] (which caches the derived
-/// identity on the transaction and binds every subintent signer address
-/// to its public key), and every subintent signature covers its
-/// declaration hash.
+/// Construction asserts: the body decodes, the envelope names this
+/// session's network, the composer's ed25519 signature covers the
+/// envelope content, the tree admits and routes under the installed
+/// [`crate::VmStatics`] (which caches the derived identity on the
+/// transaction and binds every subintent signer address to its public
+/// key), and every subintent signature covers its declaration hash.
+///
+/// The network check runs before the signature: the named network is
+/// signed content, so a transaction composed for another network fails
+/// here whatever its signature says, and a re-targeted one fails the
+/// signature.
 ///
 /// Construction goes through one of two gates:
 ///
@@ -341,11 +355,17 @@ pub enum TransactionVerifyError {
 ///   source (storage-recovery, where the value was validated before
 ///   persistence; equivalent-attestation paths). Every call site
 ///   carries a `// SAFETY:` comment naming the trust source.
-impl Verify<()> for Transaction {
+impl Verify<NetworkId> for Transaction {
     type Error = TransactionVerifyError;
 
-    fn verify(&self, (): ()) -> Result<Verified<Self>, Self::Error> {
+    fn verify(&self, network: NetworkId) -> Result<Verified<Self>, Self::Error> {
         let vm = self.try_body()?;
+        if vm.network != network {
+            return Err(TransactionVerifyError::WrongNetwork {
+                signed: vm.network.0,
+                session: network.0,
+            });
+        }
         if !vm.signature_is_valid() {
             return Err(TransactionVerifyError::InvalidSignature);
         }
@@ -439,6 +459,9 @@ mod tests {
         }
     }
 
+    /// The network every fixture in this module signs for.
+    const TEST_NETWORK: NetworkId = NetworkId(242);
+
     fn test_envelope(tree: &[u8]) -> TransactionEnvelope {
         let key = Ed25519PrivateKey::from_bytes(&[7u8; 32]).unwrap();
         let range = test_validity_range();
@@ -451,6 +474,7 @@ mod tests {
             validity_start_ms: range.start_timestamp_inclusive.as_millis(),
             validity_end_ms: range.end_timestamp_exclusive.as_millis(),
             message: Vec::new(),
+            network: TEST_NETWORK,
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -494,21 +518,21 @@ mod tests {
     #[test]
     fn verification_checks_signature_and_derivation() {
         let good = fixture(b"graph bytes");
-        assert!(good.verify(()).is_ok());
+        assert!(good.verify(TEST_NETWORK).is_ok());
 
         // A tampered signature refuses.
         let mut vm = good.body().clone();
         vm.signature[0] ^= 1;
         let bad_signature = Transaction::new(vm);
         assert_eq!(
-            bad_signature.verify(()).unwrap_err(),
+            bad_signature.verify(TEST_NETWORK).unwrap_err(),
             TransactionVerifyError::InvalidSignature
         );
 
         // A refused tree surfaces the derivation error.
         let inadmissible = fixture(b"inadmissible");
         assert!(matches!(
-            inadmissible.verify(()).unwrap_err(),
+            inadmissible.verify(TEST_NETWORK).unwrap_err(),
             TransactionVerifyError::Derivation(_)
         ));
 
@@ -523,8 +547,34 @@ mod tests {
             cached_bytes: OnceLock::new(),
         };
         assert_eq!(
-            garbage.verify(()).unwrap_err(),
+            garbage.verify(TEST_NETWORK).unwrap_err(),
             TransactionVerifyError::UndecodableBody
+        );
+    }
+
+    /// A transaction signed for one network fails verification under
+    /// another's session — before its signature is even consulted, and
+    /// re-targeting it breaks the signature since the network is signed
+    /// content.
+    #[test]
+    fn verification_refuses_a_foreign_networks_transaction() {
+        let tx = fixture(b"graph bytes");
+        assert!(tx.verify(TEST_NETWORK).is_ok());
+        assert_eq!(
+            tx.verify(NetworkId(7)).unwrap_err(),
+            TransactionVerifyError::WrongNetwork {
+                signed: TEST_NETWORK.0,
+                session: 7,
+            }
+        );
+
+        let mut retargeted = tx.body().clone();
+        retargeted.network = NetworkId(7);
+        assert_eq!(
+            Transaction::new(retargeted)
+                .verify(NetworkId(7))
+                .unwrap_err(),
+            TransactionVerifyError::InvalidSignature,
         );
     }
 
@@ -541,13 +591,17 @@ mod tests {
             signature: subintent_key.sign(STUB_SUBINTENT_HASH).0,
         }];
         let composed = envelope.sign(&composer_key);
-        assert!(Transaction::new(composed.clone()).verify(()).is_ok());
+        assert!(
+            Transaction::new(composed.clone())
+                .verify(TEST_NETWORK)
+                .is_ok()
+        );
 
         let mut forged = composed;
         forged.subintent_sigs[0].signature[0] ^= 1;
         let forged = forged.sign(&composer_key);
         assert_eq!(
-            Transaction::new(forged).verify(()).unwrap_err(),
+            Transaction::new(forged).verify(TEST_NETWORK).unwrap_err(),
             TransactionVerifyError::InvalidSubintentSignature(0)
         );
     }

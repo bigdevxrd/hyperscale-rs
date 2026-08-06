@@ -23,9 +23,9 @@ use hyperscale_engine::{
 };
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
-    BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, RevealChain, ShardId,
-    ShardTrie, StateWrites, SubstateKey, Transaction, TransactionBody, TransactionEnvelope,
-    Verified, WeightedTimestamp,
+    BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, NetworkId, RevealChain,
+    ShardId, ShardTrie, StateWrites, SubstateKey, Transaction, TransactionBody,
+    TransactionEnvelope, Verified, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -121,6 +121,7 @@ fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> Transaction {
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
             message: Vec::new(),
+            network: NetworkId(242),
             signer: [0; 32],
             signature: [0; 64],
         }

@@ -18,8 +18,8 @@ use hyperscale_engine::{
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
     BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash,
-    RevealChain, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, SubstateKey, Transaction,
-    TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
+    NetworkId, RevealChain, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, SubstateKey,
+    Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -149,6 +149,7 @@ fn signed_stake(pool: [u8; 16], amount: u128) -> Transaction {
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
             message: Vec::new(),
+            network: NetworkId(242),
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -266,6 +267,7 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
             message: Vec::new(),
+            network: NetworkId(242),
             signer: [0; 32],
             signature: [0; 64],
         }
@@ -310,6 +312,7 @@ fn signed_registration(pool: [u8; 16], seed: u8) -> Transaction {
             validity_start_ms: 0,
             validity_end_ms: u64::MAX,
             message: Vec::new(),
+            network: NetworkId(242),
             signer: [0; 32],
             signature: [0; 64],
         }

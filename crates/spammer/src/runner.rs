@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::join_all;
 use hyperscale_effects_bridge::build_transfer_tx;
-use hyperscale_types::{ShardId, Transaction};
+use hyperscale_types::{NetworkDefinition, NetworkId, ShardId, Transaction};
 use rand::{Rng, RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tokio::spawn;
@@ -667,6 +667,7 @@ impl PartitionWorkload {
             TRANSFER_MAX_FEE,
             validity_range_for_now(),
             nonce.to_le_bytes().to_vec(),
+            NetworkId::from(&NetworkDefinition::simulator()),
         )
     }
 }

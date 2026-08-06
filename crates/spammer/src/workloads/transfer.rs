@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hyperscale_effects_bridge::build_transfer_tx;
-use hyperscale_types::{ShardId, Transaction};
+use hyperscale_types::{NetworkDefinition, NetworkId, ShardId, Transaction};
 use rand::{Rng, RngExt};
 
 use crate::accounts::{AccountPool, FundedAccount, SelectionMode};
@@ -133,6 +133,7 @@ impl TransferWorkload {
             TRANSFER_MAX_FEE,
             (self.validity_clock)(),
             nonce.to_le_bytes().to_vec(),
+            NetworkId::from(&NetworkDefinition::simulator()),
         )
     }
 

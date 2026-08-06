@@ -16,9 +16,9 @@ use hyperscale_engine::{
 };
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
-    BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, RevealChain, ShardId,
-    ShardTrie, StateWrites, SubstateKey, Transaction, TransactionBody, TransactionEnvelope,
-    Verified, WeightedTimestamp, absorb_committed_cells,
+    BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, NetworkId, RevealChain,
+    ShardId, ShardTrie, StateWrites, SubstateKey, Transaction, TransactionBody,
+    TransactionEnvelope, Verified, WeightedTimestamp, absorb_committed_cells,
 };
 use hyperscale_vm_effects::{
     AbiParam, Address, Constraint, EdgeRef, EnvelopeTree, Expr, GraphArg, GraphNode, IntentDecl,
@@ -149,6 +149,7 @@ fn signed_transfer_under_bound(
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
         message: Vec::new(),
+        network: NetworkId(242),
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -181,6 +182,7 @@ fn signed_transfer_with_fee(
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
         message: Vec::new(),
+        network: NetworkId(242),
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -250,6 +252,7 @@ fn signed_stamp_with_fee(seed: u8, owner: [u8; 16], max_fee: u128) -> Transactio
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
         message: Vec::new(),
+        network: NetworkId(242),
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -897,6 +900,7 @@ fn signed_publish(seed: u8, artifact: Vec<u8>) -> Transaction {
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
         message: Vec::new(),
+        network: NetworkId(242),
         signer: [0; 32],
         signature: [0; 64],
     }

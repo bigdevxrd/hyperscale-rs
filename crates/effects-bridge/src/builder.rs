@@ -7,7 +7,7 @@
 //! can compare.
 
 use hyperscale_types::{
-    Ed25519PrivateKey, EnvelopeExt, TimestampRange, Transaction, TransactionBody,
+    Ed25519PrivateKey, EnvelopeExt, NetworkId, TimestampRange, Transaction, TransactionBody,
     TransactionEnvelope,
 };
 use hyperscale_vm_effects::{
@@ -64,6 +64,7 @@ pub fn sign_call(
     max_fee: u128,
     validity: TimestampRange,
     message: Vec<u8>,
+    network: NetworkId,
 ) -> TransactionEnvelope {
     let tree = EnvelopeTree {
         root: IntentDecl {
@@ -82,6 +83,7 @@ pub fn sign_call(
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
         message,
+        network,
         signer: [0; 32],
         signature: [0; 64],
     }
@@ -93,6 +95,7 @@ pub fn sign_call(
 /// `payer` must control `from`: only the withdrawing account's authority
 /// is gated, so one signature composes the whole transfer.
 #[must_use]
+#[allow(clippy::too_many_arguments)] // the envelope's flat signing-time terms
 pub fn build_transfer_tx(
     payer: &Ed25519PrivateKey,
     from: [u8; 16],
@@ -101,6 +104,7 @@ pub fn build_transfer_tx(
     max_fee: u128,
     validity: TimestampRange,
     message: Vec<u8>,
+    network: NetworkId,
 ) -> Transaction {
     Transaction::new(sign_call(
         transfer_graph(from, to, amount),
@@ -108,5 +112,6 @@ pub fn build_transfer_tx(
         max_fee,
         validity,
         message,
+        network,
     ))
 }

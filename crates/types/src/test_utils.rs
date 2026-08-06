@@ -13,13 +13,13 @@ use crate::{
     BlockHeight, BlockVoteMessage, CertificateRoot, CertifiedBlock, CertifiedBlockHeader,
     ChainOrigin, CommitProof, ConsensusPublicKey, ConsensusSignature, DeclaredKey, Derived,
     EnvelopeExt, ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
-    GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, ProposerTimestamp,
-    ProvisionsRoot, QuorumCertificate, RevealChain, Round, Routing, ShardForkProof, ShardId,
-    ShardLoad, SignerBitfield, StateRoot, TimestampRange, TopologySnapshot, Transaction,
-    TransactionBody, TransactionDecision, TransactionEnvelope, TransactionRoot, TxHash, TxOutcome,
-    ValidatorId, ValidatorInfo, ValidatorSet, Verifiable, Verified, VmStatics, VmStaticsError,
-    WaveCertificate, WaveId, WeightedTimestamp, WitnessSources, install_vm_statics, signed_bytes,
-    vm_statics_installed,
+    GlobalReceiptRoot, Hash, InFlightCount, LocalReceiptRoot, NetworkDefinition, NetworkId,
+    ProposerTimestamp, ProvisionsRoot, QuorumCertificate, RevealChain, Round, Routing,
+    ShardForkProof, ShardId, ShardLoad, SignerBitfield, StateRoot, TimestampRange,
+    TopologySnapshot, Transaction, TransactionBody, TransactionDecision, TransactionEnvelope,
+    TransactionRoot, TxHash, TxOutcome, ValidatorId, ValidatorInfo, ValidatorSet, Verifiable,
+    Verified, VmStatics, VmStaticsError, WaveCertificate, WaveId, WeightedTimestamp,
+    WitnessSources, install_vm_statics, signed_bytes, vm_statics_installed,
 };
 
 /// Create a test transaction the [`StubVmStatics`] derivation routes to
@@ -979,6 +979,7 @@ pub fn stub_transaction_with_reads(
         validity_start_ms: validity.start_timestamp_inclusive.as_millis(),
         validity_end_ms: validity.end_timestamp_exclusive.as_millis(),
         message: Vec::new(),
+        network: NetworkId::from(&NetworkDefinition::simulator()),
         signer: [0; 32],
         signature: [0; 64],
     }
