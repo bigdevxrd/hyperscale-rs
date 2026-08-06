@@ -160,16 +160,26 @@ pub(super) fn distribute_epoch_rewards(
     shard_work: &BTreeMap<ShardId, u64>,
 ) -> BTreeMap<StakePoolId, Stake> {
     let gas_total: u128 = shard_work.values().map(|g| u128::from(*g)).sum();
+    // Live records only: a reshape's lingering terminal record holds the
+    // same bytes its successors' records carry — a splitting parent's
+    // reappear on its children — so counting both would dilute every
+    // live shard's storage share in exactly the reshape-adjacent epochs
+    // the term exists to discriminate.
     let bytes_total: u128 = state
         .boundaries
         .values()
+        .filter(|b| b.terminal_epoch.is_none())
         .map(|b| u128::from(b.substate_bytes))
         .sum();
     let weight_of = |shard: ShardId| -> u128 {
         shard_emission_weight(
             shard_work.get(&shard).copied().unwrap_or(0),
             gas_total,
-            state.boundaries.get(&shard).map_or(0, |b| b.substate_bytes),
+            state
+                .boundaries
+                .get(&shard)
+                .filter(|b| b.terminal_epoch.is_none())
+                .map_or(0, |b| b.substate_bytes),
             bytes_total,
         )
     };
@@ -779,6 +789,86 @@ mod tests {
         assert!(
             with_storage[&second_pool] > weighted[&second_pool],
             "stored bytes should weigh: {with_storage:?}"
+        );
+    }
+
+    /// A reshape's lingering terminal record neither earns nor dilutes
+    /// the storage term: a splitting parent's bytes already reappear on
+    /// its successors' records, so an epoch straddling the split
+    /// credits them once — the live shards' shares are identical with
+    /// and without the terminal record present.
+    #[test]
+    fn a_lingering_terminal_record_does_not_dilute_the_storage_term() {
+        use hyperscale_types::{
+            BeaconWitnessLeafCount, BlockHash, BlockHeight, ShardBoundary, StateRoot,
+            WeightedTimestamp,
+        };
+
+        let record = |bytes: u64, terminal: Option<Epoch>| ShardBoundary {
+            state_root: StateRoot::ZERO,
+            block_hash: BlockHash::ZERO,
+            height: BlockHeight::GENESIS,
+            weighted_timestamp: WeightedTimestamp::ZERO,
+            witness_leaf_count: BeaconWitnessLeafCount::ZERO,
+            witness_base: BeaconWitnessLeafCount::ZERO,
+            attested_work: 0,
+            substate_bytes: bytes,
+            last_live_epoch: Epoch::GENESIS,
+            consecutive_misses: 0,
+            terminal_epoch: terminal,
+            terminal_delivered: false,
+            settled_waves_root: None,
+            reshape_admitted_epoch: None,
+        };
+
+        // Two pools, one ready validator each, on the two children of a
+        // split whose parent's record still lingers.
+        let build = |with_terminal: bool| {
+            let mut state = single_pool_state(1);
+            let sibling = ShardId::leaf(1, 1);
+            let second = ValidatorId::new(1);
+            let second_pool = StakePoolId::new(1);
+            state.pools.insert(
+                second_pool,
+                StakePool {
+                    id: second_pool,
+                    total_stake: Stake::from_attos(MIN_STAKE_FLOOR.attos()),
+                    validators: std::iter::once(second).collect(),
+                    pending_withdrawals: Vec::new(),
+                    released_cumulative: Stake::ZERO,
+                    conviction: None,
+                },
+            );
+            state.validators.insert(
+                second,
+                validator_record(
+                    1,
+                    1,
+                    ValidatorStatus::OnShard {
+                        shard: sibling,
+                        ready: true,
+                        placed_at_epoch: Epoch::GENESIS,
+                    },
+                ),
+            );
+            state
+                .boundaries
+                .insert(ShardId::leaf(1, 0), record(1_000, None));
+            state.boundaries.insert(sibling, record(3_000, None));
+            if with_terminal {
+                state
+                    .boundaries
+                    .insert(ShardId::ROOT, record(4_000, Some(Epoch::GENESIS)));
+            }
+            state
+        };
+
+        let work = BTreeMap::new();
+        let without = distribute_epoch_rewards(&mut build(false), &work);
+        let with = distribute_epoch_rewards(&mut build(true), &work);
+        assert_eq!(
+            with, without,
+            "a terminal record must not move any live shard's share"
         );
     }
 
