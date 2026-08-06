@@ -180,8 +180,6 @@ mod tests {
     /// whose prefix subtree holds the owner's identity leaves.
     #[test]
     fn vm_leaf_places_under_the_shard_its_owner_prefix_routes_to() {
-        use crate::state_key::{jmt_leaf_key, vm_flat_key};
-
         let mut non_uniform = ShardTrie::single();
         let (left, _right) = non_uniform.split(ShardId::ROOT);
         non_uniform.split(left);
@@ -189,7 +187,11 @@ mod tests {
         for trie in [ShardTrie::uniform(3), non_uniform] {
             for seed in [0x00u8, 0x1F, 0x5A, 0x80, 0xC3, 0xFF] {
                 let owner = [seed; 16];
-                let leaf = jmt_leaf_key(&vm_flat_key(owner, [7u8; 16]));
+                let leaf = {
+                    let mut leaf = [7u8; 32];
+                    leaf[..16].copy_from_slice(&owner);
+                    leaf
+                };
                 assert_eq!(
                     shard_for_key_bits(&trie, &leaf),
                     trie.shard_for_prefix(owner),

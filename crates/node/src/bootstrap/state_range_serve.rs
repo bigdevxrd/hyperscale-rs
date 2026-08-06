@@ -9,9 +9,7 @@ use hyperscale_types::network::request::GetStateRangeRequest;
 use hyperscale_types::network::response::{
     GetStateRangeResponse, MAX_LEAVES_PER_STATE_RANGE, StateRangeChunk, StateRangeLeaf,
 };
-use hyperscale_types::{
-    Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN, MerkleInclusionProof,
-};
+use hyperscale_types::{MAX_CELL_VALUE_LEN, MerkleInclusionProof, SubstateKey};
 use tracing::warn;
 
 type Jmt = Tree<Blake3Hasher, 1>;
@@ -65,14 +63,17 @@ pub fn serve_state_range_request<S: ShardStorage>(
             warn!(height = version, "state range: leaf association missing");
             return unavailable;
         };
-        budget = budget.saturating_sub(storage_key.len() + value.len() + 32);
-        if storage_key.len() > MAX_STATE_ENTRY_KEY_LEN || value.len() > MAX_STATE_ENTRY_VALUE_LEN {
-            warn!(height = version, "state range: oversized substate pair");
+        let Ok(key_bytes) = <[u8; 32]>::try_from(storage_key.as_slice()) else {
+            warn!(height = version, "state range: malformed leaf association");
+            return unavailable;
+        };
+        budget = budget.saturating_sub(value.len() + 32);
+        if value.len() > MAX_CELL_VALUE_LEN {
+            warn!(height = version, "state range: oversized substate value");
             return unavailable;
         }
         wire_leaves.push(StateRangeLeaf {
-            leaf_key: Hash::from_hash_bytes(leaf_key),
-            storage_key,
+            key: SubstateKey::from_bytes(key_bytes),
             value,
         });
         if budget == 0 {
@@ -105,7 +106,7 @@ mod tests {
     use hyperscale_storage::tree::hash_value;
     use hyperscale_storage::{BoundaryStore, SubstateStore};
     use hyperscale_storage_memory::SimShardStorage;
-    use hyperscale_types::BlockHeight;
+    use hyperscale_types::{BlockHeight, Hash};
 
     use super::*;
 
@@ -143,7 +144,7 @@ mod tests {
             leaves: chunk
                 .leaves
                 .iter()
-                .map(|leaf| (*leaf.leaf_key.as_bytes(), hash_value(&leaf.value)))
+                .map(|leaf| (leaf.key.to_bytes(), hash_value(&leaf.value)))
                 .collect(),
             more: chunk.more,
         };
@@ -183,7 +184,7 @@ mod tests {
         assert!(first.more);
 
         // Resume immediately after the last served leaf.
-        let cursor = next_key(first.leaves.last().unwrap().leaf_key.as_bytes())
+        let cursor = next_key(&first.leaves.last().unwrap().key.to_bytes())
             .expect("not at the key-space maximum");
         let mut resume = full_range_request(8);
         resume.start = Hash::from_hash_bytes(&cursor);
@@ -198,7 +199,7 @@ mod tests {
             leaves: second
                 .leaves
                 .iter()
-                .map(|leaf| (*leaf.leaf_key.as_bytes(), hash_value(&leaf.value)))
+                .map(|leaf| (leaf.key.to_bytes(), hash_value(&leaf.value)))
                 .collect(),
             more: second.more,
         };
@@ -225,7 +226,7 @@ mod tests {
         let all = serve_state_range_request(&storage, &full_range_request(8))
             .chunk
             .expect("served");
-        let mid_end = all.leaves[3].leaf_key;
+        let mid_end = Hash::from_hash_bytes(&all.leaves[3].key.to_bytes());
 
         let mut req = full_range_request(8);
         req.end = mid_end;

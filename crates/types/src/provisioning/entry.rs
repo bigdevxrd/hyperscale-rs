@@ -30,7 +30,7 @@ impl ProvisionEntry {
     /// future ordering leak can't slip past one caller.
     #[must_use]
     pub fn new(tx_hash: TxHash, mut entries: Vec<SubstateEntry>) -> Self {
-        entries.sort_by(|a, b| a.storage_key.cmp(&b.storage_key));
+        entries.sort_by_key(|entry| entry.key);
         Self { tx_hash, entries }
     }
 }
@@ -78,7 +78,13 @@ mod tests {
     fn decode_rejects_oversized_entries() {
         let mut buf = hbor_to_vec(&TxHash::from(Hash::from_bytes(b"tx"))).unwrap();
         varint::write(&mut buf, MAX_STATE_ENTRIES_PER_TX + 1).unwrap();
-        buf.extend(std::iter::repeat_n(0u8, (MAX_STATE_ENTRIES_PER_TX + 1) * 8));
+        // Enough input to pay for the claimed count at an entry's minimum
+        // width (32-byte key + the value's None tag), so the entry cap is
+        // the check that refuses.
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_STATE_ENTRIES_PER_TX + 1) * 33,
+        ));
         let err = hbor_from_slice::<ProvisionEntry>(&buf).unwrap_err();
         assert!(matches!(
             err,

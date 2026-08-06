@@ -1,42 +1,33 @@
 //! Pre-computed-key substate entries shipped between shards as provisions.
 
 use hyperscale_hbor::Hbor;
+use hyperscale_vm_types::MAX_CELL_VALUE_LEN;
 
-#[cfg(any(test, feature = "test-utils"))]
-use crate::state_key::vm_flat_key;
-use crate::{Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
+use crate::{Hash, SubstateKey};
 
-/// A state entry with pre-computed storage key for fast engine lookup.
-///
-/// This type stores the pre-computed storage key that can be used directly for
-/// database lookups without any key transformation at the receiving shard.
-///
-/// The storage key format is: `db_node_key(50) + partition_num(1) + sort_key(var)`
-/// where `db_node_key` is the `SpreadPrefixKeyMapper` hash (expensive to compute).
+/// A state entry shipped by key for direct lookup at the receiving shard.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct SubstateEntry {
-    /// Pre-computed full storage key (ready for direct DB lookup).
-    /// Format: `db_node_key` (50 bytes) + partition (1 byte) + `sort_key`
-    #[hbor(max = MAX_STATE_ENTRY_KEY_LEN)]
-    pub storage_key: Vec<u8>,
+    /// The substate's key — its JMT leaf and storage key in one.
+    pub key: SubstateKey,
 
-    /// HBOR-encoded substate value (None if deleted/doesn't exist).
-    #[hbor(max = MAX_STATE_ENTRY_VALUE_LEN)]
+    /// The raw substate value (`None` if deleted/doesn't exist).
+    #[hbor(max = MAX_CELL_VALUE_LEN)]
     pub value: Option<Vec<u8>>,
 }
 
 impl SubstateEntry {
-    /// Create a new DB state entry with pre-computed storage key.
+    /// Create a new substate entry.
     #[must_use]
-    pub const fn new(storage_key: Vec<u8>, value: Option<Vec<u8>>) -> Self {
-        Self { storage_key, value }
+    pub const fn new(key: SubstateKey, value: Option<Vec<u8>>) -> Self {
+        Self { key, value }
     }
 
     /// Compute hash of this entry for signing/verification.
     #[must_use]
     pub fn hash(&self) -> Hash {
-        let mut data = Vec::with_capacity(self.storage_key.len() + 32);
-        data.extend_from_slice(&self.storage_key);
+        let mut data = Vec::with_capacity(64);
+        data.extend_from_slice(&self.key.to_bytes());
 
         match &self.value {
             Some(value_bytes) => {
@@ -51,20 +42,26 @@ impl SubstateEntry {
         Hash::from_bytes(&data)
     }
 
-    /// Create a test entry from a node ID (for testing only).
-    ///
-    /// Builds the flat storage key from the owner prefix and a local half
-    /// zero-padded from `local`, so a fixture names a cell by a short seed
-    /// and still produces a key every decoding path accepts.
+    /// Create a test entry from an owner prefix and a local half
+    /// zero-padded from `local`, so a fixture names a cell by a short
+    /// seed.
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn test_entry(owner: [u8; 16], local: &[u8], value: Option<Vec<u8>>) -> Self {
+        use hyperscale_vm_types::{Address, LocalKey};
         let mut half = [0u8; 16];
         let n = local.len().min(16);
         half[..n].copy_from_slice(&local[..n]);
-        Self::new(vm_flat_key(owner, half), value)
+        Self::new(
+            SubstateKey {
+                owner: Address(owner),
+                local: LocalKey(half),
+            },
+            value,
+        )
     }
 }
+
 #[cfg(test)]
 mod tests {
     use hyperscale_hbor::{
@@ -98,35 +95,19 @@ mod tests {
         assert_eq!(decoded, entry);
     }
 
-    /// Encode an oversized `storage_key` directly (without going through
-    /// `SubstateEntry::Encode`) and verify decode rejects it before allocation.
-    #[test]
-    fn decode_rejects_oversized_storage_key() {
-        let mut buf = Vec::new();
-        varint::write(&mut buf, MAX_STATE_ENTRY_KEY_LEN + 1).unwrap();
-        buf.extend(std::iter::repeat_n(0u8, MAX_STATE_ENTRY_KEY_LEN + 2));
-        let err = hbor_from_slice::<SubstateEntry>(&buf).unwrap_err();
-        assert!(matches!(
-            err,
-            DecodeError::BoundExceeded { max, actual }
-                if max == MAX_STATE_ENTRY_KEY_LEN && actual == MAX_STATE_ENTRY_KEY_LEN + 1
-        ));
-    }
-
-    /// Same shape as above, but for the `Some(value)` byte-vector field,
-    /// whose cap reaches through the `Option`.
+    /// The value cap reaches through the `Option`: an oversized value
+    /// rejects at decode before allocation.
     #[test]
     fn decode_rejects_oversized_value() {
-        // Empty storage_key is fine; the bound check we want fires on `value`.
-        let mut buf = hbor_to_vec(&Vec::<u8>::new()).unwrap();
+        let mut buf = vec![0u8; 32]; // the fixed-width key
         buf.push(1); // Some
-        varint::write(&mut buf, MAX_STATE_ENTRY_VALUE_LEN + 1).unwrap();
-        buf.extend(std::iter::repeat_n(0u8, MAX_STATE_ENTRY_VALUE_LEN + 1));
+        varint::write(&mut buf, MAX_CELL_VALUE_LEN + 1).unwrap();
+        buf.extend(std::iter::repeat_n(0u8, MAX_CELL_VALUE_LEN + 1));
         let err = hbor_from_slice::<SubstateEntry>(&buf).unwrap_err();
         assert!(matches!(
             err,
             DecodeError::BoundExceeded { max, actual }
-                if max == MAX_STATE_ENTRY_VALUE_LEN && actual == MAX_STATE_ENTRY_VALUE_LEN + 1
+                if max == MAX_CELL_VALUE_LEN && actual == MAX_CELL_VALUE_LEN + 1
         ));
     }
 }

@@ -7,17 +7,17 @@ use hyperscale_types::{BlockHeight, StateRoot};
 
 use super::{CollectedWrites, state_root_from_jmt};
 
-/// Associates a JMT leaf (hashed key) with the raw substate storage key
-/// it represents.
+/// Associates a JMT leaf with the raw substate storage key it
+/// represents.
 ///
-/// `jmt_leaf_key` is one-way, so this is the only route from a leaf
-/// enumerated out of the tree back to the raw `(storage key, value)`
-/// pair a snap-syncing joiner imports. Backends persist the mapping
-/// alongside the tree: it is deterministic and immutable per key, so
-/// retaining entries for deleted leaves is always safe.
+/// Range serving resolves leaves enumerated out of the tree back to the
+/// raw `(storage key, value)` pairs a snap-syncing joiner imports.
+/// Backends persist the mapping alongside the tree: it is deterministic
+/// and immutable per key, so retaining entries for deleted leaves is
+/// always safe.
 #[derive(Debug, Clone)]
 pub struct LeafSubstateKeyAssociation {
-    /// The 32-byte hashed JMT leaf key.
+    /// The 32-byte JMT leaf key.
     pub leaf_key: Key,
     /// The raw substate storage key, or `None` when this write deleted
     /// the leaf.

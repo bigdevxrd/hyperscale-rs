@@ -11,7 +11,7 @@ use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use hyperscale_jmt::{Blake3Hasher, MultiProof, Tree};
 use thiserror::Error;
 
-use crate::state_key::{jmt_value_hash, vm_flat_key_parts, vm_leaf_key};
+use crate::state_key::jmt_value_hash;
 use crate::{
     BlockHeight, CertifiedBlockHeader, Hash, MAX_TXS_PER_BLOCK, MerkleInclusionProof,
     ProvisionEntry, ProvisionHash, RETENTION_HORIZON, RevealChain, ShardId, SubstateEntry, TxHash,
@@ -243,7 +243,7 @@ impl Provisions {
         ProvisionHash::from_raw(Hash::from_bytes(&bytes))
     }
 
-    /// Get all entries across all transactions, sorted and deduped by `storage_key`.
+    /// Get all entries across all transactions, sorted and deduped by key.
     #[must_use]
     pub fn all_entries_deduped(&self) -> Vec<SubstateEntry> {
         let mut entries: Vec<SubstateEntry> = self
@@ -251,8 +251,8 @@ impl Provisions {
             .iter()
             .flat_map(|tx| tx.entries.iter().cloned())
             .collect();
-        entries.sort_by(|a, b| a.storage_key.cmp(&b.storage_key));
-        entries.dedup_by(|a, b| a.storage_key == b.storage_key);
+        entries.sort_by_key(|entry| entry.key);
+        entries.dedup_by(|a, b| a.key == b.key);
         entries
     }
 
@@ -306,12 +306,6 @@ pub enum ProvisionsVerifyError {
     /// entries.
     #[error("merkle inclusion verification failed against committed state root")]
     BadInclusion,
-    /// A `SubstateEntry` carried a `storage_key` that is neither a flat
-    /// key nor `db_node_key`-prefixed, so it cannot name a committed substate.
-    #[error(
-        "provision entry storage key is malformed (neither VM flat key nor db_node_key prefixed)"
-    )]
-    MalformedStorageKey,
     /// The bundle's claimed `source_block_ts` does not equal the
     /// commit-proven source header's parent-QC weighted timestamp.
     #[error("provisions source block timestamp does not match the committed header")]
@@ -379,14 +373,8 @@ impl Verify<&ProvisionsContext<'_>> for Provisions {
 
         let mut expected: Vec<([u8; 32], Option<[u8; 32]>)> = Vec::with_capacity(entries.len());
         for e in &entries {
-            // The one path taking peer-supplied storage keys: decode
-            // before keying, so a malformed key refuses rather than
-            // reaching the leaf derivation.
-            let Some((owner, local)) = vm_flat_key_parts(&e.storage_key) else {
-                return Err(ProvisionsVerifyError::MalformedStorageKey);
-            };
             let value_hash = e.value.as_ref().map(|v| jmt_value_hash(v));
-            expected.push((vm_leaf_key(owner, local), value_hash));
+            expected.push((e.key.to_bytes(), value_hash));
         }
 
         let root_bytes: [u8; 32] = *ctx.certified_header.state_root().as_raw().as_bytes();
@@ -430,15 +418,20 @@ mod tests {
     use hyperscale_hbor::{
         DecodeError, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
     };
+    use hyperscale_vm_types::{Address, LocalKey};
 
     use super::*;
-    use crate::state_key::vm_flat_key;
+    use crate::SubstateKey;
+
+    fn cell(owner: u8, local: u8) -> SubstateKey {
+        SubstateKey {
+            owner: Address([owner; 16]),
+            local: LocalKey([local; 16]),
+        }
+    }
 
     fn test_entry(seed: u8) -> SubstateEntry {
-        SubstateEntry::new(
-            vm_flat_key([seed; 16], [seed; 16]),
-            Some(vec![seed, seed + 1]),
-        )
+        SubstateEntry::new(cell(seed, seed), Some(vec![seed, seed + 1]))
     }
 
     #[test]
@@ -534,7 +527,7 @@ mod tests {
         use hyperscale_jmt::{Blake3Hasher, LeafValue, MemoryStore, NodeKey, Tree};
 
         use super::*;
-        use crate::state_key::{jmt_leaf_key, jmt_value_hash};
+        use crate::state_key::jmt_value_hash;
         use crate::{
             BlockHeader, BlockHeight, ChainOrigin, Hash, QuorumCertificate, ShardId, StateRoot,
             ValidatorId,
@@ -542,28 +535,24 @@ mod tests {
 
         type Jmt = Tree<Blake3Hasher, 1>;
 
-        fn entry(seed: u8) -> (Vec<u8>, Vec<u8>) {
-            (
-                vm_flat_key([seed; 16], [seed; 16]),
-                vec![seed, seed.wrapping_add(1)],
-            )
+        fn entry(seed: u8) -> (SubstateKey, Vec<u8>) {
+            (cell(seed, seed), vec![seed, seed.wrapping_add(1)])
         }
 
-        fn build_jmt(entries: &[(Vec<u8>, Vec<u8>)]) -> (StateRoot, MerkleInclusionProof) {
+        fn build_jmt(entries: &[(SubstateKey, Vec<u8>)]) -> (StateRoot, MerkleInclusionProof) {
             let mut store = MemoryStore::new();
             let updates: BTreeMap<[u8; 32], Option<LeafValue>> = entries
                 .iter()
                 .map(|(k, v)| {
-                    let key = jmt_leaf_key(k);
                     let val = LeafValue::new(jmt_value_hash(v), v.len() as u64);
-                    (key, Some(val))
+                    (k.to_bytes(), Some(val))
                 })
                 .collect();
             let result = Jmt::apply_updates(&store, None, 1, &updates).unwrap();
             let root_hash = result.root_hash;
             store.apply(&result);
             let root_key = NodeKey::root(1);
-            let jmt_keys: Vec<[u8; 32]> = entries.iter().map(|(k, _)| jmt_leaf_key(k)).collect();
+            let jmt_keys: Vec<[u8; 32]> = entries.iter().map(|(k, _)| k.to_bytes()).collect();
             let proof = Jmt::prove(&store, &root_key, &jmt_keys).unwrap();
             let state_root = StateRoot::from_raw(Hash::from_hash_bytes(&root_hash));
             (state_root, MerkleInclusionProof::new(proof.encode()))
@@ -581,14 +570,14 @@ mod tests {
 
         fn provisions_with(
             proof: MerkleInclusionProof,
-            items: Vec<(Vec<u8>, Vec<u8>)>,
+            items: Vec<(SubstateKey, Vec<u8>)>,
         ) -> Provisions {
             let tx_entries = items
                 .into_iter()
                 .enumerate()
-                .map(|(i, (storage_key, value))| {
+                .map(|(i, (key, value))| {
                     let tx_hash = TxHash::from(Hash::from_bytes(&[u8::try_from(i).unwrap(); 4]));
-                    ProvisionEntry::new(tx_hash, vec![SubstateEntry::new(storage_key, Some(value))])
+                    ProvisionEntry::new(tx_hash, vec![SubstateEntry::new(key, Some(value))])
                 })
                 .collect();
             Provisions::new(
@@ -696,10 +685,7 @@ mod tests {
                 proof,
                 vec![ProvisionEntry::new(
                     TxHash::from(Hash::from_bytes(b"tx")),
-                    vec![SubstateEntry::new(
-                        items[0].0.clone(),
-                        Some(items[0].1.clone()),
-                    )],
+                    vec![SubstateEntry::new(items[0].0, Some(items[0].1.clone()))],
                 )],
             );
             let ctx = ProvisionsContext {
@@ -728,10 +714,7 @@ mod tests {
                 proof,
                 vec![ProvisionEntry::new(
                     TxHash::from(Hash::from_bytes(b"tx")),
-                    vec![SubstateEntry::new(
-                        items[0].0.clone(),
-                        Some(items[0].1.clone()),
-                    )],
+                    vec![SubstateEntry::new(items[0].0, Some(items[0].1.clone()))],
                 )],
             );
             let ctx = ProvisionsContext {
@@ -740,41 +723,6 @@ mod tests {
             assert_eq!(
                 provisions.verify(&ctx),
                 Err(ProvisionsVerifyError::SourceBlockRevealMismatch)
-            );
-        }
-
-        #[test]
-        fn verify_rejects_malformed_storage_key() {
-            // A storage key that is not flat-shaped is rejected explicitly,
-            // not panicked on during leaf-key derivation.
-            let (state_root, proof) = build_jmt(&[entry(1)]);
-            let verified_header = header_with_state_root(state_root);
-            let provisions = provisions_with(proof, vec![(vec![0u8; 10], vec![1, 2])]);
-            let ctx = ProvisionsContext {
-                certified_header: &verified_header,
-            };
-            assert_eq!(
-                provisions.verify(&ctx),
-                Err(ProvisionsVerifyError::MalformedStorageKey)
-            );
-        }
-
-        #[test]
-        fn verify_rejects_a_mistagged_vm_length_key() {
-            use crate::state_key::VM_DB_NODE_KEY_LEN;
-            // Exactly flat-key length but with a nonzero partition byte:
-            // not a well-formed key, so it is malformed — not panicked on.
-            let (state_root, proof) = build_jmt(&[entry(1)]);
-            let verified_header = header_with_state_root(state_root);
-            let mut bad_key = vm_flat_key([0x11; 16], [1; 16]);
-            bad_key[VM_DB_NODE_KEY_LEN] = 1;
-            let provisions = provisions_with(proof, vec![(bad_key, vec![9])]);
-            let ctx = ProvisionsContext {
-                certified_header: &verified_header,
-            };
-            assert_eq!(
-                provisions.verify(&ctx),
-                Err(ProvisionsVerifyError::MalformedStorageKey)
             );
         }
     }

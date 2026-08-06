@@ -14,10 +14,9 @@ use std::sync::Arc;
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_jmt::TreeReader as JmtTreeReader;
 use hyperscale_storage::{SubstateStore, SubstateView, VersionedStore};
-use hyperscale_types::state_key::vm_flat_key;
 use hyperscale_types::{
-    BlockHeight, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, ShardId,
-    SubstateEntry, TxHash, WeightedTimestamp,
+    Address, BlockHeight, LocalKey, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain,
+    ShardId, SubstateEntry, SubstateKey, TxHash, WeightedTimestamp,
 };
 use tracing::warn;
 
@@ -72,9 +71,12 @@ where
                 return None;
             };
             if let Some(value) = value {
-                let storage_key = vm_flat_key(*owner, *local);
-                all_storage_keys.push(storage_key.clone());
-                entries.push(SubstateEntry::new(storage_key, Some(value)));
+                let key = SubstateKey {
+                    owner: Address(*owner),
+                    local: LocalKey(*local),
+                };
+                all_storage_keys.push(key.to_bytes().to_vec());
+                entries.push(SubstateEntry::new(key, Some(value)));
             }
         }
         staged.push((req.tx_hash, entries));

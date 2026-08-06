@@ -240,7 +240,6 @@ mod tests {
         make_state_writes, test_boundary_import_roundtrip, test_boundary_retention_evicts_oldest,
         test_boundary_unpinned_height_not_served,
     };
-    use hyperscale_types::state_key::vm_leaf_key;
     use hyperscale_types::{
         ConsensusReceipt, GlobalReceiptHash, Hash, ShardId, SplitChildRoots, StateWrites, TxHash,
         shard_prefix_path,
@@ -369,11 +368,7 @@ mod tests {
     /// prefix tests.
     fn child_of(seed: u8) -> ShardId {
         let (left, right) = ShardId::ROOT.children();
-        if vm_leaf_key([seed; 16], [0u8; 16])[0] >> 7 == 0 {
-            left
-        } else {
-            right
-        }
+        if seed >> 7 == 0 { left } else { right }
     }
 
     /// Owner seeds paired with the height that writes them, alternating

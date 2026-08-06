@@ -131,7 +131,7 @@ pub const IMPORT_STAGING_CF: &str = "import_staging";
 /// Column family mapping hashed JMT leaf keys back to raw substate
 /// storage keys.
 ///
-/// Key: the 32-byte hashed leaf key (`jmt_leaf_key` output). Value: the
+/// Key: the 32-byte leaf key (the substate key's own bytes). Value: the
 /// raw storage key (`db_node_key ++ partition_num ++ sort_key`). The
 /// mapping is deterministic and immutable per key; entries are deleted
 /// when their substate is deleted, so the CF mirrors `STATE_CF`'s live

@@ -35,7 +35,7 @@ const CHUNK_LEAVES: usize = 4_096;
 const HEIGHT: BlockHeight = BlockHeight::new(1_000);
 
 /// One deterministic generated leaf. Keys are hashed from the index so
-/// paths spread uniformly, exactly like real `jmt_leaf_key` output.
+/// paths spread uniformly, exactly like real leaf keys.
 fn leaf(index: u64) -> ImportLeaf {
     let mut seed = [0u8; 32];
     seed[..8].copy_from_slice(&index.to_be_bytes());

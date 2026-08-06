@@ -27,10 +27,10 @@ pub const BOUNDARY_RETAIN: usize = 3;
 
 /// Resolve a JMT leaf back to the raw substate pair it represents.
 ///
-/// `jmt_leaf_key` is one-way, so range serving needs this to turn leaves
-/// enumerated out of the tree into the raw `(storage key, value)` pairs
-/// a snap-syncing joiner imports. Backends answer from their
-/// leaf-association mapping at the boundary's pinned state.
+/// Range serving uses this to turn leaves enumerated out of the tree
+/// into the raw `(storage key, value)` pairs a snap-syncing joiner
+/// imports. Backends answer from their leaf-association mapping at the
+/// boundary's pinned state.
 pub trait ResolveLeaf {
     /// The raw `(storage key, value)` behind `leaf_key`, or `None` when
     /// the leaf is unknown at this boundary.

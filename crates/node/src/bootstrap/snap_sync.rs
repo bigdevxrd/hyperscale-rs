@@ -38,7 +38,7 @@ use hyperscale_jmt::{
 use hyperscale_storage::{ImportCursor, ImportLeaf, ImportProgress};
 use hyperscale_types::network::request::GetStateRangeRequest;
 use hyperscale_types::network::response::{GetStateRangeResponse, StateRangeChunk};
-use hyperscale_types::state_key::{jmt_value_hash, leaf_key_binds_storage_key};
+use hyperscale_types::state_key::jmt_value_hash;
 use hyperscale_types::{Hash, ShardAnchor};
 
 type Jmt = Tree<Blake3Hasher, 1>;
@@ -325,11 +325,7 @@ fn verify_chunk(
 ) -> Result<Vec<ImportLeaf>, &'static str> {
     let mut jmt_leaves: Vec<(Key, [u8; 32])> = Vec::with_capacity(chunk.leaves.len());
     for leaf in &chunk.leaves {
-        let leaf_key = *leaf.leaf_key.as_bytes();
-        if !leaf_key_binds_storage_key(&leaf_key, &leaf.storage_key) {
-            return Err("leaf key does not bind the shipped storage key");
-        }
-        jmt_leaves.push((leaf_key, jmt_value_hash(&leaf.value)));
+        jmt_leaves.push((leaf.key.to_bytes(), jmt_value_hash(&leaf.value)));
     }
 
     let proof =
@@ -345,8 +341,8 @@ fn verify_chunk(
         .leaves
         .iter()
         .map(|leaf| ImportLeaf {
-            leaf_key: *leaf.leaf_key.as_bytes(),
-            storage_key: leaf.storage_key.clone(),
+            leaf_key: leaf.key.to_bytes(),
+            storage_key: leaf.key.to_bytes().to_vec(),
             value: leaf.value.clone(),
         })
         .collect())
@@ -496,7 +492,7 @@ mod tests {
     }
 
     /// A swapped storage key breaks the leaf-key low-half binding even
-    /// though the proof itself still verifies.
+    /// though the values themselves are untouched.
     #[test]
     fn swapped_storage_key_is_rejected() {
         let (peer, anchor) = replica();
@@ -505,8 +501,8 @@ mod tests {
         let (id, request) = sync.next_requests().pop().expect("one sub-range");
         let mut response = serve_state_range_request(&peer, &request);
         let chunk = response.chunk.as_mut().unwrap();
-        let other_key = chunk.leaves[1].storage_key.clone();
-        chunk.leaves[0].storage_key = other_key;
+        let other_key = chunk.leaves[1].key;
+        chunk.leaves[0].key = other_key;
 
         assert!(matches!(
             sync.on_response(id, &response),

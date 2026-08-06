@@ -1190,7 +1190,7 @@ mod tests {
                 let mut seed = [0u8; 32];
                 seed[..8].copy_from_slice(&index.to_be_bytes());
                 // Hashed keys spread paths uniformly, like real
-                // `jmt_leaf_key` output.
+                // leaf keys.
                 let key = *blake3_hash(&seed).as_bytes();
                 let mut storage_key = vec![0u8; 40];
                 storage_key[..32].copy_from_slice(&key);

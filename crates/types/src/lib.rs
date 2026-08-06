@@ -167,7 +167,6 @@ pub use signing::{
     shard_reveal_verify, signed_bytes, validator_possession_proof_sign,
     validator_possession_proof_verify, vrf_output_from_proof, vrf_sign, vrf_verify,
 };
-pub use state_key::{MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN};
 pub use time::epoch_windows::EpochWindows;
 pub use time::limits::{MAX_TIMESTAMP_DELAY, MAX_TIMESTAMP_RUSH};
 pub use time::range::{MAX_VALIDITY_RANGE, TimestampRange};

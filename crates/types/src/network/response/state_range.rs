@@ -1,11 +1,9 @@
 //! Snap-sync state range response.
 
 use hyperscale_hbor::Hbor;
+use hyperscale_vm_types::MAX_CELL_VALUE_LEN;
 
-use crate::{
-    Hash, MAX_STATE_ENTRY_KEY_LEN, MAX_STATE_ENTRY_VALUE_LEN, MerkleInclusionProof, MessageClass,
-    NetworkMessage,
-};
+use crate::{MerkleInclusionProof, MessageClass, NetworkMessage, SubstateKey};
 
 /// Cap on the leaves a single state range chunk can carry.
 ///
@@ -14,26 +12,18 @@ use crate::{
 /// sizes chunks, not the total transfer.
 pub const MAX_LEAVES_PER_STATE_RANGE: usize = 1_024;
 
-/// One leaf of a state range: the JMT leaf key plus the raw substate
-/// pair it represents.
+/// One leaf of a state range: the substate pair it represents.
 ///
-/// The verifier trusts none of it bare: `leaf_key` must prove into the
-/// shard's attested `state_root` via the chunk's range proof, the low
-/// half of `leaf_key` must equal `BLAKE3(storage_key)[..16]` (binding
-/// the raw key without needing the owner map — the high half is the
-/// owner-routing prefix, attested positionally by the proof), and the
-/// proof's claimed value hash must equal the hash of `value`.
+/// The verifier trusts none of it bare: the key's own 32 bytes are the
+/// JMT leaf key and must prove into the shard's attested `state_root`
+/// via the chunk's range proof, and the proof's claimed value hash must
+/// equal the hash of `value`.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StateRangeLeaf {
-    /// The 32-byte hashed JMT leaf key.
-    pub leaf_key: Hash,
-    /// The raw substate storage key, bounded by the same decode cap as
-    /// a provisioned `SubstateEntry` — any committed key must be
-    /// servable here, so the two limits must not diverge.
-    #[hbor(max = MAX_STATE_ENTRY_KEY_LEN)]
-    pub storage_key: Vec<u8>,
+    /// The substate's key — its JMT leaf key by identity.
+    pub key: SubstateKey,
     /// The raw substate value, bounded like a provisioned entry's.
-    #[hbor(max = MAX_STATE_ENTRY_VALUE_LEN)]
+    #[hbor(max = MAX_CELL_VALUE_LEN)]
     pub value: Vec<u8>,
 }
 
@@ -42,7 +32,7 @@ pub struct StateRangeLeaf {
 /// over them.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StateRangeChunk {
-    /// `(leaf, raw pair)` entries, strictly ascending by `leaf_key`.
+    /// Substate entries, strictly ascending by key.
     #[hbor(max = MAX_LEAVES_PER_STATE_RANGE)]
     pub leaves: Vec<StateRangeLeaf>,
     /// Whether leaves beyond the last returned remain in the requested
@@ -93,8 +83,7 @@ mod tests {
     #[test]
     fn test_hbor_roundtrip_chunk() {
         let leaf = StateRangeLeaf {
-            leaf_key: Hash::from_bytes(b"leaf"),
-            storage_key: vec![7u8; 60],
+            key: SubstateKey::from_bytes([7u8; 32]),
             value: vec![9u8; 128],
         };
         let response = GetStateRangeResponse {

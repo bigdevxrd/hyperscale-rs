@@ -26,7 +26,6 @@ use hyperscale_effects_bridge::{
 };
 use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::SubstateDatabase;
-use hyperscale_types::state_key::vm_flat_key_parts;
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventExt, EventRoot,
     ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, Stake,
@@ -765,16 +764,8 @@ impl Executor {
         for lists in provisions_by_tx.values() {
             for entries in lists {
                 for entry in entries.iter() {
-                    if let Some((owner, local)) = vm_flat_key_parts(&entry.storage_key)
-                        && let Some(value) = entry.value.as_ref()
-                    {
-                        cells.insert(
-                            SubstateKey {
-                                owner: Address(owner),
-                                local: LocalKey(local),
-                            },
-                            value.clone(),
-                        );
+                    if let Some(value) = entry.value.as_ref() {
+                        cells.insert(entry.key, value.clone());
                     }
                 }
             }
