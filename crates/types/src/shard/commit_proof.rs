@@ -218,7 +218,16 @@ impl CommitProof {
 
     /// Structural checks that need no committee: header/QC linkage, the
     /// round-contiguous two-chain shape, and a well-formed ancestry link.
-    pub(crate) fn verify_structure(&self) -> Result<(), CommitProofVerifyError> {
+    ///
+    /// The full predicate for a consumer whose member headers are already
+    /// signature-verified — a proof assembled from locally verified
+    /// headers needs no [`Self::verify_resolved`] pass, only the
+    /// committing structure a bare QC cannot show.
+    ///
+    /// # Errors
+    ///
+    /// A [`CommitProofVerifyError`] naming the failing check.
+    pub fn verify_structure(&self) -> Result<(), CommitProofVerifyError> {
         for ch in self.qc_headers() {
             if ch.qc().block_hash() != ch.block_hash()
                 || ch.qc().shard_id() != ch.shard_id()

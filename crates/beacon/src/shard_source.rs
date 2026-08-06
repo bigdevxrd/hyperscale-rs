@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hyperscale_types::{
-    BlockHash, BlockHeader, BlockHeight, CertifiedBlockHeader, Epoch, EpochWindows, Hash,
-    LeafIndex, QuorumCertificate, ShardId, ShardWitnessPayload, Verified,
+    BlockHash, BlockHeader, BlockHeight, CertifiedBlockHeader, CommitProof, Epoch, EpochWindows,
+    Hash, LeafIndex, QuorumCertificate, ShardId, ShardWitnessPayload, Verified,
 };
 
 /// How many recent epoch-boundary crossings to retain per shard. The
@@ -37,11 +37,12 @@ const MAX_RETAINED_HEADERS_PER_SHARD: usize = 8;
 
 /// A shard's observed crossing of an epoch boundary.
 ///
-/// `boundary_header` is the first committed block `B` whose weighted
-/// timestamp lands past the boundary; `canonical_qc` is the QC over `B`
-/// read from `B`'s committed child (`C.parent_qc`) — hash-pinned, so every
-/// node that observes the crossing selects the identical QC. Recorded when
-/// the `(B, C)` pair is fresh near the shard tip, so it survives header
+/// `boundary_header` is the first block `B` whose weighted timestamp
+/// lands past the boundary; `canonical_qc` is the QC over `B` read from
+/// its child (`C.parent_qc`) — hash-pinned, so every node that observes
+/// the crossing selects the identical QC. Recorded only once `B`'s
+/// *commit* is established ([`ShardSourceTracker::commit_established`]),
+/// while the evidence is fresh near the shard tip, so it survives header
 /// pruning.
 #[derive(Debug, Clone)]
 pub struct ObservedCrossing {
@@ -181,6 +182,54 @@ impl ShardSourceTracker {
             .map(|held| held.header())
     }
 
+    /// Whether `boundary`'s *commit* on `shard` is locally established: a
+    /// recorded crossing already names it (this check gated the record),
+    /// or the header window holds a round-contiguous certified two-chain
+    /// at or above it whose parent-hash ancestry descends to it —
+    /// [`CommitProof`]'s structural rule, assembled from headers whose
+    /// signatures were verified on arrival. A bare 2f+1 QC proves
+    /// availability, not commitment, so this is what separates a crossing
+    /// the shard's chain durably reached from one it merely certified.
+    #[must_use]
+    pub fn commit_established(&self, shard: ShardId, boundary: &BlockHeader) -> bool {
+        if self
+            .boundary_crossings
+            .get(&shard)
+            .is_some_and(|per_shard| {
+                per_shard
+                    .values()
+                    .any(|crossing| crossing.boundary_header.block_hash() == boundary.hash())
+            })
+        {
+            return true;
+        }
+        let Some(headers) = self.shard_headers.get(&shard) else {
+            return false;
+        };
+        headers.range(boundary.height()..).any(|(height, x)| {
+            let Some(y) = headers.get(&height.next()) else {
+                return false;
+            };
+            // The ancestry walk from `x`'s parent down to `boundary`,
+            // pulled by height; `verify_structure` pins every link by
+            // hash, so a sibling occupying a slot fails closed.
+            let mut ancestry: Vec<BlockHeader> = Vec::new();
+            let mut link_height = height.prev();
+            while let Some(h) = link_height {
+                if h < boundary.height() {
+                    break;
+                }
+                let Some(link) = headers.get(&h) else {
+                    return false;
+                };
+                ancestry.push(link.header().clone());
+                link_height = h.prev();
+            }
+            let proof = CommitProof::new((***x).clone(), (***y).clone(), None, ancestry);
+            proof.verify_structure().is_ok() && proof.proven_block_hash() == boundary.hash()
+        })
+    }
+
     /// Admit a verified chunk — the run `[lo, lo + payloads.len())` against
     /// `anchor` — and clear the matching pending-fetch entry. Replaces any
     /// chunk already held for the anchor: a later fetch is issued only for
@@ -317,31 +366,31 @@ impl ShardSourceTracker {
         }
     }
 
-    /// Record any epoch-boundary crossing made visible by the verified
-    /// header just inserted at `(shard, height)`. The inserted header can
-    /// be the child `C` of an earlier `B`, or the parent `B` of a `C` that
-    /// arrived first, so both consecutive pairs are checked. A detected
-    /// crossing is stored keyed by the crossed epoch and retained past
-    /// header pruning (bounded by [`MAX_RETAINED_CROSSINGS_PER_SHARD`]),
-    /// so the proposer can report it well after `(B, C)` leave the window.
-    pub fn observe_crossing(
-        &mut self,
-        shard: ShardId,
-        height: BlockHeight,
-        epoch_duration_ms: u64,
-    ) {
+    /// Record any epoch-boundary crossing visible in `shard`'s header
+    /// window whose boundary block's *commit* is established
+    /// ([`Self::commit_established`]) — a certified crossing alone is not
+    /// enough, since a shard can halt with its crossing block certified
+    /// but never committed, and a boundary folded from it would anchor
+    /// recovery on state no member's committed chain can serve. The whole
+    /// window is rescanned (it is small), so a crossing detected before
+    /// its commit evidence arrived is recorded by the insert that
+    /// completes the two-chain. A recorded crossing is stored keyed by
+    /// the crossed epoch and retained past header pruning (bounded by
+    /// [`MAX_RETAINED_CROSSINGS_PER_SHARD`]), so the proposer can report
+    /// it well after its headers leave the window.
+    pub fn observe_crossing(&mut self, shard: ShardId, epoch_duration_ms: u64) {
         let windows = EpochWindows::new(epoch_duration_ms);
         let found: Vec<(Epoch, ObservedCrossing)> = {
             let Some(headers) = self.shard_headers.get(&shard) else {
                 return;
             };
-            let prev = height.inner().checked_sub(1).map(BlockHeight::new);
-            [(prev, height), (Some(height), height.next())]
-                .into_iter()
-                .filter_map(|(b_height, c_height)| {
-                    let b = headers.get(&b_height?)?;
-                    let c = headers.get(&c_height)?;
-                    detect_crossing(b, c, windows)
+            headers
+                .iter()
+                .filter_map(|(height, b)| {
+                    let c = headers.get(&height.next())?;
+                    let (epoch, crossing) = detect_crossing(b, c, windows)?;
+                    self.commit_established(shard, crossing.boundary_header())
+                        .then_some((epoch, crossing))
                 })
                 .collect()
         };
@@ -564,10 +613,13 @@ mod tests {
     /// Build a verified header that links to its parent: its `parent_qc`
     /// names `parent_hash` and carries `parent_wt` (the parent's canonical
     /// weighted timestamp). Chaining two of these lets `detect_crossing`
-    /// recognise a real `(B, C)` parent/child pair.
+    /// recognise a real `(B, C)` parent/child pair; a round-contiguous
+    /// child (`round == parent round + 1`) additionally direct-commits its
+    /// parent, which the crossing recorder demands as commit evidence.
     fn linked_header(
         s: ShardId,
         height: u64,
+        round: u64,
         parent_hash: BlockHash,
         parent_wt: u64,
         leaf_count: u64,
@@ -589,7 +641,7 @@ mod tests {
             parent_qc,
             ValidatorId::new(0),
             ProposerTimestamp::ZERO,
-            Round::INITIAL,
+            Round::new(round),
             false,
             StateRoot::ZERO,
             TransactionRoot::ZERO,
@@ -626,7 +678,7 @@ mod tests {
     /// Record a verified header and detect any crossing it completes.
     fn note(t: &mut ShardSourceTracker, h: &Arc<Verified<CertifiedBlockHeader>>, dur: u64) {
         t.on_verified_source_header(Arc::clone(h));
-        t.observe_crossing(h.header().shard_id(), h.header().height(), dur);
+        t.observe_crossing(h.header().shard_id(), dur);
     }
 
     /// `n` distinct deposit payloads — content the chunk helpers can hash
@@ -756,8 +808,8 @@ mod tests {
     #[test]
     fn observe_crossing_records_first_block_across_boundary() {
         let mut t = ShardSourceTracker::new();
-        let b = linked_header(shard(0), 2, BlockHash::ZERO, 900, 7);
-        let c = linked_header(shard(0), 3, b.block_hash(), 1_500, 7);
+        let b = linked_header(shard(0), 2, 1, BlockHash::ZERO, 900, 7);
+        let c = linked_header(shard(0), 3, 2, b.block_hash(), 1_500, 7);
         note(&mut t, &b, 1_000);
         note(&mut t, &c, 1_000);
         let crossing = t.latest_crossing(shard(0)).expect("crossing observed");
@@ -769,13 +821,51 @@ mod tests {
         assert_eq!(crossing.boundary_header().hash(), b.block_hash());
     }
 
+    /// A `(B, C)` pair whose rounds gap — a view change between them —
+    /// leaves `B` certified but not committed, so no crossing is recorded:
+    /// a boundary folded from it would anchor recovery on state no
+    /// member's committed chain can ever serve.
+    #[test]
+    fn observe_crossing_demands_commit_evidence() {
+        let mut t = ShardSourceTracker::new();
+        let b = linked_header(shard(0), 2, 1, BlockHash::ZERO, 900, 7);
+        let c = linked_header(shard(0), 3, 3, b.block_hash(), 1_500, 7);
+        note(&mut t, &b, 1_000);
+        note(&mut t, &c, 1_000);
+        assert!(
+            t.latest_crossing(shard(0)).is_none(),
+            "a certified-but-uncommitted boundary block must not record a crossing",
+        );
+    }
+
+    /// A round gap directly above the boundary block still records once a
+    /// later round-contiguous pair direct-commits a descendant: the parent
+    /// hash chain descending from the committed block pins the boundary
+    /// block beneath it.
+    #[test]
+    fn observe_crossing_accepts_commit_via_later_two_chain() {
+        let mut t = ShardSourceTracker::new();
+        let b = linked_header(shard(0), 2, 1, BlockHash::ZERO, 900, 7);
+        let c = linked_header(shard(0), 3, 3, b.block_hash(), 1_500, 7);
+        let d = linked_header(shard(0), 4, 4, c.block_hash(), 1_600, 7);
+        note(&mut t, &b, 1_000);
+        note(&mut t, &c, 1_000);
+        assert!(t.latest_crossing(shard(0)).is_none());
+        note(&mut t, &d, 1_000);
+        let crossing = t
+            .latest_crossing(shard(0))
+            .expect("the (C, D) two-chain commits C, whose ancestry pins B");
+        assert_eq!(crossing.boundary_header().hash(), b.block_hash());
+        assert_eq!(crossing.canonical_qc().block_hash(), b.block_hash());
+    }
+
     /// A pair wholly inside one epoch (predecessor 1200 and own wt 1500,
     /// both past the 1000 boundary) is not a crossing.
     #[test]
     fn observe_crossing_ignores_within_epoch_pair() {
         let mut t = ShardSourceTracker::new();
-        let b = linked_header(shard(0), 2, BlockHash::ZERO, 1_200, 0);
-        let c = linked_header(shard(0), 3, b.block_hash(), 1_500, 0);
+        let b = linked_header(shard(0), 2, 1, BlockHash::ZERO, 1_200, 0);
+        let c = linked_header(shard(0), 3, 2, b.block_hash(), 1_500, 0);
         note(&mut t, &b, 1_000);
         note(&mut t, &c, 1_000);
         assert!(t.latest_crossing(shard(0)).is_none());
@@ -788,13 +878,20 @@ mod tests {
     #[test]
     fn verified_header_lookup_survives_header_pruning_via_crossing() {
         let mut t = ShardSourceTracker::new();
-        let b = linked_header(shard(0), 2, BlockHash::ZERO, 900, 0);
-        let c = linked_header(shard(0), 3, b.block_hash(), 1_500, 0);
+        let b = linked_header(shard(0), 2, 1, BlockHash::ZERO, 900, 0);
+        let c = linked_header(shard(0), 3, 2, b.block_hash(), 1_500, 0);
         note(&mut t, &b, 1_000);
         note(&mut t, &c, 1_000);
         // Push the boundary block out of the sliding header window.
         for height in 4..=(MAX_RETAINED_HEADERS_PER_SHARD as u64 + 4) {
-            t.on_verified_source_header(linked_header(shard(0), height, BlockHash::ZERO, 1_600, 0));
+            t.on_verified_source_header(linked_header(
+                shard(0),
+                height,
+                height,
+                BlockHash::ZERO,
+                1_600,
+                0,
+            ));
         }
         t.prune_stale_headers();
         assert!(t.header(shard(0), BlockHeight::new(2)).is_none());
@@ -817,7 +914,14 @@ mod tests {
     fn prune_stale_headers_bounds_the_window() {
         let mut t = ShardSourceTracker::new();
         for height in 1..=(MAX_RETAINED_HEADERS_PER_SHARD as u64 + 3) {
-            t.on_verified_source_header(linked_header(shard(0), height, BlockHash::ZERO, 0, 0));
+            t.on_verified_source_header(linked_header(
+                shard(0),
+                height,
+                height,
+                BlockHash::ZERO,
+                0,
+                0,
+            ));
         }
         t.prune_stale_headers();
         // Oldest heights dropped; the window holds the most recent set.
@@ -834,7 +938,7 @@ mod tests {
     #[test]
     fn evicted_from_committee_clears_chunks_keeps_headers() {
         let mut t = ShardSourceTracker::new();
-        t.on_verified_source_header(linked_header(shard(0), 1, BlockHash::ZERO, 0, 0));
+        t.on_verified_source_header(linked_header(shard(0), 1, 1, BlockHash::ZERO, 0, 0));
         t.admit_chunk(shard(0), anchor(1), 0, payloads(1), Vec::new());
         t.register_pending_fetch(shard(0), BlockHeight::new(5), anchor(2), 1, 3);
         let abandoned = t.evicted_from_committee();

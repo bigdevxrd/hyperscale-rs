@@ -28,9 +28,10 @@ use crate::shard_source::ShardSourceTracker;
 
 /// Whether every boundary QC a peer proposes is admissible.
 ///
-/// A `Some` entry must name a boundary block this node has synced, that
-/// block's canonical QC must be a genuine `2f+1` of the governing shard
-/// committee, and the block must be a real epoch-boundary crossing.
+/// A `Some` entry must name a boundary block this node has synced *and
+/// established the commit of*, that block's canonical QC must be a
+/// genuine `2f+1` of the governing shard committee, and the block must
+/// be a real epoch-boundary crossing.
 /// Unverifiable entries make the whole proposal inadmissible — this vnode
 /// abstains, exactly as it does for an unverifiable witness, and the
 /// one-honest-reporter rule covers a crossing this node hasn't yet seen.
@@ -205,9 +206,9 @@ pub fn build_shard_contributions(
 }
 
 /// Whether a single peer-proposed boundary QC clears admission: the local
-/// node holds the boundary block, the QC authenticates as a genuine `2f+1`
-/// of the governing shard committee, and the block is a real
-/// epoch-boundary crossing.
+/// node holds the boundary block and has established its commit, the QC
+/// authenticates as a genuine `2f+1` of the governing shard committee,
+/// and the block is a real epoch-boundary crossing.
 fn boundary_qc_admissible(
     verifier: &dyn Verifier,
     shard: ShardId,
@@ -229,6 +230,21 @@ fn boundary_qc_admissible(
         );
         return false;
     };
+    // A 2f+1 QC proves availability, not commitment: a shard can halt
+    // with its crossing block certified yet never committed, and a
+    // boundary folded from it would anchor recovery on state no member's
+    // committed chain can serve. Same abstention posture as the sync
+    // gate above — the members whose windows hold the two-chain carry
+    // the fold.
+    if !shard_source.commit_established(shard, header) {
+        warn!(
+            shard = shard.inner(),
+            block_hash = ?qc.block_hash(),
+            "abstaining from proposal admission — the proposed boundary \
+             block's commit isn't locally established"
+        );
+        return false;
+    }
     boundary_qc_authentic(
         verifier,
         shard,
@@ -373,7 +389,12 @@ mod tests {
 
     /// A header at `height` extending `parent_hash`, whose parent QC carries
     /// `anchor_ms` — the block's own position on the weighted-time grid.
-    fn chained_header(height: u64, parent_hash: BlockHash, anchor_ms: u64) -> BlockHeader {
+    fn chained_header(
+        height: u64,
+        round: u64,
+        parent_hash: BlockHash,
+        anchor_ms: u64,
+    ) -> BlockHeader {
         let parent_qc = QuorumCertificate::new(
             parent_hash,
             SHARD,
@@ -391,7 +412,7 @@ mod tests {
             parent_qc,
             ValidatorId::new(0),
             ProposerTimestamp::from_millis(0),
-            Round::INITIAL,
+            Round::new(round),
             false,
             StateRoot::ZERO,
             TransactionRoot::ZERO,
@@ -469,8 +490,8 @@ mod tests {
         // The parent anchors in epoch 0; the chain then stalls a full
         // window, so the boundary block's own anchor lands in epoch 1. Its
         // committee is epoch 0's — the window its parent anchors in.
-        let parent = chained_header(9, BlockHash::ZERO, ED - 1);
-        let boundary = chained_header(10, parent.hash(), ED + 1);
+        let parent = chained_header(9, 9, BlockHash::ZERO, ED - 1);
+        let boundary = chained_header(10, 10, parent.hash(), ED + 1);
         let qc = signed_qc(&committee_a, &boundary, ED + 2);
 
         let mut shard_source = ShardSourceTracker::new();
@@ -504,6 +525,76 @@ mod tests {
             ),
             "without the parent held, the fallback resolves the block's own window and its \
              rotated keys reject the QC — abstention, not mis-acceptance",
+        );
+    }
+
+    /// A boundary QC over a certified-but-uncommitted block is
+    /// inadmissible. A 2f+1 QC proves availability, not commitment: a
+    /// shard can halt with its epoch-crossing block certified yet never
+    /// committed, and a boundary folded from it would anchor recovery on
+    /// state no member's committed chain can serve. Admission demands
+    /// local commit evidence — a round-contiguous certified descendant
+    /// pair — and abstains without it.
+    #[test]
+    fn an_uncommitted_boundary_qc_is_inadmissible() {
+        use hyperscale_types::{BeaconChainConfig, BeaconState};
+
+        let committee = TestCommittee::new(4, 1);
+        let snapshot = Arc::new(committee.topology_snapshot(1));
+        let mut schedule = TopologySchedule::new(ED, Epoch::new(1), Arc::clone(&snapshot));
+        schedule.insert(Epoch::new(0), snapshot);
+        let state = BeaconState::empty(BeaconChainConfig {
+            epoch_duration_ms: ED,
+            ..BeaconChainConfig::default()
+        });
+
+        let boundary = chained_header(10, 10, BlockHash::ZERO, ED - 1);
+        let qc = signed_qc(&committee, &boundary, ED + 1);
+        let held = |child: &BlockHeader| {
+            let child_qc = QuorumCertificate::new(
+                child.hash(),
+                SHARD,
+                child.height(),
+                child.parent_block_hash(),
+                Round::INITIAL,
+                SignerBitfield::empty(),
+                AggregateSignature::ZERO,
+                WeightedTimestamp::from_millis(ED + 2),
+            );
+            let mut t = ShardSourceTracker::new();
+            t.on_verified_source_header(Arc::new(Verified::new_unchecked_for_test(
+                CertifiedBlockHeader::new(boundary.clone(), qc.clone()),
+            )));
+            t.on_verified_source_header(Arc::new(Verified::new_unchecked_for_test(
+                CertifiedBlockHeader::new(child.clone(), child_qc),
+            )));
+            t
+        };
+        let admissible = |t: &ShardSourceTracker| {
+            boundary_qc_admissible(
+                &BlsVerifier,
+                SHARD,
+                &qc,
+                &state,
+                t,
+                &schedule,
+                &NetworkDefinition::simulator(),
+            )
+        };
+
+        // A child that certifies the boundary across a round gap — a view
+        // change between them — leaves it uncommitted.
+        let gapped = chained_header(11, 12, boundary.hash(), ED + 2);
+        assert!(
+            !admissible(&held(&gapped)),
+            "a certified-but-uncommitted boundary QC must not clear admission",
+        );
+
+        // The round-contiguous child direct-commits the boundary.
+        let contiguous = chained_header(11, 11, boundary.hash(), ED + 2);
+        assert!(
+            admissible(&held(&contiguous)),
+            "the same QC clears admission once the two-chain commits its block",
         );
     }
 }

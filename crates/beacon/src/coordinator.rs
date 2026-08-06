@@ -1872,7 +1872,6 @@ impl BeaconCoordinator {
             .on_verified_source_header(Arc::clone(certified_header));
         self.shard_source.observe_crossing(
             certified_header.header().shard_id(),
-            certified_header.header().height(),
             self.state.chain_config.epoch_duration_ms,
         );
         if !self.is_on_committee() {
@@ -2817,7 +2816,7 @@ mod tests {
             parent_qc,
             ValidatorId::new(0),
             ProposerTimestamp::ZERO,
-            Round::INITIAL,
+            Round::new(height),
             false,
             state_root,
             TransactionRoot::ZERO,
@@ -2939,7 +2938,7 @@ mod tests {
             parent_qc,
             ValidatorId::new(0),
             ProposerTimestamp::ZERO,
-            Round::INITIAL,
+            Round::new(height),
             false,
             StateRoot::ZERO,
             TransactionRoot::ZERO,

@@ -1558,7 +1558,10 @@ fn make_source_header_with_parent_qc(
         parent_qc,
         ValidatorId::new(0),
         ProposerTimestamp::ZERO,
-        Round::INITIAL,
+        // Track height so consecutive fixture headers form the
+        // round-contiguous two-chain commit evidence the crossing
+        // recorder and boundary-QC admission demand.
+        Round::new(height),
         false,
         state_root,
         TransactionRoot::ZERO,
