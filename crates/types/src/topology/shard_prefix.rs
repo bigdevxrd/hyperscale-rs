@@ -50,7 +50,7 @@ mod tests {
     use hyperscale_jmt::{Blake3Hasher, Hasher, LeafValue, MemoryStore, NibblePath, Tree};
 
     use super::shard_prefix_path;
-    use crate::{Hash, ShardId, ShardTrie, StateRoot};
+    use crate::{Address, Hash, ShardId, ShardTrie, StateRoot};
 
     type Jmt = Tree<Blake3Hasher, 1>;
 
@@ -194,7 +194,7 @@ mod tests {
                 };
                 assert_eq!(
                     shard_for_key_bits(&trie, &leaf),
-                    trie.shard_for_prefix(owner),
+                    trie.shard_for_prefix(Address(owner)),
                     "owner {seed:#x}"
                 );
             }

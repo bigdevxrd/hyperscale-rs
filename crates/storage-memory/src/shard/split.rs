@@ -214,21 +214,20 @@ fn install_adoption(
 mod tests {
     use hyperscale_jmt::{Blake3Hasher, Hasher};
     use hyperscale_storage::test_helpers::import_boundary_state;
-    use hyperscale_storage::{AdoptSource, ImportLeaf, WitnessSeed};
+    use hyperscale_storage::{AdoptSource, WitnessSeed};
     use hyperscale_types::{
-        Block, BlockHash, BlockHeight, ChainOrigin, Hash, ShardId, StateRoot, ValidatorId,
-        WeightedTimestamp,
+        Block, BlockHash, BlockHeight, ChainOrigin, Hash, ShardId, StateRoot, SubstateKey,
+        SubstateLeaf, ValidatorId, WeightedTimestamp,
     };
 
     use super::*;
 
     /// An import leaf whose top byte places it under one trie half.
-    fn leaf(top: u8) -> ImportLeaf {
+    fn leaf(top: u8) -> SubstateLeaf {
         let mut key = [0u8; 32];
         key[0] = top;
-        ImportLeaf {
-            leaf_key: key,
-            storage_key: vec![top; 40],
+        SubstateLeaf {
+            key: SubstateKey::from_bytes(key),
             value: vec![top],
         }
     }

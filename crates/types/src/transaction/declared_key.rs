@@ -8,34 +8,53 @@
 
 use hyperscale_hbor::Hbor;
 
-/// One declared access target: an owner prefix, optionally narrowed to
-/// one substate's local half — together exactly the state leaf key.
+use crate::{Address, LocalKey, SubstateKey};
+
+/// One declared access target: an owner prefix, or one substate cell —
+/// the cell variant is exactly the state leaf key.
 ///
-/// Two keys conflict only when equal — an owner-granular key
-/// (`local: None`) and a slot under the same owner are distinct keys, so
-/// a producer narrowing its declarations must narrow them consistently.
+/// Two keys conflict only when equal — an owner-granular key and a cell
+/// under the same owner are distinct keys, so a producer narrowing its
+/// declarations must narrow them consistently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
-pub struct DeclaredKey {
-    /// The owning address: the leaf key's owner half.
-    pub owner: [u8; 16],
-    /// The substate's local half, when declared finer than
-    /// owner-granular.
-    pub local: Option<[u8; 16]>,
+pub enum DeclaredKey {
+    /// Owner-granular: every cell under the owner's prefix.
+    Prefix(Address),
+    /// One substate cell.
+    Cell(SubstateKey),
 }
 
 impl DeclaredKey {
     /// The substate-granular key for a leaf `[owner | local]`.
     #[must_use]
     pub const fn substate(owner: [u8; 16], local: [u8; 16]) -> Self {
-        Self {
-            owner,
-            local: Some(local),
-        }
+        Self::Cell(SubstateKey {
+            owner: Address(owner),
+            local: LocalKey(local),
+        })
     }
 
     /// The owner-granular key for a prefix.
     #[must_use]
     pub const fn prefix(owner: [u8; 16]) -> Self {
-        Self { owner, local: None }
+        Self::Prefix(Address(owner))
+    }
+
+    /// The owning address — the routing half either variant carries.
+    #[must_use]
+    pub const fn owner(&self) -> Address {
+        match self {
+            Self::Prefix(owner) => *owner,
+            Self::Cell(key) => key.owner,
+        }
+    }
+
+    /// The cell key, when declared finer than owner-granular.
+    #[must_use]
+    pub const fn cell(&self) -> Option<SubstateKey> {
+        match self {
+            Self::Prefix(_) => None,
+            Self::Cell(key) => Some(*key),
+        }
     }
 }

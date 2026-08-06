@@ -33,7 +33,7 @@ use hyperscale_types::{
     install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, Declaration, EffectTarget, InstanceRegistry, LocalKey, NodeCall, PackageHash,
+    Address, Declaration, EffectTarget, InstanceRegistry, NodeCall, PackageHash,
     PrefixShardResolver, RoleId, SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
@@ -44,9 +44,7 @@ use hyperscale_vm_kernel::{
 use crate::backend::EngineBackend;
 use crate::genesis::{World, genesis_world_with_pools};
 use crate::sharding::writes_root;
-use crate::{
-    CachedOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, WaveBatchContext, project_to_shard,
-};
+use crate::{CachedOutput, CrossShardTxInput, ExecutedTx, WaveBatchContext, project_to_shard};
 
 /// Whether a derivation holds a gated node to its target's authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,11 +265,6 @@ impl Executor {
                 .collect(),
         })
     }
-}
-
-/// Read one declared cell from the wave snapshot by its key.
-pub fn read_cell(snapshot: &DynSnapshot<'_>, key: SubstateKey) -> Option<Vec<u8>> {
-    snapshot.substate(key)
 }
 
 /// Fuel and the abort reason (if any) as node-local metadata.
@@ -703,7 +696,7 @@ impl Executor {
     fn run_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
-        snapshot: &DynSnapshot<'_>,
+        snapshot: &(dyn SubstateDatabase + Sync),
         transactions: &[Arc<Verified<Transaction>>],
         provisions_by_tx: &BTreeMap<TxHash, Vec<Arc<Vec<SubstateEntry>>>>,
         env_by_tx: &BTreeMap<TxHash, EnvInputs>,
@@ -716,7 +709,7 @@ impl Executor {
             let trie = ctx.shard_trie.clone();
             let local_shard = ctx.local_shard;
             Locality::Owned(Arc::new(move |owner: Address| {
-                trie.shard_for_prefix(owner.0) == local_shard
+                trie.shard_for_prefix(owner) == local_shard
             }))
         } else {
             Locality::All
@@ -771,7 +764,7 @@ impl Executor {
             for effect in entry.declaration.set.iter() {
                 if let EffectTarget::Point(key) = effect.target
                     && locality.is_local(key.owner)
-                    && let Some(value) = read_cell(snapshot, key)
+                    && let Some(value) = snapshot.substate(key)
                 {
                     cells.insert(key, value);
                 }
@@ -786,13 +779,9 @@ impl Executor {
             if !publishes.contains_key(&vm_tx) {
                 continue;
             }
-            let (owner, local) = tx.fee_vault();
-            let key = SubstateKey {
-                owner: Address(owner),
-                local: LocalKey(local),
-            };
+            let key = tx.fee_vault();
             if locality.is_local(key.owner)
-                && let Some(value) = read_cell(snapshot, key)
+                && let Some(value) = snapshot.substate(key)
             {
                 cells.insert(key, value);
             }
@@ -842,17 +831,14 @@ impl Executor {
             .iter()
             .filter_map(|tx| {
                 let vm = tx.body();
-                let (owner, local) = tx.fee_vault();
-                if !locality.is_local(Address(owner)) {
+                let vault = tx.fee_vault();
+                if !locality.is_local(vault.owner) {
                     return None;
                 }
                 Some((
                     tx.hash(),
                     PayerFee {
-                        vault: SubstateKey {
-                            owner: Address(owner),
-                            local: LocalKey(local),
-                        },
+                        vault,
                         max_fee: vm.max_fee,
                         floor: vm.abort_floor(),
                         wave_abortable: cross_shard,
@@ -948,7 +934,7 @@ impl Executor {
     pub fn execute_wave_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
-        snapshot: &DynSnapshot<'_>,
+        snapshot: &(dyn SubstateDatabase + Sync),
         transactions: &[Arc<Verified<Transaction>>],
     ) -> Vec<ExecutedTx> {
         // A single-shard batch commits in one block, so every member's
@@ -982,7 +968,7 @@ impl Executor {
     pub fn execute_cross_shard_batch(
         &self,
         ctx: &WaveBatchContext<'_>,
-        snapshot: &DynSnapshot<'_>,
+        snapshot: &(dyn SubstateDatabase + Sync),
         requests: &[CrossShardTxInput<'_>],
     ) -> Vec<ExecutedTx> {
         let transactions: Vec<Arc<Verified<Transaction>>> =

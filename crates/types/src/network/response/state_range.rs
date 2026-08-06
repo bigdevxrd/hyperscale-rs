@@ -1,9 +1,8 @@
 //! Snap-sync state range response.
 
 use hyperscale_hbor::Hbor;
-use hyperscale_vm_types::MAX_CELL_VALUE_LEN;
 
-use crate::{MerkleInclusionProof, MessageClass, NetworkMessage, SubstateKey};
+use crate::{MerkleInclusionProof, MessageClass, NetworkMessage, SubstateLeaf};
 
 /// Cap on the leaves a single state range chunk can carry.
 ///
@@ -12,29 +11,14 @@ use crate::{MerkleInclusionProof, MessageClass, NetworkMessage, SubstateKey};
 /// sizes chunks, not the total transfer.
 pub const MAX_LEAVES_PER_STATE_RANGE: usize = 1_024;
 
-/// One leaf of a state range: the substate pair it represents.
-///
-/// The verifier trusts none of it bare: the key's own 32 bytes are the
-/// JMT leaf key and must prove into the shard's attested `state_root`
-/// via the chunk's range proof, and the proof's claimed value hash must
-/// equal the hash of `value`.
-#[derive(Debug, Clone, PartialEq, Eq, Hbor)]
-pub struct StateRangeLeaf {
-    /// The substate's key — its JMT leaf key by identity.
-    pub key: SubstateKey,
-    /// The raw substate value, bounded like a provisioned entry's.
-    #[hbor(max = MAX_CELL_VALUE_LEN)]
-    pub value: Vec<u8>,
-}
-
 /// A served chunk of a shard's state at a pinned boundary: leaves in
-/// ascending hashed-key order plus the completeness-checked range proof
-/// over them.
+/// ascending key order plus the completeness-checked range proof over
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
 pub struct StateRangeChunk {
     /// Substate entries, strictly ascending by key.
     #[hbor(max = MAX_LEAVES_PER_STATE_RANGE)]
-    pub leaves: Vec<StateRangeLeaf>,
+    pub leaves: Vec<SubstateLeaf>,
     /// Whether leaves beyond the last returned remain in the requested
     /// range — the chunk is complete only through its last leaf, and the
     /// joiner resumes immediately after it.
@@ -70,6 +54,7 @@ mod tests {
     use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 
     use super::*;
+    use crate::SubstateKey;
 
     #[test]
     fn test_hbor_roundtrip_unavailable() {
@@ -82,7 +67,7 @@ mod tests {
 
     #[test]
     fn test_hbor_roundtrip_chunk() {
-        let leaf = StateRangeLeaf {
+        let leaf = SubstateLeaf {
             key: SubstateKey::from_bytes([7u8; 32]),
             value: vec![9u8; 128],
         };

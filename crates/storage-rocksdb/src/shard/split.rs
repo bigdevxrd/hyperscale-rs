@@ -341,8 +341,10 @@ impl TreeReader for PreRootStore<'_> {
 mod tests {
     use hyperscale_jmt::{Blake3Hasher, Hasher, Key, NibblePath};
     use hyperscale_storage::test_helpers::import_boundary_state;
-    use hyperscale_storage::{AdoptSource, BoundaryStore, ImportLeaf, WitnessSeed};
-    use hyperscale_types::{BlockHash, BlockHeight, ShardId, ValidatorId, WeightedTimestamp};
+    use hyperscale_storage::{AdoptSource, BoundaryStore, WitnessSeed};
+    use hyperscale_types::{
+        BlockHash, BlockHeight, ShardId, SubstateKey, SubstateLeaf, ValidatorId, WeightedTimestamp,
+    };
     use tempfile::TempDir;
 
     use super::super::metadata::read_chain_origin;
@@ -355,10 +357,9 @@ mod tests {
         key
     }
 
-    fn leaf(b: u8) -> ImportLeaf {
-        ImportLeaf {
-            leaf_key: k(b),
-            storage_key: vec![b; 40],
+    fn leaf(b: u8) -> SubstateLeaf {
+        SubstateLeaf {
+            key: SubstateKey::from_bytes(k(b)),
             value: vec![b],
         }
     }

@@ -15,8 +15,8 @@ use hyperscale_core::ProvisionsRequest;
 use hyperscale_jmt::TreeReader as JmtTreeReader;
 use hyperscale_storage::{SubstateStore, SubstateView, VersionedStore};
 use hyperscale_types::{
-    Address, BlockHeight, LocalKey, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain,
-    ShardId, SubstateEntry, SubstateKey, TxHash, WeightedTimestamp,
+    BlockHeight, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, ShardId,
+    SubstateEntry, SubstateKey, TxHash, WeightedTimestamp,
 };
 use tracing::warn;
 
@@ -44,7 +44,7 @@ where
     S: SubstateStore + VersionedStore + JmtTreeReader + Sync,
 {
     let mut staged: Vec<(TxHash, Vec<SubstateEntry>)> = Vec::with_capacity(requests.len());
-    let mut all_storage_keys: Vec<Vec<u8>> = Vec::new();
+    let mut all_keys: Vec<SubstateKey> = Vec::new();
 
     for req in requests {
         if !req.targets.contains(&target_shard) {
@@ -58,9 +58,8 @@ where
         // request still stages its transaction: the payer shard's
         // empty-entry bundle is the engagement evidence.
         let mut entries = Vec::with_capacity(req.local_keys.len());
-        for (owner, local) in &req.local_keys {
-            let Some(value) = view.get_substate_at_height(*owner, *local, source_block_height)
-            else {
+        for key in &req.local_keys {
+            let Some(value) = view.get_substate_at_height(*key, source_block_height) else {
                 warn!(
                     source_shard = source_shard.inner(),
                     target_shard = target_shard.inner(),
@@ -71,21 +70,17 @@ where
                 return None;
             };
             if let Some(value) = value {
-                let key = SubstateKey {
-                    owner: Address(*owner),
-                    local: LocalKey(*local),
-                };
-                all_storage_keys.push(key.to_bytes().to_vec());
-                entries.push(SubstateEntry::new(key, Some(value)));
+                all_keys.push(*key);
+                entries.push(SubstateEntry::new(*key, Some(value)));
             }
         }
         staged.push((req.tx_hash, entries));
     }
 
-    let proof = if all_storage_keys.is_empty() {
+    let proof = if all_keys.is_empty() {
         MerkleInclusionProof::new(Vec::new())
     } else {
-        view.generate_merkle_proofs_overlay(&all_storage_keys, source_block_height)?
+        view.generate_merkle_proofs_overlay(&all_keys, source_block_height)?
     };
 
     let transactions = staged

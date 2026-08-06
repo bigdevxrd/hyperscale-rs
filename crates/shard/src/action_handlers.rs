@@ -23,7 +23,7 @@ use hyperscale_types::{
     ProposerTimestamp, ProvisionHash, ProvisionTxRootsContext, ProvisionTxRootsMap, Provisions,
     ProvisionsRoot, ProvisionsRootContext, QcContext, QuorumCertificate, ReadySignal,
     ReadySignalMessage, ReshapeTrigger, RevealChain, Round, SettledWavesRoot, ShardId, ShardLoad,
-    SplitChildRoots, StateRoot, StateRootContext, Stopwatch, StoredReceipt, Timeout,
+    SplitChildRoots, StateRoot, StateRootContext, Stopwatch, StoredReceipt, SubstateKey, Timeout,
     TimeoutContext, TopologySnapshot, Transaction, TransactionRoot, TransactionRootContext,
     ValidatorId, Verifiable, Verified, Verifier, Verify, VoteCount, VrfProof, WeightedTimestamp,
     WitnessSources, absorb_committed_cells, commit_witness_window, compute_waves, derive_leaves,
@@ -579,12 +579,10 @@ where
             let view = ctx.pending_chain.view_at_committed_tip();
             let mut result: Result<(), String> = Ok(());
             for demand in &demands {
-                let Some(cell) =
-                    view.get_substate_at_height(demand.owner, demand.vault_local, committed_height)
-                else {
+                let Some(cell) = view.get_substate_at_height(demand.vault, committed_height) else {
                     result = Err(format!(
                         "payer {:?}: balance history unavailable at height {}",
-                        demand.owner,
+                        demand.vault.owner,
                         committed_height.inner()
                     ));
                     break;
@@ -595,7 +593,7 @@ where
                 if balance < demand.demand {
                     result = Err(format!(
                         "payer {:?}: balance {balance} under reservation demand {}",
-                        demand.owner, demand.demand
+                        demand.vault.owner, demand.demand
                     ));
                     break;
                 }
@@ -877,32 +875,32 @@ where
             let transactions = if fee_checks.is_empty() {
                 transactions
             } else {
-                let mut running: std::collections::HashMap<[u8; 16], u128> = fee_checks
+                let mut running: std::collections::HashMap<SubstateKey, u128> = fee_checks
                     .iter()
-                    .map(|check| (check.owner, check.demand))
+                    .map(|check| (check.vault, check.demand))
                     .collect();
-                let balances: std::collections::HashMap<[u8; 16], u128> = fee_checks
+                let balances: std::collections::HashMap<SubstateKey, u128> = fee_checks
                     .iter()
                     .map(|check| {
                         let balance = view
-                            .get_substate_at_height(check.owner, check.vault_local, fee_read_height)
+                            .get_substate_at_height(check.vault, fee_read_height)
                             .flatten()
                             .and_then(|bytes| <[u8; 16]>::try_from(bytes.as_slice()).ok())
                             .map_or(0u128, u128::from_le_bytes);
-                        (check.owner, balance)
+                        (check.vault, balance)
                     })
                     .collect();
                 let mut dropped = 0usize;
                 let kept: Vec<_> = transactions
                     .into_iter()
                     .filter(|tx| {
-                        let (owner, _) = tx.fee_vault();
-                        let Some(used) = running.get_mut(&owner) else {
+                        let vault = tx.fee_vault();
+                        let Some(used) = running.get_mut(&vault) else {
                             return true;
                         };
                         let max_fee = tx.body().max_fee;
                         let wanted = used.saturating_add(max_fee);
-                        if wanted > balances.get(&owner).copied().unwrap_or(0) {
+                        if wanted > balances.get(&vault).copied().unwrap_or(0) {
                             dropped += 1;
                             return false;
                         }

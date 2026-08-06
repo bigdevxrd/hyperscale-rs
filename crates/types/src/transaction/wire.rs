@@ -20,8 +20,8 @@ use thiserror::Error;
 use crate::crypto::{Ed25519PublicKey, Ed25519Signature, verify_ed25519};
 use crate::transaction::vm::vm_statics;
 use crate::{
-    DeclaredKey, Derived, EnvelopeExt, Hash, MAX_TX_BYTES_LEN, Routing, ShardTrie, TimestampRange,
-    TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
+    DeclaredKey, Derived, EnvelopeExt, Hash, LocalKey, MAX_TX_BYTES_LEN, Routing, ShardTrie,
+    SubstateKey, TimestampRange, TransactionEnvelope, TxHash, Verified, Verify, VmStaticsError,
 };
 
 /// A signed transaction as the network carries it.
@@ -228,16 +228,18 @@ impl Transaction {
         &self.derived().routing
     }
 
-    /// The fee payer's native-resource vault cell as `(owner, local)`
-    /// halves — what the payer shard's reservation check reads and the
-    /// fee settlement debits.
+    /// The fee payer's native-resource vault cell — what the payer
+    /// shard's reservation check reads and the fee settlement debits.
     ///
     /// # Panics
     ///
     /// Panics under the same conditions as [`Self::routing`].
     #[must_use]
-    pub fn fee_vault(&self) -> ([u8; 16], [u8; 16]) {
-        (self.body().fee_payer.0, self.derived().fee_vault_local)
+    pub fn fee_vault(&self) -> SubstateKey {
+        SubstateKey {
+            owner: self.body().fee_payer,
+            local: LocalKey(self.derived().fee_vault_local),
+        }
     }
 
     /// The cached derivation, or a panic naming the refusal.
@@ -427,10 +429,10 @@ mod tests {
                 routing: Routing {
                     read_keys: vec![DeclaredKey::prefix([0x11; 16])],
                     write_keys: vec![DeclaredKey::substate([0x22; 16], [0x01; 16])],
-                    read_prefixes: vec![[0x11; 16]],
-                    write_prefixes: vec![[0x22; 16]],
+                    read_prefixes: vec![Address([0x11; 16])],
+                    write_prefixes: vec![Address([0x22; 16])],
                     provision_keys: vec![DeclaredKey::prefix([0x11; 16])],
-                    provision_prefixes: vec![[0x11; 16]],
+                    provision_prefixes: vec![Address([0x11; 16])],
                 },
                 subintent_hashes,
             })

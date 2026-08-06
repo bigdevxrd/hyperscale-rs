@@ -41,7 +41,7 @@ pub fn filter_writes_for_shard(
 ) -> StateWrites {
     let mut filtered = StateWrites::default();
     for (key, change) in &writes.cells {
-        if shard_trie.shard_for_prefix(key.owner.0) == local_shard {
+        if shard_trie.shard_for_prefix(key.owner) == local_shard {
             filtered.cells.insert(*key, change.clone());
         }
     }
@@ -105,10 +105,13 @@ mod tests {
         let trie = ShardTrie::uniform_from_count(2);
         let left = [0x00; 16];
         let right = [0xFF; 16];
-        assert_ne!(trie.shard_for_prefix(left), trie.shard_for_prefix(right));
+        assert_ne!(
+            trie.shard_for_prefix(Address(left)),
+            trie.shard_for_prefix(Address(right))
+        );
         let all = writes(&[(left, [1; 16], vec![1]), (right, [1; 16], vec![2])]);
 
-        let filtered = filter_writes_for_shard(&all, trie.shard_for_prefix(left), &trie);
+        let filtered = filter_writes_for_shard(&all, trie.shard_for_prefix(Address(left)), &trie);
         assert_eq!(filtered.cells.len(), 1);
         assert_eq!(filtered.cells.keys().next().unwrap().owner, Address(left));
     }

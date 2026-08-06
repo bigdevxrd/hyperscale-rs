@@ -24,19 +24,19 @@ use crate::typed_cf::{
 pub const DEFAULT_CF: &str = "default";
 
 /// Column family name for substate data. Stores the current value per
-/// unversioned `(partition_key, sort_key)`. History for recent writes
-/// lives in `STATE_HISTORY_CF` (same `storage_key` + write-version suffix,
-/// value is the pre-write prior state). Current-state reads are a
-/// direct point lookup; historical reads at version V seek the smallest
+/// unversioned substate key. History for recent writes lives in
+/// `STATE_HISTORY_CF` (same key + write-version suffix, value is the
+/// pre-write prior state). Current-state reads are a direct point
+/// lookup; historical reads at version V seek the smallest
 /// state-history entry for the key with `write_version > V` and return
 /// its prior value.
 pub const STATE_CF: &str = "state";
 
 /// Column family name for the per-write state-history log used by
 /// historical reads.
-/// Key: `((partition_key, sort_key), write_version)`; value: the prior
-/// value at that key immediately before the write at `write_version`.
-/// A `None` value means "key was absent before the write."
+/// Key: `(substate_key, write_version)`; value: the prior value at that
+/// key immediately before the write at `write_version`. A `None` value
+/// means "key was absent before the write."
 pub const STATE_HISTORY_CF: &str = "state_history";
 
 /// Column family name for block metadata (header + manifest) keyed by height.
@@ -119,27 +119,14 @@ pub const SAFE_VOTE_REGISTERS_CF: &str = "safe_vote_registers";
 
 /// Column family staging verified snap-sync chunks before finalize.
 ///
-/// Key: the 32-byte hashed JMT leaf key — the bytewise comparator makes
-/// a full scan leaf-sorted, which the chunked finalize build relies on.
-/// Value: `[storage_key_len_BE_4B][storage_key][value]` — the raw
-/// substate pair the leaf binds. Written one atomic batch per verified
-/// chunk together with the import progress record in the default CF;
-/// the store proper is untouched until `finalize_boundary_import`
-/// builds the state from the staged leaves and clears this CF.
+/// Key: the substate key's 32 bytes — its JMT leaf key, so the bytewise
+/// comparator makes a full scan leaf-sorted, which the chunked finalize
+/// build relies on. Value: the raw substate value. Written one atomic
+/// batch per verified chunk together with the import progress record in
+/// the default CF; the store proper is untouched until
+/// `finalize_boundary_import` builds the state from the staged leaves
+/// and clears this CF.
 pub const IMPORT_STAGING_CF: &str = "import_staging";
-
-/// Column family mapping hashed JMT leaf keys back to raw substate
-/// storage keys.
-///
-/// Key: the 32-byte leaf key (the substate key's own bytes). Value: the
-/// raw storage key (`db_node_key ++ partition_num ++ sort_key`). The
-/// mapping is deterministic and immutable per key; entries are deleted
-/// when their substate is deleted, so the CF mirrors `STATE_CF`'s live
-/// key set. Snap-sync range serving resolves enumerated leaves through
-/// it — keyed in hashed order, a range walk reads it sequentially.
-/// Hard-link checkpoints pin it alongside the tree, making a checkpoint
-/// self-contained for serving.
-pub const LEAF_ASSOCIATIONS_CF: &str = "leaf_associations";
 
 // Default-CF metadata keys are defined as MetadataEntry types in typed_cf.rs.
 // See CommittedHeightEntry, CommittedHashEntry, CommittedQcEntry, JmtMetadataEntry.
@@ -163,7 +150,6 @@ pub const ALL_COLUMN_FAMILIES: &[&str] = &[
     EXECUTION_METADATA_CF,
     EXECUTION_CERTS_CF,
     BEACON_WITNESSES_CF,
-    LEAF_ASSOCIATIONS_CF,
     SUBSTATE_BYTES_CF,
     SAFE_VOTE_REGISTERS_CF,
     IMPORT_STAGING_CF,
@@ -190,7 +176,6 @@ pub struct CfHandles<'a> {
     execution_metadata: &'a ColumnFamily,
     execution_certs: &'a ColumnFamily,
     beacon_witnesses: &'a ColumnFamily,
-    leaf_associations: &'a ColumnFamily,
     substate_bytes: &'a ColumnFamily,
     safe_vote_registers: &'a ColumnFamily,
     import_staging: &'a ColumnFamily,
@@ -219,7 +204,6 @@ impl<'a> CfHandles<'a> {
             execution_metadata: resolve(EXECUTION_METADATA_CF),
             execution_certs: resolve(EXECUTION_CERTS_CF),
             beacon_witnesses: resolve(BEACON_WITNESSES_CF),
-            leaf_associations: resolve(LEAF_ASSOCIATIONS_CF),
             substate_bytes: resolve(SUBSTATE_BYTES_CF),
             safe_vote_registers: resolve(SAFE_VOTE_REGISTERS_CF),
             import_staging: resolve(IMPORT_STAGING_CF),
@@ -312,67 +296,14 @@ impl TypedCf for SubstateBytesCf {
     }
 }
 
-/// Hashed-leaf-key → raw-storage-key mapping; see [`LEAF_ASSOCIATIONS_CF`].
-pub struct LeafAssociationsCf;
-impl TypedCf for LeafAssociationsCf {
-    const NAME: &'static str = LEAF_ASSOCIATIONS_CF;
-    type Key = Hash; // 32-byte hashed JMT leaf key
-    type Value = Vec<u8>; // raw substate storage key
-    type KeyCodec = HashCodec;
-    type ValueCodec = RawCodec;
-    type Handles<'a> = CfHandles<'a>;
-    fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
-        cf.leaf_associations
-    }
-}
-
-/// Value codec for [`ImportStagingCf`]: the staged raw substate pair,
-/// packed as `[storage_key_len_BE_4B][storage_key][value]`.
-#[derive(Default)]
-pub struct StagedLeafCodec;
-
-impl StagedLeafCodec {
-    /// Pack a borrowed pair into `buf` — the single definition of the
-    /// staged byte layout, shared by the trait encode and the zero-copy
-    /// staging write.
-    ///
-    /// # Errors
-    ///
-    /// Errors when the storage key's length overflows the 4-byte prefix.
-    pub fn encode_parts(storage_key: &[u8], value: &[u8], buf: &mut Vec<u8>) -> Result<(), String> {
-        let len =
-            u32::try_from(storage_key.len()).map_err(|_| "oversized storage key".to_string())?;
-        buf.extend_from_slice(&len.to_be_bytes());
-        buf.extend_from_slice(storage_key);
-        buf.extend_from_slice(value);
-        Ok(())
-    }
-}
-
-impl DbEncode<(Vec<u8>, Vec<u8>)> for StagedLeafCodec {
-    fn encode_to(&self, value: &(Vec<u8>, Vec<u8>), buf: &mut Vec<u8>) {
-        Self::encode_parts(&value.0, &value.1, buf).expect("storage key length fits in u32");
-    }
-}
-
-impl DbCodec<(Vec<u8>, Vec<u8>)> for StagedLeafCodec {
-    fn decode(&self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
-        let len_bytes: [u8; 4] = bytes[..4]
-            .try_into()
-            .expect("staged leaf must carry a length prefix");
-        let split = 4 + u32::from_be_bytes(len_bytes) as usize;
-        (bytes[4..split].to_vec(), bytes[split..].to_vec())
-    }
-}
-
 /// Staged snap-sync leaves awaiting finalize; see [`IMPORT_STAGING_CF`].
 pub struct ImportStagingCf;
 impl TypedCf for ImportStagingCf {
     const NAME: &'static str = IMPORT_STAGING_CF;
-    type Key = Hash; // 32-byte hashed JMT leaf key
-    type Value = (Vec<u8>, Vec<u8>); // (raw storage key, raw value)
-    type KeyCodec = HashCodec;
-    type ValueCodec = StagedLeafCodec;
+    type Key = SubstateKey; // the leaf key by identity
+    type Value = Vec<u8>; // raw substate value
+    type KeyCodec = SubstateKeyCodec;
+    type ValueCodec = RawCodec;
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.import_staging
@@ -398,10 +329,9 @@ impl TypedCf for StaleStateHistoryCf {
 
 /// State — current-value-per-key source of truth.
 ///
-/// Key: `(partition_key, sort_key)` encoded as `storage_key_bytes`.
-/// Value: opaque substate bytes. An absent row means "no value for this
-/// key" — deletions do `batch.delete_cf(state_cf, K)`, not a tombstone
-/// sentinel.
+/// Key: the substate key's 32 bytes. Value: opaque substate bytes. An
+/// absent row means "no value for this key" — deletions do
+/// `batch.delete_cf(state_cf, K)`, not a tombstone sentinel.
 ///
 /// Current reads are direct point lookups. Historical reads at version V
 /// go through the companion `StateHistoryCf`: seek the smallest history
@@ -429,8 +359,8 @@ impl TypedCf for StateCf {
 
 /// State-history log — per-write prior-value entries for historical reads.
 ///
-/// Key: `((partition_key, sort_key), write_version)` encoded as
-/// `storage_key_bytes ++ write_version_BE_8B`. Value:
+/// Key: `(substate_key, write_version)` encoded as
+/// `substate_key_bytes ++ write_version_BE_8B`. Value:
 /// `Option<Vec<u8>>` — the value the key held immediately before the
 /// write at `write_version`. `None` means "key was absent before the
 /// write."

@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_types::{
-    Address, BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
-    CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, FinalizedWave, LocalKey,
+    BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
+    CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
     MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON, SettledWavesRoot,
     ShardId, ShardWitnessPayload, StateRoot, StateWrites, SubstateKey, Transaction, TxHash,
     Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
@@ -834,23 +834,18 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
 
     fn get_substate_at_height(
         &self,
-        owner: [u8; 16],
-        local: [u8; 16],
+        key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
         let persisted_version = (*self.base).jmt_height();
         if block_height <= persisted_version {
-            return (*self.base).get_substate_at_height(owner, local, block_height);
+            return (*self.base).get_substate_at_height(key, block_height);
         }
 
         // Base value at the persisted tip, then pending receipts in
         // commit order up to `block_height` — the same overlay walk as
-        // the node-level listing, narrowed to one flat key.
-        let mut value = (*self.base).get_substate_at_height(owner, local, persisted_version)?;
-        let key = SubstateKey {
-            owner: Address(owner),
-            local: LocalKey(local),
-        };
+        // the node-level listing, narrowed to one key.
+        let mut value = (*self.base).get_substate_at_height(key, persisted_version)?;
         for (h, receipt) in &self.versioned_receipts {
             if *h > block_height {
                 break;
@@ -864,11 +859,11 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
 
     fn generate_merkle_proofs(
         &self,
-        storage_keys: &[Vec<u8>],
+        keys: &[SubstateKey],
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
         // Try base first — works for heights already persisted.
-        if let Some(proof) = (*self.base).generate_merkle_proofs(storage_keys, block_height) {
+        if let Some(proof) = (*self.base).generate_merkle_proofs(keys, block_height) {
             return Some(proof);
         }
         // Beyond persisted — caller should use `generate_merkle_proofs_overlay`
@@ -882,19 +877,17 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
 /// heights.
 impl<S: SubstateStore + TreeReader + Sync> SubstateView<S> {
     /// Generate merkle proofs, falling back to the JMT overlay for
-    /// unpersisted block heights. `owner_map` owner-prefixes internal
-    /// nodes' leaf keys to match the committed tree.
+    /// unpersisted block heights.
     #[must_use]
-    #[allow(clippy::implicit_hasher)] // call sites pass std `HashMap`s
     pub fn generate_merkle_proofs_overlay(
         &self,
-        storage_keys: &[Vec<u8>],
+        keys: &[SubstateKey],
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
-        if let Some(proof) = (*self.base).generate_merkle_proofs(storage_keys, block_height) {
+        if let Some(proof) = (*self.base).generate_merkle_proofs(keys, block_height) {
             return Some(proof);
         }
-        generate_proof(self, storage_keys, block_height)
+        generate_proof(self, keys, block_height)
     }
 }
 
@@ -969,10 +962,10 @@ mod tests {
     use std::sync::PoisonError;
 
     use hyperscale_types::{
-        AggregateSignature, Block, CertifiedBlock, CertifiedBlockHeader, ExecutionCertificate,
-        ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, Round,
-        SignerBitfield, StateWrites, Transaction, TxHash, TxOutcome, WaveCertificate, WaveId,
-        WitnessSources,
+        Address, AggregateSignature, Block, CertifiedBlock, CertifiedBlockHeader,
+        ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
+        GlobalReceiptRoot, Hash, LocalKey, Round, SignerBitfield, StateWrites, Transaction, TxHash,
+        TxOutcome, WaveCertificate, WaveId, WitnessSources,
     };
 
     use super::*;
@@ -1034,15 +1027,14 @@ mod tests {
         }
         fn get_substate_at_height(
             &self,
-            _owner: [u8; 16],
-            _local: [u8; 16],
+            _key: SubstateKey,
             _block_height: BlockHeight,
         ) -> Option<Option<Vec<u8>>> {
             None
         }
         fn generate_merkle_proofs(
             &self,
-            _storage_keys: &[Vec<u8>],
+            _keys: &[SubstateKey],
             _block_height: BlockHeight,
         ) -> Option<MerkleInclusionProof> {
             None
@@ -1177,7 +1169,6 @@ mod tests {
             new_height: BlockHeight::GENESIS,
             nodes: vec![],
             stale_node_keys: vec![],
-            leaf_associations: vec![],
             bytes_delta: 0,
         })
     }

@@ -4,7 +4,7 @@
 //!
 //! # Key mapping
 //!
-//! A flat storage key's two halves *are* its 32-byte JMT key — the leaf
+//! A substate key's two halves *are* its 32-byte JMT key — the leaf
 //! is read off the key with no hashing, so one owner's substates form a
 //! contiguous subtree under the prefix its own bits name (see
 //! `hyperscale_types::state_key`).
@@ -29,11 +29,9 @@ use hyperscale_jmt::{
     UpdateResult, ValueHash,
 };
 use hyperscale_types::state_key::jmt_value_hash;
-use hyperscale_types::{BlockHeight, Hash, StateRoot, StateWrites, SubstateKey};
+use hyperscale_types::{BlockHeight, Hash, StateRoot, StateWrites, SubstateKey, SubstateLeaf};
 use rayon::prelude::*;
-pub use snapshot::{JmtSnapshot, LeafSubstateKeyAssociation};
-
-use crate::ImportLeaf;
+pub use snapshot::JmtSnapshot;
 
 /// Layered tree reader that overlays pending JMT snapshots on a base store.
 ///
@@ -103,11 +101,10 @@ pub fn state_root_from_jmt(root_hash: [u8; 32]) -> StateRoot {
 /// `version`, on top of `parent_version` (`None` for the first batch of
 /// an import into an empty store).
 ///
-/// The shipped leaf keys are already in leaf form, so the tree is
-/// rebuilt from them directly instead of re-deriving through
-/// [`put_at_version`]. The caller
-/// persists the result's node batch plus whatever raw-pair and
-/// leaf-association records its backend keeps; a single-batch import
+/// The leaves' substate keys are the leaf keys, so the tree is rebuilt
+/// from them directly instead of re-deriving through
+/// [`put_at_version`]. The caller persists the result's node batch plus
+/// whatever raw-value records its backend keeps; a single-batch import
 /// stores the returned root as the imported state root, a chunked one
 /// chains batches through `parent_version` and keeps only the final
 /// root.
@@ -120,14 +117,14 @@ pub fn import_leaf_updates<S: TreeReader>(
     root_path: &NibblePath,
     parent_version: Option<u64>,
     version: u64,
-    leaves: &[ImportLeaf],
+    leaves: &[SubstateLeaf],
 ) -> Result<(StateRoot, UpdateResult), String> {
     let updates: BTreeMap<Key, Option<LeafValue>> = leaves
         .iter()
         .map(|leaf| {
             let len = leaf.value.len() as u64;
             (
-                leaf.leaf_key,
+                leaf.key.to_bytes(),
                 Some(LeafValue::new(hash_value(&leaf.value), len)),
             )
         })
@@ -277,7 +274,6 @@ pub fn noop_jmt_snapshot<S: TreeReader>(
         new_height: block_height,
         nodes,
         stale_node_keys: Vec::new(),
-        leaf_associations: Vec::new(),
         bytes_delta: 0,
     }
 }
@@ -360,18 +356,6 @@ pub fn put_at_version<S: TreeReader + Sync>(
         })
         .collect();
 
-    // Record each write's leaf → storage-key association. The leaf is
-    // the key's own bytes, so the association is the identity — kept so
-    // range serving resolves enumerated leaves without consulting the
-    // key layout.
-    let leaf_associations: Vec<LeafSubstateKeyAssociation> = work_items
-        .iter()
-        .map(|(key, value_ref)| LeafSubstateKeyAssociation {
-            leaf_key: key.to_bytes(),
-            storage_key: value_ref.is_some().then_some(key.to_bytes().to_vec()),
-        })
-        .collect();
-
     updates.par_sort_by(|a, b| a.0.cmp(&b.0));
 
     let updates_btree: BTreeMap<Key, Option<LeafValue>> = updates.into_iter().collect();
@@ -396,7 +380,6 @@ pub fn put_at_version<S: TreeReader + Sync>(
     for stale in &result.batch.stale_nodes {
         collected.stale_node_keys.push(stale.node_key.clone());
     }
-    collected.leaf_associations = leaf_associations;
     collected.bytes_delta = result.batch.bytes_delta;
 
     (root_hash, collected)
@@ -404,7 +387,7 @@ pub fn put_at_version<S: TreeReader + Sync>(
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_jmt::MemoryStore;
+    use hyperscale_jmt::{MemoryStore, TreeWriter};
     use hyperscale_types::{Address, LocalKey};
 
     use super::*;
@@ -416,52 +399,26 @@ mod tests {
         }
     }
 
-    /// One association per work item: the leaf key paired with the key's
-    /// own bytes for sets, `None` for deletes.
-    #[test]
-    fn put_at_version_records_leaf_associations() {
-        let store = MemoryStore::new();
-
-        let set_key = cell([1u8; 16], [9u8; 16]);
-        let del_key = cell([2u8; 16], [5u8; 16]);
-        let mut writes = StateWrites::default();
-        writes.cells.insert(set_key, Some(vec![42]));
-        writes.cells.insert(del_key, None);
-
-        let (_, collected) = put_at_version(&store, None, 1, &[&writes]);
-
-        let by_key = |key: SubstateKey| {
-            collected
-                .leaf_associations
-                .iter()
-                .find(|a| a.leaf_key == key.to_bytes())
-                .expect("association recorded for every work item")
-                .clone()
-        };
-        assert_eq!(collected.leaf_associations.len(), 2);
-        assert_eq!(
-            by_key(set_key).storage_key,
-            Some(set_key.to_bytes().to_vec())
-        );
-        assert_eq!(by_key(del_key).storage_key, None);
-    }
-
-    /// A write keys its leaf by identity — `[owner | local]` — so one
-    /// owner's cells form a contiguous subtree.
+    /// A write keys its leaf by identity — `[owner | local]` — so the
+    /// leaf enumerated back out of the tree carries the key's own bytes.
     #[test]
     fn put_at_version_keys_writes_by_identity() {
-        let store = MemoryStore::new();
+        let mut store = MemoryStore::new();
         let key = cell([0xA5u8; 16], [0x3Cu8; 16]);
 
         let mut writes = StateWrites::default();
         writes.cells.insert(key, Some(vec![42]));
 
         let (root, collected) = put_at_version(&store, None, 1, &[&writes]);
-
         assert_ne!(root, StateRoot::ZERO);
-        assert_eq!(collected.leaf_associations.len(), 1);
-        let association = &collected.leaf_associations[0];
-        assert_eq!(association.leaf_key, key.to_bytes());
-        assert_eq!(association.storage_key, Some(key.to_bytes().to_vec()));
+        for (node_key, node) in &collected.nodes {
+            store.put_node(node_key.clone(), node.as_ref().clone());
+        }
+
+        let root_key = NodeKey::new(1, store.root_path());
+        let chunk =
+            Jmt::collect_range(&store, &root_key, &[0u8; 32], &[0xFF; 32], 10).expect("range");
+        let leaf_keys: Vec<Key> = chunk.leaves.iter().map(|(k, _)| *k).collect();
+        assert_eq!(leaf_keys, vec![key.to_bytes()]);
     }
 }

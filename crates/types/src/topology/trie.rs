@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::ShardId;
+use crate::{Address, ShardId};
 
 /// The set of live shards, forming a complete partition of the keyspace: every
 /// infinite bit path from the root passes through exactly one leaf.
@@ -65,9 +65,9 @@ impl ShardTrie {
     /// # Panics
     /// As [`Self::shard_for`].
     #[must_use]
-    pub fn shard_for_prefix(&self, prefix: [u8; 16]) -> ShardId {
+    pub fn shard_for_prefix(&self, prefix: Address) -> ShardId {
         self.walk(u64::from_be_bytes(
-            prefix[..8].try_into().expect("prefix is 16 bytes"),
+            prefix.0[..8].try_into().expect("prefix is 16 bytes"),
         ))
     }
 
@@ -147,8 +147,8 @@ mod tests {
     fn single_routes_everything_to_root() {
         let trie = ShardTrie::single();
         assert_eq!(trie.len(), 1);
-        assert_eq!(trie.shard_for_prefix([1; 16]), ShardId::ROOT);
-        assert_eq!(trie.shard_for_prefix([0xff; 16]), ShardId::ROOT);
+        assert_eq!(trie.shard_for_prefix(Address([1; 16])), ShardId::ROOT);
+        assert_eq!(trie.shard_for_prefix(Address([0xff; 16])), ShardId::ROOT);
     }
 
     #[test]
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(trie.len(), 2);
         // Every owner lands on one of the two depth-1 leaves, by its MSB.
         for seed in 0u8..32 {
-            let shard = trie.shard_for_prefix([seed; 16]);
+            let shard = trie.shard_for_prefix(Address([seed; 16]));
             assert_eq!(shard.depth(), 1);
             assert!(trie.contains(shard));
         }
@@ -186,7 +186,7 @@ mod tests {
         // prefix itself — no hashing, the prefix is the placement.
         let trie = ShardTrie::uniform(3);
         for prefix in [[0x00; 16], [0x5A; 16], [0xFF; 16]] {
-            let shard = trie.shard_for_prefix(prefix);
+            let shard = trie.shard_for_prefix(Address(prefix));
             let bits = u64::from_be_bytes(prefix[..8].try_into().unwrap());
             assert_eq!(shard.path(), bits >> (64 - 3));
         }
@@ -197,7 +197,7 @@ mod tests {
         // The routed shard's path equals the owner prefix's top `depth` bits.
         let trie = ShardTrie::uniform(3);
         let owner = [0xabu8; 16];
-        let shard = trie.shard_for_prefix(owner);
+        let shard = trie.shard_for_prefix(Address(owner));
         let bits = u64::from_be_bytes(owner[..8].try_into().unwrap());
         assert_eq!(shard.path(), bits >> (64 - 3));
     }
@@ -225,7 +225,11 @@ mod tests {
             } else {
                 ShardId::leaf(2, (bits >> 62) & 1)
             };
-            assert_eq!(trie.shard_for_prefix(owner), expected, "seed {seed}");
+            assert_eq!(
+                trie.shard_for_prefix(Address(owner)),
+                expected,
+                "seed {seed}"
+            );
         }
 
         // Merging the two depth-2 leaves restores the 2-shard partition.

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use hyperscale_hbor::Hbor;
 
 use crate::{
-    BeaconWitnessLeafCount, BlockHash, BlockHeight, CompletedRecovery, ConsensusPublicKey,
+    Address, BeaconWitnessLeafCount, BlockHash, BlockHeight, CompletedRecovery, ConsensusPublicKey,
     DeclaredKey, Epoch, NetworkDefinition, NetworkParams, ReshapeThresholds, Round,
     SettledWavesRoot, ShardId, ShardRecovery, ShardTrie, StateRoot, Transaction, ValidatorId,
     ValidatorSet, VoteCount, WeightedTimestamp,
@@ -958,14 +958,14 @@ impl TopologySnapshot {
     /// The shard owning a owner prefix's key space: the trie walk on
     /// the prefix's own bits, no hashing.
     #[must_use]
-    pub fn shard_for_prefix(&self, prefix: [u8; 16]) -> ShardId {
+    pub fn shard_for_prefix(&self, prefix: Address) -> ShardId {
         self.shard_trie.shard_for_prefix(prefix)
     }
 
     /// The shard owning a declared admission key.
     #[must_use]
     pub fn shard_for_declared_key(&self, key: &DeclaredKey) -> ShardId {
-        self.shard_for_prefix(key.owner)
+        self.shard_for_prefix(key.owner())
     }
 
     /// Every shard a transaction touches via its derived effect sets.
@@ -1626,7 +1626,7 @@ mod tests {
     ) -> Vec<[u8; 16]> {
         let prefixes: Vec<[u8; 16]> = (0..=u8::MAX)
             .map(test_prefix)
-            .filter(|p| topology_snapshot.shard_for_prefix(*p) == shard)
+            .filter(|p| topology_snapshot.shard_for_prefix(Address(*p)) == shard)
             .take(count)
             .collect();
         assert!(

@@ -44,7 +44,7 @@ mod tests {
 
     use crate::test_utils::test_transaction_with_prefixes;
     use crate::{
-        AggregateSignature, Attempt, BlockHeight, ConsensusReceipt, ExecutionCertificate,
+        Address, AggregateSignature, Attempt, BlockHeight, ConsensusReceipt, ExecutionCertificate,
         ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash,
         MAX_EXECUTION_CERTIFICATES_PER_WAVE, NetworkDefinition, ProvisionTxRoot,
         ProvisionTxRootsMap, RETENTION_HORIZON, ReceiptValidationError, ShardId, SignerBitfield,
@@ -74,7 +74,7 @@ mod tests {
     fn prefix_on_shard(topology_snapshot: &TopologySnapshot, target_shard: ShardId) -> [u8; 16] {
         for seed in 0u8..=255 {
             let prefix = [seed; 16];
-            if topology_snapshot.shard_for_prefix(prefix) == target_shard {
+            if topology_snapshot.shard_for_prefix(Address(prefix)) == target_shard {
                 return prefix;
             }
         }

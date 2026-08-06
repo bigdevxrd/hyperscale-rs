@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
+use hyperscale_execution::provision_request;
 use hyperscale_metrics::record_fetch_response_sent;
 use hyperscale_provisions::build_provisions;
 use hyperscale_storage::{PendingChain, ShardStorage};
@@ -43,41 +44,19 @@ pub fn serve_provision_request<S: ShardStorage>(
     };
     let block = certified.block();
 
+    // The same derivation the gossip emit path runs, narrowed to the
+    // requester: a transaction is served exactly when the requester is
+    // among the targets the emit path would have broadcast to.
     let mut requests: Vec<ProvisionsRequest> = Vec::new();
     for tx in block.transactions().iter() {
-        // The same read-set keys the gossip emit path serves, re-derived
-        // from the envelope.
-        let routing = tx.routing();
-        let local_keys: Vec<([u8; 16], [u8; 16])> = routing
-            .provision_keys
-            .iter()
-            .filter_map(|key| {
-                key.local
-                    .filter(|_| shard_trie.shard_for_prefix(key.owner) == local_shard)
-                    .map(|local| (key.owner, local))
-            })
-            .collect();
-        let targets_requester = routing
-            .all_prefixes()
-            .iter()
-            .any(|prefix| shard_trie.shard_for_prefix(*prefix) == req.target_shard);
-        // The payer shard serves its bundle even with nothing owned
-        // — the engagement evidence — and a counterpart with
-        // nothing owned serves its empty bundle to the payer alone:
-        // the engagement echo. Both mirror the emit path.
-        let payer_shard = shard_trie.shard_for_prefix(tx.body().fee_payer.0);
-        if local_keys.is_empty() && payer_shard != local_shard {
-            if payer_shard != req.target_shard {
-                continue;
-            }
-        } else if !targets_requester {
+        let Some(mut request) = provision_request(shard_trie, tx, local_shard) else {
+            continue;
+        };
+        if !request.targets.contains(&req.target_shard) {
             continue;
         }
-        requests.push(ProvisionsRequest {
-            tx_hash: tx.hash(),
-            targets: vec![req.target_shard],
-            local_keys,
-        });
+        request.targets = vec![req.target_shard];
+        requests.push(request);
     }
 
     let view = pending_chain.view_at_committed_tip();

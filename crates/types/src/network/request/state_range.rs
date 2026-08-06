@@ -3,14 +3,14 @@
 use hyperscale_hbor::Hbor;
 
 use crate::network::response::GetStateRangeResponse;
-use crate::{BlockHeight, Hash, MessageClass, NetworkMessage, Request};
+use crate::{BlockHeight, MessageClass, NetworkMessage, Request, SubstateKey};
 
 /// Request a verified range of a shard's committed state at a pinned
 /// epoch boundary.
 ///
 /// Sent by a joining vnode bootstrapping the target shard's state
 /// against its beacon-attested boundary anchor. The server reads from
-/// the boundary pinned at `height` and answers leaves in hashed-key
+/// the boundary pinned at `height` and answers leaves in ascending key
 /// order over `[start, end]`, with a completeness-checked range proof
 /// against the boundary's `state_root`.
 #[derive(Debug, Clone, PartialEq, Eq, Hbor)]
@@ -18,10 +18,11 @@ pub struct GetStateRangeRequest {
     /// The pinned boundary height — the anchor's block height, read from
     /// the projected `TopologySnapshot`.
     pub height: BlockHeight,
-    /// First hashed JMT key of the requested range (inclusive).
-    pub start: Hash,
-    /// Last hashed JMT key of the requested range (inclusive).
-    pub end: Hash,
+    /// First key of the requested range (inclusive). A key-space cursor,
+    /// not necessarily a live substate.
+    pub start: SubstateKey,
+    /// Last key of the requested range (inclusive).
+    pub end: SubstateKey,
     /// Requested leaf cap for this chunk. The server clamps to
     /// [`MAX_LEAVES_PER_STATE_RANGE`](crate::network::response::MAX_LEAVES_PER_STATE_RANGE)
     /// and may return fewer (byte budget); `more` signals continuation.
@@ -56,8 +57,8 @@ mod tests {
     fn test_hbor_roundtrip() {
         let request = GetStateRangeRequest {
             height: BlockHeight::new(42),
-            start: Hash::from_bytes(b"start"),
-            end: Hash::from_bytes(b"end"),
+            start: SubstateKey::from_bytes([0x11; 32]),
+            end: SubstateKey::from_bytes([0xEE; 32]),
             limit: 512,
         };
 

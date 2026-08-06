@@ -3,11 +3,10 @@
 use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
-use hyperscale_storage::SubstateLookup;
-use hyperscale_types::{StateRoot, SubstateKey};
+use hyperscale_types::StateRoot;
 use rocksdb::{ColumnFamily, DB, Snapshot};
 
-use super::column_families::{CfHandles, JmtNodesCf, StateCf};
+use super::column_families::{CfHandles, JmtNodesCf};
 use super::jmt_stored::StoredNodeKey;
 use super::metadata::read_jmt_metadata;
 use crate::typed_cf::{self, TypedCf};
@@ -31,7 +30,6 @@ pub struct SnapshotTreeStore<'a> {
     /// proof and ~12 hashmap lookups per `CfHandles::resolve`, the
     /// uncached overhead grows quickly.
     jmt_nodes_cf: &'a ColumnFamily,
-    state_cf: &'a ColumnFamily,
     /// Prefix the underlying shard store's JMT is rooted at — mirrors
     /// `RocksDbShardStorage::root_path` so root lookups resolve to the same
     /// subtree node.
@@ -44,16 +42,8 @@ impl<'a> SnapshotTreeStore<'a> {
         Self {
             snapshot: db.snapshot(),
             jmt_nodes_cf: JmtNodesCf::handle(&cf),
-            state_cf: StateCf::handle(&cf),
             root_path,
         }
-    }
-
-    /// Read the current substate value visible through this `RocksDB`
-    /// snapshot. Used when collecting historical state associations
-    /// during proof generation.
-    pub fn get_substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
-        typed_cf::get::<StateCf>(&self.snapshot, self.state_cf, &key)
     }
 
     /// Read the JMT version and root hash from this snapshot. Uses the
@@ -85,11 +75,5 @@ impl TreeReader for SnapshotTreeStore<'_> {
 
     fn root_path(&self) -> NibblePath {
         self.root_path.clone()
-    }
-}
-
-impl SubstateLookup for SnapshotTreeStore<'_> {
-    fn lookup_substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
-        self.get_substate(key)
     }
 }

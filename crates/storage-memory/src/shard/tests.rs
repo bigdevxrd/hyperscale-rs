@@ -58,9 +58,6 @@ impl SimShardStorage {
     /// Test helper: commits database updates with auto-incrementing JMT version.
     /// Not used in production (use `commit_block` instead).
     ///
-    /// Computes JMT updates and applies them to the tree store, resolving
-    /// leaf-substate associations for historical reads.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -69,7 +66,6 @@ impl SimShardStorage {
 
         let new_version = s.current_block_height.inner() + 1;
 
-        // Apply substate updates first (visible for association resolution below).
         apply_writes(&mut s, writes, new_version, /* write_history */ true);
 
         let parent_version =
@@ -79,11 +75,6 @@ impl SimShardStorage {
 
         for (key, node) in &collected.nodes {
             s.tree_store.insert(key.clone(), Arc::clone(node));
-        }
-        for a in collected.leaf_associations {
-            if let Some(storage_key) = a.storage_key {
-                s.associations.insert(a.leaf_key, storage_key);
-            }
         }
 
         s.current_block_height = BlockHeight::new(new_version);
@@ -181,30 +172,6 @@ fn commit_empty(
     qc: &Verified<QuorumCertificate>,
 ) -> StateRoot {
     commit_with(storage, &StateWrites::default(), block, qc)
-}
-
-/// Associations map hashed leaf keys to raw storage keys, and entries
-/// outlive substate deletion — the mapping is deterministic per key, and
-/// pinned boundary versions may still serve the leaf.
-#[test]
-fn leaf_associations_map_hashed_to_raw_keys() {
-    let storage = SimShardStorage::default();
-    let key = state_key(3, 7);
-    storage.commit_shared(&make_state_writes(3, 7, vec![1]));
-
-    let leaf = key.to_bytes();
-    assert_eq!(
-        storage.state.read().unwrap().associations.get(&leaf),
-        Some(&leaf.to_vec()),
-    );
-
-    let mut delete = StateWrites::default();
-    delete.cells.insert(key, None);
-    storage.commit_shared(&delete);
-    assert_eq!(
-        storage.state.read().unwrap().associations.get(&leaf),
-        Some(&leaf.to_vec()),
-    );
 }
 
 #[test]
@@ -629,12 +596,7 @@ fn substate_bytes_tracks_block_commits() {
 #[test]
 fn historical_substate_reads_resolve_per_version() {
     let storage = SimShardStorage::default();
-    let owner = [1u8; 16];
-    let local = {
-        let mut local = [0u8; 16];
-        local[0] = 10;
-        local
-    };
+    let key = state_key(1, 10);
 
     // Block height 1: commit value [100].
     let updates1 = make_state_writes(1, 10, vec![100]);
@@ -650,26 +612,26 @@ fn historical_substate_reads_resolve_per_version() {
     assert_ne!(root_v1, root_v2, "roots must differ after overwrite");
 
     assert_eq!(
-        storage.get_substate_at_height(owner, local, BlockHeight::new(1)),
+        storage.get_substate_at_height(key, BlockHeight::new(1)),
         Some(Some(vec![100u8])),
         "v1 value should be [100]"
     );
     assert_eq!(
-        storage.get_substate_at_height(owner, local, BlockHeight::new(2)),
+        storage.get_substate_at_height(key, BlockHeight::new(2)),
         Some(Some(vec![200u8])),
         "v2 value should be [200]"
     );
 
     // An unwritten cell reads as absent, not as an unavailable height.
     assert_eq!(
-        storage.get_substate_at_height([99u8; 16], local, BlockHeight::new(1)),
+        storage.get_substate_at_height(state_key(99, 10), BlockHeight::new(1)),
         Some(None),
     );
 
     // A future version is unavailable.
     assert!(
         storage
-            .get_substate_at_height(owner, local, BlockHeight::new(99))
+            .get_substate_at_height(key, BlockHeight::new(99))
             .is_none(),
         "future version should return None"
     );
@@ -868,27 +830,25 @@ fn test_snapshot_at_below_retention_panics() {
 /// (the panic path is reserved for `snapshot_at` callers).
 #[test]
 fn test_historical_substate_read_respects_retention() {
-    let owner = [9u8; 16];
-    let local = [1u8; 16];
+    let key = SubstateKey {
+        owner: Address([9u8; 16]),
+        local: LocalKey([1u8; 16]),
+    };
 
     let storage = SimShardStorage::with_jmt_history_length(2);
     for h in 1..=10u64 {
         let block = make_test_block(BlockHeight::new(h));
         let qc = make_test_qc(&block);
         let mut writes = StateWrites::default();
-        writes.cells.insert(
-            SubstateKey {
-                owner: Address(owner),
-                local: LocalKey(local),
-            },
-            Some(vec![u8::try_from(h).unwrap_or(u8::MAX)]),
-        );
+        writes
+            .cells
+            .insert(key, Some(vec![u8::try_from(h).unwrap_or(u8::MAX)]));
         commit_with(&storage, &writes, &block, &qc);
     }
     // current=10, floor=8.
 
     // Within retention: returns Some.
-    let got = storage.get_substate_at_height(owner, local, BlockHeight::new(9));
+    let got = storage.get_substate_at_height(key, BlockHeight::new(9));
     assert_eq!(
         got,
         Some(Some(vec![9])),
@@ -896,11 +856,11 @@ fn test_historical_substate_read_respects_retention() {
     );
 
     // Below retention: returns None (graceful).
-    let got = storage.get_substate_at_height(owner, local, BlockHeight::new(1));
+    let got = storage.get_substate_at_height(key, BlockHeight::new(1));
     assert!(got.is_none(), "height below retention must return None");
 
     // Above current: returns None.
-    let got = storage.get_substate_at_height(owner, local, BlockHeight::new(99));
+    let got = storage.get_substate_at_height(key, BlockHeight::new(99));
     assert!(got.is_none(), "future height returns None");
 }
 

@@ -37,19 +37,17 @@ pub use beacon::storage::BeaconStorage;
 use hyperscale_jmt::TreeReader;
 use hyperscale_types::{StateWrites, SubstateKey};
 pub use shard::boundary::{
-    AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportLeaf, ImportProgress,
-    ResolveLeaf, WitnessSeed,
+    AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportProgress, WitnessSeed,
 };
 pub use shard::chain_reader::{BlockForSync, ShardChainReader};
 pub use shard::chain_writer::ShardChainWriter;
 pub use shard::genesis::GenesisCommit;
-pub use shard::overlay::{SubstateDbLookup, SubstateLookup};
 pub use shard::pending_chain::{BaseReadCache, ChainEntry, PendingChain, SubstateView};
 pub use shard::recovered_state::RecoveredState;
 pub use shard::store::{SubstateStore, VersionedStore};
 pub use shard::vote_registers::SafeVoteRegisterStore;
 pub use shard::writes::{filter_writes_to_prefix, merge_state_writes, merge_writes_from_receipts};
-pub use tree::{CollectedWrites, JmtSnapshot, LeafSubstateKeyAssociation};
+pub use tree::{CollectedWrites, JmtSnapshot};
 
 /// Umbrella bound for storage backends threaded as a generic `S` through
 /// node-side machinery (the `IoLoop` and its delegated action handler).

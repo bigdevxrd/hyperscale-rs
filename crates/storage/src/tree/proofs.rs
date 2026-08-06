@@ -7,7 +7,7 @@
 //! Provisions` in `crates/types/src/provisioning/provisions.rs`.
 
 use hyperscale_jmt::{Key, NodeKey, TreeReader};
-use hyperscale_types::{BlockHeight, MerkleInclusionProof};
+use hyperscale_types::{BlockHeight, MerkleInclusionProof, SubstateKey};
 
 use super::Jmt;
 
@@ -16,24 +16,14 @@ use super::Jmt;
 ///
 /// Takes any `TreeReader` backed by the caller's storage. Returns `None`
 /// if the root at `block_height` is not in the store.
-///
-/// # Panics
-///
-/// Panics on a storage key that is not a substate key's 32 leaf bytes —
-/// every caller derives its keys from typed [`SubstateKey`]s.
-///
-/// [`SubstateKey`]: hyperscale_types::SubstateKey
 pub fn generate_proof<S: TreeReader>(
     store: &S,
-    storage_keys: &[Vec<u8>],
+    keys: &[SubstateKey],
     block_height: BlockHeight,
 ) -> Option<MerkleInclusionProof> {
     let root_key = NodeKey::new(block_height.inner(), store.root_path());
 
-    let jmt_keys: Vec<Key> = storage_keys
-        .iter()
-        .map(|sk| Key::try_from(sk.as_slice()).expect("a leaf key is 32 bytes"))
-        .collect();
+    let jmt_keys: Vec<Key> = keys.iter().map(SubstateKey::to_bytes).collect();
 
     Jmt::prove(store, &root_key, &jmt_keys)
         .ok()

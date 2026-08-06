@@ -17,7 +17,7 @@ use hyperscale_types::{
     Round, RoutingCommittees, SafeVoteRegisters, SettledWavesRoot, ShardForkProof, ShardId,
     ShardLoad, ShardVoteEquivocation, SharedCertificates, SharedTransactions, SharedWitnessSources,
     SpcEmptyViewMsg, SpcHighTriple, SpcNewCommitMsg, SpcProposalObject, SpcView, SplitChildRoots,
-    StateRoot, SubstateEntry, Timeout, TopologySnapshot, Transaction, TransactionRoot,
+    StateRoot, SubstateEntry, SubstateKey, Timeout, TopologySnapshot, Transaction, TransactionRoot,
     TransactionStatus, TxHash, TxOutcome, ValidatorId, Verifiable, Verified, VoteCount, WaveId,
     WeightedTimestamp,
 };
@@ -146,22 +146,19 @@ pub struct ProvisionsRequest {
     pub tx_hash: TxHash,
     /// The shards this request serves a bundle to.
     pub targets: Vec<ShardId>,
-    /// The locally owned flat keys of the transaction's read set (fresh
-    /// reads and read-modify-write priors) to serve, as `(owner, local)`
-    /// halves. A request with none still stages its transaction: the
-    /// payer shard's bundle is the engagement evidence and flows with
-    /// empty entries.
-    pub local_keys: Vec<([u8; 16], [u8; 16])>,
+    /// The locally owned keys of the transaction's read set (fresh
+    /// reads and read-modify-write priors) to serve. A request with
+    /// none still stages its transaction: the payer shard's bundle is
+    /// the engagement evidence and flows with empty entries.
+    pub local_keys: Vec<SubstateKey>,
 }
 
 /// One payer's fee-reservation demand, verified against its vault
 /// balance at a deterministic committed height.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeeDemand {
-    /// The payer account's owner prefix — the vault cell's owner half.
-    pub owner: [u8; 16],
-    /// The vault cell's local half.
-    pub vault_local: [u8; 16],
+    /// The payer's fee vault cell.
+    pub vault: SubstateKey,
     /// The total reservation the payer must cover: this block's newly
     /// engaged fee ceilings plus the in-flight holds derived from chain
     /// content.

@@ -394,15 +394,14 @@ fn payer_covers_fee_ceiling<S: SubstateStore>(
     storage: Option<&S>,
 ) -> bool {
     let vm = tx.body();
-    let (owner, vault_local) = tx.fee_vault();
-    if topology.shard_trie().shard_for_prefix(owner) != local_shard {
+    let vault = tx.fee_vault();
+    if topology.shard_trie().shard_for_prefix(vault.owner) != local_shard {
         return true;
     }
     let Some(storage) = storage else {
         return true;
     };
-    let Some(cell) = storage.get_substate_at_height(owner, vault_local, storage.jmt_height())
-    else {
+    let Some(cell) = storage.get_substate_at_height(vault, storage.jmt_height()) else {
         return true;
     };
     let balance = cell

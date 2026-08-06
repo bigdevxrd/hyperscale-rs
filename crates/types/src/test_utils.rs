@@ -912,9 +912,9 @@ impl VmStatics for StubVmStatics {
                     .copied()
                     .map(DeclaredKey::prefix)
                     .collect(),
-                provision_prefixes: read_prefixes.clone(),
-                read_prefixes,
-                write_prefixes,
+                provision_prefixes: read_prefixes.iter().copied().map(Address).collect(),
+                read_prefixes: read_prefixes.iter().copied().map(Address).collect(),
+                write_prefixes: write_prefixes.iter().copied().map(Address).collect(),
             },
             subintent_hashes: Vec::new(),
             fee_vault_local: [0xEE; 16],

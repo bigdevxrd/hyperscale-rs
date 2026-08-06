@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_types::{
-    BlockHeight, ConsensusPublicKey, ExecutionCertificate, ShardId, TopologySnapshot, Transaction,
-    ValidatorId, Verifiable, VoteCount, WaveId,
+    BlockHeight, ConsensusPublicKey, DeclaredKey, ExecutionCertificate, ShardId, ShardTrie,
+    SubstateKey, TopologySnapshot, Transaction, ValidatorId, Verifiable, VoteCount, WaveId,
 };
 
 /// Per-shard recipient lists for provision broadcasting.
@@ -126,38 +126,40 @@ pub fn assign_waves(
 
 /// One transaction's provision request: the locally owned read-set keys
 /// (fresh reads and read-modify-write priors) toward every remote
-/// participant. The payer shard's bundle flows even with nothing to
-/// serve — it is the engagement evidence a counterpart demands before
-/// proposing the transaction — and a counterpart with nothing to serve
-/// emits an empty bundle to the payer alone: the engagement echo the
-/// payer's vote waits for.
-fn provision_request(
-    topology_snapshot: &TopologySnapshot,
-    tx: &Arc<Verifiable<Transaction>>,
+/// participant.
+///
+/// The payer shard's bundle flows even with nothing to serve — it is
+/// the engagement evidence a counterpart demands before proposing the
+/// transaction — and a counterpart with nothing to serve emits an empty
+/// bundle to the payer alone: the engagement echo the payer's vote
+/// waits for. The gossip emit path broadcasts to every target; the
+/// fetch serve path narrows the same derivation to the requester.
+pub fn provision_request(
+    trie: &ShardTrie,
+    tx: &Verifiable<Transaction>,
     local_shard: ShardId,
 ) -> Option<ProvisionsRequest> {
-    let trie = topology_snapshot.shard_trie();
-    let local_keys: Vec<([u8; 16], [u8; 16])> = tx
+    let local_keys: Vec<SubstateKey> = tx
         .routing()
         .provision_keys
         .iter()
-        .filter_map(|key| {
-            key.local
-                .filter(|_| trie.shard_for_prefix(key.owner) == local_shard)
-                .map(|local| (key.owner, local))
-        })
+        .filter_map(DeclaredKey::cell)
+        .filter(|cell| trie.shard_for_prefix(cell.owner) == local_shard)
         .collect();
-    let payer_shard = trie.shard_for_prefix(tx.body().fee_payer.0);
+    let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
     let targets: Vec<ShardId> = if local_keys.is_empty() && payer_shard != local_shard {
         // The engagement echo: a counterpart with nothing to serve still
         // owes the payer its commitment of the transaction — the evidence
         // the payer's vote waits for — and owes nobody else anything.
         vec![payer_shard]
     } else {
-        topology_snapshot
-            .all_shards_for_transaction(tx)
+        tx.routing()
+            .all_prefixes()
             .into_iter()
+            .map(|prefix| trie.shard_for_prefix(prefix))
             .filter(|&s| s != local_shard)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect()
     };
     if targets.is_empty() {
@@ -186,7 +188,7 @@ pub fn build_provision_requests(
         if topology_snapshot.is_single_shard_transaction(tx) {
             continue;
         }
-        if let Some(request) = provision_request(topology_snapshot, tx, local_shard) {
+        if let Some(request) = provision_request(topology_snapshot.shard_trie(), tx, local_shard) {
             provision_requests.push(request);
         }
     }

@@ -22,8 +22,6 @@ pub use local_provision::{GetLocalProvisionsResponse, LocalProvisionEntry};
 pub use provision::GetProvisionResponse;
 pub use remote_header::GetRemoteHeadersResponse;
 pub use settled_waves::GetSettledWavesResponse;
-pub use state_range::{
-    GetStateRangeResponse, MAX_LEAVES_PER_STATE_RANGE, StateRangeChunk, StateRangeLeaf,
-};
+pub use state_range::{GetStateRangeResponse, MAX_LEAVES_PER_STATE_RANGE, StateRangeChunk};
 pub use transaction::GetTransactionsResponse;
 pub use witness_history::{GetWitnessHistoryResponse, WitnessHistoryChunk};

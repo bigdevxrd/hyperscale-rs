@@ -6,7 +6,7 @@ use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeRea
 use hyperscale_storage::lock_recover::read_or_recover;
 use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{SubstateStore, VersionedStore};
-use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot};
+use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot, SubstateKey};
 
 use super::core::SimShardStorage;
 use super::snapshot::SimSnapshot;
@@ -30,12 +30,10 @@ impl SubstateStore for SimShardStorage {
 
     fn get_substate_at_height(
         &self,
-        owner: [u8; 16],
-        local: [u8; 16],
+        key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
         use hyperscale_storage::SubstateDatabase;
-        use hyperscale_types::{Address, LocalKey, SubstateKey};
         let current_version = read_or_recover(&self.state).current_block_height.inner();
         if block_height.inner() > current_version {
             return None;
@@ -44,19 +42,16 @@ impl SubstateStore for SimShardStorage {
         if block_height.inner() < floor {
             return None;
         }
-        Some(self.snapshot_at(block_height).substate(SubstateKey {
-            owner: Address(owner),
-            local: LocalKey(local),
-        }))
+        Some(self.snapshot_at(block_height).substate(key))
     }
 
     fn generate_merkle_proofs(
         &self,
-        storage_keys: &[Vec<u8>],
+        keys: &[SubstateKey],
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
         let s = read_or_recover(&self.state);
-        generate_proof(&s.tree_store, storage_keys, block_height)
+        generate_proof(&s.tree_store, keys, block_height)
     }
 }
 

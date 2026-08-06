@@ -20,7 +20,8 @@ use hyperscale_types::{
     MAX_PROGRESS_WAIT, MAX_READY_SIGNALS_PER_BLOCK, MAX_TXS_PER_BLOCK, ProposerTimestamp,
     ProvisionHash, QuiesceCut, RETENTION_HORIZON, ReadySignal, ReshapeThresholds, ReshapeTrigger,
     ScheduleLookup, SettledSetVerdict, SettledWaveSet, ShardId, SplitAtBoundary, StoredReceipt,
-    WaveId, WeightedTimestamp, derive_reshape_trigger, ready_signal_window, settled_set_verdict,
+    SubstateKey, WaveId, WeightedTimestamp, derive_reshape_trigger, ready_signal_window,
+    settled_set_verdict,
 };
 
 /// Shard consensus statistics for monitoring.
@@ -1969,10 +1970,7 @@ impl ShardCoordinator {
             ProposalKind::Normal { transactions, .. } => {
                 let payer_seeds = self.local_payer_fees(
                     committee,
-                    transactions.iter().map(|tx| {
-                        let (owner, local) = tx.fee_vault();
-                        (owner, local, 0u128)
-                    }),
+                    transactions.iter().map(|tx| (tx.fee_vault(), 0u128)),
                 );
                 self.fee_demands(&payer_seeds, parent_block_hash)
             }
@@ -2944,10 +2942,10 @@ impl ShardCoordinator {
             }
             let block_fees = self.local_payer_fees(
                 committee,
-                block.transactions().iter().map(|tx| {
-                    let (owner, local) = tx.fee_vault();
-                    (owner, local, tx.body().max_fee)
-                }),
+                block
+                    .transactions()
+                    .iter()
+                    .map(|tx| (tx.fee_vault(), tx.body().max_fee)),
             );
             let fee_demands = self.fee_demands(&block_fees, block.header().parent_block_hash());
             let verification_actions = self.verification.initiate_block_verifications(
@@ -3020,23 +3018,23 @@ impl ShardCoordinator {
     }
 
     /// Per-payer fee-reservation demands for the transaction list
-    /// `fees`, given as `(owner, vault_local, max_fee)` triples of this
-    /// shard's payers: each listed ceiling, plus the still-held ceilings
-    /// in the complete uncommitted ancestor bodies behind
-    /// `parent_block_hash`, plus the committed in-flight ledger holds.
-    /// Empty when the list names no local payer. A rare manifest-only
-    /// ancestor under view changes contributes nothing — a bounded
-    /// optimism the fee settlement's saturating debit absorbs.
+    /// `fees`, given as `(vault, max_fee)` pairs of this shard's payers:
+    /// each listed ceiling, plus the still-held ceilings in the complete
+    /// uncommitted ancestor bodies behind `parent_block_hash`, plus the
+    /// committed in-flight ledger holds. Empty when the list names no
+    /// local payer. A rare manifest-only ancestor under view changes
+    /// contributes nothing — a bounded optimism the fee settlement's
+    /// saturating debit absorbs.
     fn fee_demands(
         &self,
-        fees: &[([u8; 16], [u8; 16], u128)],
+        fees: &[(SubstateKey, u128)],
         parent_block_hash: BlockHash,
     ) -> Vec<FeeDemand> {
-        let mut demands: std::collections::BTreeMap<[u8; 16], ([u8; 16], u128)> =
+        let mut demands: std::collections::BTreeMap<SubstateKey, u128> =
             std::collections::BTreeMap::new();
-        for (owner, vault_local, max_fee) in fees {
-            let entry = demands.entry(*owner).or_insert((*vault_local, 0));
-            entry.1 = entry.1.saturating_add(*max_fee);
+        for (vault, max_fee) in fees {
+            let entry = demands.entry(*vault).or_insert(0);
+            *entry = entry.saturating_add(*max_fee);
         }
         if demands.is_empty() {
             return Vec::new();
@@ -3048,38 +3046,33 @@ impl ShardCoordinator {
             }
             if let Some(block) = pending.block() {
                 for tx in block.transactions().iter() {
-                    let (owner, _) = tx.fee_vault();
-                    if let Some(entry) = demands.get_mut(&owner) {
+                    if let Some(entry) = demands.get_mut(&tx.fee_vault()) {
                         let fee = tx.body().max_fee;
-                        entry.1 = entry.1.saturating_add(fee);
+                        *entry = entry.saturating_add(fee);
                     }
                 }
             }
             cursor = pending.header().parent_block_hash();
         }
-        for (owner, entry) in &mut demands {
-            entry.1 = entry.1.saturating_add(self.fee_ledger.held_for(*owner));
+        for (vault, entry) in &mut demands {
+            *entry = entry.saturating_add(self.fee_ledger.held_for(vault.owner));
         }
         demands
             .into_iter()
-            .map(|(owner, (vault_local, demand))| FeeDemand {
-                owner,
-                vault_local,
-                demand,
-            })
+            .map(|(vault, demand)| FeeDemand { vault, demand })
             .collect()
     }
 
-    /// The `(owner, vault_local, max_fee)` triples of `transactions`
-    /// whose fee payer routes to this shard.
+    /// The `(vault, max_fee)` pairs of `transactions` whose fee payer
+    /// routes to this shard.
     fn local_payer_fees(
         &self,
         topology_snapshot: &TopologySnapshot,
-        transactions: impl Iterator<Item = ([u8; 16], [u8; 16], u128)>,
-    ) -> Vec<([u8; 16], [u8; 16], u128)> {
+        transactions: impl Iterator<Item = (SubstateKey, u128)>,
+    ) -> Vec<(SubstateKey, u128)> {
         let trie = topology_snapshot.shard_trie();
         transactions
-            .filter(|(owner, _, _)| trie.shard_for_prefix(*owner) == self.local_shard)
+            .filter(|(vault, _)| trie.shard_for_prefix(vault.owner) == self.local_shard)
             .collect()
     }
 

@@ -23,14 +23,14 @@ use hyperscale_node::reshape::orchestrator::{
 use hyperscale_node::reshape::view::ReshapeView;
 use hyperscale_node::{serve_local_certified_headers, serve_state_range_request};
 use hyperscale_storage::{
-    BoundaryStore, ImportLeaf, ImportProgress, RecoveredState, ShardChainReader, WitnessSeed,
+    BoundaryStore, ImportProgress, RecoveredState, ShardChainReader, WitnessSeed,
 };
 use hyperscale_storage_rocksdb::RocksDbShardStorage;
 use hyperscale_types::network::notification::ReadySignalNotification;
 use hyperscale_types::network::request::{GetRemoteHeadersRequest, GetStateRangeRequest};
 use hyperscale_types::{
     Block, BlockHeight, ChainOrigin, ReshapeSeat, ShardAnchor, ShardId, StateRoot, StoredReceipt,
-    ValidatorId,
+    SubstateLeaf, ValidatorId,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -84,7 +84,7 @@ pub enum ReshapeIo {
         /// The assembly's progress after the chunk.
         progress: ImportProgress,
         /// The chunk's verified leaves.
-        leaves: Vec<ImportLeaf>,
+        leaves: Vec<SubstateLeaf>,
     },
     /// A boundary import completed with the resulting store root.
     Imported {
@@ -514,7 +514,7 @@ impl ShardSupervisor {
     /// the loop, answering with [`ReshapeIo::Staged`] — or handing the
     /// chunk back via [`ReshapeIo::StageFailed`] so the duty re-stages it
     /// instead of waiting forever on an ack that will never come.
-    fn reshape_stage(&self, shard: ShardId, progress: ImportProgress, leaves: Vec<ImportLeaf>) {
+    fn reshape_stage(&self, shard: ShardId, progress: ImportProgress, leaves: Vec<SubstateLeaf>) {
         let Some(storage) = self
             .reshape_stores
             .get(&shard)

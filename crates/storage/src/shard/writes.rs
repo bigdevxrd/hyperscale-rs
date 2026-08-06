@@ -44,28 +44,25 @@ pub fn merge_state_writes(list: &[&StateWrites]) -> StateWrites {
 /// the subset of a followed chain's block writes that belongs to a store
 /// rooted there.
 ///
-/// A substate key carries its owner prefix — the identity leaf's routing
-/// half — so every cell of one owner shares the prefix decision.
+/// A substate key's leading bits are its owner prefix — the identity
+/// leaf's routing half — so every cell of one owner shares the prefix
+/// decision.
 #[must_use]
 pub fn filter_writes_to_prefix(writes: &StateWrites, prefix: &NibblePath) -> StateWrites {
     let mut filtered = StateWrites::default();
     for (key, change) in &writes.cells {
-        // A shard prefix is under 64 bits (trie depth bound), so the
-        // zero-padded low half is never consulted.
-        let mut routing = [0u8; 32];
-        routing[..16].copy_from_slice(&key.owner.0);
-        if hash_under_prefix(&routing, prefix) {
+        if key_under_prefix(&key.to_bytes(), prefix) {
             filtered.cells.insert(*key, change.clone());
         }
     }
     filtered
 }
 
-/// Whether `hash`'s leading bits equal `prefix` — the subtree-membership
+/// Whether `key`'s leading bits equal `prefix` — the subtree-membership
 /// test shard prefixes partition the keyspace by.
-fn hash_under_prefix(hash: &[u8; 32], prefix: &NibblePath) -> bool {
+fn key_under_prefix(key: &[u8; 32], prefix: &NibblePath) -> bool {
     (0..prefix.len()).all(|i| {
-        let key_bit = (hash[usize::from(i / 8)] >> (7 - (i % 8))) & 1;
+        let key_bit = (key[usize::from(i / 8)] >> (7 - (i % 8))) & 1;
         prefix.bits_at(i, 1) == key_bit
     })
 }

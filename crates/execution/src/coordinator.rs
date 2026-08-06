@@ -476,7 +476,7 @@ impl ExecutionCoordinator {
             // same shards.
             if classification
                 .shard_trie()
-                .shard_for_prefix(tx.body().fee_payer.0)
+                .shard_for_prefix(tx.body().fee_payer)
                 == local_shard
             {
                 engagement_waits.push((
@@ -500,7 +500,7 @@ impl ExecutionCoordinator {
                 .map(|prefix| trie.shard_for_prefix(*prefix))
                 .filter(|&s| s != local_shard)
                 .collect();
-            let payer_shard = trie.shard_for_prefix(tx.body().fee_payer.0);
+            let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
             if payer_shard != local_shard {
                 remote_shards.insert(payer_shard);
                 // The payer's bundle carries the transaction clock;

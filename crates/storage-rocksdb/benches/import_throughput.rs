@@ -16,16 +16,13 @@ use blake3::hash as blake3_hash;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use hyperscale_jmt::NibblePath;
 use hyperscale_storage::test_helpers::completed_import_progress;
-use hyperscale_storage::{BoundaryStore, ImportLeaf, WitnessSeed};
+use hyperscale_storage::{BoundaryStore, WitnessSeed};
 use hyperscale_storage_rocksdb::RocksDbShardStorage;
-use hyperscale_types::{BlockHeight, StateRoot};
+use hyperscale_types::{BlockHeight, StateRoot, SubstateKey, SubstateLeaf};
 use tempfile::TempDir;
 
 /// Raw value bytes per generated leaf.
 const VALUE_BYTES: usize = 128;
-
-/// Raw storage-key bytes per generated leaf.
-const KEY_BYTES: usize = 40;
 
 /// Leaves per `stage_import_chunk` call — the order of a wire chunk.
 const CHUNK_LEAVES: usize = 4_096;
@@ -36,16 +33,12 @@ const HEIGHT: BlockHeight = BlockHeight::new(1_000);
 
 /// One deterministic generated leaf. Keys are hashed from the index so
 /// paths spread uniformly, exactly like real leaf keys.
-fn leaf(index: u64) -> ImportLeaf {
+fn leaf(index: u64) -> SubstateLeaf {
     let mut seed = [0u8; 32];
     seed[..8].copy_from_slice(&index.to_be_bytes());
     let key = *blake3_hash(&seed).as_bytes();
-    let mut storage_key = vec![0u8; KEY_BYTES];
-    storage_key[..32].copy_from_slice(&key);
-    storage_key[32..40].copy_from_slice(&index.to_be_bytes());
-    ImportLeaf {
-        leaf_key: key,
-        storage_key,
+    SubstateLeaf {
+        key: SubstateKey::from_bytes(key),
         value: seed.repeat(VALUE_BYTES / 32),
     }
 }

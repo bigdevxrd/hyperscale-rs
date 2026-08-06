@@ -158,14 +158,10 @@ fn build_prepared_commit(
 
             let block_height_u64 = snapshot.new_height.inner();
             let result_root = snapshot.result_root;
-            let snapshot = match Arc::try_unwrap(snapshot) {
-                Ok(s) => s,
-                Err(arc) => (*arc).clone(),
-            };
 
             {
                 let mut s = write_or_recover(&storage.state);
-                s.apply_jmt_snapshot(snapshot);
+                s.apply_jmt_snapshot(&snapshot);
                 apply_writes(
                     &mut s,
                     &merged_writes,

@@ -3,14 +3,14 @@
 //! This module defines the storage abstraction used by runners to persist
 //! substate state.
 
-use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot};
+use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot, SubstateKey};
 
 use crate::SubstateDatabase;
 
 /// Extension trait for substate storage with snapshots, historical reads,
 /// and JMT state roots.
 ///
-/// This trait extends Radix's `SubstateDatabase` with additional methods needed
+/// This trait extends `SubstateDatabase` with additional methods needed
 /// for deterministic simulation and state commitment:
 /// - `snapshot()` - Create isolated views for parallel execution
 /// - `jmt_height()` / `state_root()` - JMT state commitment
@@ -63,7 +63,7 @@ pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
     /// Returns a zero hash if no commits have occurred.
     fn state_root(&self) -> StateRoot;
 
-    /// Read one flat-key substate at a specific historical block height.
+    /// Read one substate at a specific historical block height.
     ///
     /// Provision targets are substate-granular, so serving reads points,
     /// never scans. Used by cross-shard provision paths to serve
@@ -75,18 +75,17 @@ pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
     /// height.
     fn get_substate_at_height(
         &self,
-        owner: [u8; 16],
-        local: [u8; 16],
+        key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>>;
 
-    /// Generate a batched merkle multiproof for the given storage keys.
+    /// Generate a batched merkle multiproof for the given substate keys.
     ///
     /// Returns `None` if the requested version is unavailable (GC'd or
     /// not committed).
     fn generate_merkle_proofs(
         &self,
-        storage_keys: &[Vec<u8>],
+        keys: &[SubstateKey],
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof>;
 }

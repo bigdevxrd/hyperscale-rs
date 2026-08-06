@@ -257,7 +257,7 @@ pub fn filter_engaged_transactions(
             }
             let payer_shard = topology_snapshot
                 .shard_trie()
-                .shard_for_prefix(tx.body().fee_payer.0);
+                .shard_for_prefix(tx.body().fee_payer);
             if payer_shard == local_shard {
                 return true;
             }

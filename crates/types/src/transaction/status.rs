@@ -180,8 +180,8 @@ pub enum TransactionError {
     #[error("Transaction must declare at least one write")]
     NoWritesDeclared,
 
-    /// A `NodeId` appears in both `declared_reads` and `declared_writes`.
-    #[error("NodeId declared in both reads and writes")]
+    /// A key appears in both `declared_reads` and `declared_writes`.
+    #[error("key declared in both reads and writes")]
     DuplicateDeclaration,
 
     /// Failed to encode transaction.

@@ -28,7 +28,7 @@ impl RocksDbShardStorage {
         // state root verification failures if the JMT has already advanced.
         //
         // Note: We always include JMT state, even at height 0, because genesis bootstrap
-        // populates the JMT with initial Radix state at height 0 but with a non-zero root.
+        // populates the JMT with the genesis flash at height 0 but with a non-zero root.
         // The height 0 case is handled correctly by the state machine.
         let jmt_block_height = self.jmt_height();
         let jmt_root = self.state_root();

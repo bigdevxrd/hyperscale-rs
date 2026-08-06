@@ -198,7 +198,7 @@ impl LivelockAnalyzer {
                         let write_shards: Vec<_> = tx
                             .admission_write_keys()
                             .iter()
-                            .map(|key| trie.shard_for_prefix(key.owner))
+                            .map(|key| trie.shard_for_prefix(key.owner()))
                             .collect::<HashSet<_>>()
                             .into_iter()
                             .collect();
@@ -206,7 +206,7 @@ impl LivelockAnalyzer {
                         let read_shards: Vec<_> = tx
                             .admission_read_keys()
                             .iter()
-                            .map(|key| trie.shard_for_prefix(key.owner))
+                            .map(|key| trie.shard_for_prefix(key.owner()))
                             .collect::<HashSet<_>>()
                             .into_iter()
                             .filter(|s| !write_shards.contains(s))

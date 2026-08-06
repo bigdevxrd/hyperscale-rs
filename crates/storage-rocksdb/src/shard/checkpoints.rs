@@ -15,20 +15,22 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hyperscale_jmt::{Key, NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
+use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::tree::{import_leaf_updates, jmt_parent_height, put_at_version};
 use hyperscale_storage::{
-    AdoptSource, BoundaryStore, ImportLeaf, ImportProgress, JmtSnapshot, ResolveLeaf, WitnessSeed,
+    AdoptSource, BoundaryStore, ImportProgress, JmtSnapshot, SubstateDatabase, WitnessSeed,
     filter_writes_to_prefix, merge_writes_from_receipts,
 };
-use hyperscale_types::{Block, BlockHeight, ChainOrigin, Hash, StateRoot, StoredReceipt};
+use hyperscale_types::{
+    Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt, SubstateKey, SubstateLeaf,
+};
 use rocksdb::checkpoint::Checkpoint;
 use rocksdb::{ColumnFamily, DB, Options, WriteBatch};
 use tracing::warn;
 
 use super::column_families::{
-    ALL_COLUMN_FAMILIES, BeaconWitnessesCf, CfHandles, ImportStagingCf, JmtNodesCf,
-    LeafAssociationsCf, StagedLeafCodec, StateCf, SubstateBytesCf,
+    ALL_COLUMN_FAMILIES, BeaconWitnessesCf, CfHandles, ImportStagingCf, JmtNodesCf, StateCf,
+    SubstateBytesCf,
 };
 use super::core::RocksDbShardStorage;
 use super::jmt_snapshot_store::SnapshotTreeStore;
@@ -36,8 +38,8 @@ use super::jmt_stored::{StoredNode, StoredNodeKey, VersionedStoredNode};
 use super::metadata::{read_jmt_metadata, write_jmt_metadata};
 use crate::StorageError;
 use crate::typed_cf::{
-    ImportProgressEntry, TypedCf, batch_delete, batch_put, batch_put_encoded, get, iter_all,
-    meta_delete, meta_read, meta_write,
+    ImportProgressEntry, TypedCf, batch_delete, batch_put, get, iter_all, meta_delete, meta_read,
+    meta_write,
 };
 
 /// Queue the staging CF's full range and the progress record for
@@ -66,16 +68,15 @@ fn wipe_cf_into(batch: &mut WriteBatch, db: &DB, cf: &ColumnFamily) {
 /// independent of state size.
 const IMPORT_BATCH_BYTES: u64 = 128 * 1024 * 1024;
 
-/// Fixed per-leaf weight component (keys, hashes, allocator overhead),
-/// so a run of tiny values still bounds a batch's leaf count.
-const IMPORT_LEAF_OVERHEAD: u64 = 64;
+/// Fixed per-leaf weight component (the 32-byte key, hashes, allocator
+/// overhead), so a run of tiny values still bounds a batch's leaf count.
+const IMPORT_LEAF_OVERHEAD: u64 = 96;
 
-/// The batching weight of one staged leaf. Equal to the staged value's
-/// raw length minus its 4-byte key-length prefix, plus the fixed
-/// overhead — [`count_staged_batches`] relies on that identity to walk
-/// raw values without decoding.
-const fn leaf_weight(storage_key: &[u8], value: &[u8]) -> u64 {
-    IMPORT_LEAF_OVERHEAD + storage_key.len() as u64 + value.len() as u64
+/// The batching weight of one staged leaf: its raw value length plus
+/// the fixed overhead — [`count_staged_batches`] repeats this exact
+/// arithmetic on raw staged values.
+const fn leaf_weight(value: &[u8]) -> u64 {
+    IMPORT_LEAF_OVERHEAD + value.len() as u64
 }
 
 /// Walk the staged leaves with the greedy batch rule — close a batch
@@ -83,11 +84,6 @@ const fn leaf_weight(storage_key: &[u8], value: &[u8]) -> u64 {
 /// count (at least 1; an empty staging area is one empty batch) and the
 /// total staged weight. The apply pass repeats this exact walk, so the
 /// count fixes its version numbering.
-///
-/// The walk reads raw values only: a staged value is
-/// `[4-byte key length][storage key][value]`, so its
-/// [`leaf_weight`] is the raw length minus the prefix plus the fixed
-/// overhead — no decode, no per-leaf allocation.
 fn count_staged_batches(db: &DB, staging_cf: &ColumnFamily, limit: u64) -> (u64, u64) {
     let mut batches = 0u64;
     let mut batch_weight = 0u64;
@@ -96,7 +92,7 @@ fn count_staged_batches(db: &DB, staging_cf: &ColumnFamily, limit: u64) -> (u64,
     iter.seek_to_first();
     while iter.valid() {
         let raw_len = iter.value().map_or(0, <[u8]>::len) as u64;
-        let weight = IMPORT_LEAF_OVERHEAD + raw_len.saturating_sub(4);
+        let weight = IMPORT_LEAF_OVERHEAD + raw_len;
         batch_weight += weight;
         total_weight += weight;
         if batch_weight >= limit {
@@ -214,19 +210,15 @@ impl RocksDbShardStorage {
         let mut batch_version = height.inner() + 1 - batches;
         let mut applied = 0u64;
         let mut bytes_total: i64 = 0;
-        let mut batch_leaves: Vec<ImportLeaf> = Vec::new();
+        let mut batch_leaves: Vec<SubstateLeaf> = Vec::new();
         let mut batch_weight = 0u64;
 
         let mut pending = iter_all::<ImportStagingCf>(&self.db, staging_cf).peekable();
         let imported_root = loop {
             let leaf = pending.next();
-            if let Some((leaf_key, (storage_key, value))) = leaf {
-                batch_weight += leaf_weight(&storage_key, &value);
-                batch_leaves.push(ImportLeaf {
-                    leaf_key: *leaf_key.as_bytes(),
-                    storage_key,
-                    value,
-                });
+            if let Some((key, value)) = leaf {
+                batch_weight += leaf_weight(&value);
+                batch_leaves.push(SubstateLeaf { key, value });
                 if batch_weight < limit && pending.peek().is_some() {
                     continue;
                 }
@@ -266,17 +258,8 @@ impl RocksDbShardStorage {
                 );
             }
             let state_cf = StateCf::handle(&cf);
-            let assoc_cf = LeafAssociationsCf::handle(&cf);
             for leaf in &batch_leaves {
-                // The raw storage key IS the state CF key encoding
-                // (`SubstateKeyCodec` is a raw concatenation).
-                batch.put_cf(state_cf, &leaf.storage_key, &leaf.value);
-                batch_put::<LeafAssociationsCf>(
-                    &mut batch,
-                    assoc_cf,
-                    &Hash::from_hash_bytes(&leaf.leaf_key),
-                    &leaf.storage_key,
-                );
+                batch_put::<StateCf>(&mut batch, state_cf, &leaf.key, &leaf.value);
             }
             bytes_total += result.batch.bytes_delta;
 
@@ -463,21 +446,10 @@ impl TreeReader for CheckpointStore {
     }
 }
 
-impl ResolveLeaf for CheckpointStore {
-    fn resolve_leaf(&self, leaf_key: &Key) -> Option<(Vec<u8>, Vec<u8>)> {
+impl SubstateDatabase for CheckpointStore {
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
         let cf = CfHandles::resolve(&self.db);
-        let hashed = Hash::from_hash_bytes(leaf_key);
-        let storage_key =
-            get::<LeafAssociationsCf>(&self.db, LeafAssociationsCf::handle(&cf), &hashed)?;
-        // The association's stored bytes ARE the state CF key encoding
-        // (`SubstateKeyCodec` is a raw concatenation), so the value read
-        // skips the typed decode/encode round-trip.
-        let value = self
-            .db
-            .get_cf(StateCf::handle(&cf), &storage_key)
-            .ok()
-            .flatten()?;
-        Some((storage_key, value))
+        get::<StateCf>(&self.db, StateCf::handle(&cf), &key)
     }
 }
 
@@ -498,7 +470,7 @@ impl BoundaryStore for RocksDbShardStorage {
     fn stage_import_chunk(
         &self,
         progress: &ImportProgress,
-        leaves: &[ImportLeaf],
+        leaves: &[SubstateLeaf],
     ) -> Result<(), String> {
         let _commit_guard = self
             .commit_lock
@@ -513,14 +485,7 @@ impl BoundaryStore for RocksDbShardStorage {
         let staging_cf = ImportStagingCf::handle(&cf);
         let mut batch = WriteBatch::default();
         for leaf in leaves {
-            let mut value = Vec::with_capacity(4 + leaf.storage_key.len() + leaf.value.len());
-            StagedLeafCodec::encode_parts(&leaf.storage_key, &leaf.value, &mut value)?;
-            batch_put_encoded::<ImportStagingCf>(
-                &mut batch,
-                staging_cf,
-                &Hash::from_hash_bytes(&leaf.leaf_key),
-                &value,
-            );
+            batch_put::<ImportStagingCf>(&mut batch, staging_cf, &leaf.key, &leaf.value);
         }
         meta_write::<ImportProgressEntry>(&mut batch, progress);
         self.db
@@ -541,16 +506,14 @@ impl BoundaryStore for RocksDbShardStorage {
         let mut batch = WriteBatch::default();
         wipe_staging_into(&mut batch, ImportStagingCf::handle(&cf));
         // A finalize interrupted mid-build has already committed
-        // JMT-node, state, and leaf-association batches with no
-        // completion marker; a fresh assembly built on top of them would
-        // leave substates readable that its verified root does not
-        // attest. While the marker is unset those CFs hold nothing but
-        // abandoned import batches, so they are wiped with the staging
-        // area. (With the marker set the store is finalized and holds no
-        // staged bytes to begin with.)
+        // JMT-node and state batches with no completion marker; a fresh
+        // assembly built on top of them would leave substates readable
+        // that its verified root does not attest. While the marker is
+        // unset those CFs hold nothing but abandoned import batches, so
+        // they are wiped with the staging area. (With the marker set the
+        // store is finalized and holds no staged bytes to begin with.)
         if self.read_jmt_metadata() == (0, StateRoot::ZERO) {
             wipe_cf_into(&mut batch, &self.db, StateCf::handle(&cf));
-            wipe_cf_into(&mut batch, &self.db, LeafAssociationsCf::handle(&cf));
             wipe_cf_into(&mut batch, &self.db, JmtNodesCf::handle(&cf));
         }
         self.db
@@ -656,9 +619,7 @@ mod tests {
 
     use super::*;
     use crate::RocksDbConfig;
-    use crate::shard::column_families::{
-        IMPORT_STAGING_CF, JMT_NODES_CF, LEAF_ASSOCIATIONS_CF, STATE_CF,
-    };
+    use crate::shard::column_families::{IMPORT_STAGING_CF, JMT_NODES_CF, STATE_CF};
 
     type Jmt = Tree<Blake3Hasher, 1>;
 
@@ -827,12 +788,11 @@ mod tests {
     }
 
     /// An import leaf whose top byte places it under one trie half.
-    fn staged_leaf(top: u8) -> ImportLeaf {
+    fn staged_leaf(top: u8) -> SubstateLeaf {
         let mut key = [0u8; 32];
         key[0] = top;
-        ImportLeaf {
-            leaf_key: key,
-            storage_key: vec![top; 40],
+        SubstateLeaf {
+            key: SubstateKey::from_bytes(key),
             value: vec![top; 3],
         }
     }
@@ -917,7 +877,7 @@ mod tests {
 
     /// Deterministic pseudorandom import leaves with distinct keys and
     /// varied value lengths.
-    fn random_leaves(n: usize, seed: u64) -> Vec<ImportLeaf> {
+    fn random_leaves(n: usize, seed: u64) -> Vec<SubstateLeaf> {
         let mut state = seed.max(1);
         let mut next = move || {
             state ^= state << 13;
@@ -925,7 +885,7 @@ mod tests {
             state ^= state << 17;
             state
         };
-        let mut by_key: std::collections::BTreeMap<[u8; 32], ImportLeaf> =
+        let mut by_key: std::collections::BTreeMap<[u8; 32], SubstateLeaf> =
             std::collections::BTreeMap::new();
         while by_key.len() < n {
             let mut key = [0u8; 32];
@@ -936,9 +896,8 @@ mod tests {
             let value: Vec<u8> = (0..=next() % 200).map(|_| next() as u8).collect();
             by_key.insert(
                 key,
-                ImportLeaf {
-                    leaf_key: key,
-                    storage_key: key.to_vec(),
+                SubstateLeaf {
+                    key: SubstateKey::from_bytes(key),
                     value,
                 },
             );
@@ -948,7 +907,11 @@ mod tests {
 
     /// Stage `leaves` in fixed-size chunks under a completed progress
     /// record.
-    fn stage_in_chunks(storage: &RocksDbShardStorage, height: BlockHeight, leaves: &[ImportLeaf]) {
+    fn stage_in_chunks(
+        storage: &RocksDbShardStorage,
+        height: BlockHeight,
+        leaves: &[SubstateLeaf],
+    ) {
         let bytes = leaves.iter().map(|l| l.value.len() as u64).sum();
         let progress = completed_import_progress(height, bytes);
         for chunk in leaves.chunks(37) {
@@ -997,12 +960,7 @@ mod tests {
         assert_eq!(batched.read_jmt_metadata(), (200, expected));
         assert_eq!(batched.substate_bytes_at_version(200), Some(value_bytes));
         assert_eq!(batched.read_import_progress(), None);
-        for cf in [
-            JMT_NODES_CF,
-            STATE_CF,
-            LEAF_ASSOCIATIONS_CF,
-            IMPORT_STAGING_CF,
-        ] {
+        for cf in [JMT_NODES_CF, STATE_CF, IMPORT_STAGING_CF] {
             assert_eq!(
                 count_cf_entries(&batched, cf),
                 count_cf_entries(&one_shot, cf),
@@ -1043,7 +1001,7 @@ mod tests {
             .unwrap();
         assert_eq!(root, expected);
         assert_eq!(interrupted.read_jmt_metadata(), (150, expected));
-        for cf in [JMT_NODES_CF, STATE_CF, LEAF_ASSOCIATIONS_CF] {
+        for cf in [JMT_NODES_CF, STATE_CF] {
             assert_eq!(
                 count_cf_entries(&interrupted, cf),
                 count_cf_entries(&reference, cf),
@@ -1074,12 +1032,7 @@ mod tests {
         // against a new anchor.
         storage.wipe_import_staging().unwrap();
         assert_eq!(storage.read_import_progress(), None);
-        for cf in [
-            JMT_NODES_CF,
-            STATE_CF,
-            LEAF_ASSOCIATIONS_CF,
-            IMPORT_STAGING_CF,
-        ] {
+        for cf in [JMT_NODES_CF, STATE_CF, IMPORT_STAGING_CF] {
             assert_eq!(
                 count_cf_entries(&storage, cf),
                 0,
@@ -1102,7 +1055,7 @@ mod tests {
             .finalize_staged(height_b, &WitnessSeed::default(), 512, None)
             .unwrap();
         assert_eq!(root, expected);
-        for cf in [JMT_NODES_CF, STATE_CF, LEAF_ASSOCIATIONS_CF] {
+        for cf in [JMT_NODES_CF, STATE_CF] {
             assert_eq!(
                 count_cf_entries(&storage, cf),
                 count_cf_entries(&reference, cf),
@@ -1115,7 +1068,7 @@ mod tests {
             assert!(
                 storage
                     .db
-                    .get_cf(state_cf, &leaf.storage_key)
+                    .get_cf(state_cf, leaf.key.to_bytes())
                     .unwrap()
                     .is_none(),
                 "a dropped leaf stayed readable after the rebind",
@@ -1192,12 +1145,8 @@ mod tests {
                 // Hashed keys spread paths uniformly, like real
                 // leaf keys.
                 let key = *blake3_hash(&seed).as_bytes();
-                let mut storage_key = vec![0u8; 40];
-                storage_key[..32].copy_from_slice(&key);
-                storage_key[32..].copy_from_slice(&index.to_be_bytes());
-                chunk.push(ImportLeaf {
-                    leaf_key: key,
-                    storage_key,
+                chunk.push(SubstateLeaf {
+                    key: SubstateKey::from_bytes(key),
                     value: seed.repeat(VALUE_BYTES / 32),
                 });
                 if chunk.len() == STAGE_CHUNK {
@@ -1224,7 +1173,7 @@ mod tests {
             wide.substate_bytes_at_version(1_000),
             Some(TOTAL * VALUE_BYTES as u64),
         );
-        for cf in [JMT_NODES_CF, STATE_CF, LEAF_ASSOCIATIONS_CF] {
+        for cf in [JMT_NODES_CF, STATE_CF] {
             assert_eq!(
                 count_cf_entries(&wide, cf),
                 count_cf_entries(&narrow, cf),

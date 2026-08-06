@@ -13,16 +13,16 @@ use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::{
-    AdoptSource, BaseReadCache, BlockForSync, BoundaryStore, GenesisCommit, ImportLeaf,
-    ImportProgress, JmtSnapshot, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter,
-    SubstateDatabase, SubstateStore, VersionedStore, WitnessSeed,
+    AdoptSource, BaseReadCache, BlockForSync, BoundaryStore, GenesisCommit, ImportProgress,
+    JmtSnapshot, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateDatabase,
+    SubstateStore, VersionedStore, WitnessSeed,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock,
     CertifiedBlockHeader, ChainOrigin, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
     MerkleInclusionProof, PreparedCommit, QuorumCertificate, SafeVoteRegisters,
-    ShardWitnessPayload, StateRoot, StateWrites, StoredReceipt, SubstateKey, Transaction, TxHash,
-    ValidatorId, Verifiable, Verified, WaveCertificate, WaveId,
+    ShardWitnessPayload, StateRoot, StateWrites, StoredReceipt, SubstateKey, SubstateLeaf,
+    Transaction, TxHash, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId,
 };
 
 use super::core::RocksDbShardStorage;
@@ -99,19 +99,18 @@ impl SubstateStore for SharedStorage {
 
     fn get_substate_at_height(
         &self,
-        owner: [u8; 16],
-        local: [u8; 16],
+        key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        self.0.get_substate_at_height(owner, local, block_height)
+        self.0.get_substate_at_height(key, block_height)
     }
 
     fn generate_merkle_proofs(
         &self,
-        storage_keys: &[Vec<u8>],
+        keys: &[SubstateKey],
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
-        self.0.generate_merkle_proofs(storage_keys, block_height)
+        self.0.generate_merkle_proofs(keys, block_height)
     }
 }
 
@@ -153,7 +152,7 @@ impl BoundaryStore for SharedStorage {
     fn stage_import_chunk(
         &self,
         progress: &ImportProgress,
-        leaves: &[ImportLeaf],
+        leaves: &[SubstateLeaf],
     ) -> Result<(), String> {
         self.0.stage_import_chunk(progress, leaves)
     }

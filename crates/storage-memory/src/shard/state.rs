@@ -5,13 +5,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use hyperscale_jmt::Key;
 use hyperscale_storage::JmtSnapshot;
 use hyperscale_storage::tree::{carry_noop_root, jmt_parent_height, put_at_version};
 use hyperscale_types::{
     BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate,
     ExecutionMetadata, QuorumCertificate, SafeVoteRegisters, ShardWitnessPayload, StateRoot,
-    StateWrites, StoredReceipt, Transaction, TxHash, ValidatorId, WaveCertificate, WaveId,
+    StateWrites, StoredReceipt, SubstateKey, Transaction, TxHash, ValidatorId, WaveCertificate,
+    WaveId,
 };
 
 use super::tree_store::SimTreeStore;
@@ -22,9 +22,6 @@ use super::tree_store::SimTreeStore;
 
 /// Substate data and JMT state protected by a single `RwLock`.
 ///
-/// A single lock ensures association resolution can read substate data
-/// atomically, avoiding deadlock.
-///
 /// Using `RwLock` (instead of Mutex) allows concurrent read access: speculative
 /// JMT computations from `prepare_block_commit` take a read lock and can run
 /// concurrently with other readers, while commits take a write lock.
@@ -33,19 +30,13 @@ pub struct SharedState {
     pub tree_store: SimTreeStore,
     pub current_block_height: BlockHeight,
     pub current_root_hash: StateRoot,
-    /// Hashed-leaf-key → raw-storage-key associations for snap-sync
-    /// range serving. Entries for deleted leaves are retained — the
-    /// mapping is deterministic and immutable per key, and pinned
-    /// boundaries serve versions where the leaf may still be live.
-    pub associations: HashMap<Key, Vec<u8>>,
-    /// Current value per `storage_key`. Absent key = no value. This is
+    /// Current value per substate key. Absent key = no value. This is
     /// the authoritative source of truth for reads at the current tip.
-    pub current_state: BTreeMap<Vec<u8>, Vec<u8>>,
-    /// Per-write prior-value entries keyed by `(storage_key,
-    /// write_version)`. `None` means the key was absent immediately
-    /// before the write at that version. Consumed by historical reads
-    /// and the retention GC.
-    pub state_history: BTreeMap<(Vec<u8>, u64), Option<Vec<u8>>>,
+    pub current_state: BTreeMap<SubstateKey, Vec<u8>>,
+    /// Per-write prior-value entries keyed by `(key, write_version)`.
+    /// `None` means the key was absent immediately before the write at
+    /// that version. Consumed by historical reads and the retention GC.
+    pub state_history: BTreeMap<(SubstateKey, u64), Option<Vec<u8>>>,
     /// Committed substate byte total per version, written in
     /// lockstep with each applied snapshot. Consensus-critical:
     /// shard-witness derivation reads it, so it must be identical on
@@ -65,7 +56,6 @@ impl SharedState {
             current_root_hash: StateRoot::ZERO,
             current_state: BTreeMap::new(),
             state_history: BTreeMap::new(),
-            associations: HashMap::new(),
             substate_bytes: BTreeMap::new(),
         }
     }
@@ -76,12 +66,12 @@ impl SharedState {
     /// agreed on the resulting state root). We apply unconditionally —
     /// the overlay may have computed from a base state ahead of the
     /// tree store, so `base_root` mismatches are expected and safe.
-    pub(crate) fn apply_jmt_snapshot(&mut self, snapshot: JmtSnapshot) {
+    pub(crate) fn apply_jmt_snapshot(&mut self, snapshot: &JmtSnapshot) {
         // A no-op snapshot prepared before its parent's tree existed (the
         // recovery bridge over a sync-admitted parent) carries no nodes.
         // Persistence is height-ordered, so the parent's root is durable
         // now — complete the carry the prepare couldn't.
-        if let Some((key, node)) = carry_noop_root(&self.tree_store, &snapshot) {
+        if let Some((key, node)) = carry_noop_root(&self.tree_store, snapshot) {
             self.tree_store.insert(key, node);
         }
         for (jmt_key, jmt_node) in &snapshot.nodes {
@@ -93,11 +83,6 @@ impl SharedState {
         // the tree at past block heights. In production, RocksDB GC handles
         // pruning after `jmt_history_length` blocks (default 256). In
         // simulation, we retain all nodes (tests are short-lived).
-        for a in snapshot.leaf_associations {
-            if let Some(storage_key) = a.storage_key {
-                self.associations.insert(a.leaf_key, storage_key);
-            }
-        }
 
         // Substate bytes: the byte total behind the currently applied version
         // (equal across any interleaved empty commits) plus this
@@ -119,11 +104,10 @@ impl SharedState {
 }
 
 /// Apply `updates` at `height` over the shared state — substate values
-/// (with history), the JMT (owner-routed via `owner_map`), leaf
-/// associations, the substate byte total, and the tip version/root — and
-/// return the resulting root. The state-level half of a block commit,
-/// shared by the chain writer's sync path and a split observer's
-/// follow path.
+/// (with history), the JMT, the substate byte total, and the tip
+/// version/root — and return the resulting root. The state-level half
+/// of a block commit, shared by the chain writer's sync path and a
+/// split observer's follow path.
 pub fn apply_state_writes(
     s: &mut SharedState,
     writes: &StateWrites,
@@ -143,11 +127,6 @@ pub fn apply_state_writes(
     // roots must be retained for provision proof generation at past
     // block heights. RocksDB GC handles pruning in production. See
     // also `apply_jmt_snapshot`.
-    for a in collected.leaf_associations {
-        if let Some(storage_key) = a.storage_key {
-            s.associations.insert(a.leaf_key, storage_key);
-        }
-    }
 
     // Substate bytes: prior byte total behind the current version plus
     // this application's leaf delta — same rule as `apply_jmt_snapshot`.
@@ -279,19 +258,16 @@ pub fn apply_writes(
     write_history: bool,
 ) {
     for (key, change) in &writes.cells {
-        let key_bytes = key.to_bytes().to_vec();
-        let prior = state.current_state.get(&key_bytes).cloned();
+        let prior = state.current_state.get(key).cloned();
         if write_history {
-            state
-                .state_history
-                .insert((key_bytes.clone(), version), prior);
+            state.state_history.insert((*key, version), prior);
         }
         match change {
             Some(value) => {
-                state.current_state.insert(key_bytes, value.clone());
+                state.current_state.insert(*key, value.clone());
             }
             None => {
-                state.current_state.remove(&key_bytes);
+                state.current_state.remove(key);
             }
         }
     }

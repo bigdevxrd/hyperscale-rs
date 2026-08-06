@@ -137,9 +137,9 @@ pub fn decode_tree(bytes: &[u8]) -> Result<EnvelopeTree, VmStaticsError> {
 /// owner-granular for collection targets.
 const fn admission_key(target: &EffectTarget) -> DeclaredKey {
     match target {
-        EffectTarget::Point(key) => DeclaredKey::substate(key.owner.0, key.local.0),
+        EffectTarget::Point(key) => DeclaredKey::Cell(*key),
         EffectTarget::Entry { owner, .. } | EffectTarget::Range { owner, .. } => {
-            DeclaredKey::prefix(owner.0)
+            DeclaredKey::Prefix(*owner)
         }
     }
 }
@@ -247,17 +247,14 @@ impl BridgeStatics {
         let package = package_hash(&ProtocolHasher, artifact);
         let cell = package_key(publisher.0, package);
         let vault = vault_key(publisher.0, XRD);
-        let mut write_keys = vec![
-            DeclaredKey::substate(cell.owner.0, cell.local.0),
-            DeclaredKey::substate(vault.owner.0, vault.local.0),
-        ];
+        let mut write_keys = vec![DeclaredKey::Cell(cell), DeclaredKey::Cell(vault)];
         write_keys.sort_unstable();
         write_keys.dedup();
 
         Ok(Derived {
             routing: Routing {
                 read_prefixes: Vec::new(),
-                write_prefixes: vec![publisher.0],
+                write_prefixes: vec![publisher],
                 provision_prefixes: Vec::new(),
                 read_keys: Vec::new(),
                 write_keys,
@@ -439,9 +436,9 @@ impl VmStatics for BridgeStatics {
                 Mode::Locked => {}
             }
         }
-        let prefixes = |keys: &BTreeSet<DeclaredKey>| -> Vec<[u8; 16]> {
+        let prefixes = |keys: &BTreeSet<DeclaredKey>| -> Vec<Address> {
             keys.iter()
-                .map(|key| key.owner)
+                .map(DeclaredKey::owner)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect()
@@ -664,7 +661,7 @@ mod tests {
         assert!(derived.routing.provision_keys.is_empty());
         assert!(derived.routing.provision_prefixes.is_empty());
         assert!(derived.subintent_hashes.is_empty());
-        let mut owners = vec![composer_addr().0, bob_addr().0];
+        let mut owners = vec![composer_addr(), bob_addr()];
         owners.sort_unstable();
         assert_eq!(derived.routing.write_prefixes, owners);
     }

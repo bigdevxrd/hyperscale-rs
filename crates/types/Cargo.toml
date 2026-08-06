@@ -28,7 +28,7 @@ thiserror.workspace = true
 # Diagnostics
 tracing.workspace = true
 
-# Radix transaction types
+# Transaction signing
 ed25519-dalek.workspace = true
 indexmap.workspace = true
 zeroize.workspace = true

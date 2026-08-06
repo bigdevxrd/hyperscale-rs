@@ -18,13 +18,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyperscale_types::{
-    FinalizedWave, RETENTION_HORIZON, Transaction, TxHash, Verifiable, WeightedTimestamp,
+    Address, FinalizedWave, RETENTION_HORIZON, Transaction, TxHash, Verifiable, WeightedTimestamp,
 };
 
 /// One engaged reservation: the payer's owner prefix, the held ceiling,
 /// and the prune deadline.
 struct Hold {
-    payer: [u8; 16],
+    payer: Address,
     max_fee: u128,
     deadline: WeightedTimestamp,
 }
@@ -45,11 +45,11 @@ impl FeeReservationLedger {
     pub fn register_committed(
         &mut self,
         transactions: &[Arc<Verifiable<Transaction>>],
-        payer_local: impl Fn([u8; 16]) -> bool,
+        payer_local: impl Fn(Address) -> bool,
     ) {
         for tx in transactions {
             let vm = tx.body();
-            if !payer_local(vm.fee_payer.0) {
+            if !payer_local(vm.fee_payer) {
                 continue;
             }
             let deadline = tx
@@ -57,7 +57,7 @@ impl FeeReservationLedger {
                 .end_timestamp_exclusive
                 .plus(RETENTION_HORIZON);
             self.holds.entry(tx.hash()).or_insert(Hold {
-                payer: vm.fee_payer.0,
+                payer: vm.fee_payer,
                 max_fee: vm.max_fee,
                 deadline,
             });
@@ -82,7 +82,7 @@ impl FeeReservationLedger {
 
     /// The total engaged reservation against `payer`, saturating.
     #[must_use]
-    pub fn held_for(&self, payer: [u8; 16]) -> u128 {
+    pub fn held_for(&self, payer: Address) -> u128 {
         self.holds
             .values()
             .filter(|hold| hold.payer == payer)
@@ -98,6 +98,7 @@ mod tests {
     use super::*;
 
     const PAYER: [u8; 16] = [0xAA; 16];
+    const PAYER_ADDR: Address = Address(PAYER);
 
     fn transaction(max_fee: u128, end_ms: u64) -> Arc<Verifiable<Transaction>> {
         let validity = TimestampRange::new(
@@ -114,8 +115,8 @@ mod tests {
         let mut ledger = FeeReservationLedger::new();
         let tx = transaction(1_000, 60_000);
         ledger.register_committed(std::slice::from_ref(&tx), |_| true);
-        assert_eq!(ledger.held_for(PAYER), 1_000);
-        assert_eq!(ledger.held_for([0xBB; 16]), 0);
+        assert_eq!(ledger.held_for(PAYER_ADDR), 1_000);
+        assert_eq!(ledger.held_for(Address([0xBB; 16])), 0);
 
         let wave = Arc::new(Verifiable::from(make_finalized_wave(
             BlockHeight::new(1),
@@ -123,7 +124,7 @@ mod tests {
             TransactionDecision::Accept,
         )));
         ledger.release_finalized(std::slice::from_ref(&wave));
-        assert_eq!(ledger.held_for(PAYER), 0);
+        assert_eq!(ledger.held_for(PAYER_ADDR), 0);
     }
 
     #[test]
@@ -131,7 +132,7 @@ mod tests {
         let mut ledger = FeeReservationLedger::new();
         let tx = transaction(1_000, 60_000);
         ledger.register_committed(std::slice::from_ref(&tx), |_| false);
-        assert_eq!(ledger.held_for(PAYER), 0);
+        assert_eq!(ledger.held_for(PAYER_ADDR), 0);
     }
 
     #[test]
@@ -141,12 +142,12 @@ mod tests {
         ledger.register_committed(std::slice::from_ref(&tx), |_| true);
 
         ledger.prune(WeightedTimestamp::from_millis(100));
-        assert_eq!(ledger.held_for(PAYER), 1_000);
+        assert_eq!(ledger.held_for(PAYER_ADDR), 1_000);
 
         let past = WeightedTimestamp::from_millis(100)
             .plus(RETENTION_HORIZON)
             .plus(std::time::Duration::from_millis(1));
         ledger.prune(past);
-        assert_eq!(ledger.held_for(PAYER), 0);
+        assert_eq!(ledger.held_for(PAYER_ADDR), 0);
     }
 }

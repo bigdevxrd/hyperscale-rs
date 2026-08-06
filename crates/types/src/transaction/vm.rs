@@ -18,7 +18,7 @@ pub use hyperscale_vm_types::{
 use thiserror::Error;
 
 use crate::crypto::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, verify_ed25519};
-use crate::{DeclaredKey, Hash, TimestampRange, WeightedTimestamp};
+use crate::{Address, DeclaredKey, Hash, TimestampRange, WeightedTimestamp};
 
 /// The workspace's crypto and clock binding for the envelope.
 ///
@@ -95,23 +95,23 @@ pub struct Routing {
     /// Conflict keys for every mutation (writes, deltas, reserves).
     pub write_keys: Vec<DeclaredKey>,
     /// Owner prefixes behind `read_keys`, deduplicated ascending.
-    pub read_prefixes: Vec<[u8; 16]>,
+    pub read_prefixes: Vec<Address>,
     /// Owner prefixes behind `write_keys`, deduplicated ascending.
-    pub write_prefixes: Vec<[u8; 16]>,
+    pub write_prefixes: Vec<Address>,
     /// The keys whose committed values counterpart shards must carry:
     /// fresh reads plus read-modify-write priors. Deltas, blind writes,
     /// and reserves provision nothing.
     pub provision_keys: Vec<DeclaredKey>,
     /// Owner prefixes behind `provision_keys`, deduplicated ascending —
     /// the wave's provision dependency set routes on these.
-    pub provision_prefixes: Vec<[u8; 16]>,
+    pub provision_prefixes: Vec<Address>,
 }
 
 impl Routing {
     /// Every owner prefix the transaction touches, ascending, deduplicated.
     #[must_use]
-    pub fn all_prefixes(&self) -> Vec<[u8; 16]> {
-        let mut prefixes: Vec<[u8; 16]> = self
+    pub fn all_prefixes(&self) -> Vec<Address> {
+        let mut prefixes: Vec<Address> = self
             .read_prefixes
             .iter()
             .chain(self.write_prefixes.iter())

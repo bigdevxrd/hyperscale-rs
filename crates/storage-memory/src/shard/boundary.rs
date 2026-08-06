@@ -8,14 +8,16 @@
 
 use std::sync::{Arc, RwLock};
 
-use hyperscale_jmt::{Key, NibblePath, Node, NodeKey, TreeReader};
+use hyperscale_jmt::{NibblePath, Node, NodeKey, TreeReader};
 use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::import_leaf_updates;
 use hyperscale_storage::{
-    AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportLeaf, ImportProgress, ResolveLeaf,
-    WitnessSeed, filter_writes_to_prefix, merge_writes_from_receipts,
+    AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportProgress, SubstateDatabase, WitnessSeed,
+    filter_writes_to_prefix, merge_writes_from_receipts,
 };
-use hyperscale_types::{Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt};
+use hyperscale_types::{
+    Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt, SubstateKey, SubstateLeaf,
+};
 
 use super::core::SimShardStorage;
 use super::snapshot::value_at_version;
@@ -47,19 +49,16 @@ impl TreeReader for SimBoundary {
     }
 }
 
-impl ResolveLeaf for SimBoundary {
-    fn resolve_leaf(&self, leaf_key: &Key) -> Option<(Vec<u8>, Vec<u8>)> {
+impl SubstateDatabase for SimBoundary {
+    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
         let state = read_or_recover(&self.state);
-        let storage_key = state.associations.get(leaf_key)?.clone();
-        let value = value_at_version(
+        value_at_version(
             &state.current_state,
             &state.state_history,
-            &storage_key,
+            key,
             self.version,
             state.current_block_height.inner(),
-        )?;
-        drop(state);
-        Some((storage_key, value))
+        )
     }
 }
 
@@ -88,7 +87,7 @@ impl BoundaryStore for SimShardStorage {
     fn stage_import_chunk(
         &self,
         progress: &ImportProgress,
-        leaves: &[ImportLeaf],
+        leaves: &[SubstateLeaf],
     ) -> Result<(), String> {
         let state = read_or_recover(&self.state);
         if state.current_block_height != BlockHeight::GENESIS
@@ -100,10 +99,7 @@ impl BoundaryStore for SimShardStorage {
 
         let mut staging = write_or_recover(&self.import_staging);
         for leaf in leaves {
-            staging.leaves.insert(
-                leaf.leaf_key,
-                (leaf.storage_key.clone(), leaf.value.clone()),
-            );
+            staging.leaves.insert(leaf.key, leaf.value.clone());
         }
         staging.progress = Some(progress.clone());
         drop(staging);
@@ -151,13 +147,9 @@ impl BoundaryStore for SimShardStorage {
         let staged = std::mem::take(&mut staging.leaves);
         staging.progress = None;
         drop(staging);
-        let leaves: Vec<ImportLeaf> = staged
+        let leaves: Vec<SubstateLeaf> = staged
             .into_iter()
-            .map(|(leaf_key, (storage_key, value))| ImportLeaf {
-                leaf_key,
-                storage_key,
-                value,
-            })
+            .map(|(key, value)| SubstateLeaf { key, value })
             .collect();
 
         let root_path = state.tree_store.root_path();
@@ -167,10 +159,7 @@ impl BoundaryStore for SimShardStorage {
             state.tree_store.insert(key, Arc::new(node));
         }
         for leaf in leaves {
-            state
-                .associations
-                .insert(leaf.leaf_key, leaf.storage_key.clone());
-            state.current_state.insert(leaf.storage_key, leaf.value);
+            state.current_state.insert(leaf.key, leaf.value);
         }
 
         // Seed the substate byte total: a fresh-tree import's byte delta IS
@@ -241,8 +230,8 @@ mod tests {
         test_boundary_unpinned_height_not_served,
     };
     use hyperscale_types::{
-        ConsensusReceipt, GlobalReceiptHash, Hash, ShardId, SplitChildRoots, StateWrites, TxHash,
-        shard_prefix_path,
+        ConsensusReceipt, GlobalReceiptHash, Hash, ShardId, SplitChildRoots, StateWrites,
+        SubstateKey, TxHash, shard_prefix_path,
     };
 
     use super::*;
@@ -260,9 +249,8 @@ mod tests {
         let storage = SimShardStorage::default();
         let mut progress = completed_import_progress(BlockHeight::new(3), 1);
         progress.cursors[0].done = false;
-        let leaf = ImportLeaf {
-            leaf_key: [0x42; 32],
-            storage_key: vec![0x42],
+        let leaf = SubstateLeaf {
+            key: SubstateKey::from_bytes([0x42; 32]),
             value: vec![1],
         };
         storage.stage_import_chunk(&progress, &[leaf]).unwrap();
@@ -321,7 +309,9 @@ mod tests {
         let root_key = boundary.get_root_key(1).expect("pinned root resolves");
         let chunk = Jmt::collect_range(&boundary, &root_key, &[0u8; 32], &[0xFF; 32], 10).unwrap();
         let (leaf, _) = chunk.leaves.first().expect("one substate committed");
-        let (_, value) = boundary.resolve_leaf(leaf).expect("leaf resolves");
+        let value = boundary
+            .substate(SubstateKey::from_bytes(*leaf))
+            .expect("leaf resolves");
         assert_eq!(value, vec![1]);
     }
 

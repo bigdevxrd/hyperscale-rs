@@ -15,8 +15,6 @@ blake3.workspace = true
 # Parallelism
 rayon.workspace = true
 
-# Radix dependencies (for SubstateDatabase, DatabaseUpdates, etc.)
-
 # Key encoding
 indexmap.workspace = true
 

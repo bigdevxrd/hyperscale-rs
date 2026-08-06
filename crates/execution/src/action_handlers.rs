@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use hyperscale_core::{Action, ActionContext, CrossShardExecutionRequest, ProtocolEvent};
-use hyperscale_engine::{CrossShardTxInput, DynSnapshot, ExecutedTx, WaveBatchContext};
+use hyperscale_engine::{CrossShardTxInput, ExecutedTx, WaveBatchContext};
 use hyperscale_metrics::record_execution_latency;
 use hyperscale_network::Network;
 use hyperscale_storage::{ShardStorage, SubstateStore, SubstateView};
@@ -154,7 +154,6 @@ where
             let shard_trie = ctx.topology_snapshot.shard_trie();
             let view = ctx.pending_chain.view_at(block_hash, block_height);
             let view_snap = <SubstateView<_> as SubstateStore>::snapshot(&*view);
-            let snapshot = DynSnapshot(&view_snap);
             let wave_ctx = WaveBatchContext {
                 par: ctx.par,
                 cache: ctx.execution_cache.as_ref(),
@@ -165,7 +164,7 @@ where
                 wave_start_reveal,
             };
             let txs: Vec<_> = transactions.iter().map(Arc::clone).collect();
-            let executed = ctx.executor.execute_wave_batch(&wave_ctx, &snapshot, &txs);
+            let executed = ctx.executor.execute_wave_batch(&wave_ctx, &view_snap, &txs);
             let ExecutionOutputs {
                 outcomes: tx_outcomes,
                 results,
@@ -203,7 +202,6 @@ where
             let shard_trie = ctx.topology_snapshot.shard_trie();
             let view = ctx.pending_chain.view_at(block_hash, block_height);
             let view_snap = <SubstateView<_> as SubstateStore>::snapshot(&*view);
-            let snapshot = DynSnapshot(&view_snap);
             let wave_ctx = WaveBatchContext {
                 par: ctx.par,
                 cache: ctx.execution_cache.as_ref(),
@@ -216,7 +214,7 @@ where
             let all: Vec<&CrossShardExecutionRequest> = requests.iter().collect();
             let executed =
                 ctx.executor
-                    .execute_cross_shard_batch(&wave_ctx, &snapshot, &inputs(&all));
+                    .execute_cross_shard_batch(&wave_ctx, &view_snap, &inputs(&all));
             let ExecutionOutputs {
                 outcomes: tx_outcomes,
                 results,

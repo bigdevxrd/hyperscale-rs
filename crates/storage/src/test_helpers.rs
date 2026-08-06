@@ -18,14 +18,15 @@ use hyperscale_types::{
     ProposerTimestamp, ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound,
     RevealChain, Round, ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield,
     SpcCert, SpcView, Stake, StakePoolId, StateRoot, StateWrites, StoredReceipt, SubstateKey,
-    TransactionRoot, TxHash, TxOutcome, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId,
-    WeightedTimestamp, WitnessSources, compute_global_receipt_root, compute_merkle_root,
+    SubstateLeaf, TransactionRoot, TxHash, TxOutcome, ValidatorId, Verifiable, Verified,
+    WaveCertificate, WaveId, WeightedTimestamp, WitnessSources, compute_global_receipt_root,
+    compute_merkle_root,
 };
 
 use crate::tree::Jmt;
 use crate::{
-    BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportLeaf, ImportProgress, ResolveLeaf,
-    ShardChainReader, ShardChainWriter, SubstateStore, WitnessSeed,
+    BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportProgress, ShardChainReader,
+    ShardChainWriter, SubstateDatabase, SubstateStore, WitnessSeed,
 };
 
 /// A completed [`ImportProgress`] covering the whole key span as one
@@ -55,7 +56,7 @@ pub fn completed_import_progress(height: BlockHeight, staged_bytes: u64) -> Impo
 pub fn import_boundary_state<S: BoundaryStore>(
     storage: &S,
     height: BlockHeight,
-    leaves: &[ImportLeaf],
+    leaves: &[SubstateLeaf],
     witnesses: WitnessSeed,
 ) -> Result<StateRoot, String> {
     let staged_bytes = leaves.iter().map(|l| l.value.len() as u64).sum();
@@ -431,9 +432,8 @@ fn commit_empty_blocks_up_to(storage: &impl ShardChainWriter, target: BlockHeigh
 /// Commit `writes` at `height` through the production block-commit path.
 ///
 /// The writes ride a single-receipt finalized wave inside a test block,
-/// so substates, state history, the JMT, and leaf associations all land
-/// exactly as a live commit writes them. Returns the resulting state
-/// root.
+/// so substates, state history, and the JMT all land exactly as a live
+/// commit writes them. Returns the resulting state root.
 pub fn commit_block_with_updates(
     storage: &impl ShardChainWriter,
     height: BlockHeight,
@@ -802,14 +802,15 @@ where
     let boundary = serving.open_boundary(BlockHeight::new(6)).expect("pinned");
     let root_key = boundary.get_root_key(6).expect("root resolves");
     let chunk = Jmt::collect_range(&boundary, &root_key, &[0u8; 32], &[0xFF; 32], 1_000).unwrap();
-    let leaves: Vec<ImportLeaf> = chunk
+    let leaves: Vec<SubstateLeaf> = chunk
         .leaves
         .iter()
         .map(|(leaf_key, _)| {
-            let (storage_key, value) = boundary.resolve_leaf(leaf_key).expect("resolves");
-            ImportLeaf {
-                leaf_key: *leaf_key,
-                storage_key,
+            let value = boundary
+                .substate(SubstateKey::from_bytes(*leaf_key))
+                .expect("resolves");
+            SubstateLeaf {
+                key: SubstateKey::from_bytes(*leaf_key),
                 value,
             }
         })
@@ -818,7 +819,7 @@ where
     let probe = leaves
         .iter()
         .find(|l| l.value == [3, 3, 3])
-        .map(|l| (l.leaf_key, l.storage_key.clone()))
+        .map(|l| l.key)
         .expect("seed-3 leaf present");
 
     let imported_root =
@@ -829,10 +830,7 @@ where
     // Imported raw substates read back at the imported state.
     fresh.pin_boundary(BlockHeight::new(6)).unwrap();
     let fresh_boundary = fresh.open_boundary(BlockHeight::new(6)).expect("pinned");
-    assert_eq!(
-        fresh_boundary.resolve_leaf(&probe.0),
-        Some((probe.1, vec![3, 3, 3])),
-    );
+    assert_eq!(fresh_boundary.substate(probe), Some(vec![3, 3, 3]),);
 
     // A second import is rejected — the store is no longer empty.
     assert!(

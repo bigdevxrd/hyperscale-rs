@@ -96,7 +96,7 @@ fn register<C: Cluster>(c: &mut C, pool: [u8; 16], seed: u8, validator: Validato
 /// A delegation through a stake pool contract folds into the beacon
 /// state — the control plane's whole rail, driven by contract code.
 ///
-/// The Radix scenarios above assert a witness a *keyholder signed*: the
+/// The scenarios above assert a witness a *keyholder signed*: the
 /// action rides a no-op transaction's plaintext message, so the beacon
 /// takes the sender's word for it. This one asserts a witness a *contract
 /// emitted*: the delegator's funds actually move into the pool's vault,
@@ -104,10 +104,10 @@ fn register<C: Cluster>(c: &mut C, pool: [u8; 16], seed: u8, validator: Validato
 /// Nothing is asserted about the amount by the transaction — the amount
 /// is the delta that occurred.
 ///
-/// Every layer between is the one the Radix path already used: the same
-/// receipt field, the same witness leaves, the same windowed root on the
-/// boundary header, the same fold. Only the source changed, which is what
-/// makes this the assertion that the source is all that changed.
+/// Every layer between is the same: the same receipt field, the same
+/// witness leaves, the same windowed root on the boundary header, the
+/// same fold. Only the source differs, which is what makes this the
+/// assertion that the source is all that differs.
 ///
 /// # Panics
 ///

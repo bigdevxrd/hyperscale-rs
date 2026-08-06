@@ -16,9 +16,8 @@
 //! tombstones, dedup caches, conflict-detector entries) inherits the
 //! same bound and can be dropped deterministically on every node.
 //!
-//! Field naming and the inclusive/exclusive convention align with Radix
-//! Engine V2's proposer-timestamp range so the eventual integration is a
-//! field-rename rather than a struct redesign.
+//! The range is judged against proposer timestamps: start inclusive,
+//! end exclusive.
 
 use std::time::Duration;
 

@@ -1026,7 +1026,7 @@ impl MempoolCoordinator {
         }
         let payer_shard = topology_snapshot
             .shard_trie()
-            .shard_for_prefix(tx.body().fee_payer.0);
+            .shard_for_prefix(tx.body().fee_payer);
         if payer_shard == self.local_shard {
             return None;
         }
@@ -1439,7 +1439,7 @@ mod tests {
         stub_transaction, test_prefix, test_transaction, test_transaction_with_prefixes,
         test_validity_range,
     };
-    use hyperscale_types::{RevealChain, Verified, WitnessSources};
+    use hyperscale_types::{Address, RevealChain, Verified, WitnessSources};
 
     /// Test-only convenience: wrap any `Transaction` in a
     /// `Verified` witness via the test-only gate.
@@ -2305,11 +2305,11 @@ mod tests {
         use hyperscale_types::test_utils::test_prefix;
 
         let trie = ShardTrie::uniform_from_count(2);
-        let shard1 = trie.shard_for_prefix(test_prefix(seed));
+        let shard1 = trie.shard_for_prefix(Address(test_prefix(seed)));
 
         let mut other_seed = seed.wrapping_add(1);
         loop {
-            if trie.shard_for_prefix(test_prefix(other_seed)) != shard1 {
+            if trie.shard_for_prefix(Address(test_prefix(other_seed))) != shard1 {
                 break;
             }
             other_seed = other_seed.wrapping_add(1);
@@ -2806,7 +2806,7 @@ mod tests {
 
         // A tx writing to a node, and that node's shard.
         let prefix = test_prefix(7);
-        let fenced_shard = topology_snapshot.shard_for_prefix(prefix);
+        let fenced_shard = topology_snapshot.shard_for_prefix(Address(prefix));
         let tx = test_transaction_with_prefixes(&[7], &[], &[prefix]);
         let hash = tx.hash();
 
@@ -2827,7 +2827,7 @@ mod tests {
         let mut seed = 8u8;
         let other = loop {
             let p = test_prefix(seed);
-            if topology_snapshot.shard_for_prefix(p) != fenced_shard {
+            if topology_snapshot.shard_for_prefix(Address(p)) != fenced_shard {
                 break p;
             }
             seed = seed.wrapping_add(1);
@@ -2854,7 +2854,7 @@ mod tests {
         let mut mempool = MempoolCoordinator::new(ShardId::leaf(1, 0));
 
         let prefix = test_prefix(7);
-        let fenced_shard = topology_snapshot.shard_for_prefix(prefix);
+        let fenced_shard = topology_snapshot.shard_for_prefix(Address(prefix));
         mempool.engage_fork_fence(fenced_shard, BlockHeight::new(5), &BTreeMap::new());
 
         let submit = |mempool: &mut MempoolCoordinator, seed: u8| {

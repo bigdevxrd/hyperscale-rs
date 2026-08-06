@@ -8,7 +8,7 @@ use hyperscale_storage::tree::carry_noop_root;
 use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{JmtSnapshot, SubstateStore, VersionedStore};
 use hyperscale_types::{
-    Block, BlockHeight, MerkleInclusionProof, QuorumCertificate, StateRoot, Verified,
+    Block, BlockHeight, MerkleInclusionProof, QuorumCertificate, StateRoot, SubstateKey, Verified,
 };
 use rocksdb::{WriteBatch, WriteOptions};
 
@@ -45,12 +45,10 @@ impl SubstateStore for RocksDbShardStorage {
 
     fn get_substate_at_height(
         &self,
-        owner: [u8; 16],
-        local: [u8; 16],
+        key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
         use hyperscale_storage::SubstateDatabase;
-        use hyperscale_types::{Address, LocalKey, SubstateKey};
         let snapshot = self.db.snapshot();
         let (current_version, _) = read_jmt_metadata(&snapshot);
         if block_height.inner() > current_version {
@@ -66,21 +64,18 @@ impl SubstateStore for RocksDbShardStorage {
             version: block_height.inner(),
             current_version,
         };
-        Some(snap.substate(SubstateKey {
-            owner: Address(owner),
-            local: LocalKey(local),
-        }))
+        Some(snap.substate(key))
     }
 
     fn generate_merkle_proofs(
         &self,
-        storage_keys: &[Vec<u8>],
+        keys: &[SubstateKey],
         block_height: BlockHeight,
     ) -> Option<MerkleInclusionProof> {
         // Use a RocksDB snapshot for all reads so concurrent JMT GC cannot
         // delete nodes mid-proof-generation.
         let snapshot_store = SnapshotTreeStore::new(&self.db, self.root_path.clone());
-        generate_proof(&snapshot_store, storage_keys, block_height)
+        generate_proof(&snapshot_store, keys, block_height)
     }
 }
 
@@ -172,7 +167,6 @@ impl RocksDbShardStorage {
 
         let nodes_count = jmt_snapshot.nodes.len();
         let stale_count = jmt_snapshot.stale_node_keys.len();
-        let associations_count = jmt_snapshot.leaf_associations.len();
         let new_version = jmt_snapshot.new_height.inner();
         let new_root = jmt_snapshot.result_root;
 
@@ -214,7 +208,6 @@ impl RocksDbShardStorage {
             new_root = %hex_encode(new_root.as_raw().to_bytes()),
             nodes_count,
             stale_count,
-            associations_count,
             elapsed_ms = elapsed.as_millis(),
             "Applied prepared commit (single fsync)"
         );

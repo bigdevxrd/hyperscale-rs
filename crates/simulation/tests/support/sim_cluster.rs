@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hyperscale_engine::{DynSnapshot, PreviewGrants, PreviewInputs, PreviewReport};
+use hyperscale_engine::{PreviewGrants, PreviewInputs, PreviewReport};
 use hyperscale_metrics::{MetricsRecorder, with_scoped_recorder};
 use hyperscale_metrics_memory::MemoryRecorder;
 use hyperscale_network::fault::{HostId, RuleHandle};
@@ -25,9 +25,9 @@ use hyperscale_scenarios::{
 use hyperscale_simulation::{EPOCH_MS, ExecutionMode, SimConfig, SimulationRunner};
 use hyperscale_storage::{ShardChainReader, SubstateStore};
 use hyperscale_types::{
-    BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, Event, ReshapeThresholds,
-    ShardId, Signer, StateRoot, Transaction, TransactionDecision, TransactionStatus, TxHash,
-    ValidatorId,
+    Address, BeaconChainConfig, BeaconState, BlockHeight, ConsensusReceipt, Event, LocalKey,
+    ReshapeThresholds, ShardId, Signer, StateRoot, SubstateKey, Transaction, TransactionDecision,
+    TransactionStatus, TxHash, ValidatorId,
 };
 
 /// The clock slice `run_until` advances per poll, matching the runner's own
@@ -404,7 +404,11 @@ impl Cluster for SimCluster {
             .into_iter()
             .find_map(|host| self.runner.hosts_shard(host, shard))?;
         let height = store.jmt_height();
-        store.get_substate_at_height(owner, local, height)?
+        let key = SubstateKey {
+            owner: Address(owner),
+            local: LocalKey(local),
+        };
+        store.get_substate_at_height(key, height)?
     }
 
     fn preview(
@@ -424,7 +428,7 @@ impl Cluster for SimCluster {
         let tip = store.get_certified_header(store.committed_height())?;
         let snapshot = store.snapshot();
         Some(self.runner.engine().preview(
-            &DynSnapshot(&snapshot),
+            &snapshot,
             tx,
             PreviewInputs {
                 clock: tip.qc().weighted_timestamp(),

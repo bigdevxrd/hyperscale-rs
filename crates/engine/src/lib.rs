@@ -39,9 +39,7 @@ pub mod genesis;
 /// Shard assignment and write filtering for `StateWrites`.
 pub mod sharding;
 
-pub use batch::{
-    CrossShardTxInput, DynSnapshot, WaveBatchContext, batch_compute_cached, participating_shards,
-};
+pub use batch::{CrossShardTxInput, WaveBatchContext, batch_compute_cached, participating_shards};
 pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 pub use executor::Executor;
 pub use genesis::{GenesisConfig, World, XRD, genesis_world, genesis_writes};

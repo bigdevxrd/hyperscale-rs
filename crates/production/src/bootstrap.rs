@@ -306,12 +306,12 @@ mod tests {
     use hyperscale_network::{GossipHandler, NotificationHandler, RequestHandler};
     use hyperscale_node::{serve_state_range_request, serve_witness_history_request};
     use hyperscale_storage::test_helpers::{completed_import_progress, pin_snap_sync_replica};
-    use hyperscale_storage::{BoundaryStore, ImportLeaf, PendingChain, SubstateStore};
+    use hyperscale_storage::{BoundaryStore, PendingChain, SubstateStore};
     use hyperscale_storage_memory::SimShardStorage;
     use hyperscale_types::network::request::{GetStateRangeRequest, GetWitnessHistoryRequest};
     use hyperscale_types::{
-        GossipMessage, MessageClass, NetworkDefinition, NetworkMessage, ShardAnchor,
-        TopologySnapshot, ValidatorId, ValidatorSet,
+        GossipMessage, MessageClass, NetworkDefinition, NetworkMessage, ShardAnchor, SubstateKey,
+        SubstateLeaf, TopologySnapshot, ValidatorId, ValidatorSet,
     };
 
     use super::*;
@@ -526,9 +526,8 @@ mod tests {
         // A stale attempt against a different anchor left a poisoned
         // chunk behind; its record binds neither this anchor's root nor
         // the fetch geometry.
-        let poisoned = ImportLeaf {
-            leaf_key: [0x42; 32],
-            storage_key: vec![0x42; 40],
+        let poisoned = SubstateLeaf {
+            key: SubstateKey::from_bytes([0x42; 32]),
             value: vec![0xEE; 8],
         };
         fresh

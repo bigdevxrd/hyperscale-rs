@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hyperscale_effects_bridge::admit_package;
+use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{Event, RevealChain, Transaction, WeightedTimestamp};
 use hyperscale_vm_effects::{EffectTarget, SubstateKey};
 use hyperscale_vm_kernel::{
@@ -30,10 +31,10 @@ use hyperscale_vm_kernel::{
 
 use crate::executor::{
     PayerFee, TargetAuthority, VmBase, abort_reason, charge_for, protocol_hash, publish_work,
-    read_cell, tx_randomness,
+    tx_randomness,
 };
 use crate::genesis::vault_key;
-use crate::{DynSnapshot, Executor, XRD};
+use crate::{Executor, XRD};
 
 /// What a preview run is permitted that a committed execution is not.
 ///
@@ -240,7 +241,7 @@ impl Executor {
     #[must_use]
     pub fn preview(
         &self,
-        snapshot: &DynSnapshot<'_>,
+        snapshot: &(dyn SubstateDatabase + Sync),
         tx: &Transaction,
         inputs: PreviewInputs,
     ) -> PreviewReport {
@@ -273,14 +274,14 @@ impl Executor {
         let mut cells: BTreeMap<SubstateKey, Vec<u8>> = BTreeMap::new();
         for effect in prepared.declaration.set.iter() {
             if let EffectTarget::Point(key) = effect.target
-                && let Some(value) = read_cell(snapshot, key)
+                && let Some(value) = snapshot.substate(key)
             {
                 cells.insert(key, value);
             }
         }
         // The fee vault is not a declared effect, and the report needs
         // its committed amount to say what the charge would leave.
-        if let Some(value) = read_cell(snapshot, payer.vault) {
+        if let Some(value) = snapshot.substate(payer.vault) {
             cells.insert(payer.vault, value);
         }
         let base = Arc::new(VmBase { cells });
@@ -335,7 +336,7 @@ impl Executor {
 /// An artifact admission refuses costs nothing, because a publish that
 /// cannot be admitted never enters a block.
 fn preview_publish(
-    snapshot: &DynSnapshot<'_>,
+    snapshot: &(dyn SubstateDatabase + Sync),
     artifact: &[u8],
     payer: PayerFee,
     grants: PreviewGrants,
@@ -345,7 +346,7 @@ fn preview_publish(
     }
     let work = publish_work(artifact);
     let mut base = VmBase::default();
-    if let Some(value) = read_cell(snapshot, payer.vault) {
+    if let Some(value) = snapshot.substate(payer.vault) {
         base.cells.insert(payer.vault, value);
     }
     let fee = u128::from(work).min(payer.max_fee);

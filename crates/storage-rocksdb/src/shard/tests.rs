@@ -42,7 +42,7 @@ fn placeholder_local_ec(shard: ShardId, height: BlockHeight) -> Arc<ExecutionCer
 use rocksdb::WriteBatch;
 use tempfile::TempDir;
 
-use super::column_families::{LeafAssociationsCf, STATE_HISTORY_CF};
+use super::column_families::STATE_HISTORY_CF;
 use super::core::RocksDbShardStorage;
 use super::metadata::write_chain_origin;
 use crate::config::RocksDbConfig;
@@ -79,28 +79,6 @@ fn make_state_delete(owner_seed: u8, local_seed: u8) -> StateWrites {
     let mut writes = StateWrites::default();
     writes.cells.insert(state_key(owner_seed, local_seed), None);
     writes
-}
-
-/// The leaf-association CF mirrors the live substate key set: a set
-/// writes the hashed-key → raw-key mapping, a delete drops it.
-#[test]
-fn leaf_associations_track_live_substates() {
-    let temp_dir = TempDir::new().unwrap();
-    let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
-
-    let key = state_key(3, 7);
-    storage
-        .commit(&make_state_writes(3, 7, vec![1, 2, 3]))
-        .unwrap();
-
-    let leaf = Hash::from_hash_bytes(&key.to_bytes());
-    assert_eq!(
-        storage.cf_get::<LeafAssociationsCf>(&leaf),
-        Some(key.to_bytes().to_vec()),
-    );
-
-    storage.commit(&make_state_delete(3, 7)).unwrap();
-    assert_eq!(storage.cf_get::<LeafAssociationsCf>(&leaf), None);
 }
 
 /// The per-version substate byte total tracks inserts, value updates and
@@ -1164,41 +1142,39 @@ fn test_historical_substate_read_respects_retention() {
         RocksDbShardStorage::open_with_config(temp_dir.path(), &config, NibblePath::empty())
             .unwrap();
 
-    let owner = [9u8; 16];
-    let local = [1u8; 16];
+    let key = SubstateKey {
+        owner: Address([9u8; 16]),
+        local: LocalKey([1u8; 16]),
+    };
 
     for h in 1..=10u64 {
         let block = make_test_block(BlockHeight::new(h));
         let qc = make_test_qc(&block);
         let mut writes = StateWrites::default();
-        writes.cells.insert(
-            SubstateKey {
-                owner: Address(owner),
-                local: LocalKey(local),
-            },
-            Some(vec![u8::try_from(h).unwrap_or(u8::MAX)]),
-        );
+        writes
+            .cells
+            .insert(key, Some(vec![u8::try_from(h).unwrap_or(u8::MAX)]));
         rocks_commit_with(&storage, &writes, &block, &qc);
     }
     // current=10, floor=8.
 
     // Within retention: returns Some.
     assert_eq!(
-        storage.get_substate_at_height(owner, local, BlockHeight::new(9)),
+        storage.get_substate_at_height(key, BlockHeight::new(9)),
         Some(Some(vec![9])),
         "height within retention must succeed"
     );
     // Below retention: returns None.
     assert!(
         storage
-            .get_substate_at_height(owner, local, BlockHeight::new(1))
+            .get_substate_at_height(key, BlockHeight::new(1))
             .is_none(),
         "height below retention must return None"
     );
     // Above current: returns None.
     assert!(
         storage
-            .get_substate_at_height(owner, local, BlockHeight::new(99))
+            .get_substate_at_height(key, BlockHeight::new(99))
             .is_none(),
         "future height returns None"
     );

@@ -32,5 +32,6 @@ mod waves;
 pub use coordinator::{CompletionData, ExecutionCoordinator, ExecutionMemoryStats};
 pub use exec_cert_store::ExecCertStore;
 pub use finalized_waves::FinalizedWaveStore;
+pub use lookups::provision_request;
 pub use vote_tracker::VoteTracker;
 pub use wave_state::WaveState;

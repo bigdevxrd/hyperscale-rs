@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use hyperscale_storage::{ImportLeaf, ImportProgress};
+use hyperscale_storage::ImportProgress;
 use hyperscale_types::network::request::{
     GetBlockRequest, GetRemoteHeadersRequest, GetStateRangeRequest,
 };
@@ -31,8 +31,8 @@ use hyperscale_types::network::response::{
 };
 use hyperscale_types::{
     Block, BlockHash, BlockHeader, BlockHeight, ChainOrigin, LocalTimestamp, NetworkDefinition,
-    QuorumCertificate, ShardAnchor, ShardId, StateRoot, StoredReceipt, ValidatorId, Verifier,
-    WeightedTimestamp,
+    QuorumCertificate, ShardAnchor, ShardId, StateRoot, StoredReceipt, SubstateLeaf, ValidatorId,
+    Verifier, WeightedTimestamp,
 };
 
 use crate::bootstrap::{BootstrapRequest, ShardBootstrap, StateRangeOutcome};
@@ -126,7 +126,7 @@ pub enum ReshapeRequest {
         /// The assembly's progress after this chunk.
         progress: ImportProgress,
         /// The chunk's verified leaves.
-        leaves: Vec<ImportLeaf>,
+        leaves: Vec<SubstateLeaf>,
     },
     /// Build `shard`'s boundary state at `height` from its staged
     /// chunks. Answered by [`ReshapeEvent::Imported`]. Emitted only
@@ -244,7 +244,7 @@ pub enum ReshapeEvent {
         /// The assembly's progress after the chunk.
         progress: ImportProgress,
         /// The chunk's verified leaves.
-        leaves: Vec<ImportLeaf>,
+        leaves: Vec<SubstateLeaf>,
     },
     /// A boundary import completed with the resulting store root.
     Imported {
@@ -403,7 +403,7 @@ struct ObserverDuty {
     store_opened: bool,
     /// Verified chunks awaiting a [`ReshapeRequest::StageChunk`] emit on
     /// the next advance.
-    pending_stage: Vec<(ImportProgress, Vec<ImportLeaf>)>,
+    pending_stage: Vec<(ImportProgress, Vec<SubstateLeaf>)>,
     /// Stage writes emitted but not yet acknowledged; the finalize waits
     /// for zero so every staged chunk is durable first.
     stages_unacked: usize,
@@ -533,7 +533,7 @@ struct KeeperDuty {
     /// Verified chunks (from either half — their spans are disjoint)
     /// awaiting a [`ReshapeRequest::StageChunk`] emit on the next
     /// advance.
-    pending_stage: Vec<(ImportProgress, Vec<ImportLeaf>)>,
+    pending_stage: Vec<(ImportProgress, Vec<SubstateLeaf>)>,
     /// Stage writes emitted but not yet acknowledged; the union
     /// finalize waits for zero so every staged chunk is durable first.
     stages_unacked: usize,
@@ -2113,8 +2113,8 @@ mod tests {
 
     #[test]
     fn a_failed_stage_re_queues_and_re_emits_the_chunk() {
-        use hyperscale_storage::ImportLeaf;
         use hyperscale_storage::test_helpers::completed_import_progress;
+        use hyperscale_types::{SubstateKey, SubstateLeaf};
 
         let parent = ShardId::ROOT;
         let (child, _) = parent.children();
@@ -2127,9 +2127,8 @@ mod tests {
             ObserverPhase::Syncing(Box::new(ObserverBootstrap::new(parent, anchor(), child))),
         );
         let progress = completed_import_progress(BlockHeight::new(1), 0);
-        let leaves = vec![ImportLeaf {
-            leaf_key: [7u8; 32],
-            storage_key: vec![7],
+        let leaves = vec![SubstateLeaf {
+            key: SubstateKey::from_bytes([7u8; 32]),
             value: vec![7],
         }];
         duty.pending_stage.push((progress.clone(), leaves.clone()));

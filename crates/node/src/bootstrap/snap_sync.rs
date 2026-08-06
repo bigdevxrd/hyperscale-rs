@@ -21,25 +21,23 @@
 //!
 //! # Chunk verification
 //!
-//! Nothing in a response is trusted bare. Three bindings tie each chunk
+//! Nothing in a response is trusted bare. Two bindings tie each chunk
 //! to the attested root:
 //!
-//! 1. the range proof proves the leaf keys into `state_root`, with the
-//!    completeness check rejecting omitted in-span leaves;
-//! 2. each leaf key's low half must equal `blake3(storage_key)[..16]`,
-//!    binding the shipped raw key without needing the ownership map (the
-//!    high, owner-routing half is positional — the proof attests it);
-//! 3. each proof claim's value hash is recomputed from the shipped raw
+//! 1. the range proof proves the leaf keys — the shipped substate keys
+//!    by identity — into `state_root`, with the completeness check
+//!    rejecting omitted in-span leaves;
+//! 2. each proof claim's value hash is recomputed from the shipped raw
 //!    value.
 
 use hyperscale_jmt::{
     Blake3Hasher, Key, MultiProof, NibblePath, RangeChunk, Tree, next_key, subspan,
 };
-use hyperscale_storage::{ImportCursor, ImportLeaf, ImportProgress};
+use hyperscale_storage::{ImportCursor, ImportProgress};
 use hyperscale_types::network::request::GetStateRangeRequest;
 use hyperscale_types::network::response::{GetStateRangeResponse, StateRangeChunk};
 use hyperscale_types::state_key::jmt_value_hash;
-use hyperscale_types::{Hash, ShardAnchor};
+use hyperscale_types::{ShardAnchor, SubstateKey, SubstateLeaf};
 
 type Jmt = Tree<Blake3Hasher, 1>;
 
@@ -52,7 +50,7 @@ pub enum StateRangeOutcome {
     /// cursor advance and byte tally.
     Staged {
         /// The chunk's verified leaves.
-        leaves: Vec<ImportLeaf>,
+        leaves: Vec<SubstateLeaf>,
         /// The assembly's progress after absorbing this chunk.
         progress: ImportProgress,
     },
@@ -201,8 +199,8 @@ impl SnapSync {
                 sub.state = SubRangeState::InFlight;
                 let request = GetStateRangeRequest {
                     height,
-                    start: Hash::from_hash_bytes(&sub.cursor),
-                    end: Hash::from_hash_bytes(&sub.end),
+                    start: SubstateKey::from_bytes(sub.cursor),
+                    end: SubstateKey::from_bytes(sub.end),
                     limit,
                 };
                 (id, request)
@@ -243,26 +241,27 @@ impl SnapSync {
         let Some(chunk) = &response.chunk else {
             return StateRangeOutcome::Rejected("boundary unavailable at peer");
         };
-        let verified = match verify_chunk(
+        if let Err(reason) = verify_chunk(
             self.anchor.state_root.as_raw().as_bytes(),
             &self.root_path,
             &sub.cursor,
             &sub.end,
             chunk,
         ) {
-            Ok(verified) => verified,
-            Err(reason) => return StateRangeOutcome::Rejected(reason),
-        };
+            return StateRangeOutcome::Rejected(reason);
+        }
 
         if chunk.more {
             // Complete through the last leaf; resume just past it. The
             // verifier rejected `more` without leaves, so `last` exists.
             // A successor past the sub-range end (or none at all — the
             // absolute key-space maximum) means the span is exhausted.
-            let last = verified
+            let last = chunk
+                .leaves
                 .last()
                 .expect("verified truncated chunk carries leaves")
-                .leaf_key;
+                .key
+                .to_bytes();
             match next_key(&last) {
                 Some(next) if next <= sub.end => sub.cursor = next,
                 _ => sub.state = SubRangeState::Done,
@@ -270,9 +269,13 @@ impl SnapSync {
         } else {
             sub.state = SubRangeState::Done;
         }
-        self.staged_bytes += verified.iter().map(|l| l.value.len() as u64).sum::<u64>();
+        self.staged_bytes += chunk
+            .leaves
+            .iter()
+            .map(|l| l.value.len() as u64)
+            .sum::<u64>();
         StateRangeOutcome::Staged {
-            leaves: verified,
+            leaves: chunk.leaves.clone(),
             progress: self.progress(),
         }
     }
@@ -315,14 +318,15 @@ impl SnapSync {
 }
 
 /// Verify one wire chunk against the attested root over
-/// `[start, end]`; returns the leaves as import-ready entries.
+/// `[start, end]`; on success the chunk's leaves are import-ready
+/// as-is.
 fn verify_chunk(
     expected_root: &[u8; 32],
     root_path: &NibblePath,
     start: &Key,
     end: &Key,
     chunk: &StateRangeChunk,
-) -> Result<Vec<ImportLeaf>, &'static str> {
+) -> Result<(), &'static str> {
     let mut jmt_leaves: Vec<(Key, [u8; 32])> = Vec::with_capacity(chunk.leaves.len());
     for leaf in &chunk.leaves {
         jmt_leaves.push((leaf.key.to_bytes(), jmt_value_hash(&leaf.value)));
@@ -335,17 +339,7 @@ fn verify_chunk(
         more: chunk.more,
     };
     Jmt::verify_range(&proof, *expected_root, root_path, start, end, &range)
-        .map_err(|_| "range proof does not verify against the anchor")?;
-
-    Ok(chunk
-        .leaves
-        .iter()
-        .map(|leaf| ImportLeaf {
-            leaf_key: leaf.key.to_bytes(),
-            storage_key: leaf.key.to_bytes().to_vec(),
-            value: leaf.value.clone(),
-        })
-        .collect())
+        .map_err(|_| "range proof does not verify against the anchor")
 }
 
 #[cfg(test)]
@@ -491,10 +485,10 @@ mod tests {
         assert!(!sync.is_complete());
     }
 
-    /// A swapped storage key breaks the leaf-key low-half binding even
-    /// though the values themselves are untouched.
+    /// A swapped key breaks the range proof even though the values
+    /// themselves are untouched.
     #[test]
-    fn swapped_storage_key_is_rejected() {
+    fn swapped_key_is_rejected() {
         let (peer, anchor) = replica();
 
         let mut sync = SnapSync::new(anchor, NibblePath::empty(), 0, 100);

@@ -10,8 +10,8 @@
 //!   events, and the beacon facts are shard-specific.
 
 use hyperscale_types::{
-    BeaconWitnessEvent, ConsensusReceipt, Event, ExecutionMetadata, GlobalReceiptHash, ShardId,
-    ShardTrie, StateWrites, TxHash,
+    Address, BeaconWitnessEvent, ConsensusReceipt, Event, ExecutionMetadata, GlobalReceiptHash,
+    ShardId, ShardTrie, StateWrites, TxHash,
 };
 
 use crate::output::ExecutedTx;
@@ -143,7 +143,9 @@ pub fn project_to_shard(
             // shard owns its emitter.
             let beacon_witness_events: Vec<BeaconWitnessEvent> = witnesses
                 .iter()
-                .filter(|(emitter, _)| shard_trie.shard_for_prefix(*emitter) == local_shard)
+                .filter(|(emitter, _)| {
+                    shard_trie.shard_for_prefix(Address(*emitter)) == local_shard
+                })
                 .map(|(_, event)| event.clone())
                 .collect();
             // An event is stored where its emitter lives, so each shard
@@ -152,7 +154,7 @@ pub fn project_to_shard(
             // costs no agreement.
             let events: Vec<Event> = events
                 .iter()
-                .filter(|event| shard_trie.shard_for_prefix(event.emitter.0) == local_shard)
+                .filter(|event| shard_trie.shard_for_prefix(event.emitter) == local_shard)
                 .cloned()
                 .collect();
             let consensus = ConsensusReceipt::Succeeded {

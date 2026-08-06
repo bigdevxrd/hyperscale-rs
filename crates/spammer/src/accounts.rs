@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hex::encode as hex_encode;
 use hyperscale_effects_bridge::account_address;
-use hyperscale_types::{Ed25519PrivateKey, ShardId, ShardTrie, ed25519_keypair_from_seed};
+use hyperscale_types::{Address, Ed25519PrivateKey, ShardId, ShardTrie, ed25519_keypair_from_seed};
 use rand::{Rng, RngExt};
 use serde_json::{from_str as json_from_str, to_string_pretty as json_to_string_pretty};
 use tracing::info;
@@ -104,7 +104,7 @@ impl FundedAccount {
     /// Determine which shard an address belongs to. An account's address
     /// *is* its placement, so this is a trie walk over the address bits.
     fn shard_for_address(address: &[u8; 16], num_shards: u64) -> ShardId {
-        ShardTrie::uniform_from_count(num_shards).shard_for_prefix(*address)
+        ShardTrie::uniform_from_count(num_shards).shard_for_prefix(Address(*address))
     }
 }
 

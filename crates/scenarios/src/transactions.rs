@@ -22,9 +22,8 @@ use crate::support::{Cluster, epochs};
 /// cycle detector: each payer's shard holds a lock the other's wave needs,
 /// neither can engage, and the deadline abort is what breaks it — the
 /// backstop D21 names, doing the job it exists for. So both aborting is
-/// the expected shape rather than the failure the Radix path called it,
-/// and asserting "at most one aborts" would be asserting a mechanism this
-/// engine does not have.
+/// the expected shape, and asserting "at most one aborts" would be
+/// asserting a mechanism this engine does not have.
 ///
 /// What that leaves worth asserting is that the deadlock was transient:
 /// the pair moves nothing, and a single transfer submitted afterwards

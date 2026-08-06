@@ -24,8 +24,8 @@ use hyperscale_storage::{
     BaseReadCache, GenesisCommit, JmtSnapshot, SubstateDatabase, SubstateStore, tree,
 };
 use hyperscale_types::{
-    Block, BlockHeight, ChainOrigin, Hash, QuorumCertificate, SafeVoteRegisters, StateRoot,
-    StateWrites, SubstateKey, ValidatorId, Verified,
+    Block, BlockHeight, ChainOrigin, QuorumCertificate, SafeVoteRegisters, StateRoot, StateWrites,
+    SubstateKey, ValidatorId, Verified,
 };
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamilyDescriptor, DB, DBCompressionType, Options,
@@ -35,9 +35,8 @@ use tracing::field::Empty;
 use tracing::{Level, Span, instrument};
 
 use super::column_families::{
-    ALL_COLUMN_FAMILIES, CfHandles, HOT_WRITE_COLUMN_FAMILIES, JmtNodesCf, LeafAssociationsCf,
-    STATE_HISTORY_CF, StaleJmtNodesCf, StaleStateHistoryCf, StateCf, StateHistoryCf,
-    SubstateBytesCf,
+    ALL_COLUMN_FAMILIES, CfHandles, HOT_WRITE_COLUMN_FAMILIES, JmtNodesCf, STATE_HISTORY_CF,
+    StaleJmtNodesCf, StaleStateHistoryCf, StateCf, StateHistoryCf, SubstateBytesCf,
 };
 use super::jmt_snapshot_store::SnapshotTreeStore;
 use super::jmt_stored::{StaleTreePart, StoredNode, StoredNodeKey, VersionedStoredNode};
@@ -59,7 +58,7 @@ use crate::typed_cf::{DbEncode, TypedCf, batch_delete, batch_put, get, multi_get
 /// - Bloom filters for key existence checks
 /// - Binary Blake3 JMT for cryptographic state commitment
 ///
-/// Implements Radix's `SubstateDatabase` directly, plus our `SubstateStore` extension
+/// Implements `SubstateDatabase` directly, plus the `SubstateStore` extension
 /// for snapshots, node listing, and JMT state roots.
 ///
 /// JMT tree nodes are persisted in the `jmt_nodes` column family. JMT metadata
@@ -215,12 +214,12 @@ impl RocksDbShardStorage {
                 // reads and `list_at_prefix` scans. Keys carry an 8-byte
                 // write_version suffix beyond the prefix, so historical
                 // seeks at `storage_key ++ BE8(V+1)` and partition
-                // scans both benefit from partition-granularity SST
-                // pruning via prefix bloom. StateCf is point-read
-                // dominated and uses whole-key bloom only — see its
-                // type doc.
+                // scans both benefit from per-substate SST pruning via
+                // prefix bloom over the 32-byte key ahead of the version
+                // suffix. StateCf is point-read dominated and uses
+                // whole-key bloom only — see its type doc.
                 if name == STATE_HISTORY_CF {
-                    cf_opts.set_prefix_extractor(SliceTransform::create_fixed_prefix(51));
+                    cf_opts.set_prefix_extractor(SliceTransform::create_fixed_prefix(32));
                 }
 
                 ColumnFamilyDescriptor::new(name, cf_opts)
@@ -352,8 +351,8 @@ impl RocksDbShardStorage {
 
     /// Append JMT data from a snapshot to a `WriteBatch`.
     ///
-    /// Writes JMT nodes, stale tree parts (for deferred GC), historical
-    /// substate associations (if enabled), and JMT metadata (version + root hash).
+    /// Writes JMT nodes, stale tree parts (for deferred GC), and JMT
+    /// metadata (version + root hash).
     ///
     /// This is the write-side complement to `read_jmt_metadata`.
     pub(crate) fn append_jmt_to_batch(
@@ -389,19 +388,6 @@ impl RocksDbShardStorage {
                 &new_version,
                 &stale_parts,
             );
-        }
-
-        // Leaf associations — keep the hashed-key → raw-key mapping in
-        // lockstep with the live leaf set.
-        let leaf_assoc_cf = LeafAssociationsCf::handle(&cf);
-        for assoc in &snapshot.leaf_associations {
-            let key = Hash::from_hash_bytes(&assoc.leaf_key);
-            match &assoc.storage_key {
-                Some(storage_key) => {
-                    batch_put::<LeafAssociationsCf>(batch, leaf_assoc_cf, &key, storage_key);
-                }
-                None => batch_delete::<LeafAssociationsCf>(batch, leaf_assoc_cf, &key),
-            }
         }
 
         // JMT metadata — single key, atomic read.

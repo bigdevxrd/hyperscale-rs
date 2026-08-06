@@ -17,25 +17,13 @@
 use std::sync::Arc;
 
 use hyperscale_dispatch::Parallelism;
-use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
-    BlockHash, RevealChain, ShardId, ShardTrie, SubstateEntry, SubstateKey, Transaction, Verified,
+    BlockHash, RevealChain, ShardId, ShardTrie, SubstateEntry, Transaction, Verified,
     WeightedTimestamp,
 };
 
 use crate::cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 use crate::receipt::CachedOutput;
-
-/// Type-erased borrow of the wave's state snapshot, so one batch entry
-/// point serves every backend's snapshot type while the concrete type
-/// stays generic at the call site.
-pub struct DynSnapshot<'a>(pub &'a (dyn SubstateDatabase + Sync));
-
-impl SubstateDatabase for DynSnapshot<'_> {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
-        self.0.substate(key)
-    }
-}
 
 /// Per-wave inputs an engine's batch execution reads besides the
 /// transactions themselves.

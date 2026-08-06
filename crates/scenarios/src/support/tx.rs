@@ -273,7 +273,7 @@ fn ballast(shard: ShardId, num_shards: u64, count: usize, accounts: &mut Vec<([u
         let mut bytes = [0u8; 32];
         bytes[..8].copy_from_slice(&seed.to_le_bytes());
         let address = account_address(&ed25519_keypair_from_seed(&bytes).public_key().0);
-        if trie.shard_for_prefix(address) == shard {
+        if trie.shard_for_prefix(Address(address)) == shard {
             accounts.push((address, BALLAST_FUNDING));
             found += 1;
         }
@@ -684,7 +684,7 @@ pub fn account_routing_to_n(
             continue;
         }
         let address = account_from_seed(seed);
-        if trie.shard_for_prefix(address) == shard {
+        if trie.shard_for_prefix(Address(address)) == shard {
             taken.push(seed);
             return (signer_from_seed(seed), address);
         }
@@ -701,7 +701,7 @@ pub fn account_routing_to_n(
 /// Panics if `num_shards` is not a power of two.
 #[must_use]
 pub fn account_shard(address: [u8; 16], num_shards: u64) -> ShardId {
-    ShardTrie::uniform_from_count(num_shards).shard_for_prefix(address)
+    ShardTrie::uniform_from_count(num_shards).shard_for_prefix(Address(address))
 }
 
 /// Grind a straddler leg: a payer in `from_shard` and a recipient in

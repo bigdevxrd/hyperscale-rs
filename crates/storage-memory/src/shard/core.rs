@@ -1,9 +1,9 @@
 //! Core `SimShardStorage` struct and basic implementations.
 //!
 //! In-memory storage for deterministic simulation testing (DST).
-//! Substates live in two `BTreeMaps`: `current_state: (storage_key →
-//! value)` for current-tip reads, and `state_history: ((storage_key,
-//! write_version) → Option<prior>)` for historical reads. A read at
+//! Substates live in two `BTreeMaps`: `current_state: (key → value)`
+//! for current-tip reads, and `state_history: ((key, write_version) →
+//! Option<prior>)` for historical reads. A read at
 //! version V below the current tip uses a single forward seek on
 //! `state_history` to find the smallest write after V; its prior value
 //! is the state at V.
@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 
-use hyperscale_jmt::{Key, NibblePath};
+use hyperscale_jmt::NibblePath;
 use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::put_at_version;
 use hyperscale_storage::{
@@ -38,7 +38,7 @@ use super::state::{ConsensusState, SharedState, apply_writes};
 /// # Locking Strategy
 ///
 /// Two `RwLocks` with independent lifetimes — no ordering constraint:
-/// - `state`: `current_state` + state-history log + JMT tree store + version/root/associations.
+/// - `state`: `current_state` + state-history log + JMT tree store + version/root.
 ///   Read lock for substate reads, JMT lookups, and speculative computation.
 ///   Write lock for commits (substate writes + JMT updates in one acquisition).
 /// - `consensus`: Block metadata, certificates, votes, committed state.
@@ -80,7 +80,7 @@ pub struct SimShardStorage {
 #[derive(Default)]
 pub struct SimImportStaging {
     pub(crate) progress: Option<ImportProgress>,
-    pub(crate) leaves: BTreeMap<Key, (Vec<u8>, Vec<u8>)>,
+    pub(crate) leaves: BTreeMap<SubstateKey, Vec<u8>>,
 }
 
 impl Default for SimShardStorage {
@@ -299,14 +299,6 @@ impl SimShardStorage {
         }
         for stale_key in &collected.stale_node_keys {
             s.tree_store.remove(stale_key);
-        }
-        // Genesis leaves must be resolvable for snap-sync serving like
-        // any other commit's — every path that writes JMT leaves applies
-        // its collected associations.
-        for a in collected.leaf_associations {
-            if let Some(storage_key) = a.storage_key {
-                s.associations.insert(a.leaf_key, storage_key);
-            }
         }
 
         let genesis_count =

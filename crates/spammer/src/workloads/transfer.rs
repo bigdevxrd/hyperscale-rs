@@ -264,7 +264,7 @@ mod tests {
     use std::collections::HashSet;
 
     use hyperscale_effects_bridge::decode_tree;
-    use hyperscale_types::ShardTrie;
+    use hyperscale_types::{Address, ShardTrie};
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
@@ -281,7 +281,7 @@ mod tests {
             .graph
             .nodes
             .iter()
-            .map(|node| partition.shard_for_prefix(node.target.0))
+            .map(|node| partition.shard_for_prefix(Address(node.target.0)))
             .collect()
     }
 

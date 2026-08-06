@@ -18,8 +18,8 @@ use std::sync::Arc;
 use hyperscale_effects_bridge::{account_address, encode_tree};
 use hyperscale_engine::genesis::vault_key;
 use hyperscale_engine::{
-    DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache,
-    WaveBatchContext, XRD, genesis_writes,
+    ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache, WaveBatchContext, XRD,
+    genesis_writes,
 };
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
@@ -130,7 +130,6 @@ fn signed_transfer(from: [u8; 16], to: [u8; 16], amount: u128) -> Transaction {
 
 fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
     let store = MapDb::genesis(&world_accounts());
-    let snapshot = DynSnapshot(&store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
     let ctx = WaveBatchContext {
@@ -143,7 +142,7 @@ fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
         wave_start_reveal: RevealChain::ZERO,
     };
     let verified = Arc::new(Verified::<Transaction>::from_persisted(tx));
-    executor.execute_wave_batch(&ctx, &snapshot, std::slice::from_ref(&verified))
+    executor.execute_wave_batch(&ctx, &store, std::slice::from_ref(&verified))
 }
 
 /// An account's native vault as the batch left it.

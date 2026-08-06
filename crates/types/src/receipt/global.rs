@@ -7,9 +7,9 @@ use crate::{BeaconWitnessRoot, EventRoot, GlobalReceiptHash, Hash, WritesRoot};
 /// Cross-shard agreement receipt — ensures validators on different shards
 /// executing the same transaction reach the same outcome.
 ///
-/// Contains `writes_root` (merkle root of declared-only, system-filtered global
-/// writes — NOT shard-filtered) so cross-shard agreement covers state changes,
-/// not just outcome + events.
+/// Contains `writes_root` — a commitment over the transaction's global
+/// writes, before shard filtering — so cross-shard agreement covers
+/// state changes, not just outcome + events.
 ///
 /// This hash is what validators sign over in execution votes.
 /// Ephemeral — never written to storage, only lives for EC aggregation.
@@ -60,12 +60,10 @@ impl GlobalReceipt {
         self.beacon_witness_root
     }
 
-    /// Merkle root of declared-only, system-filtered global database writes.
-    ///
-    /// Computed from `filter_updates_for_global_receipt()` — includes writes for
-    /// ALL shards (not shard-filtered), but excludes system entities and undeclared
-    /// writes. This ensures cross-shard validators agree on the same state changes
-    /// for declared accounts.
+    /// Commitment over the transaction's global writes: the hash of the
+    /// canonical `StateWrites` encoding, covering every shard's cells
+    /// (not shard-filtered), so cross-shard validators agree on the same
+    /// state changes.
     #[must_use]
     pub const fn writes_root(&self) -> WritesRoot {
         self.writes_root

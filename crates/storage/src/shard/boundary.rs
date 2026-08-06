@@ -12,8 +12,10 @@
 use hyperscale_jmt::{Key, TreeReader};
 use hyperscale_types::{
     BeaconWitnessLeafCount, Block, BlockHeight, ChainOrigin, ShardWitnessPayload, StateRoot,
-    StoredReceipt,
+    StoredReceipt, SubstateLeaf,
 };
+
+use crate::SubstateDatabase;
 
 /// The default number of boundary pins a backend retains before
 /// evicting the oldest.
@@ -24,18 +26,6 @@ use hyperscale_types::{
 /// validator overrides it with the chain-derived
 /// `boundary_retention_epochs`.
 pub const BOUNDARY_RETAIN: usize = 3;
-
-/// Resolve a JMT leaf back to the raw substate pair it represents.
-///
-/// Range serving uses this to turn leaves enumerated out of the tree
-/// into the raw `(storage key, value)` pairs a snap-syncing joiner
-/// imports. Backends answer from their leaf-association mapping at the
-/// boundary's pinned state.
-pub trait ResolveLeaf {
-    /// The raw `(storage key, value)` behind `leaf_key`, or `None` when
-    /// the leaf is unknown at this boundary.
-    fn resolve_leaf(&self, leaf_key: &Key) -> Option<(Vec<u8>, Vec<u8>)>;
-}
 
 /// The beacon-witness window a snap-synced import seeds alongside the
 /// state.
@@ -92,23 +82,6 @@ pub struct ImportProgress {
     pub cursors: Vec<ImportCursor>,
 }
 
-/// One verified snap-sync leaf ready for import: the hashed JMT key and
-/// the raw substate pair it binds.
-///
-/// The leaf key is shipped, not recomputed — it carries the originating
-/// shard's owner-prefixed routing half, which the importer cannot derive
-/// from the raw key alone. The assembler has already proven it into the
-/// attested `state_root` and bound both halves of the pair to it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportLeaf {
-    /// The 32-byte hashed JMT leaf key.
-    pub leaf_key: Key,
-    /// The raw substate storage key.
-    pub storage_key: Vec<u8>,
-    /// The raw substate value.
-    pub value: Vec<u8>,
-}
-
 /// How a reshape successor's store reaches the version its genesis sits at
 /// — the only thing that differs between the three adoptions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,8 +105,9 @@ pub enum AdoptSource {
 /// Pin and serve committed state at epoch boundary heights.
 pub trait BoundaryStore {
     /// A pinned boundary opened for serving: the JMT at the pinned
-    /// version plus leaf resolution at that same state.
-    type Boundary: TreeReader + ResolveLeaf + Send;
+    /// version plus substate reads at that same state — a leaf
+    /// enumerated out of the tree is read back by its own key.
+    type Boundary: TreeReader + SubstateDatabase + Send;
 
     /// Pin the committed state at `height` — the shard's epoch boundary
     /// block — keeping a backend-configured number of recent pins
@@ -168,7 +142,7 @@ pub trait BoundaryStore {
     fn stage_import_chunk(
         &self,
         progress: &ImportProgress,
-        leaves: &[ImportLeaf],
+        leaves: &[SubstateLeaf],
     ) -> Result<(), String>;
 
     /// The staged import's progress record, or `None` when nothing is
@@ -188,10 +162,10 @@ pub trait BoundaryStore {
 
     /// Install the staged boundary state at `height` into this (empty)
     /// store: raw substates, the JMT rebuilt from the staged leaf keys,
-    /// the leaf associations, and the anchor window's witness payloads —
-    /// the state-level image of a store that committed through the
-    /// boundary. The staging area is cleared on success. Chain metadata
-    /// is not touched; tail block-sync from `height + 1` layers on top.
+    /// and the anchor window's witness payloads — the state-level image
+    /// of a store that committed through the boundary. The staging area
+    /// is cleared on success. Chain metadata is not touched; tail block-sync
+    /// from `height + 1` layers on top.
     ///
     /// Returns the resulting state root, which the caller must compare
     /// against the beacon-attested anchor before trusting the store.

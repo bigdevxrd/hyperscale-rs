@@ -11,9 +11,8 @@ use hyperscale_effects_bridge::{
 };
 use hyperscale_engine::genesis::{account_artifact, entropy_key, vault_key};
 use hyperscale_engine::{
-    DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, PreviewGrants, PreviewInputs,
-    PreviewOutcome, PreviewReport, ProcessExecutionCache, ResourceChange, WaveBatchContext, XRD,
-    genesis_writes,
+    ExecutedTx, ExecutionMode, Executor, Parallelism, PreviewGrants, PreviewInputs, PreviewOutcome,
+    PreviewReport, ProcessExecutionCache, ResourceChange, WaveBatchContext, XRD, genesis_writes,
 };
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
@@ -261,7 +260,6 @@ fn execute_anchored(
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (bob(), 50)]);
-    let snapshot = DynSnapshot(&snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
     let ctx = WaveBatchContext {
@@ -273,7 +271,7 @@ fn execute_anchored(
         wave_start_ts: WeightedTimestamp::from_millis(1_000),
         wave_start_reveal: reveal,
     };
-    executor.execute_wave_batch(&ctx, &snapshot, transactions)
+    executor.execute_wave_batch(&ctx, &snapshot_store, transactions)
 }
 
 /// The entropy leaf a stamp wrote, if any.
@@ -411,7 +409,6 @@ fn execute_batch_on(
     executor: &Executor,
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
-    let snapshot = DynSnapshot(snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([ShardId::ROOT]));
     let trie = ShardTrie::single();
     let ctx = WaveBatchContext {
@@ -423,7 +420,7 @@ fn execute_batch_on(
         wave_start_ts: WeightedTimestamp::from_millis(1_000),
         wave_start_reveal: RevealChain::ZERO,
     };
-    executor.execute_wave_batch(&ctx, &snapshot, transactions)
+    executor.execute_wave_batch(&ctx, snapshot_store, transactions)
 }
 
 fn vault_cell(writes: &StateWrites, owner: [u8; 16]) -> Option<Vec<u8>> {
@@ -710,7 +707,6 @@ fn execute_on_shard(
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (far(), 50)]);
-    let snapshot = DynSnapshot(&snapshot_store);
     let cache = ProcessExecutionCache::new(HashSet::from([local_shard]));
     let trie = ShardTrie::uniform(1);
     let ctx = WaveBatchContext {
@@ -722,7 +718,7 @@ fn execute_on_shard(
         wave_start_ts: WeightedTimestamp::from_millis(1_000),
         wave_start_reveal: RevealChain::ZERO,
     };
-    executor.execute_wave_batch(&ctx, &snapshot, transactions)
+    executor.execute_wave_batch(&ctx, &snapshot_store, transactions)
 }
 
 fn events_of(executed: &ExecutedTx) -> Vec<([u8; 16], u32)> {
@@ -752,7 +748,10 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
     let world = vec![(alice(), 1_000u128), (far(), 50), (fee_payer(7), 1_000)];
     let executor = Executor::new(&world, ExecutionMode::Serial);
     let trie = ShardTrie::uniform(1);
-    let (near_shard, far_shard) = (trie.shard_for_prefix(alice()), trie.shard_for_prefix(far()));
+    let (near_shard, far_shard) = (
+        trie.shard_for_prefix(Address(alice())),
+        trie.shard_for_prefix(Address(far())),
+    );
     assert_ne!(
         near_shard, far_shard,
         "the two accounts must sit on different shards"
@@ -955,9 +954,8 @@ fn preview_on(
     grants: PreviewGrants,
 ) -> PreviewReport {
     let snapshot_store = MapDb::genesis(accounts);
-    let snapshot = DynSnapshot(&snapshot_store);
     executor.preview(
-        &snapshot,
+        &snapshot_store,
         tx,
         PreviewInputs {
             clock: WeightedTimestamp::from_millis(1_000),

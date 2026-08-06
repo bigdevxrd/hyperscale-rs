@@ -2,27 +2,10 @@
 
 use std::sync::Arc;
 
-use hyperscale_jmt::{Child, EMPTY_HASH, Key, Node, NodeKey};
+use hyperscale_jmt::{Child, EMPTY_HASH, Node, NodeKey};
 use hyperscale_types::{BlockHeight, StateRoot};
 
 use super::{CollectedWrites, state_root_from_jmt};
-
-/// Associates a JMT leaf with the raw substate storage key it
-/// represents.
-///
-/// Range serving resolves leaves enumerated out of the tree back to the
-/// raw `(storage key, value)` pairs a snap-syncing joiner imports.
-/// Backends persist the mapping alongside the tree: it is deterministic
-/// and immutable per key, so retaining entries for deleted leaves is
-/// always safe.
-#[derive(Debug, Clone)]
-pub struct LeafSubstateKeyAssociation {
-    /// The 32-byte JMT leaf key.
-    pub leaf_key: Key,
-    /// The raw substate storage key, or `None` when this write deleted
-    /// the leaf.
-    pub storage_key: Option<Vec<u8>>,
-}
 
 /// A snapshot of JMT nodes computed during speculative execution.
 ///
@@ -46,10 +29,6 @@ pub struct JmtSnapshot {
     pub nodes: Vec<(NodeKey, Arc<Node>)>,
     /// Keys of nodes that became stale.
     pub stale_node_keys: Vec<NodeKey>,
-    /// Hashed-leaf-key → raw-storage-key associations for this
-    /// computation's writes, persisted so snap-sync serving can
-    /// resolve enumerated leaves back to raw substate pairs.
-    pub leaf_associations: Vec<LeafSubstateKeyAssociation>,
     /// Net change to the tree's total substate value bytes in this block.
     pub bytes_delta: i64,
 }
@@ -70,7 +49,6 @@ impl JmtSnapshot {
             new_height,
             nodes: collected.nodes,
             stale_node_keys: collected.stale_node_keys,
-            leaf_associations: collected.leaf_associations,
             bytes_delta: collected.bytes_delta,
         }
     }
@@ -152,7 +130,6 @@ mod tests {
                 .map(|(key, node)| (key.clone(), Arc::new(node.clone())))
                 .collect(),
             stale_node_keys: Vec::new(),
-            leaf_associations: Vec::new(),
             bytes_delta: 0,
         };
         (store, snapshot)
@@ -220,7 +197,6 @@ mod tests {
             new_height: BlockHeight::new(height),
             nodes: Vec::new(),
             stale_node_keys: Vec::new(),
-            leaf_associations: Vec::new(),
             bytes_delta: 0,
         }
     }

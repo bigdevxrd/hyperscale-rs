@@ -406,8 +406,8 @@ pub struct StorageConfig {
 
     /// Number of block heights of JMT history to retain before garbage collection.
     ///
-    /// Stale JMT nodes and their associations are kept for this many heights
-    /// before being eligible for deletion. This enables historical queries within
+    /// Stale JMT nodes are kept for this many heights before being
+    /// eligible for deletion. This enables historical queries within
     /// this window.
     ///
     /// Set to 0 for immediate deletion (no history retention).

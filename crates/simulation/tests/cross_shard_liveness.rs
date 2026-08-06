@@ -14,7 +14,7 @@ use std::time::Duration;
 use hyperscale_scenarios::tx::{account_routing_to, build_transfer_tx, validity_around};
 use hyperscale_scenarios::{Cluster, ScenarioConfig};
 use hyperscale_storage::ShardChainReader;
-use hyperscale_types::{BlockHeight, Ed25519PrivateKey, ShardId, ShardTrie};
+use hyperscale_types::{Address, BlockHeight, Ed25519PrivateKey, ShardId, ShardTrie};
 
 mod support;
 
@@ -115,8 +115,8 @@ fn cross_shard_load_costs_no_view_changes() {
         let from = (nonce % u32::from(ACCOUNTS)) as usize;
         let to = (from + 1) % cast.len();
         assert_ne!(
-            trie.shard_for_prefix(cast[from].1),
-            trie.shard_for_prefix(cast[to].1),
+            trie.shard_for_prefix(Address(cast[from].1)),
+            trie.shard_for_prefix(Address(cast[to].1)),
             "every leg of the load has to cross, or the test applies no load",
         );
         let transfer = build_transfer_tx(
