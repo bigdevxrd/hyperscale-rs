@@ -37,7 +37,8 @@ use hyperscale_scenarios::{
     register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
     single_transfer, split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees, zipf_payments,
+    surviving_sibling_split_seats_full_committees,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use serial_test::serial;
 use support::ProdCluster;
@@ -686,6 +687,18 @@ fn stake_withdraw_drops_effective_stake_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0xD7A1, EPOCH_MS, Vec::new());
     stake_withdraw_drops_effective_stake(&mut cluster);
+}
+
+#[test]
+#[serial]
+#[cfg_attr(
+    not(feature = "ci"),
+    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
+)]
+fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_prod() {
+    let mut cluster =
+        ProdCluster::start_with_accounts(&witness_config(4), 0xE1EC, EPOCH_MS, Vec::new());
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates(&mut cluster);
 }
 
 #[test]

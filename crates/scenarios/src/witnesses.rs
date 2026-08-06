@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use hyperscale_types::{
     ConsensusPublicKey, MIN_STAKE_FLOOR, NetworkDefinition, Stake, StakePoolId, Transaction,
-    TransactionDecision, TransactionStatus, ValidatorId, ValidatorStatus,
+    TransactionDecision, TransactionStatus, UNBONDING_WINDOW_EPOCHS, ValidatorId, ValidatorStatus,
     validator_possession_proof_sign,
 };
 
@@ -280,6 +280,68 @@ pub fn stake_withdraw_drops_effective_stake(c: &mut impl Cluster) {
         pool_total_stake(c, pool),
         Some(Stake::from_attos(delegated)),
         "total stake must hold until the withdrawal unbonds",
+    );
+}
+
+/// A matured withdrawal ejects a pool's validator; a later deposit
+/// reactivates it once capacity returns.
+///
+/// The whole loop rides the VM rail: a delegation buys the capacity, a
+/// registration seats the validator against it, the unstake's unbond
+/// matures into the over-capacity sweep, and the re-deposit is what the
+/// beacon's reactivation pass promotes from. Nothing asserts an amount
+/// by message — every stake figure is what the pool contract recorded.
+///
+/// # Panics
+///
+/// Panics if any stage misses its budget: the registration, the matured
+/// withdrawal's ejection, or the reactivation.
+pub fn withdrawal_ejects_a_validator_that_a_deposit_reactivates(c: &mut impl Cluster) {
+    warm_up(c);
+
+    let member = ValidatorId::new(3000);
+    let funded = MIN_STAKE_FLOOR.attos() * 10;
+    delegate(c, STAKE_POOL, STAKE_POOL_ID, funded);
+    register(c, STAKE_POOL, 13, member);
+    assert!(
+        c.run_until(epochs(8), |c| validator_status(c, member)
+            == Some(ValidatorStatus::Pooled)),
+        "registered validator never reached the pool",
+    );
+
+    // Return most of the position. The unbond leaves total stake in
+    // place until it matures; the release then drops the pool below one
+    // `min_stake` and the over-capacity sweep deactivates its member.
+    let (key, delegator) = delegator();
+    let returned = funded - MIN_STAKE_FLOOR.attos() / 2;
+    submit_committed(
+        c,
+        build_unstake_tx(
+            &key,
+            delegator,
+            STAKE_POOL,
+            returned,
+            validity_around(c.now()),
+        ),
+    );
+    let unbond = u32::try_from(UNBONDING_WINDOW_EPOCHS).expect("unbonding window fits u32");
+    assert!(
+        c.run_until(epochs(unbond + 10), |c| validator_status(c, member)
+            == Some(ValidatorStatus::InsufficientStake)),
+        "the matured withdrawal never ejected the pool's validator; status = {:?}",
+        validator_status(c, member),
+    );
+
+    // Buy the capacity back; the beacon's reactivation pass promotes
+    // the ejected validator once the pool supports it again.
+    delegate(c, STAKE_POOL, STAKE_POOL_ID, funded);
+    assert!(
+        c.run_until(epochs(8), |c| matches!(
+            validator_status(c, member),
+            Some(ValidatorStatus::Pooled | ValidatorStatus::OnShard { .. })
+        )),
+        "the deposit never reactivated the ejected validator; status = {:?}",
+        validator_status(c, member),
     );
 }
 

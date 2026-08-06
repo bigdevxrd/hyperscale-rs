@@ -44,7 +44,8 @@ use hyperscale_scenarios::{
     registered_validator_activates_onto_a_shard, single_transfer, split_lifecycle,
     split_straddler_atomic, split_straddler_ec_partition_atomic,
     split_terminating_payer_releases_its_reservation, stake_withdraw_drops_effective_stake,
-    surviving_sibling_split_seats_full_committees, zipf_payments,
+    surviving_sibling_split_seats_full_committees,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates, zipf_payments,
 };
 use hyperscale_simulation::ExecutionMode;
 use hyperscale_storage::ShardChainReader;
@@ -1049,6 +1050,13 @@ fn stake_withdraw_drops_effective_stake_sim() {
     let mut cluster =
         SimCluster::with_accounts(&witness_config(4), 0xD7A1, &staking_genesis_accounts());
     stake_withdraw_drops_effective_stake(&mut cluster);
+}
+
+#[test]
+fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_sim() {
+    let mut cluster =
+        SimCluster::with_accounts(&witness_config(4), 0xE1EC, &staking_genesis_accounts());
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates(&mut cluster);
 }
 
 #[test]
