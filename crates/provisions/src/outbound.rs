@@ -245,7 +245,7 @@ mod tests {
     }
 
     fn tx(label: &[u8]) -> TxHash {
-        TxHash::from_raw(Hash::from_bytes(label))
+        TxHash::from(Hash::from_bytes(label))
     }
 
     fn make_provisions(source_block: BlockHeight, txs: &[TxHash]) -> Arc<Verified<Provisions>> {

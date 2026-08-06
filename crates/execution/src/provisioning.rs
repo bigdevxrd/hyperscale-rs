@@ -312,13 +312,13 @@ mod tests {
         assert_eq!(t.verified_len(), 0);
         assert_eq!(t.required_len(), 0);
         assert_eq!(t.received_len(), 0);
-        assert!(!t.is_fully_provisioned(TxHash::from_raw(Hash::from_bytes(b"missing"))));
+        assert!(!t.is_fully_provisioned(TxHash::from(Hash::from_bytes(b"missing"))));
     }
 
     #[test]
     fn has_received_from_tracks_absorbed_sources() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         assert!(!t.has_received_from(tx, shard(1)));
 
         // An empty-entry bundle — the payer shard's engagement evidence
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn is_fully_provisioned_requires_required_subset_of_received() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         t.record_required(tx, [shard(1), shard(2)].into_iter().collect());
 
         assert!(!t.is_fully_provisioned(tx));
@@ -354,7 +354,7 @@ mod tests {
         // The dependency-free cross-shard leg: requirements recorded as
         // the empty set dispatch without any provision landing.
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"delta-only"));
+        let tx = TxHash::from(Hash::from_bytes(b"delta-only"));
         t.record_required(tx, BTreeSet::new());
         assert!(t.is_fully_provisioned(tx));
     }
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn is_fully_provisioned_false_without_required_entry() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         // Absorbed provisions records `received[tx]` but there's no `required` —
         // the query must not report fully-provisioned just because
         // anything landed.
@@ -374,8 +374,8 @@ mod tests {
     #[test]
     fn absorb_provisions_returns_touched_tx_hashes_in_order() {
         let mut t = ProvisioningTracker::new();
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"b"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"b"));
         let provisions = make_provisions(shard(1), BlockHeight::new(5), vec![tx_a, tx_b]);
         let touched = t.absorb_provisions(&provisions);
         assert_eq!(touched, vec![tx_a, tx_b]);
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn absorb_provisions_populates_verified_and_received_maps() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         let provisions = make_provisions(shard(1), BlockHeight::new(5), vec![tx]);
         t.absorb_provisions(&provisions);
 
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn absorb_multiple_batches_for_same_tx_accumulates() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         t.absorb_provisions(&make_provisions(shard(1), BlockHeight::new(5), vec![tx]));
         t.absorb_provisions(&make_provisions(shard(2), BlockHeight::new(5), vec![tx]));
 
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn payer_anchor_reads_the_payer_bundles_clock_and_draw() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         t.record_required(tx, [shard(1), shard(2)].into_iter().collect());
         t.record_payer_shard(tx, shard(2));
 
@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn remove_tx_drops_state_from_every_owned_map() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         t.record_required(tx, std::iter::once(shard(1)).collect());
         let provisions = make_provisions(shard(1), BlockHeight::new(5), vec![tx]);
         t.absorb_provisions(&provisions);
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn record_required_overwrites_existing_entry() {
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         t.record_required(tx, std::iter::once(shard(1)).collect());
         // Re-record with a different requirement set.
         t.record_required(tx, [shard(1), shard(2)].into_iter().collect());
@@ -477,8 +477,8 @@ mod tests {
         use hyperscale_types::RETENTION_HORIZON;
 
         let mut t = ProvisioningTracker::new();
-        let tx_old = TxHash::from_raw(Hash::from_bytes(b"old"));
-        let tx_fresh = TxHash::from_raw(Hash::from_bytes(b"fresh"));
+        let tx_old = TxHash::from(Hash::from_bytes(b"old"));
+        let tx_fresh = TxHash::from(Hash::from_bytes(b"fresh"));
 
         // Old tx absorbed at clock = ms(1_000).
         t.advance_clock(WeightedTimestamp::from_millis(1_000));
@@ -520,7 +520,7 @@ mod tests {
         use hyperscale_types::RETENTION_HORIZON;
 
         let mut t = ProvisioningTracker::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
 
         // First insert at clock = ms(1_000) → deadline = 1_000 + horizon.
         t.advance_clock(WeightedTimestamp::from_millis(1_000));

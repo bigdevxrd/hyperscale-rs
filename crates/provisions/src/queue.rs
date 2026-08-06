@@ -136,7 +136,7 @@ mod tests {
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
-                TxHash::from_raw(Hash::from_bytes(&[seed])),
+                TxHash::from(Hash::from_bytes(&[seed])),
                 vec![],
             )],
         )))

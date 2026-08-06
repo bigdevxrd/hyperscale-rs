@@ -177,7 +177,7 @@ impl Transaction {
     /// Computes `blake3(serialized_bytes)` on first call and caches the
     /// result. `::new` pre-populates the cache.
     pub fn hash(&self) -> TxHash {
-        TxHash::from_raw(*self.hash.get_or_init(|| {
+        TxHash::from(*self.hash.get_or_init(|| {
             let mut hasher = Hasher::new();
             hasher.update(&self.serialized_bytes);
             Hash::from_hash_bytes(hasher.finalize().as_bytes())
@@ -579,7 +579,7 @@ mod tests {
         let decoded: Transaction = hbor_from_slice(&bytes).unwrap();
         let mut hasher = Hasher::new();
         hasher.update(decoded.serialized_bytes());
-        let expected = TxHash::from_raw(Hash::from_hash_bytes(hasher.finalize().as_bytes()));
+        let expected = TxHash::from(Hash::from_hash_bytes(hasher.finalize().as_bytes()));
         assert_eq!(decoded.hash(), expected);
     }
 

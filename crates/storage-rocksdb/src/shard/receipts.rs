@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use hyperscale_types::{ConsensusReceipt, ExecutionMetadata, StoredReceipt, TxHash};
+use hyperscale_types::{ConsensusReceipt, ExecutionMetadata, Hash, StoredReceipt, TxHash};
 use rocksdb::{ColumnFamily, WriteBatch};
 
 use super::column_families::{ConsensusReceiptsCf, ExecutionMetadataCf};
@@ -53,7 +53,7 @@ impl RocksDbShardStorage {
     /// Read the consensus portion. Present for any tx that committed
     /// (success or failure); absent for aborted txs and unknown hashes.
     pub fn get_consensus_receipt(&self, tx_hash: &TxHash) -> Option<Arc<ConsensusReceipt>> {
-        self.cf_get::<ConsensusReceiptsCf>(tx_hash.as_raw())
+        self.cf_get::<ConsensusReceiptsCf>(&Hash::from(*tx_hash))
             .map(Arc::new)
     }
 
@@ -61,7 +61,7 @@ impl RocksDbShardStorage {
     /// a peer (peers don't ship their metadata) or pruned earlier than
     /// the consensus portion.
     pub fn get_execution_metadata(&self, tx_hash: &TxHash) -> Option<ExecutionMetadata> {
-        self.cf_get::<ExecutionMetadataCf>(tx_hash.as_raw())
+        self.cf_get::<ExecutionMetadataCf>(&Hash::from(*tx_hash))
     }
 }
 
@@ -79,11 +79,16 @@ pub fn add_receipt_to_batch(
     batch_put::<ConsensusReceiptsCf>(
         batch,
         consensus_cf,
-        receipt.tx_hash.as_raw(),
+        &Hash::from(receipt.tx_hash),
         &receipt.consensus,
     );
 
     if let Some(ref metadata) = receipt.metadata {
-        batch_put::<ExecutionMetadataCf>(batch, metadata_cf, receipt.tx_hash.as_raw(), metadata);
+        batch_put::<ExecutionMetadataCf>(
+            batch,
+            metadata_cf,
+            &Hash::from(receipt.tx_hash),
+            metadata,
+        );
     }
 }

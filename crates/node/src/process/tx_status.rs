@@ -92,7 +92,7 @@ mod tests {
     use super::*;
 
     fn tx(bytes: &[u8]) -> TxHash {
-        TxHash::from_raw(Hash::from_bytes(bytes))
+        TxHash::from(Hash::from_bytes(bytes))
     }
 
     const SHARD_A: ShardId = ShardId::leaf(1, 0);

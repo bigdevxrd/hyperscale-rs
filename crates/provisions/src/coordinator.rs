@@ -1010,7 +1010,7 @@ mod tests {
         tx_hashes: &[TxHash],
     ) -> Arc<Verified<CertifiedBlockHeader>> {
         let header_arc = make_certified_header_with_targets(shard, height, vec![local_shard]);
-        let raw: Vec<Hash> = tx_hashes.iter().map(|h| h.into_raw()).collect();
+        let raw: Vec<Hash> = tx_hashes.iter().map(|h| Hash::from(*h)).collect();
         let root = ProvisionTxRoot::from_raw(compute_merkle_root(&raw));
         let (header, qc) = Arc::unwrap_or_clone(header_arc).into_inner().into_parts();
         let mut roots = header.provision_tx_roots().clone();
@@ -1159,7 +1159,7 @@ mod tests {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
         let source = ShardId::leaf(2, 1);
         let height = BlockHeight::new(10);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"parked_tx"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"parked_tx"));
         let header =
             make_certified_header_committing(source, height, ShardId::leaf(2, 0), &[tx_hash]);
 
@@ -1194,7 +1194,7 @@ mod tests {
 
         // Above the frontier: dropped outright, nothing parked.
         let above = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"above")),
+            TxHash::from(Hash::from_bytes(b"above")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(6),
@@ -1208,7 +1208,7 @@ mod tests {
 
         // At the frontier: legitimate history, parked awaiting its header.
         let at = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"at")),
+            TxHash::from(Hash::from_bytes(b"at")),
             source,
             ShardId::leaf(2, 0),
             frontier,
@@ -1222,7 +1222,7 @@ mod tests {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
         let source = ShardId::leaf(2, 1);
         let height = BlockHeight::new(10);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"fenced_tx"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"fenced_tx"));
         let header =
             make_certified_header_committing(source, height, ShardId::leaf(2, 0), &[tx_hash]);
 
@@ -1254,14 +1254,14 @@ mod tests {
         let source = ShardId::leaf(2, 1);
         let frontier = BlockHeight::new(5);
         let above = BlockHeight::new(9);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"purged_tx"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"purged_tx"));
         let header =
             make_certified_header_committing(source, above, ShardId::leaf(2, 0), &[tx_hash]);
 
         // Header opened and a bundle parked at another height pre-fold.
         deliver_committed_header(&mut coordinator, &header);
         let parked = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"parked_other")),
+            TxHash::from(Hash::from_bytes(b"parked_other")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(8),
@@ -1303,7 +1303,7 @@ mod tests {
         // At the fork height → dropped (abstention: a block depending on it
         // can never assemble, so the replica never votes on it).
         let at_fork = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"at_fork")),
+            TxHash::from(Hash::from_bytes(b"at_fork")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(5),
@@ -1315,7 +1315,7 @@ mod tests {
         );
         // Above the fork → dropped.
         let above = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"above")),
+            TxHash::from(Hash::from_bytes(b"above")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(9),
@@ -1329,7 +1329,7 @@ mod tests {
 
         // Below the fork — pre-fork history, unaffected — parks normally.
         let below = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"below")),
+            TxHash::from(Hash::from_bytes(b"below")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(4),
@@ -1339,7 +1339,7 @@ mod tests {
 
         // A different shard is untouched.
         let other = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"other")),
+            TxHash::from(Hash::from_bytes(b"other")),
             ShardId::leaf(2, 2),
             ShardId::leaf(2, 0),
             BlockHeight::new(9),
@@ -1352,7 +1352,7 @@ mod tests {
     fn engaging_fork_fence_purges_already_admitted_content() {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
         let source = ShardId::leaf(2, 1);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"purge_tx"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"purge_tx"));
         let header = make_certified_header_committing(
             source,
             BlockHeight::new(9),
@@ -1363,7 +1363,7 @@ mod tests {
         // A header opened and a bundle parked before the fence engages.
         deliver_committed_header(&mut coordinator, &header);
         let parked = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"parked")),
+            TxHash::from(Hash::from_bytes(b"parked")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(8),
@@ -1409,7 +1409,7 @@ mod tests {
 
         // While fenced, an above-fork provision is dropped.
         let during = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"during")),
+            TxHash::from(Hash::from_bytes(b"during")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(6),
@@ -1425,7 +1425,7 @@ mod tests {
         let recovering = sched_recovering(source, BlockHeight::new(4));
         coordinator.on_block_committed(&recovering, &make_block(BlockHeight::new(1)));
         let mid_window = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"mid_window")),
+            TxHash::from(Hash::from_bytes(b"mid_window")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(6),
@@ -1441,7 +1441,7 @@ mod tests {
         let recovered = sched_recovered(source, BlockHeight::new(4));
         coordinator.on_block_committed(&recovered, &make_block(BlockHeight::new(2)));
         let after = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"after")),
+            TxHash::from(Hash::from_bytes(b"after")),
             source,
             ShardId::leaf(2, 0),
             BlockHeight::new(6),
@@ -1490,7 +1490,7 @@ mod tests {
     fn test_provision_received_with_header_emits_verification() {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let source_shard = ShardId::leaf(2, 1);
 
         // First: header arrives (commits to the single tx we'll send).
@@ -1522,7 +1522,7 @@ mod tests {
     fn test_provision_received_without_header_buffers() {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let source_shard = ShardId::leaf(2, 1);
 
         // Batch arrives before header — should buffer
@@ -1541,7 +1541,7 @@ mod tests {
     fn test_header_arrival_triggers_buffered_provision_verification() {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let source_shard = ShardId::leaf(2, 1);
 
         // Batch arrives first — buffered
@@ -1574,7 +1574,7 @@ mod tests {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
         let provisions = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
             ShardId::leaf(2, 0), // own shard
             ShardId::leaf(2, 1),
             BlockHeight::new(10),
@@ -1588,7 +1588,7 @@ mod tests {
     fn test_duplicate_provision_ignored_after_verification() {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let source_shard = ShardId::leaf(2, 1);
 
         // Setup: header + provisions + verification.
@@ -1631,7 +1631,7 @@ mod tests {
     fn test_provision_verified_emits_provisions_verified() {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let source_shard = ShardId::leaf(2, 1);
 
         // Setup
@@ -1666,7 +1666,7 @@ mod tests {
     fn test_provision_verified_invalid_does_not_emit() {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let source_shard = ShardId::leaf(2, 1);
 
         let header = make_certified_header(source_shard, BlockHeight::new(10));
@@ -1705,7 +1705,7 @@ mod tests {
 
         // Send provisions with 3 transactions from the same block; header commits to them.
         let tx_hashes: Vec<_> = (0..3)
-            .map(|i| TxHash::from_raw(Hash::from_bytes(format!("tx{i}").as_bytes())))
+            .map(|i| TxHash::from(Hash::from_bytes(format!("tx{i}").as_bytes())))
             .collect();
         let header = make_certified_header_committing(
             source_shard,
@@ -1739,7 +1739,7 @@ mod tests {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
         let source_shard = ShardId::leaf(2, 1);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
 
         // Verified header from coordinator (commits to the tx we'll send).
         let header = make_certified_header_committing(
@@ -1773,7 +1773,7 @@ mod tests {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
         let source_shard = ShardId::leaf(2, 1);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
 
         let header = make_certified_header_committing(
             source_shard,
@@ -1810,9 +1810,9 @@ mod tests {
 
         let source_shard = ShardId::leaf(2, 1);
         let tx_full = vec![
-            TxHash::from_raw(Hash::from_bytes(b"tx_a")),
-            TxHash::from_raw(Hash::from_bytes(b"tx_b")),
-            TxHash::from_raw(Hash::from_bytes(b"tx_c")),
+            TxHash::from(Hash::from_bytes(b"tx_a")),
+            TxHash::from(Hash::from_bytes(b"tx_b")),
+            TxHash::from(Hash::from_bytes(b"tx_c")),
         ];
         let header = make_certified_header_committing(
             source_shard,
@@ -1850,7 +1850,7 @@ mod tests {
         deliver_committed_header(&mut coordinator, &header);
 
         let provisions = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
             source_shard,
             ShardId::leaf(2, 0),
             BlockHeight::new(10),
@@ -1866,8 +1866,8 @@ mod tests {
 
         let source_shard = ShardId::leaf(2, 1);
         let tx_hashes = vec![
-            TxHash::from_raw(Hash::from_bytes(b"tx_ok")),
-            TxHash::from_raw(Hash::from_bytes(b"tx_bad")),
+            TxHash::from(Hash::from_bytes(b"tx_ok")),
+            TxHash::from(Hash::from_bytes(b"tx_bad")),
         ];
         let header = make_certified_header_committing(
             source_shard,
@@ -2093,7 +2093,7 @@ mod tests {
 
         // Batch arrives and is verified
         let provisions = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
             source_shard,
             ShardId::leaf(2, 0),
             BlockHeight::new(10),
@@ -2233,7 +2233,7 @@ mod tests {
 
         // Batch arrives and is verified before timeout
         let provisions = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
             source_shard,
             ShardId::leaf(2, 0),
             BlockHeight::new(10),
@@ -2277,7 +2277,7 @@ mod tests {
         assert_eq!(coordinator.expected.len(), 1);
 
         let provisions = make_provisions(
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
             source_shard,
             ShardId::leaf(2, 0),
             BlockHeight::new(10),
@@ -2375,7 +2375,7 @@ mod tests {
 
         let source_shard = ShardId::leaf(2, 1);
         let source_height = BlockHeight::new(10);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let provisions = make_provisions(tx_hash, source_shard, ShardId::leaf(2, 0), source_height);
         let provisions_hash = provisions.hash();
 
@@ -2464,7 +2464,7 @@ mod tests {
 
         let source_shard = ShardId::leaf(2, 1);
         let source_height = BlockHeight::new(10);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
         let provisions = make_provisions(tx_hash, source_shard, ShardId::leaf(2, 0), source_height);
         let provisions_hash = provisions.hash();
 
@@ -2598,7 +2598,7 @@ mod tests {
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
         let source_shard = ShardId::leaf(2, 1);
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx1"));
 
         let header = make_certified_header_committing(
             source_shard,
@@ -2681,7 +2681,7 @@ mod tests {
 
         // Verify a provisions sourced from shard 1 at height 10
         // (weighted_ts = 5_000ms in the test clock).
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"old-tx"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"old-tx"));
         let header = make_certified_header_committing(
             ShardId::leaf(2, 1),
             BlockHeight::new(10),
@@ -2734,7 +2734,7 @@ mod tests {
         // verification that no peer can use.
         let mut coordinator = ProvisionCoordinator::new(ShardId::leaf(2, 0));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx-old"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx-old"));
         let header = make_certified_header_committing(
             ShardId::leaf(2, 1),
             BlockHeight::new(10),
@@ -2788,7 +2788,7 @@ mod tests {
         // Prime local clock so received_at is non-zero.
         coordinator.on_block_committed(&sched(), &make_block(BlockHeight::new(1)));
 
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx-pending"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx-pending"));
         let provisions = make_provisions(
             tx_hash,
             ShardId::leaf(2, 1),
@@ -2866,7 +2866,7 @@ mod tests {
             &mut coordinator,
             ShardId::leaf(2, 1),
             BlockHeight::new(10),
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
             now,
         );
 
@@ -2891,7 +2891,7 @@ mod tests {
             &mut coordinator,
             ShardId::leaf(2, 1),
             BlockHeight::new(10),
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
             LocalTimestamp::from_millis(1_000),
         );
 
@@ -2928,7 +2928,7 @@ mod tests {
             &mut coordinator,
             ShardId::leaf(2, 1),
             BlockHeight::new(10),
-            TxHash::from_raw(Hash::from_bytes(b"tx_old")),
+            TxHash::from(Hash::from_bytes(b"tx_old")),
             LocalTimestamp::from_millis(1_000),
         );
 
@@ -2937,7 +2937,7 @@ mod tests {
             &mut coordinator,
             ShardId::leaf(2, 1),
             BlockHeight::new(11),
-            TxHash::from_raw(Hash::from_bytes(b"tx_young")),
+            TxHash::from(Hash::from_bytes(b"tx_young")),
             LocalTimestamp::from_millis(1_300),
         );
 
@@ -2947,7 +2947,7 @@ mod tests {
         assert_eq!(eligible.len(), 1);
         assert_eq!(
             eligible[0].transactions()[0].tx_hash,
-            TxHash::from_raw(Hash::from_bytes(b"tx_old"))
+            TxHash::from(Hash::from_bytes(b"tx_old"))
         );
     }
 
@@ -2974,7 +2974,7 @@ mod tests {
             for i in 0..n {
                 let source_height = BlockHeight::new(source_heights[i]);
                 let tx_hash =
-                    TxHash::from_raw(Hash::from_bytes(format!("tx-{i}").as_bytes()));
+                    TxHash::from(Hash::from_bytes(format!("tx-{i}").as_bytes()));
                 let provisions = make_provisions(
                     tx_hash,
                     ShardId::leaf(2, 1),

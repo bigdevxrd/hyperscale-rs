@@ -256,7 +256,7 @@ mod tests {
             WeightedTimestamp::from_millis(1),
             GlobalReceiptRoot::ZERO,
             vec![TxOutcome::new(
-                TxHash::from_raw(Hash::from_bytes(b"tx")),
+                TxHash::from(Hash::from_bytes(b"tx")),
                 ExecutionOutcome::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                 },

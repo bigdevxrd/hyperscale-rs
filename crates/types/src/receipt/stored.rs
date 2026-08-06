@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn synced_receipt_has_no_metadata() {
         let synced = StoredReceipt::synced(
-            TxHash::from_raw(Hash::from_bytes(b"synced_tx")),
+            TxHash::from(Hash::from_bytes(b"synced_tx")),
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
                 database_updates: DatabaseUpdates::default(),
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn locally_executed_receipt_carries_metadata() {
         let local = StoredReceipt {
-            tx_hash: TxHash::from_raw(Hash::from_bytes(b"local_tx")),
+            tx_hash: TxHash::from(Hash::from_bytes(b"local_tx")),
             consensus: Arc::new(ConsensusReceipt::Failed),
             metadata: Some(ExecutionMetadata::new(
                 FeeSummary {

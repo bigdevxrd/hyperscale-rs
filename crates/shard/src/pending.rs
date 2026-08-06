@@ -926,8 +926,8 @@ mod tests {
 
     #[test]
     fn test_pending_block_creation() {
-        let tx1 = TxHash::from_raw(Hash::from_bytes(b"tx1"));
-        let tx2 = TxHash::from_raw(Hash::from_bytes(b"tx2"));
+        let tx1 = TxHash::from(Hash::from_bytes(b"tx1"));
+        let tx2 = TxHash::from(Hash::from_bytes(b"tx2"));
         let header = make_header(BlockHeight::new(1));
 
         let pb = PendingBlock::from_manifest(
@@ -954,7 +954,7 @@ mod tests {
 
     #[test]
     fn test_pending_block_with_waves() {
-        let tx1 = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx1 = TxHash::from(Hash::from_bytes(b"tx1"));
         let wave1 = WaveId::new(ShardId::ROOT, BlockHeight::new(1), BTreeSet::new());
         let wave2 = WaveId::new(ShardId::ROOT, BlockHeight::new(2), BTreeSet::new());
         let header = make_header(BlockHeight::new(1));
@@ -1160,8 +1160,8 @@ mod tests {
     #[test]
     fn remove_orphaning_keeps_fetches_another_block_still_needs() {
         let mut pending_blocks = PendingBlocks::new();
-        let shared = TxHash::from_raw(Hash::from_bytes(b"shared_tx"));
-        let only_dropped = TxHash::from_raw(Hash::from_bytes(b"dropped_tx"));
+        let shared = TxHash::from(Hash::from_bytes(b"shared_tx"));
+        let only_dropped = TxHash::from(Hash::from_bytes(b"dropped_tx"));
 
         let dropped = PendingBlock::from_manifest(
             make_header(BlockHeight::new(7)),

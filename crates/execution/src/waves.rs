@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn assign_and_lookup_tx() {
         let mut r = WaveRegistry::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         let wid = wave(1);
         r.assign_tx(tx, wid.clone());
         assert_eq!(r.wave_assignment(tx), Some(wid));
@@ -582,8 +582,8 @@ mod tests {
     #[test]
     fn classify_attestation_splits_routed_and_unrouted() {
         let mut r = WaveRegistry::new();
-        let tx_known = TxHash::from_raw(Hash::from_bytes(b"known"));
-        let tx_unknown = TxHash::from_raw(Hash::from_bytes(b"unknown"));
+        let tx_known = TxHash::from(Hash::from_bytes(b"known"));
+        let tx_unknown = TxHash::from(Hash::from_bytes(b"unknown"));
         let wid = wave(1);
 
         r.assign_tx(tx_known, wid.clone());
@@ -601,14 +601,14 @@ mod tests {
     #[test]
     fn is_awaiting_provisioning_false_without_assignment() {
         let r = WaveRegistry::new();
-        assert!(!r.is_awaiting_provisioning(TxHash::from_raw(Hash::from_bytes(b"orphan"))));
+        assert!(!r.is_awaiting_provisioning(TxHash::from(Hash::from_bytes(b"orphan"))));
     }
 
     #[test]
     fn is_awaiting_provisioning_false_when_single_shard_wave_is_ready() {
         // Single-shard waves pass `is_fully_provisioned = true` at creation.
         let mut r = WaveRegistry::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         let wid = wave(1);
         let ws = make_wave_state(wid.clone(), BlockHash::ZERO, 1);
         let tx_hash_in_wave = ws.tx_hashes()[0];
@@ -658,7 +658,7 @@ mod tests {
             wid2.clone(),
             make_wave_state(wid2.clone(), BlockHash::ZERO, 2),
         );
-        r.assign_tx(TxHash::from_raw(Hash::from_bytes(b"a")), wid1.clone());
+        r.assign_tx(TxHash::from(Hash::from_bytes(b"a")), wid1.clone());
         // wid2 has no assignment — it's resolved.
 
         let counts = r.prune_resolved();
@@ -676,8 +676,8 @@ mod tests {
             wid1.clone(),
             make_wave_state(wid1.clone(), BlockHash::ZERO, 1),
         );
-        r.assign_tx(TxHash::from_raw(Hash::from_bytes(b"a")), wid1);
-        r.assign_tx(TxHash::from_raw(Hash::from_bytes(b"dangling")), wid_gone);
+        r.assign_tx(TxHash::from(Hash::from_bytes(b"a")), wid1);
+        r.assign_tx(TxHash::from(Hash::from_bytes(b"dangling")), wid_gone);
 
         let counts = r.prune_resolved();
         assert_eq!(counts.assignments, 1);
@@ -708,7 +708,7 @@ mod tests {
             }
             // Assign some subset of txs to some subset of waves.
             for (i, idx) in assignment_indices.iter().enumerate() {
-                let tx = TxHash::from_raw(Hash::from_bytes(&[u8::try_from(i).unwrap_or(u8::MAX); 32]));
+                let tx = TxHash::from(Hash::from_bytes(&[u8::try_from(i).unwrap_or(u8::MAX); 32]));
                 let wid = &wave_ids[idx % wave_ids.len()];
                 r.assign_tx(tx, wid.clone());
             }
@@ -717,7 +717,7 @@ mod tests {
 
             // Invariant 1: every assignment points to a live wave.
             for wid in (0_u8..20).filter_map(|i| {
-                r.wave_assignment(TxHash::from_raw(Hash::from_bytes(&[i; 32])))
+                r.wave_assignment(TxHash::from(Hash::from_bytes(&[i; 32])))
             }) {
                 prop_assert!(r.contains_wave(&wid));
             }
@@ -727,7 +727,7 @@ mod tests {
             for (wid, _) in r.waves_iter() {
                 // Surviving waves must have at least one assignment.
                 let referenced = (0_u8..20).any(|i| {
-                    r.wave_assignment(TxHash::from_raw(Hash::from_bytes(&[i; 32])))
+                    r.wave_assignment(TxHash::from(Hash::from_bytes(&[i; 32])))
                         .as_ref()
                         == Some(wid)
                 });

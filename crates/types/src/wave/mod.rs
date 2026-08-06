@@ -83,7 +83,7 @@ mod tests {
 
     fn make_outcome(seed: u8) -> TxOutcome {
         TxOutcome::new(
-            TxHash::from_raw(Hash::from_bytes(&[seed; 4])),
+            TxHash::from(Hash::from_bytes(&[seed; 4])),
             ExecutionOutcome::Succeeded {
                 receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(&[seed + 100; 4])),
             },
@@ -187,8 +187,8 @@ mod tests {
         assert!(roots.contains_key(&ShardId::leaf(1, 1)));
 
         let expected = ProvisionTxRoot::from_raw(compute_merkle_root(&[
-            tx_a.hash().into_raw(),
-            tx_b.hash().into_raw(),
+            Hash::from(tx_a.hash()),
+            Hash::from(tx_b.hash()),
         ]));
         assert_eq!(roots[&ShardId::leaf(1, 1)], expected);
     }
@@ -257,13 +257,13 @@ mod tests {
     #[test]
     fn test_tx_outcome_leaf_success_matters() {
         let success = TxOutcome::new(
-            TxHash::from_raw(Hash::from_bytes(b"tx")),
+            TxHash::from(Hash::from_bytes(b"tx")),
             ExecutionOutcome::Succeeded {
                 receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"receipt")),
             },
         );
         let failure = TxOutcome::new(
-            TxHash::from_raw(Hash::from_bytes(b"tx")),
+            TxHash::from(Hash::from_bytes(b"tx")),
             ExecutionOutcome::Failed,
         );
         assert_ne!(tx_outcome_leaf(&success), tx_outcome_leaf(&failure));
@@ -272,13 +272,13 @@ mod tests {
     #[test]
     fn test_tx_outcome_leaf_aborted_differs_from_executed() {
         let executed = TxOutcome::new(
-            TxHash::from_raw(Hash::from_bytes(b"tx")),
+            TxHash::from(Hash::from_bytes(b"tx")),
             ExecutionOutcome::Succeeded {
                 receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"receipt")),
             },
         );
         let aborted = TxOutcome::new(
-            TxHash::from_raw(Hash::from_bytes(b"tx")),
+            TxHash::from(Hash::from_bytes(b"tx")),
             ExecutionOutcome::Aborted,
         );
         assert_ne!(tx_outcome_leaf(&executed), tx_outcome_leaf(&aborted));
@@ -550,8 +550,8 @@ mod tests {
     #[test]
     fn reconstruct_from_all_success_outcomes() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"tx_b"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"tx_b"));
 
         let outcomes = vec![
             TxOutcome::new(
@@ -585,8 +585,8 @@ mod tests {
     #[test]
     fn reconstruct_skips_aborted_tx_without_receipt() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"tx_b_aborted"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"tx_b_aborted"));
 
         let outcomes = vec![
             TxOutcome::new(
@@ -620,7 +620,7 @@ mod tests {
     #[test]
     fn reconstruct_fails_when_non_aborted_receipt_missing() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
 
         let outcomes = vec![TxOutcome::new(
             tx_a,
@@ -647,7 +647,7 @@ mod tests {
         let remote_ec = make_local_ec(
             &remote_wave_id,
             vec![TxOutcome::new(
-                TxHash::from_raw(Hash::from_bytes(b"tx")),
+                TxHash::from(Hash::from_bytes(b"tx")),
                 ExecutionOutcome::Aborted,
             )],
         );
@@ -660,9 +660,9 @@ mod tests {
     #[test]
     fn validate_accepts_receipts_matching_outcomes() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"tx_b_aborted"));
-        let tx_c = TxHash::from_raw(Hash::from_bytes(b"tx_c_fail"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"tx_b_aborted"));
+        let tx_c = TxHash::from(Hash::from_bytes(b"tx_c_fail"));
 
         let outcomes = vec![
             TxOutcome::new(
@@ -704,7 +704,7 @@ mod tests {
     fn validate_rejects_unexpected_failure() {
         // EC says Succeeded, receipt says Failed.
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
         let outcomes = vec![TxOutcome::new(
             tx_a,
             ExecutionOutcome::Succeeded {
@@ -732,7 +732,7 @@ mod tests {
     fn validate_rejects_unexpected_success() {
         // EC says Failed, receipt says Succeeded.
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
         let outcomes = vec![TxOutcome::new(tx_a, ExecutionOutcome::Failed)];
         let fw = FinalizedWave::new(
             Arc::new(WaveCertificate::new(
@@ -760,7 +760,7 @@ mod tests {
     fn validate_rejects_receipt_hash_mismatch() {
         // Both Succeeded but receipt_hashes disagree — divergent state for the same tx.
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
         let ec_hash = GlobalReceiptHash::from_raw(Hash::from_bytes(b"ec"));
         let receipt_hash = GlobalReceiptHash::from_raw(Hash::from_bytes(b"receipt"));
         let outcomes = vec![TxOutcome::new(
@@ -795,7 +795,7 @@ mod tests {
     #[test]
     fn validate_rejects_missing_receipt() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
         let outcomes = vec![TxOutcome::new(
             tx_a,
             ExecutionOutcome::Succeeded {
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn validate_rejects_extra_receipt() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
         let outcomes = vec![TxOutcome::new(tx_a, ExecutionOutcome::Aborted)];
         let fw = FinalizedWave::new(
             Arc::new(WaveCertificate::new(
@@ -845,8 +845,8 @@ mod tests {
     #[test]
     fn validate_rejects_tx_hash_mismatch() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"tx_a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"tx_b"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"tx_a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"tx_b"));
         let outcomes = vec![TxOutcome::new(
             tx_a,
             ExecutionOutcome::Succeeded {
@@ -894,7 +894,7 @@ mod tests {
     fn validate_all_aborted_wave_with_empty_receipts_passes() {
         let wave_id = make_wave_id(0, BlockHeight::new(42), &[1]);
         let outcomes = vec![TxOutcome::new(
-            TxHash::from_raw(Hash::from_bytes(b"aborted")),
+            TxHash::from(Hash::from_bytes(b"aborted")),
             ExecutionOutcome::Aborted,
         )];
         let fw = FinalizedWave::new(

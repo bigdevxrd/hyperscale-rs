@@ -189,8 +189,9 @@ pub trait TypedHash: Copy + Eq + Ord + StdHash + Debug + Display + Into<Hash> {
     /// Unwrap into the underlying raw [`struct@Hash`].
     fn into_raw(self) -> Hash;
 
-    /// Borrow the underlying raw [`struct@Hash`].
-    fn as_raw(&self) -> &Hash;
+    /// The underlying raw [`struct@Hash`]. By value — every kind is
+    /// `Copy`, and not every kind stores a `Hash` it could lend out.
+    fn as_raw(&self) -> Hash;
 }
 
 /// Declare a `#[repr(transparent)]` newtype around [`Hash`] implementing [`TypedHash`].
@@ -261,8 +262,8 @@ macro_rules! hash_newtype {
                 self.0
             }
 
-            fn as_raw(&self) -> &$crate::Hash {
-                &self.0
+            fn as_raw(&self) -> $crate::Hash {
+                self.0
             }
         }
 

@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn hbor_roundtrip() {
         let entry = ProvisionEntry::new(
-            TxHash::from_raw(Hash::from_bytes(b"tx")),
+            TxHash::from(Hash::from_bytes(b"tx")),
             vec![sample_entry(1), sample_entry(2)],
         );
         let bytes = hbor_to_vec(&entry).unwrap();
@@ -64,7 +64,7 @@ mod tests {
     /// them if construction canonicalises.
     #[test]
     fn construction_canonicalises_entry_order() {
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx"));
         let forward = ProvisionEntry::new(tx_hash, vec![sample_entry(1), sample_entry(2)]);
         let reverse = ProvisionEntry::new(tx_hash, vec![sample_entry(2), sample_entry(1)]);
         assert_eq!(forward, reverse);
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_oversized_entries() {
-        let mut buf = hbor_to_vec(&TxHash::from_raw(Hash::from_bytes(b"tx"))).unwrap();
+        let mut buf = hbor_to_vec(&TxHash::from(Hash::from_bytes(b"tx"))).unwrap();
         varint::write(&mut buf, MAX_STATE_ENTRIES_PER_TX + 1).unwrap();
         buf.extend(std::iter::repeat_n(0u8, (MAX_STATE_ENTRIES_PER_TX + 1) * 8));
         let err = hbor_from_slice::<ProvisionEntry>(&buf).unwrap_err();
@@ -92,7 +92,7 @@ mod tests {
         // Hand-roll the prior wire layout — entries plus target and owned
         // node lists — to confirm a peer can't keep shipping node sets the
         // receiver now derives for itself.
-        let entry = ProvisionEntry::new(TxHash::from_raw(Hash::from_bytes(b"tx")), vec![]);
+        let entry = ProvisionEntry::new(TxHash::from(Hash::from_bytes(b"tx")), vec![]);
         let mut buf = hbor_to_vec(&entry).unwrap();
         buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());
         buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());

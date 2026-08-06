@@ -3737,7 +3737,7 @@ mod tests {
             WeightedTimestamp::ZERO,
             GlobalReceiptRoot::ZERO,
             vec![TxOutcome::new(
-                TxHash::from_raw(Hash::from_bytes(b"deferred_tx")),
+                TxHash::from(Hash::from_bytes(b"deferred_tx")),
                 ExecutionOutcome::Aborted,
             )],
             AggregateSignature::ZERO,
@@ -3787,7 +3787,7 @@ mod tests {
                 WeightedTimestamp::ZERO,
                 GlobalReceiptRoot::ZERO,
                 vec![TxOutcome::new(
-                    TxHash::from_raw(Hash::from_bytes(&height.to_le_bytes())),
+                    TxHash::from(Hash::from_bytes(&height.to_le_bytes())),
                     ExecutionOutcome::Aborted,
                 )],
                 AggregateSignature::ZERO,
@@ -4155,7 +4155,7 @@ mod tests {
             WeightedTimestamp::ZERO,
             GlobalReceiptRoot::ZERO,
             vec![TxOutcome::new(
-                TxHash::from_raw(Hash::from_bytes(b"untracked_tx")),
+                TxHash::from(Hash::from_bytes(b"untracked_tx")),
                 ExecutionOutcome::Aborted,
             )],
             AggregateSignature::ZERO,
@@ -4886,7 +4886,7 @@ mod tests {
                 WeightedTimestamp::from_millis(height),
                 GlobalReceiptRoot::ZERO,
                 vec![TxOutcome::new(
-                    TxHash::from_raw(Hash::from_bytes(b"tx")),
+                    TxHash::from(Hash::from_bytes(b"tx")),
                     ExecutionOutcome::Succeeded {
                         receipt_hash: GlobalReceiptHash::ZERO,
                     },

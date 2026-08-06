@@ -52,9 +52,9 @@ pub trait BloomKey {
 
 impl<T: TypedHash> BloomKey for T {
     fn bloom_seed(&self) -> [u8; 16] {
-        let bytes = self.as_raw().as_bytes();
+        let raw = self.as_raw();
         let mut out = [0u8; 16];
-        out.copy_from_slice(&bytes[0..16]);
+        out.copy_from_slice(&raw.as_bytes()[0..16]);
         out
     }
 }
@@ -280,7 +280,7 @@ mod tests {
     use crate::{Hash, ProvisionHash, TxHash};
 
     fn tx(n: u64) -> TxHash {
-        TxHash::from_raw(Hash::from_bytes(&n.to_le_bytes()))
+        TxHash::from(Hash::from_bytes(&n.to_le_bytes()))
     }
 
     #[test]

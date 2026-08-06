@@ -451,7 +451,7 @@ fn test_get_block_for_sync() {
 #[test]
 fn test_transactions_batch_missing() {
     let storage = SimShardStorage::default();
-    let result = storage.get_transactions_batch(&[TxHash::from_raw(Hash::from_bytes(&[1; 32]))]);
+    let result = storage.get_transactions_batch(&[TxHash::from(Hash::from_bytes(&[1; 32]))]);
     assert!(result.is_empty());
 }
 
@@ -497,7 +497,7 @@ fn test_transactions_batch_with_indexed_block() {
     assert_eq!(result[0].hash(), tx_hash);
 
     // Missing hash still excluded
-    let missing = TxHash::from_raw(Hash::from_bytes(&[99; 32]));
+    let missing = TxHash::from(Hash::from_bytes(&[99; 32]));
     let partial = storage.get_transactions_batch(&[tx_hash, missing]);
     assert_eq!(partial.len(), 1);
 }

@@ -339,7 +339,7 @@ pub fn make_test_block_and_state(
 /// equality checks across seeds distinguish entries.
 #[must_use]
 pub fn make_test_receipt(seed: u8) -> StoredReceipt {
-    let tx_hash = TxHash::from_raw(Hash::from_bytes(&[seed; 32]));
+    let tx_hash = TxHash::from(Hash::from_bytes(&[seed; 32]));
     let consensus = ConsensusReceipt::Succeeded {
         receipt_hash: GlobalReceiptHash::ZERO,
         database_updates: DatabaseUpdates::default(),
@@ -383,7 +383,7 @@ pub fn make_test_execution_certificate(
     block_height: BlockHeight,
 ) -> ExecutionCertificate {
     let outcomes = vec![TxOutcome::new(
-        TxHash::from_raw(Hash::from_bytes(&[seed + 100; 32])),
+        TxHash::from(Hash::from_bytes(&[seed + 100; 32])),
         ExecutionOutcome::Succeeded {
             receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(&[seed + 150; 32])),
         },

@@ -204,7 +204,7 @@ mod tests {
         Arc::new(
             make_finalized_wave(
                 BlockHeight::new(height),
-                TxHash::from_raw(Hash::from_bytes(
+                TxHash::from(Hash::from_bytes(
                     &[u8::try_from(height).unwrap_or(u8::MAX); 32],
                 )),
                 TransactionDecision::Accept,
@@ -214,7 +214,7 @@ mod tests {
     }
 
     fn make_provisions(seed: u8) -> Arc<Provisions> {
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(&[seed; 32]));
+        let tx_hash = TxHash::from(Hash::from_bytes(&[seed; 32]));
         Arc::new(Provisions::new(
             ShardId::leaf(1, 0),
             ShardId::leaf(1, 1),

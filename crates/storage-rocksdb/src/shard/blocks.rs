@@ -59,13 +59,13 @@ impl RocksDbShardStorage {
     /// This is idempotent - storing the same transaction twice is safe.
     /// Used by `put_block_denormalized` to store transactions separately from block metadata.
     pub fn put_transaction(&self, tx: &Transaction) {
-        self.cf_put_sync::<TransactionsCf>(tx.hash().as_raw(), tx);
+        self.cf_put_sync::<TransactionsCf>(&Hash::from(tx.hash()), tx);
     }
 
     /// Get a transaction by hash.
     pub fn get_transaction(&self, hash: &TxHash) -> Option<Transaction> {
         let start = Instant::now();
-        let result = self.cf_get::<TransactionsCf>(hash.as_raw());
+        let result = self.cf_get::<TransactionsCf>(&Hash::from(*hash));
         record_storage_read(start.elapsed().as_secs_f64());
         result
     }
@@ -80,7 +80,7 @@ impl RocksDbShardStorage {
         }
 
         let start = Instant::now();
-        let raw: Vec<Hash> = hashes.iter().map(|h| h.into_raw()).collect();
+        let raw: Vec<Hash> = hashes.iter().map(|h| Hash::from(*h)).collect();
         let results = self.cf_multi_get::<TransactionsCf>(&raw);
 
         let txs: Vec<_> = results.into_iter().flatten().collect();
@@ -142,7 +142,7 @@ impl RocksDbShardStorage {
             batch_put_raw::<TransactionsCf>(
                 batch,
                 transactions_cf,
-                tx.hash().as_raw(),
+                &Hash::from(tx.hash()),
                 tx.as_ref(),
                 Some(tx.cached_wire_bytes()),
             );
@@ -257,7 +257,8 @@ impl RocksDbShardStorage {
             .into_iter()
             .map(|cert| {
                 FinalizedWave::reconstruct(cert, |h| {
-                    get::<ConsensusReceiptsCf>(&*self.db, consensus_cf, h.as_raw()).map(Arc::new)
+                    get::<ConsensusReceiptsCf>(&*self.db, consensus_cf, &Hash::from(*h))
+                        .map(Arc::new)
                 })
                 .map(|fw| Arc::new(fw.into()))
             })
@@ -399,7 +400,8 @@ impl RocksDbShardStorage {
             .into_iter()
             .map(|cert| {
                 FinalizedWave::reconstruct(cert, |h| {
-                    get::<ConsensusReceiptsCf>(&*self.db, consensus_cf, h.as_raw()).map(Arc::new)
+                    get::<ConsensusReceiptsCf>(&*self.db, consensus_cf, &Hash::from(*h))
+                        .map(Arc::new)
                 })
                 .map(|fw| Arc::new(fw.into()))
             })
@@ -458,7 +460,7 @@ impl RocksDbShardStorage {
             return vec![];
         }
 
-        let raw: Vec<Hash> = hashes.iter().map(|h| h.into_raw()).collect();
+        let raw: Vec<Hash> = hashes.iter().map(|h| Hash::from(*h)).collect();
         let results = multi_get::<TransactionsCf>(&*self.db, transactions_cf, &raw);
 
         results

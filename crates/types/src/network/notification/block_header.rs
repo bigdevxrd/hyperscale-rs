@@ -131,10 +131,10 @@ mod tests {
         let header = make_header(BlockHeight::new(1));
         let manifest = BlockManifest::new(
             vec![
-                TxHash::from_raw(Hash::from_bytes(b"tx1")),
-                TxHash::from_raw(Hash::from_bytes(b"tx2")),
-                TxHash::from_raw(Hash::from_bytes(b"tx3")),
-                TxHash::from_raw(Hash::from_bytes(b"tx4")),
+                TxHash::from(Hash::from_bytes(b"tx1")),
+                TxHash::from(Hash::from_bytes(b"tx2")),
+                TxHash::from(Hash::from_bytes(b"tx3")),
+                TxHash::from(Hash::from_bytes(b"tx4")),
             ],
             vec![],
             vec![],
@@ -151,7 +151,7 @@ mod tests {
     fn test_block_header_gossip_into_parts() {
         let header = make_header(BlockHeight::new(5));
         let manifest = BlockManifest::new(
-            vec![TxHash::from_raw(Hash::from_bytes(b"tx1"))],
+            vec![TxHash::from(Hash::from_bytes(b"tx1"))],
             vec![],
             vec![],
             WitnessSources::empty(),
@@ -165,9 +165,9 @@ mod tests {
 
     #[test]
     fn test_block_header_gossip_all_transaction_hashes() {
-        let tx1 = TxHash::from_raw(Hash::from_bytes(b"tx1"));
-        let tx2 = TxHash::from_raw(Hash::from_bytes(b"tx2"));
-        let tx3 = TxHash::from_raw(Hash::from_bytes(b"tx3"));
+        let tx1 = TxHash::from(Hash::from_bytes(b"tx1"));
+        let tx2 = TxHash::from(Hash::from_bytes(b"tx2"));
+        let tx3 = TxHash::from(Hash::from_bytes(b"tx3"));
 
         let gossip = BlockHeaderNotification::new(
             make_header(BlockHeight::new(1)),

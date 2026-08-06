@@ -208,7 +208,7 @@ pub async fn get_transaction_handler(
 ) -> impl IntoResponse {
     // Parse the hash from hex (expects the raw hash bytes, not data to hash)
     let tx_hash = match Hash::from_hex(&hash_hex) {
-        Ok(hash) => TxHash::from_raw(hash),
+        Ok(hash) => TxHash::from(hash),
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -590,8 +590,8 @@ mod tests {
     async fn test_get_transaction_found() {
         let state = create_test_state();
         // Create a hash from some input bytes
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(&[0x12; 32]));
-        let tx_hash_hex = hex_encode(tx_hash.as_raw().as_bytes());
+        let tx_hash = TxHash::from(Hash::from_bytes(&[0x12; 32]));
+        let tx_hash_hex = hex_encode(tx_hash.as_bytes());
 
         state
             .tx_status

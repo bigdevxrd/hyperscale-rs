@@ -425,7 +425,7 @@ mod tests {
     }
 
     fn tx(seed: u8) -> TxHash {
-        TxHash::from_raw(Hash::from_bytes(&[seed; 32]))
+        TxHash::from(Hash::from_bytes(&[seed; 32]))
     }
 
     #[test]

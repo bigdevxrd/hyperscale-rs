@@ -250,7 +250,7 @@ mod tests {
         let store = FinalizedWaveStore::new();
         assert_eq!(store.len(), 0);
         assert!(store.is_empty());
-        assert!(!store.is_finalized(TxHash::from_raw(Hash::from_bytes(b"anything"))));
+        assert!(!store.is_finalized(TxHash::from(Hash::from_bytes(b"anything"))));
         assert!(store.all_tx_hashes().is_empty());
         assert!(store.all_waves().is_empty());
     }
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn insert_then_lookup_by_tx_hash() {
         let store = FinalizedWaveStore::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx1"));
         let (wid, fw) = make_finalized_wave(1, &[tx]);
 
         store.insert(wid.clone(), fw);
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn lookup_by_wave_id_matches_inserted_wave() {
         let store = FinalizedWaveStore::new();
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx1"));
         let (wid, fw) = make_finalized_wave(1, &[tx]);
 
         store.insert(wid.clone(), fw);
@@ -288,9 +288,9 @@ mod tests {
     #[test]
     fn all_tx_hashes_flattens_across_waves() {
         let store = FinalizedWaveStore::new();
-        let a = TxHash::from_raw(Hash::from_bytes(b"a"));
-        let b = TxHash::from_raw(Hash::from_bytes(b"b"));
-        let c = TxHash::from_raw(Hash::from_bytes(b"c"));
+        let a = TxHash::from(Hash::from_bytes(b"a"));
+        let b = TxHash::from(Hash::from_bytes(b"b"));
+        let c = TxHash::from(Hash::from_bytes(b"c"));
         let (wid1, fw1) = make_finalized_wave(1, &[a, b]);
         let (wid2, fw2) = make_finalized_wave(2, &[c]);
 
@@ -307,8 +307,8 @@ mod tests {
     #[test]
     fn remove_drops_only_the_named_wave() {
         let store = FinalizedWaveStore::new();
-        let tx1 = TxHash::from_raw(Hash::from_bytes(b"tx1"));
-        let tx2 = TxHash::from_raw(Hash::from_bytes(b"tx2"));
+        let tx1 = TxHash::from(Hash::from_bytes(b"tx1"));
+        let tx2 = TxHash::from(Hash::from_bytes(b"tx2"));
         let (wid1, fw1) = make_finalized_wave(1, &[tx1]);
         let (wid2, fw2) = make_finalized_wave(2, &[tx2]);
 
@@ -327,8 +327,8 @@ mod tests {
     #[test]
     fn cert_bloom_snapshot_contains_every_tracked_wave() {
         let store = FinalizedWaveStore::new();
-        let tx1 = TxHash::from_raw(Hash::from_bytes(b"tx1"));
-        let tx2 = TxHash::from_raw(Hash::from_bytes(b"tx2"));
+        let tx1 = TxHash::from(Hash::from_bytes(b"tx1"));
+        let tx2 = TxHash::from(Hash::from_bytes(b"tx2"));
         let (wid1, fw1) = make_finalized_wave(1, &[tx1]);
         let (wid2, fw2) = make_finalized_wave(2, &[tx2]);
         store.insert(wid1.clone(), fw1);
@@ -354,10 +354,8 @@ mod tests {
     #[test]
     fn all_waves_iterates_in_wave_id_order() {
         let store = FinalizedWaveStore::new();
-        let (wid_high, fw_high) =
-            make_finalized_wave(5, &[TxHash::from_raw(Hash::from_bytes(b"hi"))]);
-        let (wid_low, fw_low) =
-            make_finalized_wave(1, &[TxHash::from_raw(Hash::from_bytes(b"lo"))]);
+        let (wid_high, fw_high) = make_finalized_wave(5, &[TxHash::from(Hash::from_bytes(b"hi"))]);
+        let (wid_low, fw_low) = make_finalized_wave(1, &[TxHash::from(Hash::from_bytes(b"lo"))]);
 
         store.insert(wid_high, fw_high);
         store.insert(wid_low, fw_low);

@@ -37,12 +37,12 @@ use hyperscale_types::{
     install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, Declaration, EffectTarget, Hash32, InstanceRegistry, LocalKey, NodeCall, PackageHash,
+    Address, Declaration, EffectTarget, InstanceRegistry, LocalKey, NodeCall, PackageHash,
     PrefixShardResolver, RoleId, SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
-    Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
-    TxHash as VmTxHash, amount_cell, decode_amount, encode_amount, execute_batch,
+    Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt, amount_cell,
+    decode_amount, encode_amount, execute_batch,
 };
 use indexmap::IndexMap;
 
@@ -105,7 +105,7 @@ pub fn tx_randomness(anchor: RevealChain, tx: TxHash) -> [u8; 32] {
     *Hash::from_parts(&[
         DOMAIN_TX_RANDOMNESS,
         anchor.as_raw().as_bytes(),
-        tx.as_raw().as_bytes(),
+        tx.as_bytes(),
     ])
     .as_bytes()
 }
@@ -143,7 +143,7 @@ impl Base for VmBase {
         false
     }
 
-    fn holds(&self, _key: SubstateKey) -> BTreeMap<VmTxHash, u128> {
+    fn holds(&self, _key: SubstateKey) -> BTreeMap<TxHash, u128> {
         BTreeMap::new()
     }
 
@@ -298,7 +298,7 @@ fn fold_delta(
     receipt: &Receipt,
     base: &VmBase,
     running: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
-    tx: VmTxHash,
+    tx: TxHash,
     locality: &Locality,
 ) -> BTreeMap<SubstateKey, Option<Vec<u8>>> {
     assert!(
@@ -608,13 +608,13 @@ pub const fn publish_work(artifact: &[u8]) -> u64 {
 fn assemble_published_tx(
     ctx: &WaveBatchContext<'_>,
     base: &VmBase,
-    vm_tx: VmTxHash,
+    vm_tx: TxHash,
     publisher: [u8; 16],
     artifact: &[u8],
     fee: Option<PayerFee>,
     locality: &Locality,
 ) -> ExecutedTx {
-    let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
+    let tx_hash = TxHash::from(Hash::from_hash_bytes(&vm_tx.0.0));
     let work = publish_work(artifact);
 
     // Admission reached the whole verdict from these same bytes, so a
@@ -709,7 +709,7 @@ fn assemble_executed_tx(
     ctx: &WaveBatchContext<'_>,
     inputs: BatchInputs<'_>,
     fold: &mut FoldState,
-    vm_tx: VmTxHash,
+    vm_tx: TxHash,
     kernel: KernelOutput<'_>,
     fee: Option<PayerFee>,
 ) -> ExecutedTx {
@@ -718,7 +718,7 @@ fn assemble_executed_tx(
         receipt,
         work: attested_work,
     } = kernel;
-    let tx_hash = TxHash::from_raw(Hash::from_hash_bytes(&vm_tx.0.0));
+    let tx_hash = TxHash::from(Hash::from_hash_bytes(&vm_tx.0.0));
     // Built before this transaction's own burn folds in: a charge settles
     // over the state its siblings left, not over its own.
     let fee_receipt = fee.and_then(|payer| {
@@ -802,8 +802,8 @@ impl Executor {
         ctx: &WaveBatchContext<'_>,
         snapshot: &DynSnapshot<'_>,
         transactions: &[Arc<Verified<Transaction>>],
-        provisions_by_tx: &BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>>,
-        env_by_tx: &BTreeMap<VmTxHash, EnvInputs>,
+        provisions_by_tx: &BTreeMap<TxHash, Vec<Arc<Vec<SubstateEntry>>>>,
+        env_by_tx: &BTreeMap<TxHash, EnvInputs>,
         cross_shard: bool,
     ) -> Vec<ExecutedTx> {
         if transactions.is_empty() {
@@ -820,24 +820,21 @@ impl Executor {
         };
         // Publishes carry no manifest, so they never reach the kernel;
         // they settle in their own pass below.
-        let publishes: BTreeMap<VmTxHash, ([u8; 16], Vec<u8>)> = transactions
+        let publishes: BTreeMap<TxHash, ([u8; 16], Vec<u8>)> = transactions
             .iter()
             .filter_map(|tx| {
                 let vm = tx.body();
                 let artifact = vm.artifact()?;
-                Some((
-                    VmTxHash(Hash32(*tx.hash().as_bytes())),
-                    (vm.fee_payer.0, artifact.to_vec()),
-                ))
+                Some((tx.hash(), (vm.fee_payer.0, artifact.to_vec())))
             })
             .collect();
 
         // Derive every transaction; refusals become deterministic
         // failures without touching the batch.
-        let mut prepared: BTreeMap<VmTxHash, PreparedTx> = BTreeMap::new();
+        let mut prepared: BTreeMap<TxHash, PreparedTx> = BTreeMap::new();
         let mut refused: BTreeMap<TxHash, String> = BTreeMap::new();
         for tx in transactions {
-            let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+            let vm_tx = tx.hash();
             if publishes.contains_key(&vm_tx) {
                 continue;
             }
@@ -890,7 +887,7 @@ impl Executor {
         // baseline value is indistinguishable from an absent cell, and
         // the burn would silently apply to nothing.
         for tx in transactions {
-            let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+            let vm_tx = tx.hash();
             if !publishes.contains_key(&vm_tx) {
                 continue;
             }
@@ -946,7 +943,7 @@ impl Executor {
         // The fee payers this shard settles: a completed transaction
         // burns its attested actual from its payer's vault, on the
         // payer's shard only.
-        let fee_by_tx: BTreeMap<VmTxHash, PayerFee> = transactions
+        let fee_by_tx: BTreeMap<TxHash, PayerFee> = transactions
             .iter()
             .filter_map(|tx| {
                 let vm = tx.body();
@@ -955,7 +952,7 @@ impl Executor {
                     return None;
                 }
                 Some((
-                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    tx.hash(),
                     PayerFee {
                         vault: SubstateKey {
                             owner: Address(owner),
@@ -973,7 +970,7 @@ impl Executor {
             running: BTreeMap::new(),
             fees_applied: BTreeMap::new(),
         };
-        let mut folded: BTreeMap<VmTxHash, ExecutedTx> = BTreeMap::new();
+        let mut folded: BTreeMap<TxHash, ExecutedTx> = BTreeMap::new();
         for (vm_tx, receipt) in &outcome.receipts {
             // The kernel priced this shard's share under the same locality
             // the receipts were applied through, so nothing here re-derives
@@ -1031,7 +1028,7 @@ impl Executor {
         transactions
             .iter()
             .map(|tx| {
-                let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+                let vm_tx = tx.hash();
                 folded.get(&vm_tx).cloned().unwrap_or_else(|| {
                     let reason = refused
                         .get(&tx.hash())
@@ -1061,11 +1058,11 @@ impl Executor {
     ) -> Vec<ExecutedTx> {
         // A single-shard batch commits in one block, so every member's
         // environment is anchored on the wave-start block.
-        let env_by_tx: BTreeMap<VmTxHash, EnvInputs> = transactions
+        let env_by_tx: BTreeMap<TxHash, EnvInputs> = transactions
             .iter()
             .map(|tx| {
                 (
-                    VmTxHash(Hash32(*tx.hash().as_bytes())),
+                    tx.hash(),
                     EnvInputs {
                         clock_ms: ctx.wave_start_ts.as_millis(),
                         randomness: tx_randomness(ctx.wave_start_reveal, tx.hash()),
@@ -1095,23 +1092,18 @@ impl Executor {
     ) -> Vec<ExecutedTx> {
         let transactions: Vec<Arc<Verified<Transaction>>> =
             requests.iter().map(|r| Arc::clone(r.transaction)).collect();
-        let provisions_by_tx: BTreeMap<VmTxHash, Vec<Arc<Vec<SubstateEntry>>>> = requests
+        let provisions_by_tx: BTreeMap<TxHash, Vec<Arc<Vec<SubstateEntry>>>> = requests
             .iter()
-            .map(|r| {
-                (
-                    VmTxHash(Hash32(*r.transaction.hash().as_bytes())),
-                    r.provisions.to_vec(),
-                )
-            })
+            .map(|r| (r.transaction.hash(), r.provisions.to_vec()))
             .collect();
         // Each request carries the environment its payer block fixed:
         // remote-payer legs the anchors off the payer's bundle, everything
         // else the wave-start block's own.
-        let env_by_tx: BTreeMap<VmTxHash, EnvInputs> = requests
+        let env_by_tx: BTreeMap<TxHash, EnvInputs> = requests
             .iter()
             .map(|r| {
                 (
-                    VmTxHash(Hash32(*r.transaction.hash().as_bytes())),
+                    r.transaction.hash(),
                     EnvInputs {
                         clock_ms: r.clock.as_millis(),
                         randomness: tx_randomness(r.randomness, r.transaction.hash()),
@@ -1139,7 +1131,7 @@ mod tests {
     }
 
     fn tx(seed: &[u8]) -> TxHash {
-        TxHash::from_raw(Hash::from_bytes(seed))
+        TxHash::from(Hash::from_bytes(seed))
     }
 
     /// The draw is a pure function of the payer block's reveal chain and

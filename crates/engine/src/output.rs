@@ -107,7 +107,7 @@ mod tests {
     use super::*;
 
     fn tx_hash(byte: u8) -> TxHash {
-        TxHash::from_raw(Hash::from_bytes(&[byte]))
+        TxHash::from(Hash::from_bytes(&[byte]))
     }
 
     #[test]

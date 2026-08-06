@@ -60,9 +60,9 @@ mod tests {
     #[test]
     fn test_get_transactions_request() {
         let tx_hashes = vec![
-            TxHash::from_raw(Hash::from_bytes(b"tx1")),
-            TxHash::from_raw(Hash::from_bytes(b"tx2")),
-            TxHash::from_raw(Hash::from_bytes(b"tx3")),
+            TxHash::from(Hash::from_bytes(b"tx1")),
+            TxHash::from(Hash::from_bytes(b"tx2")),
+            TxHash::from(Hash::from_bytes(b"tx3")),
         ];
 
         let request = GetTransactionsRequest::new(tx_hashes.clone());
@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn test_hbor_roundtrip() {
-        let request = GetTransactionsRequest::new(vec![TxHash::from_raw(Hash::from_bytes(b"tx1"))]);
+        let request = GetTransactionsRequest::new(vec![TxHash::from(Hash::from_bytes(b"tx1"))]);
         let bytes = hbor_to_vec(&request).unwrap();
         let decoded: GetTransactionsRequest = hbor_from_slice(&bytes).unwrap();
         assert_eq!(request, decoded);

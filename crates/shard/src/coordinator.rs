@@ -6782,7 +6782,7 @@ mod tests {
         state.pending_blocks.assemble(
             child.header().clone(),
             BlockManifest::new(
-                vec![TxHash::from_raw(Hash::from_bytes(b"absent-tx"))],
+                vec![TxHash::from(Hash::from_bytes(b"absent-tx"))],
                 vec![],
                 vec![],
                 WitnessSources::empty(),
@@ -10549,7 +10549,7 @@ mod tests {
                 WeightedTimestamp::from_millis(height),
                 GlobalReceiptRoot::ZERO,
                 vec![TxOutcome::new(
-                    TxHash::from_raw(Hash::from_bytes(b"tx")),
+                    TxHash::from(Hash::from_bytes(b"tx")),
                     ExecutionOutcome::Succeeded {
                         receipt_hash: GlobalReceiptHash::ZERO,
                     },

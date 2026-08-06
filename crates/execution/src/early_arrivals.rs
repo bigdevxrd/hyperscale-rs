@@ -346,7 +346,7 @@ mod tests {
     }
 
     fn make_vote(wave_id: WaveId, anchor_ts: WeightedTimestamp) -> ExecutionVote {
-        let tx_outcomes = vec![make_tx_outcome(TxHash::from_raw(Hash::from_bytes(b"tx")))];
+        let tx_outcomes = vec![make_tx_outcome(TxHash::from(Hash::from_bytes(b"tx")))];
         let global_receipt_root = GlobalReceiptRoot::from_raw(Hash::from_bytes(b"root"));
         let msg = signed_bytes(&ExecVoteMessage::new(
             &NetworkDefinition::simulator(),
@@ -492,8 +492,8 @@ mod tests {
     fn buffer_ec_records_pending_set_and_reverse_index() {
         let mut b = EarlyArrivalBuffer::new();
         let w = wave(1);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"b"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"b"));
         let ec = make_ec(w, &[tx_a, tx_b]);
 
         b.buffer_ec(&ec, &[tx_a, tx_b]);
@@ -507,7 +507,7 @@ mod tests {
     fn buffer_ec_idempotent_for_same_tx_hashes() {
         let mut b = EarlyArrivalBuffer::new();
         let w = wave(1);
-        let tx = TxHash::from_raw(Hash::from_bytes(b"a"));
+        let tx = TxHash::from(Hash::from_bytes(b"a"));
         let ec = make_ec(w, &[tx]);
 
         b.buffer_ec(&ec, &[tx]);
@@ -525,8 +525,8 @@ mod tests {
     fn clear_routed_drops_entry_once_pending_set_drains() {
         let mut b = EarlyArrivalBuffer::new();
         let w = wave(1);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"b"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"b"));
         let ec = make_ec(w, &[tx_a, tx_b]);
 
         b.buffer_ec(&ec, &[tx_a, tx_b]);
@@ -544,8 +544,8 @@ mod tests {
     fn drain_ecs_for_txs_returns_ecs_and_clears_reverse_index() {
         let mut b = EarlyArrivalBuffer::new();
         let w = wave(1);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"b"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"b"));
         let ec = make_ec(w, &[tx_a, tx_b]);
         b.buffer_ec(&ec, &[tx_a, tx_b]);
 
@@ -560,8 +560,8 @@ mod tests {
     fn drain_ecs_for_txs_dedups_arc_identity() {
         let mut b = EarlyArrivalBuffer::new();
         let w = wave(1);
-        let tx_a = TxHash::from_raw(Hash::from_bytes(b"a"));
-        let tx_b = TxHash::from_raw(Hash::from_bytes(b"b"));
+        let tx_a = TxHash::from(Hash::from_bytes(b"a"));
+        let tx_b = TxHash::from(Hash::from_bytes(b"b"));
         // Single EC covers both txs; draining both hashes should yield one EC.
         let ec = make_ec(w, &[tx_a, tx_b]);
         b.buffer_ec(&ec, &[tx_a, tx_b]);
@@ -578,8 +578,8 @@ mod tests {
         let mut b = EarlyArrivalBuffer::new();
         let w_old = wave(1);
         let w_fresh = wave(2);
-        let tx_old = TxHash::from_raw(Hash::from_bytes(b"old"));
-        let tx_fresh = TxHash::from_raw(Hash::from_bytes(b"fresh"));
+        let tx_old = TxHash::from(Hash::from_bytes(b"old"));
+        let tx_fresh = TxHash::from(Hash::from_bytes(b"fresh"));
 
         let old_anchor = ms(1_000);
         let fresh_anchor = ms(60_000);
@@ -607,7 +607,7 @@ mod tests {
     fn gc_stale_ecs_preserves_entries_within_horizon() {
         let mut b = EarlyArrivalBuffer::new();
         let w = wave(1);
-        let tx = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx = TxHash::from(Hash::from_bytes(b"tx"));
         let anchor = ms(100_000);
         b.buffer_ec(&make_ec_with_anchor(w, &[tx], anchor), &[tx]);
 
@@ -662,7 +662,7 @@ mod tests {
             let mut b = EarlyArrivalBuffer::new();
             for (i, h) in heights.iter().enumerate() {
                 let w = wave(*h);
-                let tx = TxHash::from_raw(Hash::from_bytes(&[u8::try_from(i).unwrap_or(u8::MAX); 32]));
+                let tx = TxHash::from(Hash::from_bytes(&[u8::try_from(i).unwrap_or(u8::MAX); 32]));
                 let anchor = ms(anchor_ms[i % anchor_ms.len()]);
                 b.buffer_ec(&make_ec_with_anchor(w.clone(), &[tx], anchor), &[tx]);
             }

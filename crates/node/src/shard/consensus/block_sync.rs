@@ -522,7 +522,7 @@ mod tests {
         LocalReceiptRoot,
         CertificateRoot,
     ) {
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx"));
         let wave_id = WaveId::new(ShardId::ROOT, HEIGHT, std::collections::BTreeSet::new());
         let outcome = TxOutcome::new(
             tx_hash,
@@ -719,7 +719,7 @@ mod tests {
         // `validate_receipts_against_ec` catches this even when both
         // certificate_root and local_receipt_root are computed off the
         // (corrupted) body and would tautologically match.
-        let tx_hash = TxHash::from_raw(Hash::from_bytes(b"tx_divergent"));
+        let tx_hash = TxHash::from(Hash::from_bytes(b"tx_divergent"));
         let wave_id = WaveId::new(ShardId::ROOT, HEIGHT, std::collections::BTreeSet::new());
         let ec = ExecutionCertificate::new(
             wave_id.clone(),

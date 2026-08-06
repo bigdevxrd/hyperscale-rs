@@ -88,15 +88,15 @@ fn at_pending_limit_is_false_on_fresh_coordinator() {
 #[test]
 fn has_transaction_is_false_on_fresh_coordinator() {
     let coord = MempoolCoordinator::new(ShardId::ROOT);
-    assert!(!coord.has_transaction(&TxHash::from_raw(Hash::from_bytes(b"unknown"))));
+    assert!(!coord.has_transaction(&TxHash::from(Hash::from_bytes(b"unknown"))));
     assert!(
         coord
-            .status(&TxHash::from_raw(Hash::from_bytes(b"unknown")))
+            .status(&TxHash::from(Hash::from_bytes(b"unknown")))
             .is_none()
     );
     assert!(
         coord
-            .get_transaction(&TxHash::from_raw(Hash::from_bytes(b"unknown")))
+            .get_transaction(&TxHash::from(Hash::from_bytes(b"unknown")))
             .is_none()
     );
 }
@@ -125,7 +125,7 @@ fn lock_contention_stats_zero_on_fresh_coordinator() {
 #[test]
 fn is_tombstoned_is_false_on_fresh_coordinator() {
     let coord = MempoolCoordinator::new(ShardId::ROOT);
-    assert!(!coord.is_tombstoned(&TxHash::from_raw(Hash::from_bytes(b"unknown"))));
+    assert!(!coord.is_tombstoned(&TxHash::from(Hash::from_bytes(b"unknown"))));
 }
 
 #[test]

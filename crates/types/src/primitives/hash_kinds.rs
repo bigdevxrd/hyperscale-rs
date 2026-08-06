@@ -7,7 +7,7 @@
 //! See [`TypedHash`](crate::TypedHash) for the shared interface and the
 //! `hash_newtype!` macro in [`crate::primitives::hash`] for the declaration pattern.
 
-use crate::primitives::hash::hash_newtype;
+use crate::primitives::hash::{Hash, TypedHash, hash_newtype};
 
 // ── Block layer ──────────────────────────────────────────────────────────────
 
@@ -20,13 +20,38 @@ hash_newtype!(
     "BlockHash"
 );
 
-hash_newtype!(
-    /// Hash identifying a transaction.
-    ///
-    /// Appears as `tx_hash` / `transaction_hash`.
-    pub TxHash,
-    "TxHash"
-);
+// A transaction's identity is VM vocabulary — the hash of its envelope's
+// canonical bytes, and the kernel's canonical ordering key — so the type
+// lives there; it joins the typed-hash family through the impls below.
+pub use hyperscale_vm_types::TxHash;
+
+impl From<Hash> for TxHash {
+    fn from(raw: Hash) -> Self {
+        Self(raw.as_hash32())
+    }
+}
+
+impl From<TxHash> for Hash {
+    fn from(tx: TxHash) -> Self {
+        tx.0.into()
+    }
+}
+
+impl TypedHash for TxHash {
+    const KIND: &'static str = "TxHash";
+
+    fn from_raw(raw: Hash) -> Self {
+        Self(raw.as_hash32())
+    }
+
+    fn into_raw(self) -> Hash {
+        self.0.into()
+    }
+
+    fn as_raw(&self) -> Hash {
+        self.0.into()
+    }
+}
 
 // ── Per-block merkle roots ───────────────────────────────────────────────────
 
@@ -237,7 +262,7 @@ mod tests {
     #[test]
     fn round_trip_preserves_bytes() {
         let raw = Hash::from_bytes(b"round-trip");
-        assert_eq!(*TxHash::from_raw(raw).as_raw(), raw);
+        assert_eq!(Hash::from(TxHash::from(raw)), raw);
         assert_eq!(Hash::from(TransactionRoot::from_raw(raw)), raw);
     }
 }

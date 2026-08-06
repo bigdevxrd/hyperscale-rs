@@ -92,7 +92,7 @@ impl Verified<ProvisionTxRootsMap> {
                 per_target
                     .entry(payer_shard)
                     .or_default()
-                    .push(tx.hash().into_raw());
+                    .push(Hash::from(tx.hash()));
                 continue;
             }
             for shard in topology_snapshot.all_shards_for_transaction(tx) {
@@ -102,7 +102,7 @@ impl Verified<ProvisionTxRootsMap> {
                 per_target
                     .entry(shard)
                     .or_default()
-                    .push(tx.hash().into_raw());
+                    .push(Hash::from(tx.hash()));
             }
         }
 

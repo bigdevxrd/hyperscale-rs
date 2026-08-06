@@ -165,7 +165,7 @@ mod tests {
                 WeightedTimestamp::from_millis(11),
                 GlobalReceiptRoot::from_raw(Hash::from_bytes(&[seed + 100; 4])),
                 vec![TxOutcome::new(
-                    TxHash::from_raw(Hash::from_bytes(&[seed; 4])),
+                    TxHash::from(Hash::from_bytes(&[seed; 4])),
                     ExecutionOutcome::Succeeded {
                         receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(
                             &[seed + 50; 4],
@@ -205,7 +205,7 @@ mod tests {
             WeightedTimestamp::from_millis(11),
             GlobalReceiptRoot::from_raw(Hash::from_bytes(b"receipt")),
             vec![TxOutcome::new(
-                TxHash::from_raw(Hash::from_bytes(b"tx1")),
+                TxHash::from(Hash::from_bytes(b"tx1")),
                 ExecutionOutcome::Succeeded {
                     receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"rh")),
                 },

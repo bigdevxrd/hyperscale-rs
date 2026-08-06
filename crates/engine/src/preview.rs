@@ -23,10 +23,9 @@ use std::sync::Arc;
 
 use hyperscale_effects_bridge::admit_package;
 use hyperscale_types::{Event, RevealChain, Transaction, WeightedTimestamp};
-use hyperscale_vm_effects::{EffectTarget, Hash32, SubstateKey};
+use hyperscale_vm_effects::{EffectTarget, SubstateKey};
 use hyperscale_vm_kernel::{
-    Base, BatchTx, Locality, ManifestWalk, Outcome, Receipt, TxHash as VmTxHash, decode_amount,
-    execute_batch,
+    Base, BatchTx, Locality, ManifestWalk, Outcome, Receipt, decode_amount, execute_batch,
 };
 
 use crate::executor::{
@@ -286,7 +285,7 @@ impl Executor {
         }
         let base = Arc::new(VmBase { cells });
 
-        let vm_tx = VmTxHash(Hash32(*tx.hash().as_bytes()));
+        let vm_tx = tx.hash();
         let batch = [BatchTx::new(
             vm_tx,
             prepared.declaration,

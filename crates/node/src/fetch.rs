@@ -452,7 +452,7 @@ mod tests {
     use super::*;
 
     fn tx(n: u8) -> TxHash {
-        TxHash::from_raw(Hash::from_bytes(&[n; 32]))
+        TxHash::from(Hash::from_bytes(&[n; 32]))
     }
 
     fn vid(n: u64) -> ValidatorId {
@@ -747,7 +747,7 @@ mod partition_tests {
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
-                TxHash::from_raw(Hash::from_bytes(b"asked")),
+                TxHash::from(Hash::from_bytes(b"asked")),
                 vec![],
             )],
         ));
@@ -759,7 +759,7 @@ mod partition_tests {
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
-                TxHash::from_raw(Hash::from_bytes(b"extra")),
+                TxHash::from(Hash::from_bytes(b"extra")),
                 vec![],
             )],
         ));

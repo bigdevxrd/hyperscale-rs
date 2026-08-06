@@ -44,7 +44,7 @@ pub fn build_verify_action(
     let leaves: Vec<Hash> = provisions
         .transactions()
         .iter()
-        .map(|t| t.tx_hash.into_raw())
+        .map(|t| Hash::from(t.tx_hash))
         .collect();
     let computed_root = ProvisionTxRoot::from_raw(compute_merkle_root(&leaves));
 

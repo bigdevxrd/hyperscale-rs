@@ -787,7 +787,7 @@ fn test_transactions_batch_missing() {
     let temp_dir = TempDir::new().unwrap();
     let storage = RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap();
 
-    let result = storage.get_transactions_batch(&[TxHash::from_raw(Hash::from_bytes(&[1; 32]))]);
+    let result = storage.get_transactions_batch(&[TxHash::from(Hash::from_bytes(&[1; 32]))]);
     assert!(result.is_empty());
 }
 

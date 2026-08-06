@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn with_inventory_attaches_filters() {
         let mut bf: BloomFilter<TxHash> = BloomFilter::with_capacity(100, 0.01).unwrap();
-        bf.insert(&TxHash::from_raw(Hash::from_bytes(b"tx")));
+        bf.insert(&TxHash::from(Hash::from_bytes(b"tx")));
         let inv = Inventory {
             tx_have: Some(bf),
             cert_have: None,
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn hbor_roundtrip_preserves_inventory() {
         let mut bf: BloomFilter<TxHash> = BloomFilter::with_capacity(100, 0.01).unwrap();
-        let h = TxHash::from_raw(Hash::from_bytes(b"tx"));
+        let h = TxHash::from(Hash::from_bytes(b"tx"));
         bf.insert(&h);
         let req = GetBlockRequest::new(BlockHeight::new(1), BlockHeight::new(10)).with_inventory(
             Inventory {

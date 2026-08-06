@@ -73,7 +73,10 @@ impl Verified<TransactionRoot> {
         if transactions.is_empty() {
             return Self::new_unchecked(TransactionRoot::ZERO);
         }
-        let leaves: Vec<Hash> = transactions.iter().map(|tx| tx.hash().into_raw()).collect();
+        let leaves: Vec<Hash> = transactions
+            .iter()
+            .map(|tx| Hash::from(tx.hash()))
+            .collect();
         // Use padded merkle root (power-of-2 padding with Hash::ZERO) so that
         // merkle inclusion proofs can be generated and verified for any leaf.
         Self::new_unchecked(TransactionRoot::from_raw(compute_merkle_root(&leaves)))

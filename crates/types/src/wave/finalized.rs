@@ -505,7 +505,7 @@ mod tests {
 
     fn make_outcome(seed: u8) -> TxOutcome {
         TxOutcome::new(
-            TxHash::from_raw(Hash::from_bytes(&[seed; 4])),
+            TxHash::from(Hash::from_bytes(&[seed; 4])),
             ExecutionOutcome::Succeeded {
                 receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(&[seed + 100; 4])),
             },

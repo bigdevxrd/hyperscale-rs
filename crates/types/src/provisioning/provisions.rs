@@ -487,7 +487,7 @@ mod tests {
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![ProvisionEntry::new(
-                TxHash::from_raw(Hash::from_bytes(b"tx1")),
+                TxHash::from(Hash::from_bytes(b"tx1")),
                 vec![test_entry(1)],
             )],
         );
@@ -508,12 +508,9 @@ mod tests {
             RevealChain::ZERO,
             MerkleInclusionProof::dummy(),
             vec![
+                ProvisionEntry::new(TxHash::from(Hash::from_bytes(b"tx1")), vec![entry.clone()]),
                 ProvisionEntry::new(
-                    TxHash::from_raw(Hash::from_bytes(b"tx1")),
-                    vec![entry.clone()],
-                ),
-                ProvisionEntry::new(
-                    TxHash::from_raw(Hash::from_bytes(b"tx2")),
+                    TxHash::from(Hash::from_bytes(b"tx2")),
                     vec![entry, test_entry(2)],
                 ),
             ],
@@ -590,8 +587,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(i, (storage_key, value))| {
-                    let tx_hash =
-                        TxHash::from_raw(Hash::from_bytes(&[u8::try_from(i).unwrap(); 4]));
+                    let tx_hash = TxHash::from(Hash::from_bytes(&[u8::try_from(i).unwrap(); 4]));
                     ProvisionEntry::new(tx_hash, vec![SubstateEntry::new(storage_key, Some(value))])
                 })
                 .collect();
@@ -699,7 +695,7 @@ mod tests {
                 RevealChain::ZERO,
                 proof,
                 vec![ProvisionEntry::new(
-                    TxHash::from_raw(Hash::from_bytes(b"tx")),
+                    TxHash::from(Hash::from_bytes(b"tx")),
                     vec![SubstateEntry::new(
                         items[0].0.clone(),
                         Some(items[0].1.clone()),
@@ -731,7 +727,7 @@ mod tests {
                 RevealChain::from_raw(Hash::from_bytes(b"another block's reveal")),
                 proof,
                 vec![ProvisionEntry::new(
-                    TxHash::from_raw(Hash::from_bytes(b"tx")),
+                    TxHash::from(Hash::from_bytes(b"tx")),
                     vec![SubstateEntry::new(
                         items[0].0.clone(),
                         Some(items[0].1.clone()),

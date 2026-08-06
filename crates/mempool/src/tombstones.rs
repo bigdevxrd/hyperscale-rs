@@ -86,17 +86,17 @@ mod tests {
     #[test]
     fn tombstone_is_observable_via_is_tombstoned() {
         let mut store = TombstoneStore::new();
-        let hash = TxHash::from_raw(Hash::from_bytes(b"tx1"));
+        let hash = TxHash::from(Hash::from_bytes(b"tx1"));
         store.tombstone(hash, WeightedTimestamp::from_millis(1_000));
         assert!(store.is_tombstoned(&hash));
-        assert!(!store.is_tombstoned(&TxHash::from_raw(Hash::from_bytes(b"other"))));
+        assert!(!store.is_tombstoned(&TxHash::from(Hash::from_bytes(b"other"))));
     }
 
     #[test]
     fn prune_tombstones_drops_entries_past_their_end_exclusive() {
         let mut store = TombstoneStore::new();
-        let old = TxHash::from_raw(Hash::from_bytes(b"old"));
-        let future = TxHash::from_raw(Hash::from_bytes(b"future"));
+        let old = TxHash::from(Hash::from_bytes(b"old"));
+        let future = TxHash::from(Hash::from_bytes(b"future"));
         store.tombstone(old, WeightedTimestamp::from_millis(100));
         store.tombstone(future, WeightedTimestamp::from_millis(900));
 
@@ -111,11 +111,11 @@ mod tests {
     fn prune_tombstones_far_in_future_clears_everything() {
         let mut store = TombstoneStore::new();
         store.tombstone(
-            TxHash::from_raw(Hash::from_bytes(b"a")),
+            TxHash::from(Hash::from_bytes(b"a")),
             WeightedTimestamp::from_millis(100),
         );
         store.tombstone(
-            TxHash::from_raw(Hash::from_bytes(b"b")),
+            TxHash::from(Hash::from_bytes(b"b")),
             WeightedTimestamp::from_millis(200),
         );
 
@@ -129,7 +129,7 @@ mod tests {
         // Half-open semantics: end_timestamp_exclusive == now means past
         // expiry. retain keeps `end > now`.
         let mut store = TombstoneStore::new();
-        let at_end = TxHash::from_raw(Hash::from_bytes(b"at_end"));
+        let at_end = TxHash::from(Hash::from_bytes(b"at_end"));
         store.tombstone(at_end, WeightedTimestamp::from_millis(500));
         let removed = store.prune_tombstones(WeightedTimestamp::from_millis(500));
         assert_eq!(removed, vec![at_end]);

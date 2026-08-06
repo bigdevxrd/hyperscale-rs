@@ -712,7 +712,7 @@ mod tests {
             let owner = seeded_owner(seed);
             let updates = make_database_update(db_node_key(owner), 0, &[seed], vec![seed; 4]);
             let receipts = [StoredReceipt::synced(
-                TxHash::from_raw(Hash::from_bytes(&[seed])),
+                TxHash::from(Hash::from_bytes(&[seed])),
                 Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     database_updates: updates,
