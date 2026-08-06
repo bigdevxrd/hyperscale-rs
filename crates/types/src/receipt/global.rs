@@ -2,7 +2,7 @@
 
 use hyperscale_hbor::Hbor;
 
-use crate::{BeaconWitnessRoot, EventRoot, GlobalReceiptHash, Hash, OwnershipRoot, WritesRoot};
+use crate::{BeaconWitnessRoot, EventRoot, GlobalReceiptHash, Hash, WritesRoot};
 
 /// Cross-shard agreement receipt — ensures validators on different shards
 /// executing the same transaction reach the same outcome.
@@ -19,7 +19,6 @@ pub struct GlobalReceipt {
     event_root: EventRoot,
     beacon_witness_root: BeaconWitnessRoot,
     writes_root: WritesRoot,
-    ownership_root: OwnershipRoot,
 }
 
 impl GlobalReceipt {
@@ -30,14 +29,12 @@ impl GlobalReceipt {
         event_root: EventRoot,
         beacon_witness_root: BeaconWitnessRoot,
         writes_root: WritesRoot,
-        ownership_root: OwnershipRoot,
     ) -> Self {
         Self {
             success,
             event_root,
             beacon_witness_root,
             writes_root,
-            ownership_root,
         }
     }
 
@@ -74,18 +71,6 @@ impl GlobalReceipt {
         self.writes_root
     }
 
-    /// Commitment over the transaction's `(internal_node, owning_global_ancestor)`
-    /// ownership map (globally filtered, shard-invariant).
-    ///
-    /// Folded into [`Self::receipt_hash`] so the execution committee agrees
-    /// on the ownership used to owner-prefix internal nodes' JMT leaves
-    /// before a wave finalizes — a Byzantine source can't slip in a keying
-    /// the committee never voted on.
-    #[must_use]
-    pub const fn ownership_root(&self) -> OwnershipRoot {
-        self.ownership_root
-    }
-
     /// Compute the global receipt hash.
     ///
     /// This is the value signed over in execution votes and stored on certificates.
@@ -97,7 +82,6 @@ impl GlobalReceipt {
             self.event_root.as_raw().as_bytes(),
             self.beacon_witness_root.as_raw().as_bytes(),
             self.writes_root.as_raw().as_bytes(),
-            self.ownership_root.as_raw().as_bytes(),
         ]))
     }
 }

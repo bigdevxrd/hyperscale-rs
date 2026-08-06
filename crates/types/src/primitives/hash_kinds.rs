@@ -128,18 +128,6 @@ hash_newtype!(
     "WritesRoot"
 );
 
-hash_newtype!(
-    /// Commitment over a transaction's `(internal_node, owning_global_ancestor)`
-    /// ownership map.
-    ///
-    /// Folded into the [`GlobalReceipt`](crate::GlobalReceipt) hash so the
-    /// execution committee agrees on the ownership used to owner-prefix
-    /// internal nodes' JMT leaves before a wave finalizes. Hashes the
-    /// globally-filtered ownership pairs in canonical key order.
-    pub OwnershipRoot,
-    "OwnershipRoot"
-);
-
 // ── State (JMT) ──────────────────────────────────────────────────────────────
 
 hash_newtype!(

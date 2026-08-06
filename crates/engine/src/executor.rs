@@ -28,8 +28,8 @@ use hyperscale_metrics::record_transaction_executed;
 use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventExt, EventRoot,
-    ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, Stake,
-    StakePoolSeat, StateWrites, SubstateEntry, Transaction, TxHash, Verified, compute_merkle_root,
+    ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, RevealChain, Stake, StakePoolSeat,
+    StateWrites, SubstateEntry, Transaction, TxHash, Verified, compute_merkle_root,
     install_vm_statics,
 };
 use hyperscale_vm_effects::{
@@ -466,7 +466,6 @@ fn build_fee_receipt(
         EventRoot::ZERO,
         BeaconWitnessRoot::ZERO,
         writes_root(&writes),
-        OwnershipRoot::ZERO,
     )
     .receipt_hash();
     // No gas: this receipt settles a floor, it does not report execution.
@@ -551,7 +550,6 @@ fn assemble_published_tx(
                 EventRoot::ZERO,
                 BeaconWitnessRoot::ZERO,
                 writes_root(&writes),
-                OwnershipRoot::ZERO,
             )
             .receipt_hash();
             CachedOutput::succeeded(
@@ -674,7 +672,6 @@ fn assemble_executed_tx(
             EventRoot::from_raw(compute_merkle_root(&event_hashes)),
             BeaconWitnessRoot::ZERO,
             writes_root(&writes),
-            OwnershipRoot::ZERO,
         )
         .receipt_hash();
         CachedOutput::succeeded(

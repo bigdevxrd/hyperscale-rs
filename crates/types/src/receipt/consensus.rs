@@ -22,8 +22,8 @@ use crate::receipt::event::EventExt;
 use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
     BeaconWitnessEvent, BeaconWitnessRoot, Event, EventRoot, GlobalReceipt, GlobalReceiptHash,
-    Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EVENTS_PER_TX, OwnershipRoot, StateWrites,
-    WritesRoot, compute_merkle_root,
+    Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EVENTS_PER_TX, StateWrites, WritesRoot,
+    compute_merkle_root,
 };
 
 // Wire variant tag bytes. Explicit rather than relying on declaration
@@ -42,7 +42,6 @@ pub static FAILED_RECEIPT_HASH: LazyLock<GlobalReceiptHash> = LazyLock::new(|| {
         EventRoot::ZERO,
         BeaconWitnessRoot::ZERO,
         WritesRoot::ZERO,
-        OwnershipRoot::ZERO,
     )
     .receipt_hash()
 });

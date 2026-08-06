@@ -24,7 +24,7 @@ mod tests {
     use crate::receipt::event::EventExt;
     use crate::{
         BeaconWitnessRoot, ConsensusReceipt, Event, EventRoot, GlobalReceipt, GlobalReceiptHash,
-        Hash, OwnershipRoot, StateWrites, WritesRoot,
+        Hash, StateWrites, WritesRoot,
     };
 
     fn make_event(seed: u8) -> Event {
@@ -51,14 +51,12 @@ mod tests {
             EventRoot::ZERO,
             BeaconWitnessRoot::ZERO,
             WritesRoot::ZERO,
-            OwnershipRoot::ZERO,
         );
         let failure = GlobalReceipt::new(
             false,
             EventRoot::ZERO,
             BeaconWitnessRoot::ZERO,
             WritesRoot::ZERO,
-            OwnershipRoot::ZERO,
         );
         assert_ne!(success.receipt_hash(), failure.receipt_hash());
     }
@@ -70,14 +68,12 @@ mod tests {
             EventRoot::ZERO,
             BeaconWitnessRoot::ZERO,
             WritesRoot::ZERO,
-            OwnershipRoot::ZERO,
         );
         let b = GlobalReceipt::new(
             true,
             EventRoot::ZERO,
             BeaconWitnessRoot::ZERO,
             WritesRoot::from_raw(Hash::from_bytes(b"different")),
-            OwnershipRoot::ZERO,
         );
         assert_ne!(a.receipt_hash(), b.receipt_hash());
     }
@@ -89,33 +85,12 @@ mod tests {
             EventRoot::ZERO,
             BeaconWitnessRoot::ZERO,
             WritesRoot::ZERO,
-            OwnershipRoot::ZERO,
         );
         let b = GlobalReceipt::new(
             true,
             EventRoot::ZERO,
             BeaconWitnessRoot::from_raw(Hash::from_bytes(b"witness")),
             WritesRoot::ZERO,
-            OwnershipRoot::ZERO,
-        );
-        assert_ne!(a.receipt_hash(), b.receipt_hash());
-    }
-
-    #[test]
-    fn test_global_receipt_hash_changes_with_ownership_root() {
-        let a = GlobalReceipt::new(
-            true,
-            EventRoot::ZERO,
-            BeaconWitnessRoot::ZERO,
-            WritesRoot::ZERO,
-            OwnershipRoot::ZERO,
-        );
-        let b = GlobalReceipt::new(
-            true,
-            EventRoot::ZERO,
-            BeaconWitnessRoot::ZERO,
-            WritesRoot::ZERO,
-            OwnershipRoot::from_raw(Hash::from_bytes(b"ownership")),
         );
         assert_ne!(a.receipt_hash(), b.receipt_hash());
     }
