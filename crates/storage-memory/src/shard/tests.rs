@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use hyperscale_storage::test_helpers::{
-    db_node_key, local_key, make_database_update, make_mapped_database_update, make_test_block,
-    make_test_certified, make_test_qc,
+    database_updates_to_state_writes, db_node_key, local_key, make_database_update,
+    make_mapped_database_update, make_test_block, make_test_certified, make_test_qc,
 };
 use hyperscale_storage::tree::{hash_storage_key, jmt_parent_height, put_at_version};
 use hyperscale_storage::{
@@ -122,7 +122,7 @@ fn commit_with(
             tx_hash: TxHash::ZERO,
             consensus: Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
-                database_updates: updates.clone(),
+                writes: database_updates_to_state_writes(updates),
                 beacon_witness_events: Vec::new(),
                 events: Vec::new(),
             }),
@@ -1062,113 +1062,6 @@ fn test_historical_substate_read_respects_retention() {
     // Above current: returns None.
     let got = storage.get_substate_at_height(owner, local, BlockHeight::new(99));
     assert!(got.is_none(), "future height returns None");
-}
-
-/// A Reset partition must capture a history entry for every key
-/// removed so historical reads see the pre-reset contents.
-#[test]
-fn test_reset_partition_captures_history_for_all_removed_keys() {
-    let node_key = db_node_key(3);
-    let partition_num = VM_PARTITION;
-    let pk = DbPartitionKey {
-        node_key: node_key.clone(),
-        partition_num,
-    };
-
-    let storage = SimShardStorage::default();
-
-    // V1: populate partition with A/B/C.
-    {
-        let block = make_test_block(BlockHeight::new(1));
-        let qc = make_test_qc(&block);
-        let mut updates = DatabaseUpdates::default();
-        updates.node_updates.insert(
-            node_key.clone(),
-            NodeDatabaseUpdates {
-                partition_updates: std::iter::once((
-                    partition_num,
-                    PartitionDatabaseUpdates::Delta {
-                        substate_updates: [
-                            (
-                                DbSortKey(local_key(&[0xA1])),
-                                DatabaseUpdate::Set(vec![0xAA]),
-                            ),
-                            (
-                                DbSortKey(local_key(&[0xB1])),
-                                DatabaseUpdate::Set(vec![0xBB]),
-                            ),
-                            (
-                                DbSortKey(local_key(&[0xC1])),
-                                DatabaseUpdate::Set(vec![0xCC]),
-                            ),
-                        ]
-                        .into_iter()
-                        .collect(),
-                    },
-                ))
-                .collect(),
-            },
-        );
-        commit_with(&storage, &updates, &block, &qc);
-    }
-
-    // V2: reset partition to only D/E.
-    {
-        let block = make_test_block(BlockHeight::new(2));
-        let qc = make_test_qc(&block);
-        let mut updates = DatabaseUpdates::default();
-        let mut new_values = IndexMap::new();
-        new_values.insert(DbSortKey(local_key(&[0xD1])), vec![0xDD]);
-        new_values.insert(DbSortKey(local_key(&[0xE1])), vec![0xEE]);
-        updates.node_updates.insert(
-            node_key,
-            NodeDatabaseUpdates {
-                partition_updates: std::iter::once((
-                    partition_num,
-                    PartitionDatabaseUpdates::Reset {
-                        new_substate_values: new_values,
-                    },
-                ))
-                .collect(),
-            },
-        );
-        commit_with(&storage, &updates, &block, &qc);
-    }
-
-    // At V1, the original contents A/B/C must still be visible.
-    let snap_v1 = storage.snapshot_at(BlockHeight::new(1));
-    assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xA1]))),
-        Some(vec![0xAA]),
-    );
-    assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xB1]))),
-        Some(vec![0xBB]),
-    );
-    assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xC1]))),
-        Some(vec![0xCC]),
-    );
-    // D/E must not be visible at V1 — they don't exist yet.
-    assert_eq!(
-        snap_v1.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xD1]))),
-        None,
-    );
-
-    // At V2, only D/E are visible.
-    let snap_v2 = storage.snapshot_at(BlockHeight::new(2));
-    assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xA1]))),
-        None,
-    );
-    assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xD1]))),
-        Some(vec![0xDD]),
-    );
-    assert_eq!(
-        snap_v2.get_raw_substate_by_db_key(&pk, &DbSortKey(local_key(&[0xE1]))),
-        Some(vec![0xEE]),
-    );
 }
 
 /// Genesis-style writes via `commit_substates_only` must NOT populate

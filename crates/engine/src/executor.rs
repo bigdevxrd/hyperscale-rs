@@ -25,15 +25,12 @@ use hyperscale_effects_bridge::{
     decode_tree, envelope_identity, witness_from_event,
 };
 use hyperscale_metrics::record_transaction_executed;
-use hyperscale_storage::{
-    DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue,
-    PartitionDatabaseUpdates, SubstateDatabase,
-};
+use hyperscale_storage::{DbPartitionKey, DbSortKey, DbSubstateValue, SubstateDatabase};
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_flat_key_parts};
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventExt, EventRoot,
     ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, OwnershipRoot, RevealChain, Stake,
-    StakePoolSeat, SubstateEntry, Transaction, TxHash, Verified, compute_merkle_root,
+    StakePoolSeat, StateWrites, SubstateEntry, Transaction, TxHash, Verified, compute_merkle_root,
     install_vm_statics,
 };
 use hyperscale_vm_effects::{
@@ -42,13 +39,12 @@ use hyperscale_vm_effects::{
 };
 use hyperscale_vm_kernel::{
     Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt, amount_cell,
-    decode_amount, encode_amount, execute_batch,
+    execute_batch,
 };
-use indexmap::IndexMap;
 
 use crate::backend::EngineBackend;
 use crate::genesis::{World, genesis_world_with_pools};
-use crate::sharding::{compute_writes_root, sort_database_updates};
+use crate::sharding::writes_root;
 use crate::{
     CachedOutput, CrossShardTxInput, DynSnapshot, ExecutedTx, WaveBatchContext, project_to_shard,
 };
@@ -285,95 +281,6 @@ pub fn read_cell(snapshot: &DynSnapshot<'_>, key: SubstateKey) -> Option<DbSubst
     )
 }
 
-/// Fold one receipt's delta into per-transaction absolute writes,
-/// mirroring the kernel apply phase's operation order: exclusive cells,
-/// then movements, then settles. `running` carries the batch's folded
-/// state; the per-transaction map reads through it to the base.
-///
-/// # Panics
-///
-/// Panics on arithmetic the kernel's apply already vetted — a divergence
-/// between this fold and kernel semantics, never a sender condition.
-fn fold_delta(
-    receipt: &Receipt,
-    base: &VmBase,
-    running: &mut BTreeMap<SubstateKey, Option<Vec<u8>>>,
-    tx: TxHash,
-    locality: &Locality,
-) -> BTreeMap<SubstateKey, Option<Vec<u8>>> {
-    assert!(
-        receipt.delta.entries.is_empty(),
-        "ordered-collection entries are outside the genesis stdlib surface"
-    );
-    let mut writes: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
-    let current = |writes: &BTreeMap<SubstateKey, Option<Vec<u8>>>,
-                   running: &BTreeMap<SubstateKey, Option<Vec<u8>>>,
-                   key: SubstateKey| {
-        writes
-            .get(&key)
-            .or_else(|| running.get(&key))
-            .cloned()
-            .unwrap_or_else(|| base.cells.get(&key).cloned())
-    };
-    // The owning shard folds its own cells; a movement on any other is the
-    // outbound record and never becomes an absolute write here.
-    let owned = receipt.delta.owned(locality);
-    for (key, change) in owned.cells() {
-        writes.insert(key, change.clone());
-    }
-    for (key, movement) in owned.movements() {
-        let before = current(&writes, running, key)
-            .map_or(Ok(0), |bytes| decode_amount(&bytes))
-            .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
-        let after = before
-            .checked_add(movement.credit)
-            .and_then(|credited| credited.checked_sub(movement.debit))
-            .unwrap_or_else(|| panic!("fold of {tx:?}: movement past the kernel-vetted floor"));
-        writes.insert(key, Some(encode_amount(after).to_vec()));
-    }
-    for (key, settled) in owned.settles() {
-        let before = current(&writes, running, key)
-            .map_or(Ok(0), |bytes| decode_amount(&bytes))
-            .unwrap_or_else(|error| panic!("fold of {tx:?}: amount cell decode: {error}"));
-        let after = before
-            .checked_sub(settled)
-            .unwrap_or_else(|| panic!("fold of {tx:?}: settle past the committed amount"));
-        writes.insert(key, Some(encode_amount(after).to_vec()));
-    }
-    for (key, change) in &writes {
-        running.insert(*key, change.clone());
-    }
-    writes
-}
-
-/// Encode per-transaction absolute writes as VM-namespace
-/// `DatabaseUpdates`.
-fn writes_to_updates(writes: &BTreeMap<SubstateKey, Option<Vec<u8>>>) -> DatabaseUpdates {
-    let mut updates = DatabaseUpdates::default();
-    for (key, change) in writes {
-        let node = updates
-            .node_updates
-            .entry(vm_db_node_key(key.owner.0))
-            .or_default();
-        let partition = node
-            .partition_updates
-            .entry(VM_PARTITION)
-            .or_insert_with(|| PartitionDatabaseUpdates::Delta {
-                substate_updates: IndexMap::new(),
-            });
-        let PartitionDatabaseUpdates::Delta { substate_updates } = partition else {
-            unreachable!("VM updates are Delta-only by construction");
-        };
-        substate_updates.insert(
-            DbSortKey(key.local.0.to_vec()),
-            change
-                .clone()
-                .map_or(DatabaseUpdate::Delete, DatabaseUpdate::Set),
-        );
-    }
-    updates
-}
-
 /// Fuel and the abort reason (if any) as node-local metadata.
 /// How an abort reads in a diagnostic: the kernel's own verdict, or the
 /// deterministic text a trap carried.
@@ -558,16 +465,14 @@ fn build_fee_receipt(
         .saturating_sub(fold.fees_applied.get(&vault).copied().unwrap_or(0));
     let debited = applied.saturating_sub(floor);
 
-    let writes: BTreeMap<SubstateKey, Option<Vec<u8>>> =
-        BTreeMap::from([(vault, Some(debited.to_le_bytes().to_vec()))]);
-    let mut updates = writes_to_updates(&writes);
-    sort_database_updates(&mut updates);
-    let writes_root = compute_writes_root(&updates);
+    let writes = StateWrites {
+        cells: BTreeMap::from([(vault, Some(debited.to_le_bytes().to_vec()))]),
+    };
     let receipt_hash = GlobalReceipt::new(
         true,
         EventRoot::ZERO,
         BeaconWitnessRoot::ZERO,
-        writes_root,
+        writes_root(&writes),
         OwnershipRoot::ZERO,
     )
     .receipt_hash();
@@ -577,7 +482,7 @@ fn build_fee_receipt(
     // abort contributes nothing to its shard's emission weight. Pricing
     // aborted work is the floor's job, not the weight's.
     let cached = CachedOutput::succeeded(
-        updates,
+        writes,
         receipt_hash,
         vm_metadata(0, None),
         0,
@@ -614,7 +519,7 @@ fn assemble_published_tx(
     fee: Option<PayerFee>,
     locality: &Locality,
 ) -> ExecutedTx {
-    let tx_hash = TxHash::from(Hash::from_hash_bytes(&vm_tx.0.0));
+    let tx_hash = vm_tx;
     let work = publish_work(artifact);
 
     // Admission reached the whole verdict from these same bytes, so a
@@ -630,35 +535,34 @@ fn assemble_published_tx(
         CachedOutput::failed(vm_metadata(work, Some(reason.clone())))
     } else {
         {
-            let mut writes: BTreeMap<SubstateKey, Option<Vec<u8>>> = BTreeMap::new();
+            let mut writes = StateWrites::default();
             if locality.is_local(Address(publisher)) {
                 let package = package_hash(&ProtocolHasher, artifact);
                 // Content-addressed, so republishing the same artifact
                 // writes the same bytes to the same cell: idempotent by
                 // construction rather than by a first-write-wins branch.
-                writes.insert(package_key(publisher, package), Some(artifact.to_vec()));
+                writes
+                    .cells
+                    .insert(package_key(publisher, package), Some(artifact.to_vec()));
             }
             apply_fee_burn(
-                &mut writes,
+                &mut writes.cells,
                 &fold.running,
                 base,
                 &mut fold.fees_applied,
                 fee,
                 work,
             );
-            let mut updates = writes_to_updates(&writes);
-            sort_database_updates(&mut updates);
-            let writes_root = compute_writes_root(&updates);
             let receipt_hash = GlobalReceipt::new(
                 true,
                 EventRoot::ZERO,
                 BeaconWitnessRoot::ZERO,
-                writes_root,
+                writes_root(&writes),
                 OwnershipRoot::ZERO,
             )
             .receipt_hash();
             CachedOutput::succeeded(
-                updates,
+                writes,
                 receipt_hash,
                 vm_metadata(work, None),
                 work,
@@ -718,7 +622,7 @@ fn assemble_executed_tx(
         receipt,
         work: attested_work,
     } = kernel;
-    let tx_hash = TxHash::from(Hash::from_hash_bytes(&vm_tx.0.0));
+    let tx_hash = vm_tx;
     // Built before this transaction's own burn folds in: a charge settles
     // over the state its siblings left, not over its own.
     let fee_receipt = fee.and_then(|payer| {
@@ -726,18 +630,27 @@ fn assemble_executed_tx(
             .and_then(|amount| build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, amount))
     });
     let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
-        let mut writes = fold_delta(receipt, base, &mut fold.running, vm_tx, locality);
+        // The kernel's own flatten: this receipt's owned part folded to
+        // absolute cells, reading through the batch's running state to
+        // the pre-read base.
+        let mut writes = receipt.delta.flatten(locality, &mut |key| {
+            fold.running
+                .get(&key)
+                .map_or_else(|| base.cells.get(&key).cloned(), Clone::clone)
+        });
+        // The pre-fee fold is the kernel differential's source: update it
+        // before the burn layers on.
+        for (key, change) in &writes.cells {
+            fold.running.insert(*key, change.clone());
+        }
         apply_fee_burn(
-            &mut writes,
+            &mut writes.cells,
             &fold.running,
             base,
             &mut fold.fees_applied,
             fee,
             receipt.fuel,
         );
-        let mut updates = writes_to_updates(&writes);
-        sort_database_updates(&mut updates);
-        let writes_root = compute_writes_root(&updates);
         // Every participant derives the same events from the same
         // manifest, so the root covers the whole union while each shard's
         // receipt keeps only what its own instances emitted.
@@ -767,12 +680,12 @@ fn assemble_executed_tx(
             true,
             EventRoot::from_raw(compute_merkle_root(&event_hashes)),
             BeaconWitnessRoot::ZERO,
-            writes_root,
+            writes_root(&writes),
             OwnershipRoot::ZERO,
         )
         .receipt_hash();
         CachedOutput::succeeded(
-            updates,
+            writes,
             receipt_hash,
             vm_metadata(receipt.fuel, None),
             receipt.fuel,

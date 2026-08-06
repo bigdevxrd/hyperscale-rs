@@ -1120,9 +1120,9 @@ impl WaveState {
 mod tests {
     use hyperscale_types::test_utils::{test_prefix, test_transaction_with_prefixes};
     use hyperscale_types::{
-        AggregateSignature, ConsensusReceipt, DatabaseUpdates, GlobalReceiptHash, Hash,
-        MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, SignerBitfield,
-        SubstateEntry, tx_outcome_leaf,
+        AggregateSignature, ConsensusReceipt, GlobalReceiptHash, Hash, MerkleInclusionProof,
+        ProvisionEntry, Provisions, RevealChain, SignerBitfield, StateWrites, SubstateEntry,
+        tx_outcome_leaf,
     };
 
     use super::*;
@@ -1211,7 +1211,7 @@ mod tests {
                 ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     #[allow(clippy::default_trait_access)]
-                    database_updates: Default::default(),
+                    writes: Default::default(),
                     beacon_witness_events: Vec::new(),
                     events: Vec::new(),
                 }
@@ -1278,7 +1278,7 @@ mod tests {
             tx,
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"fee-receipt")),
-                database_updates: DatabaseUpdates::default(),
+                writes: StateWrites::default(),
                 beacon_witness_events: Vec::new(),
                 events: Vec::new(),
             }),

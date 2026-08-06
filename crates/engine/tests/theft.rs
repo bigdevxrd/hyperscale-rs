@@ -19,16 +19,16 @@ use hyperscale_effects_bridge::{account_address, encode_tree};
 use hyperscale_engine::genesis::vault_key;
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache,
-    WaveBatchContext, XRD, genesis_updates,
+    WaveBatchContext, XRD, genesis_writes,
 };
 use hyperscale_storage::{
-    DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue,
-    PartitionDatabaseUpdates, PartitionEntry, SubstateDatabase,
+    DbPartitionKey, DbSortKey, DbSubstateValue, PartitionEntry, SubstateDatabase,
 };
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, RevealChain, ShardId,
-    ShardTrie, Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
+    ShardTrie, StateWrites, Transaction, TransactionBody, TransactionEnvelope, Verified,
+    WeightedTimestamp,
 };
 use hyperscale_vm_effects::{
     Address, Constraint, EdgeRef, EnvelopeTree, GraphArg, GraphNode, IntentDecl, ManifestGraph,
@@ -49,23 +49,18 @@ struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
-        let updates = genesis_updates(accounts, &[]);
+        let writes = genesis_writes(accounts, &[]);
         let mut map = BTreeMap::new();
-        for (node_key, node_updates) in &updates.node_updates {
-            for (partition, partition_updates) in &node_updates.partition_updates {
-                let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates else {
-                    panic!("genesis VM updates are Delta-only");
-                };
-                for (sort_key, update) in substate_updates {
-                    let DatabaseUpdate::Set(value) = update else {
-                        panic!("genesis VM updates are Set-only");
-                    };
-                    map.insert(
-                        (node_key.clone(), *partition, sort_key.0.clone()),
-                        value.clone(),
-                    );
-                }
-            }
+        for (key, change) in &writes.cells {
+            let value = change.clone().expect("genesis writes are Set-only");
+            map.insert(
+                (
+                    vm_db_node_key(key.owner.0),
+                    VM_PARTITION,
+                    key.local.0.to_vec(),
+                ),
+                value,
+            );
         }
         Self(map)
     }
@@ -180,18 +175,8 @@ fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
 }
 
 /// An account's native vault as the batch left it.
-fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
-    let key = vault_key(owner, XRD);
-    let node = updates.node_updates.get(&vm_db_node_key(owner))?;
-    let PartitionDatabaseUpdates::Delta { substate_updates } =
-        node.partition_updates.get(&VM_PARTITION)?
-    else {
-        return None;
-    };
-    match substate_updates.get(&DbSortKey(key.local.0.to_vec()))? {
-        DatabaseUpdate::Set(value) => Some(value.clone()),
-        DatabaseUpdate::Delete => None,
-    }
+fn vault_cell(writes: &StateWrites, owner: [u8; 16]) -> Option<Vec<u8>> {
+    writes.cells.get(&vault_key(owner, XRD)).cloned().flatten()
 }
 
 /// The defect, closed: an address is public, and knowing one buys nothing.
@@ -229,7 +214,8 @@ fn the_gated_node_is_the_one_that_moves_the_balance() {
     let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
     let executed = execute(&executor, signed_transfer(thief(), VICTIM, 5_000));
     let ConsensusReceipt::Succeeded {
-        database_updates, ..
+        writes: database_updates,
+        ..
     } = &executed[0].consensus
     else {
         panic!(

@@ -44,7 +44,7 @@ pub use batch::{
 };
 pub use cache::{CachedSlot, ProcessExecutionCache, SlotStatus};
 pub use executor::Executor;
-pub use genesis::{GenesisConfig, World, XRD, genesis_updates, genesis_world};
+pub use genesis::{GenesisConfig, World, XRD, genesis_world, genesis_writes};
 // Re-export the fan-out strategy `WaveBatchContext` carries, so callers
 // and their tests need no separate dispatch dependency.
 pub use hyperscale_dispatch::Parallelism;

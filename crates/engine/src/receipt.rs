@@ -6,17 +6,16 @@
 //!   field is shard-invariant for a given transaction. This is the
 //!   cacheable stage.
 //! - [`project_to_shard`] consumes the cached output and a target shard
-//!   to produce the final [`ExecutedTx`]. Only the `database_updates`
-//!   slice, the events, and the beacon facts are shard-specific.
+//!   to produce the final [`ExecutedTx`]. Only the `writes` slice, the
+//!   events, and the beacon facts are shard-specific.
 
-use hyperscale_storage::DatabaseUpdates;
 use hyperscale_types::{
     BeaconWitnessEvent, ConsensusReceipt, Event, ExecutionMetadata, GlobalReceiptHash, ShardId,
-    ShardTrie, TxHash, has_partition_reset,
+    ShardTrie, StateWrites, TxHash,
 };
 
 use crate::output::ExecutedTx;
-use crate::sharding::{filter_updates_for_shard, sort_database_updates};
+use crate::sharding::filter_writes_for_shard;
 
 /// Shard-invariant projection of an execution receipt.
 ///
@@ -24,8 +23,8 @@ use crate::sharding::{filter_updates_for_shard, sort_database_updates};
 /// participating shard. The transaction's effective state is canonical
 /// across participating shards by way of provisioning, so every field
 /// here is identical on every shard that executes the same transaction.
-/// Per-shard `database_updates` is *not* cached — it's re-derived per
-/// call from `raw_updates` via [`project_to_shard`].
+/// The per-shard writes slice is *not* cached — it's re-derived per
+/// call from `raw_writes` via [`project_to_shard`].
 pub struct CachedOutput {
     metadata: ExecutionMetadata,
     body: CachedOutputBody,
@@ -36,10 +35,10 @@ enum CachedOutputBody {
     /// A per-transaction abort, or a transaction that never reached the
     /// engine.
     Failed,
-    /// A committed success: the folded absolute updates and the receipt
+    /// A committed success: the folded absolute writes and the receipt
     /// hash over their canonical encoding.
     Succeeded {
-        raw_updates: DatabaseUpdates,
+        raw_writes: StateWrites,
         /// Events in emission order, unfiltered: the projection picks
         /// each shard's own by the emitter's home, and the event root
         /// covers the whole union.
@@ -62,13 +61,13 @@ enum CachedOutputBody {
 }
 
 impl CachedOutput {
-    /// The success output: the folded absolute updates and the receipt
+    /// The success output: the folded absolute writes and the receipt
     /// hash over their canonical encoding. Keys carry their shard
     /// placement in the owner prefix, so no declared node set or
     /// ownership map exists.
     #[must_use]
     pub const fn succeeded(
-        raw_updates: DatabaseUpdates,
+        raw_writes: StateWrites,
         receipt_hash: GlobalReceiptHash,
         metadata: ExecutionMetadata,
         gas_consumed: u64,
@@ -78,7 +77,7 @@ impl CachedOutput {
         Self {
             metadata,
             body: CachedOutputBody::Succeeded {
-                raw_updates,
+                raw_writes,
                 events,
                 receipt_hash,
                 witnesses,
@@ -112,16 +111,11 @@ impl CachedOutput {
 
 /// Build an [`ExecutedTx`] for `local_shard` from a [`CachedOutput`].
 ///
-/// Runs the per-shard step: `filter_updates_for_shard` over the cached
-/// `raw_updates`, then assembles the `ExecutedTx`. The filter output is
-/// sorted before hashing so `ConsensusReceipt::local_receipt_hash` is
-/// order-stable.
-///
-/// # Panics
-///
-/// Panics if a partition Reset survives shard filtering — receipt
-/// updates must be Delta-only (see
-/// [`has_partition_reset`](hyperscale_types::has_partition_reset)).
+/// Runs the per-shard step: `filter_writes_for_shard` over the cached
+/// `raw_writes`, then assembles the `ExecutedTx`. The writes map is
+/// canonically ordered by construction, so
+/// `ConsensusReceipt::local_receipt_hash` is order-stable with no sort
+/// step.
 #[must_use]
 pub fn project_to_shard(
     cached: &CachedOutput,
@@ -134,26 +128,13 @@ pub fn project_to_shard(
             ExecutedTx::new(tx_hash, ConsensusReceipt::Failed, cached.metadata.clone())
         }
         CachedOutputBody::Succeeded {
-            raw_updates,
+            raw_writes,
             events,
             receipt_hash,
             witnesses,
             gas_consumed,
         } => {
-            let mut database_updates =
-                filter_updates_for_shard(raw_updates, local_shard, shard_trie);
-            // Receipt updates must be Delta-only: storage applies them
-            // without enumerating pre-existing partition keys, so a Reset
-            // surviving shard filtering would silently diverge the live and
-            // sync JMT roots (see `hyperscale_types::has_partition_reset`).
-            assert!(
-                !has_partition_reset(&database_updates),
-                "partition Reset survived shard filtering for tx {tx_hash:?} — receipt updates must be Delta-only",
-            );
-            // Canonicalise key order so `ConsensusReceipt::local_receipt_hash`
-            // (which encodes the IndexMap directly) is order-stable
-            // across validators regardless of `raw_updates` insertion order.
-            sort_database_updates(&mut database_updates);
+            let writes = filter_writes_for_shard(raw_writes, local_shard, shard_trie);
             // A fact's emitter is a substate prefix, so the shard that
             // keeps the fact is the one that keeps the event it was read
             // from — the same rule applied a few lines below, and the
@@ -176,7 +157,7 @@ pub fn project_to_shard(
                 .collect();
             let consensus = ConsensusReceipt::Succeeded {
                 receipt_hash: *receipt_hash,
-                database_updates,
+                writes,
                 beacon_witness_events,
                 events,
             };

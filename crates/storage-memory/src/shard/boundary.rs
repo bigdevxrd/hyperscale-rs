@@ -236,8 +236,9 @@ impl BoundaryStore for SimShardStorage {
 mod tests {
     use hyperscale_jmt::{Blake3Hasher, Tree};
     use hyperscale_storage::test_helpers::{
-        db_node_key, make_database_update, test_boundary_import_roundtrip,
-        test_boundary_retention_evicts_oldest, test_boundary_unpinned_height_not_served,
+        database_updates_to_state_writes, db_node_key, make_database_update,
+        test_boundary_import_roundtrip, test_boundary_retention_evicts_oldest,
+        test_boundary_unpinned_height_not_served,
     };
     use hyperscale_storage::{DatabaseUpdates, SubstateStore};
     use hyperscale_types::state_key::vm_leaf_key;
@@ -358,7 +359,7 @@ mod tests {
             TxHash::from(Hash::from_bytes(&[seed])),
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
-                database_updates: updates.clone(),
+                writes: database_updates_to_state_writes(&updates),
                 beacon_witness_events: Vec::new(),
                 events: Vec::new(),
             }),

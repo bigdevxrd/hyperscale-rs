@@ -9,7 +9,7 @@ use hyperscale_storage::tree::{
 };
 use hyperscale_storage::{
     BaseReadCache, DatabaseUpdates, JmtSnapshot, ShardChainWriter, merge_database_updates,
-    merge_updates_from_receipts,
+    merge_updates_from_receipts, state_writes_to_database_updates,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, Block, BlockHeight, CertifiedBlock, FinalizedWave, PreparedCommit,
@@ -78,10 +78,11 @@ impl ShardChainWriter for RocksDbShardStorage {
         // Receipt updates are Delta-only (enforced at receipt decode and in
         // project_to_shard), so no Reset partition needs old-key JMT deletes
         // and the empty reset_old_keys map below is exact.
-        let per_receipt_updates: Vec<&DatabaseUpdates> = receipts
+        let bridged_updates: Vec<DatabaseUpdates> = receipts
             .iter()
-            .filter_map(|r| r.consensus.database_updates())
+            .filter_map(|r| r.consensus.writes().map(state_writes_to_database_updates))
             .collect();
+        let per_receipt_updates: Vec<&DatabaseUpdates> = bridged_updates.iter().collect();
 
         let (computed_root, collected) = if pending_snapshots.is_empty() {
             put_at_version(
@@ -111,11 +112,7 @@ impl ShardChainWriter for RocksDbShardStorage {
         ));
 
         // Merge updates for the substate WriteBatch (off the state_root critical path).
-        let updates: Vec<DatabaseUpdates> = receipts
-            .iter()
-            .filter_map(|r| r.consensus.database_updates().cloned())
-            .collect();
-        let merged_updates = merge_database_updates(&updates);
+        let merged_updates = merge_database_updates(&bridged_updates);
 
         // Pre-build substate + receipt writes into a WriteBatch for efficient commit.
         let (mut write_batch, _reset_old_keys) = self.build_substate_write_batch(

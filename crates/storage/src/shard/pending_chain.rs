@@ -10,15 +10,16 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_types::{
-    BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
-    CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, FinalizedWave,
+    Address, BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
+    CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, FinalizedWave, LocalKey,
     MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON, SettledWavesRoot,
-    ShardId, ShardWitnessPayload, StateRoot, Transaction, TxHash, Verifiable, Verified,
-    WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
+    ShardId, ShardWitnessPayload, StateRoot, SubstateKey, Transaction, TxHash, Verifiable,
+    Verified, WaveCertificate, WaveId, WeightedTimestamp, local_settled_wave_ids,
     settled_waves_root_from_ids,
 };
 
 use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
+use crate::shard::writes::state_writes_to_database_updates;
 use crate::tree::proofs::generate_proof;
 use crate::{
     BlockForSync, DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, JmtSnapshot,
@@ -692,8 +693,8 @@ impl<S> SubstateView<S> {
 
         for entry in chain {
             for receipt in &entry.receipts {
-                if let Some(database_updates) = receipt.database_updates() {
-                    apply_database_updates(&mut overlay, database_updates);
+                if let Some(writes) = receipt.writes() {
+                    apply_database_updates(&mut overlay, &state_writes_to_database_updates(writes));
                 }
                 versioned_receipts.push((entry.height, Arc::clone(receipt)));
             }
@@ -949,7 +950,6 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         local: [u8; 16],
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
         let persisted_version = (*self.base).jmt_height();
         if block_height <= persisted_version {
             return (*self.base).get_substate_at_height(owner, local, block_height);
@@ -959,34 +959,16 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         // commit order up to `block_height` — the same overlay walk as
         // the node-level listing, narrowed to one flat key.
         let mut value = (*self.base).get_substate_at_height(owner, local, persisted_version)?;
-        let node_key = vm_db_node_key(owner);
-        let sort_key = DbSortKey(local.to_vec());
+        let key = SubstateKey {
+            owner: Address(owner),
+            local: LocalKey(local),
+        };
         for (h, receipt) in &self.versioned_receipts {
             if *h > block_height {
                 break;
             }
-            let Some(updates) = receipt.database_updates() else {
-                continue;
-            };
-            let Some(node_updates) = updates.node_updates.get(&node_key) else {
-                continue;
-            };
-            let Some(partition_updates) = node_updates.partition_updates.get(&VM_PARTITION) else {
-                continue;
-            };
-            match partition_updates {
-                PartitionDatabaseUpdates::Delta { substate_updates } => {
-                    match substate_updates.get(&sort_key) {
-                        Some(DatabaseUpdate::Set(v)) => value = Some(v.clone()),
-                        Some(DatabaseUpdate::Delete) => value = None,
-                        None => {}
-                    }
-                }
-                PartitionDatabaseUpdates::Reset {
-                    new_substate_values,
-                } => {
-                    value = new_substate_values.get(&sort_key).cloned();
-                }
+            if let Some(change) = receipt.writes().and_then(|writes| writes.cells.get(&key)) {
+                value.clone_from(change);
             }
         }
         Some(value)
@@ -1098,15 +1080,16 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::PoisonError;
 
+    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
     use hyperscale_types::{
         AggregateSignature, Block, CertifiedBlock, CertifiedBlockHeader, ExecutionCertificate,
         ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, Round,
-        SignerBitfield, Transaction, TxHash, TxOutcome, WaveCertificate, WaveId, WitnessSources,
+        SignerBitfield, StateWrites, Transaction, TxHash, TxOutcome, WaveCertificate, WaveId,
+        WitnessSources,
     };
-    use indexmap::IndexMap;
 
     use super::*;
-    use crate::{BlockForSync, DatabaseUpdates, PartitionDatabaseUpdates};
+    use crate::BlockForSync;
 
     /// Minimal stub implementing every trait `PendingChain<S>` requires.
     /// Returns no data by default; tests that need persisted fall-through
@@ -1293,29 +1276,22 @@ mod tests {
         }
     }
 
-    fn make_delta(
-        node_key: &[u8],
-        partition: u8,
-        sort_key: Vec<u8>,
-        value: Vec<u8>,
-    ) -> DatabaseUpdates {
-        let mut updates = DatabaseUpdates::default();
-        let node = updates.node_updates.entry(node_key.to_vec()).or_default();
-        let part = node.partition_updates.entry(partition).or_insert_with(|| {
-            PartitionDatabaseUpdates::Delta {
-                substate_updates: IndexMap::new(),
-            }
-        });
-        if let PartitionDatabaseUpdates::Delta { substate_updates } = part {
-            substate_updates.insert(DbSortKey(sort_key), DatabaseUpdate::Set(value));
-        }
-        updates
+    fn make_writes(owner: [u8; 16], local: [u8; 16], value: Vec<u8>) -> StateWrites {
+        let mut writes = StateWrites::default();
+        writes.cells.insert(
+            SubstateKey {
+                owner: Address(owner),
+                local: LocalKey(local),
+            },
+            Some(value),
+        );
+        writes
     }
 
-    fn make_receipt(updates: DatabaseUpdates) -> Arc<ConsensusReceipt> {
+    fn make_receipt(writes: StateWrites) -> Arc<ConsensusReceipt> {
         Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
-            database_updates: updates,
+            writes,
             beacon_witness_events: Vec::new(),
             events: Vec::new(),
         })
@@ -1334,11 +1310,11 @@ mod tests {
         })
     }
 
-    fn entry_at(parent: BlockHash, height: BlockHeight, updates: DatabaseUpdates) -> ChainEntry {
+    fn entry_at(parent: BlockHash, height: BlockHeight, writes: StateWrites) -> ChainEntry {
         ChainEntry {
             parent_block_hash: parent,
             height,
-            receipts: vec![make_receipt(updates)],
+            receipts: vec![make_receipt(writes)],
             settled_waves: Vec::new(),
             jmt_snapshot: empty_snapshot(),
             certified_block: None,
@@ -1370,19 +1346,15 @@ mod tests {
         let h3 = bh(b"h3");
         chain.insert(
             h1,
-            entry_at(
-                BlockHash::ZERO,
-                BlockHeight::new(1),
-                DatabaseUpdates::default(),
-            ),
+            entry_at(BlockHash::ZERO, BlockHeight::new(1), StateWrites::default()),
         );
         chain.insert(
             h2,
-            entry_at(h1, BlockHeight::new(2), DatabaseUpdates::default()),
+            entry_at(h1, BlockHeight::new(2), StateWrites::default()),
         );
         chain.insert(
             h3,
-            entry_at(h2, BlockHeight::new(3), DatabaseUpdates::default()),
+            entry_at(h2, BlockHeight::new(3), StateWrites::default()),
         );
 
         chain.prune(BlockHeight::new(2));
@@ -1396,9 +1368,10 @@ mod tests {
         let h1 = bh(b"h1");
         let h2 = bh(b"h2");
 
+        let owner = [7u8; 16];
         let pk = DbPartitionKey {
-            node_key: b"node".to_vec(),
-            partition_num: 0,
+            node_key: vm_db_node_key(owner),
+            partition_num: VM_PARTITION,
         };
 
         chain.insert(
@@ -1406,7 +1379,7 @@ mod tests {
             entry_at(
                 BlockHash::ZERO,
                 BlockHeight::new(1),
-                make_delta(b"node", 0, vec![1], vec![10]),
+                make_writes(owner, [1; 16], vec![10]),
             ),
         );
         chain.insert(
@@ -1414,18 +1387,18 @@ mod tests {
             entry_at(
                 h1,
                 BlockHeight::new(2),
-                make_delta(b"node", 0, vec![2], vec![20]),
+                make_writes(owner, [2; 16], vec![20]),
             ),
         );
 
         let view = chain.view_at(h2, BlockHeight::new(2));
         // h2's parent chain: h2 → h1 → ZERO. Should see both writes.
         assert_eq!(
-            view.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![1])),
+            view.get_raw_substate_by_db_key(&pk, &DbSortKey([1; 16].to_vec())),
             Some(vec![10]),
         );
         assert_eq!(
-            view.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![2])),
+            view.get_raw_substate_by_db_key(&pk, &DbSortKey([2; 16].to_vec())),
             Some(vec![20]),
         );
     }
@@ -1436,9 +1409,10 @@ mod tests {
         let h1 = bh(b"h1");
         let orphan = bh(b"orphan");
 
+        let owner = [7u8; 16];
         let pk = DbPartitionKey {
-            node_key: b"node".to_vec(),
-            partition_num: 0,
+            node_key: vm_db_node_key(owner),
+            partition_num: VM_PARTITION,
         };
 
         chain.insert(
@@ -1446,7 +1420,7 @@ mod tests {
             entry_at(
                 BlockHash::ZERO,
                 BlockHeight::new(1),
-                make_delta(b"node", 0, vec![1], vec![10]),
+                make_writes(owner, [1; 16], vec![10]),
             ),
         );
         // Orphan: same height as h1, different parent (forks off ZERO).
@@ -1455,14 +1429,14 @@ mod tests {
             entry_at(
                 BlockHash::ZERO,
                 BlockHeight::new(1),
-                make_delta(b"node", 0, vec![1], vec![99]),
+                make_writes(owner, [1; 16], vec![99]),
             ),
         );
 
         // View anchored at h1: should see h1's value, not the orphan's.
         let view = chain.view_at(h1, BlockHeight::new(1));
         assert_eq!(
-            view.get_raw_substate_by_db_key(&pk, &DbSortKey(vec![1])),
+            view.get_raw_substate_by_db_key(&pk, &DbSortKey([1; 16].to_vec())),
             Some(vec![10]),
         );
     }
@@ -1483,7 +1457,7 @@ mod tests {
 
         chain.insert(
             h1,
-            entry_at(BlockHash::ZERO, target_height, DatabaseUpdates::default()),
+            entry_at(BlockHash::ZERO, target_height, StateWrites::default()),
         );
         // Simulate persistence: prune the pending entry while leaving the
         // base store at its default `jmt_height = GENESIS`. The two
@@ -1523,11 +1497,7 @@ mod tests {
         let h1 = bh(b"h1");
         chain.insert(
             h1,
-            entry_at(
-                BlockHash::ZERO,
-                BlockHeight::new(5),
-                DatabaseUpdates::default(),
-            ),
+            entry_at(BlockHash::ZERO, BlockHeight::new(5), StateWrites::default()),
         );
         let _view = chain.view_at(h1, BlockHeight::new(7));
     }

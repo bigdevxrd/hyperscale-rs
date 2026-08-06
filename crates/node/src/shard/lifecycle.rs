@@ -16,10 +16,12 @@
 use std::sync::Arc;
 
 use hyperscale_dispatch::Dispatch;
-use hyperscale_engine::sharding::filter_genesis_updates_for_shard;
-use hyperscale_engine::{GenesisConfig, genesis_updates};
+use hyperscale_engine::sharding::filter_genesis_writes_for_shard;
+use hyperscale_engine::{GenesisConfig, genesis_writes};
 use hyperscale_network::Network;
-use hyperscale_storage::{GenesisCommit, RecoveredState, ShardStorage};
+use hyperscale_storage::{
+    GenesisCommit, RecoveredState, ShardStorage, state_writes_to_database_updates,
+};
 use hyperscale_types::{
     Block, CertifiedBlock, ChainOrigin, ShardId, StateRoot, ValidatorId, Verified,
 };
@@ -135,16 +137,17 @@ where
         config
             .accounts
             .retain(|(address, _)| topology_snapshot.shard_for_prefix(*address) == shard);
-        let merged = genesis_updates(&config.accounts, &config.pools);
+        let merged = genesis_writes(&config.accounts, &config.pools);
         // The stdlib package is replicated to every shard's substate store
         // for read availability, but the prefix-rooted JMT must hold only
         // this shard's subtree, so the committed state root is the global
         // tree's node at the shard prefix.
-        let jmt_updates =
-            filter_genesis_updates_for_shard(&merged, shard, topology_snapshot.shard_trie());
-        self.shard_io(shard)
-            .storage
-            .install_genesis(&merged, &jmt_updates)
+        let jmt_writes =
+            filter_genesis_writes_for_shard(&merged, shard, topology_snapshot.shard_trie());
+        self.shard_io(shard).storage.install_genesis(
+            &state_writes_to_database_updates(&merged),
+            &state_writes_to_database_updates(&jmt_writes),
+        )
     }
 
     /// Register inbound network handlers (requests, gossip, notifications).

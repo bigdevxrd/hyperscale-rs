@@ -7,45 +7,16 @@
 //! funded address to it, and the funded balances land as identity-keyed
 //! vault cells in one genesis batch.
 
-use std::sync::LazyLock;
-
-use hyperscale_effects_bridge::vm_statics::{PackageCache, package_key};
-use hyperscale_effects_bridge::{
-    PoolRegistry, ProtocolHasher, admit_package, attach_metadata, validator_key,
-};
+use hyperscale_effects_bridge::vm_statics::PackageCache;
+use hyperscale_effects_bridge::{PoolRegistry, ProtocolHasher, admit_package, validator_key};
 pub use hyperscale_effects_bridge::{XRD, entropy_key, vault_key};
-use hyperscale_storage::{DatabaseUpdate, DatabaseUpdates, DbSortKey, PartitionDatabaseUpdates};
-use hyperscale_types::StakePoolSeat;
-use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
+use hyperscale_types::{StakePoolSeat, StateWrites};
 use hyperscale_vm_effects::{
     Address, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, Value, package_hash,
 };
 use hyperscale_vm_kernel::encode_amount;
-use hyperscale_vm_stdlib::{
-    ACCOUNT_COMPONENT, STAKING_COMPONENT, account_metadata, staking_metadata,
-};
-use indexmap::IndexMap;
-
-/// The stdlib account package as a publishable artifact: the committed
-/// guest blob with its effect metadata attached in the section a
-/// published package carries it in.
-///
-/// Composition is deterministic — one committed blob, one authored
-/// signature set, one frozen encoding — so every node holds the same
-/// bytes and therefore the same content address. The vocabulary crate
-/// stays wire-free, which is why the artifact is assembled here rather
-/// than committed with the section already in it.
-static ACCOUNT_ARTIFACT: LazyLock<Vec<u8>> = LazyLock::new(|| {
-    attach_metadata(ACCOUNT_COMPONENT, &account_metadata())
-        .expect("the stdlib account metadata attaches to its committed blob")
-});
-
-/// The stdlib stake pool package as a publishable artifact, assembled the
-/// same way and for the same reason as the account's.
-static STAKING_ARTIFACT: LazyLock<Vec<u8>> = LazyLock::new(|| {
-    attach_metadata(STAKING_COMPONENT, &staking_metadata())
-        .expect("the stdlib stake pool metadata attaches to its committed blob")
-});
+use hyperscale_vm_stdlib::genesis_writes as stdlib_genesis_writes;
+pub use hyperscale_vm_stdlib::{GENESIS_PUBLISHER, account_artifact, staking_artifact};
 
 /// Configuration for genesis bootstrapping.
 #[derive(Debug, Clone, Default)]
@@ -61,25 +32,6 @@ pub struct GenesisConfig {
     /// their emitted events beacon facts — running the package never
     /// does, because anyone may run the package.
     pub pools: Vec<StakePoolSeat>,
-}
-
-/// The prefix genesis publishes the stdlib package under.
-///
-/// No key derives it, so nothing can ever publish beside it or spend
-/// from it: the protocol's own packages sit where no signer reaches.
-pub const GENESIS_PUBLISHER: [u8; 16] = [0; 16];
-
-/// The stdlib account artifact: what the engine compiles and what the
-/// package's content address covers.
-#[must_use]
-pub fn account_artifact() -> &'static [u8] {
-    &ACCOUNT_ARTIFACT
-}
-
-/// The stdlib stake pool artifact.
-#[must_use]
-pub fn staking_artifact() -> &'static [u8] {
-    &STAKING_ARTIFACT
 }
 
 /// The genesis-static world: published stdlib metadata and the funded
@@ -195,129 +147,70 @@ pub fn stake_unit(pool: [u8; 16]) -> Address {
     Address(vault_key(pool, XRD).local.0)
 }
 
-/// The funded accounts' genesis substate writes: one [`XRD`] vault
-/// cell per account, identity-keyed under the owner's prefix.
+/// The genesis substate writes.
+///
+/// The protocol's stdlib flash composed with this network's allocations:
+/// a seated pool's validator records and one [`XRD`] vault cell per
+/// funded account, identity-keyed under the owner's prefix.
 #[must_use]
-pub fn genesis_updates(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> DatabaseUpdates {
-    let mut updates = DatabaseUpdates::default();
+pub fn genesis_writes(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> StateWrites {
     // The stdlib package as a committed cell, under the same content
     // address a publish would place it at. Genesis is then the cache's
     // cold start in the literal sense — the same projection of committed
     // state every later block extends, rather than a second source the
     // cache would have to be told about separately.
-    let artifact = account_artifact();
-    let package = package_hash(&ProtocolHasher, artifact);
-    let cell = package_key(GENESIS_PUBLISHER, package);
-    updates
-        .node_updates
-        .entry(vm_db_node_key(cell.owner.0))
-        .or_default()
-        .partition_updates
-        .insert(
-            VM_PARTITION,
-            PartitionDatabaseUpdates::Delta {
-                substate_updates: IndexMap::from([(
-                    DbSortKey(cell.local.0.to_vec()),
-                    DatabaseUpdate::Set(artifact.to_vec()),
-                )]),
-            },
-        );
+    let mut writes = stdlib_genesis_writes(&ProtocolHasher);
     // A seated pool's record of the validators it already operates.
     // Beacon genesis creates those memberships directly in beacon state,
     // so without this the contract would hold no record of validators it
     // demonstrably operates — and its own methods would refuse to speak
     // about them.
     for seat in pools {
-        if seat.founding.is_empty() {
-            continue;
-        }
-        let mut substate_updates = IndexMap::new();
         for (validator, pubkey) in &seat.founding {
-            let key = validator_key(seat.address, validator.inner());
-            substate_updates.insert(
-                DbSortKey(key.local.0.to_vec()),
-                DatabaseUpdate::Set(pubkey.as_bytes().to_vec()),
+            writes.cells.insert(
+                validator_key(seat.address, validator.inner()),
+                Some(pubkey.as_bytes().to_vec()),
             );
         }
-        updates
-            .node_updates
-            .entry(vm_db_node_key(seat.address))
-            .or_default()
-            .partition_updates
-            .insert(
-                VM_PARTITION,
-                PartitionDatabaseUpdates::Delta { substate_updates },
-            );
     }
     for (address, balance) in accounts {
-        let key = vault_key(*address, XRD);
-        let mut substate_updates = IndexMap::new();
-        substate_updates.insert(
-            DbSortKey(key.local.0.to_vec()),
-            DatabaseUpdate::Set(encode_amount(*balance).to_vec()),
+        writes.cells.insert(
+            vault_key(*address, XRD),
+            Some(encode_amount(*balance).to_vec()),
         );
-        updates
-            .node_updates
-            .entry(vm_db_node_key(key.owner.0))
-            .or_default()
-            .partition_updates
-            .insert(
-                VM_PARTITION,
-                PartitionDatabaseUpdates::Delta { substate_updates },
-            );
     }
-    updates
+    writes
 }
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::state_key::{VM_FLAT_KEY_LEN, vm_flat_key_parts};
+    use hyperscale_vm_stdlib::{ACCOUNT_COMPONENT, account_metadata};
 
     use super::*;
     use crate::account_address;
 
     #[test]
-    fn genesis_updates_are_identity_keyed_vault_cells() {
+    fn genesis_writes_are_identity_keyed_vault_cells() {
         let alice = [0x11u8; 16];
         let bob = [0x22u8; 16];
-        let updates = genesis_updates(&[(alice, 500), (bob, 700)], &[]);
-        // Two funded accounts, plus the stdlib package under the
-        // publisher no key derives.
-        assert_eq!(updates.node_updates.len(), 3);
+        let writes = genesis_writes(&[(alice, 500), (bob, 700)], &[]);
+        // Two funded accounts' vault cells, plus the stdlib package under
+        // the publisher no key derives.
+        assert_eq!(writes.cells.len(), 3);
         assert!(
-            updates
-                .node_updates
-                .contains_key(&vm_db_node_key(GENESIS_PUBLISHER))
+            writes
+                .cells
+                .keys()
+                .any(|key| key.owner == GENESIS_PUBLISHER)
         );
 
         for (owner, balance) in [(alice, 500u128), (bob, 700)] {
             let key = vault_key(owner, XRD);
             assert_eq!(key.owner.0, owner);
-            let node = updates
-                .node_updates
-                .get(&vm_db_node_key(owner))
-                .expect("entity keyed under the owner prefix");
-            let PartitionDatabaseUpdates::Delta { substate_updates } = node
-                .partition_updates
-                .get(&VM_PARTITION)
-                .expect("partition")
-            else {
-                panic!("VM genesis writes are Delta-only");
-            };
-            let update = substate_updates
-                .get(&DbSortKey(key.local.0.to_vec()))
-                .expect("vault cell present");
             assert_eq!(
-                update,
-                &DatabaseUpdate::Set(encode_amount(balance).to_vec())
+                writes.cells.get(&key),
+                Some(&Some(encode_amount(balance).to_vec()))
             );
-
-            // The flat key reassembles into the VM namespace.
-            let mut flat = vm_db_node_key(owner);
-            flat.push(VM_PARTITION);
-            flat.extend_from_slice(&key.local.0);
-            assert_eq!(flat.len(), VM_FLAT_KEY_LEN);
-            assert_eq!(vm_flat_key_parts(&flat), Some((owner, key.local.0)));
         }
     }
 

@@ -8,8 +8,7 @@
 //! not the local metadata.
 //!
 //! The variant tag IS the outcome — there's no separate `Success/Failure`
-//! flag and no zero-padded `database_updates`/`events` for failed
-//! transactions.
+//! flag and no zero-padded `writes`/`events` for failed transactions.
 
 use std::sync::LazyLock;
 
@@ -20,12 +19,10 @@ use hyperscale_hbor::{
 };
 
 use crate::receipt::event::EventExt;
-use crate::state_key::{VM_PARTITION, vm_db_node_key_owner};
-use crate::substate::{DatabaseUpdate, PartitionDatabaseUpdates};
 use crate::transaction::vm::{vm_statics, vm_statics_installed};
 use crate::{
-    BeaconWitnessEvent, BeaconWitnessRoot, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
-    GlobalReceiptHash, Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EVENTS_PER_TX, OwnershipRoot,
+    BeaconWitnessEvent, BeaconWitnessRoot, Event, EventRoot, GlobalReceipt, GlobalReceiptHash,
+    Hash, MAX_BEACON_WITNESS_EVENTS_PER_TX, MAX_EVENTS_PER_TX, OwnershipRoot, StateWrites,
     WritesRoot, compute_merkle_root,
 };
 
@@ -52,12 +49,12 @@ pub static FAILED_RECEIPT_HASH: LazyLock<GlobalReceiptHash> = LazyLock::new(|| {
 
 /// The consensus-bound portion of an execution result.
 ///
-/// `Succeeded` carries the shard-filtered database updates and events
-/// produced by the transaction, the beacon-witness events the engine
-/// surfaced for the shard's accumulator, plus the precomputed
-/// `receipt_hash` (which depends on a `writes_root` derived from
-/// globally-filtered updates not stored here). `Failed` carries no
-/// payload — every failure is consensus-equivalent.
+/// `Succeeded` carries the shard-filtered writes and events produced by
+/// the transaction, the beacon-witness events the engine surfaced for
+/// the shard's accumulator, plus the precomputed `receipt_hash` (which
+/// depends on a `writes_root` derived from globally-filtered writes not
+/// stored here). `Failed` carries no payload — every failure is
+/// consensus-equivalent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsensusReceipt {
     /// Engine committed the tx; carries the precomputed receipt hash and
@@ -65,13 +62,13 @@ pub enum ConsensusReceipt {
     Succeeded {
         /// Precomputed [`GlobalReceiptHash`] — cannot be recomputed from
         /// this variant alone, since it folds in `writes_root` derived
-        /// from globally-filtered (not shard-filtered) updates that
+        /// from globally-filtered (not shard-filtered) writes that
         /// aren't carried here.
         receipt_hash: GlobalReceiptHash,
         /// Substate writes filtered to the local shard. The global
         /// `writes_root` on `receipt_hash` covers writes for all shards;
         /// this field is only what the local shard needs to apply.
-        database_updates: DatabaseUpdates,
+        writes: StateWrites,
         /// Beacon-witness events the engine surfaced for this tx. Folded
         /// into the shard's beacon-witness accumulator at block-assembly
         /// time; the root of those events is bound into `receipt_hash`
@@ -89,28 +86,6 @@ pub enum ConsensusReceipt {
     Failed,
 }
 
-/// True if any partition update in `updates` is a
-/// [`PartitionDatabaseUpdates::Reset`].
-///
-/// Receipt updates are Delta-only. The engine's sole runtime Reset
-/// producer — the transaction-tracker partition cycle — targets a system
-/// entity that shard filtering drops, and genesis flash (which does carry
-/// Resets) never flows through receipts. Storage relies on the invariant:
-/// the JMT commit paths and the pending-chain overlay apply receipt
-/// updates without enumerating a partition's pre-existing keys, which a
-/// Reset over a non-empty partition would require to stay consistent
-/// across the live and sync paths. [`ConsensusReceipt`] decode enforces
-/// it on every receipt taken off the wire;
-/// `hyperscale_engine::project_to_shard` asserts it at receipt build.
-#[must_use]
-pub fn has_partition_reset(updates: &DatabaseUpdates) -> bool {
-    updates.node_updates.values().any(|node| {
-        node.partition_updates
-            .values()
-            .any(|p| matches!(p, PartitionDatabaseUpdates::Reset { .. }))
-    })
-}
-
 /// Offer every cell these committed receipts write to the installed
 /// VM statics, so the published-package cache grows with the chain.
 ///
@@ -125,29 +100,12 @@ pub fn absorb_committed_cells<'a>(receipts: impl IntoIterator<Item = &'a Consens
     }
     let statics = vm_statics();
     for receipt in receipts {
-        let ConsensusReceipt::Succeeded {
-            database_updates, ..
-        } = receipt
-        else {
+        let ConsensusReceipt::Succeeded { writes, .. } = receipt else {
             continue;
         };
-        for (node_key, node) in &database_updates.node_updates {
-            let Some(owner) = vm_db_node_key_owner(node_key) else {
-                continue;
-            };
-            let Some(PartitionDatabaseUpdates::Delta { substate_updates }) =
-                node.partition_updates.get(&VM_PARTITION)
-            else {
-                continue;
-            };
-            for (sort_key, update) in substate_updates {
-                let DatabaseUpdate::Set(value) = update else {
-                    continue;
-                };
-                let Ok(local) = <[u8; 16]>::try_from(sort_key.0.as_slice()) else {
-                    continue;
-                };
-                statics.absorb_committed_cell(owner, local, value);
+        for (key, change) in &writes.cells {
+            if let Some(value) = change {
+                statics.absorb_committed_cell(key.owner.0, key.local.0, value);
             }
         }
     }
@@ -162,13 +120,13 @@ impl HborEncode for ConsensusReceipt {
         match self {
             Self::Succeeded {
                 receipt_hash,
-                database_updates,
+                writes,
                 beacon_witness_events,
                 events,
             } => {
                 encoder.write_u8(RECEIPT_VARIANT_SUCCEEDED);
                 encoder.nested(receipt_hash)?;
-                encoder.nested(database_updates)?;
+                encoder.nested(writes)?;
                 hbor_bounded::check_encoded_len(
                     "beacon_witness_events",
                     beacon_witness_events.len(),
@@ -191,14 +149,7 @@ impl HborDecode for ConsensusReceipt {
         match decoder.read_u8()? {
             RECEIPT_VARIANT_SUCCEEDED => {
                 let receipt_hash: GlobalReceiptHash = decoder.nested()?;
-                let database_updates: DatabaseUpdates = decoder.nested()?;
-                // Receipt updates are Delta-only (see `has_partition_reset`);
-                // a Reset here is a corrupt peer or a forged receipt.
-                if has_partition_reset(&database_updates) {
-                    return Err(HborDecodeError::FailedValidation(
-                        "receipt updates must be delta-only",
-                    ));
-                }
+                let writes: StateWrites = decoder.nested()?;
                 let beacon_witness_events: Vec<BeaconWitnessEvent> =
                     decoder.descend(|decoder| {
                         hbor_bounded::decode_bounded_vec(decoder, MAX_BEACON_WITNESS_EVENTS_PER_TX)
@@ -208,7 +159,7 @@ impl HborDecode for ConsensusReceipt {
                 })?;
                 Ok(Self::Succeeded {
                     receipt_hash,
-                    database_updates,
+                    writes,
                     beacon_witness_events,
                     events,
                 })
@@ -236,53 +187,39 @@ impl ConsensusReceipt {
         matches!(self, Self::Succeeded { .. })
     }
 
-    /// The shard-filtered database updates, or `None` for `Failed`
-    /// (failed transactions produce no writes).
+    /// The shard-filtered writes, or `None` for `Failed` (failed
+    /// transactions produce no writes).
     #[must_use]
-    pub const fn database_updates(&self) -> Option<&DatabaseUpdates> {
+    pub const fn writes(&self) -> Option<&StateWrites> {
         match self {
-            Self::Succeeded {
-                database_updates, ..
-            } => Some(database_updates),
+            Self::Succeeded { writes, .. } => Some(writes),
             Self::Failed => None,
         }
     }
 
     /// Per-shard receipt hash used as a leaf in `local_receipt_root`.
     ///
-    /// Hashes `outcome_byte || event_root || database_updates_hash` over
-    /// what this shard keeps: its own writes and the events whose
-    /// emitters it owns. `Failed` produces the same hash as a
-    /// no-write/no-event failure.
+    /// Hashes `outcome_byte || event_root || writes_hash` over what this
+    /// shard keeps: its own writes and the events whose emitters it
+    /// owns. `Failed` produces the same hash as a no-write/no-event
+    /// failure.
     ///
     /// # Panics
     ///
-    /// Panics if HBOR encoding of `database_updates` fails — it is a
-    /// closed wire type and encoding is infallible in practice.
+    /// Panics if HBOR encoding of `writes` fails — it is a closed wire
+    /// type and encoding is infallible in practice.
     #[must_use]
     pub fn local_receipt_hash(&self) -> Hash {
-        let (outcome_byte, event_root, database_updates) = match self {
-            Self::Succeeded {
-                database_updates,
-                events,
-                ..
-            } => {
+        let (outcome_byte, event_root, writes) = match self {
+            Self::Succeeded { writes, events, .. } => {
                 let event_hashes: Vec<Hash> = events.iter().map(EventExt::hash).collect();
-                (
-                    [1u8],
-                    compute_merkle_root(&event_hashes),
-                    database_updates.clone(),
-                )
+                ([1u8], compute_merkle_root(&event_hashes), writes.clone())
             }
-            Self::Failed => ([0u8], Hash::ZERO, DatabaseUpdates::default()),
+            Self::Failed => ([0u8], Hash::ZERO, StateWrites::default()),
         };
-        let updates_bytes = hbor_to_vec(&database_updates).expect("encode should not fail");
-        let updates_hash = Hash::from_bytes(&updates_bytes);
-        Hash::from_parts(&[
-            &outcome_byte,
-            event_root.as_bytes(),
-            updates_hash.as_bytes(),
-        ])
+        let writes_bytes = hbor_to_vec(&writes).expect("encode should not fail");
+        let writes_hash = Hash::from_bytes(&writes_bytes);
+        Hash::from_parts(&[&outcome_byte, event_root.as_bytes(), writes_hash.as_bytes()])
     }
 }
 
@@ -292,12 +229,11 @@ mod tests {
     use hyperscale_vm_types::Address;
 
     use super::*;
-    use crate::state_key::vm_db_node_key;
 
     fn sample_succeeded() -> ConsensusReceipt {
         ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")),
-            database_updates: DatabaseUpdates::default(),
+            writes: StateWrites::default(),
             beacon_witness_events: Vec::new(),
             events: vec![Event {
                 emitter: Address([7; 16]),
@@ -332,7 +268,7 @@ mod tests {
         buf.extend_from_slice(
             &hbor_to_vec(&GlobalReceiptHash::from_raw(Hash::from_bytes(b"r"))).unwrap(),
         );
-        buf.extend_from_slice(&hbor_to_vec(&DatabaseUpdates::default()).unwrap());
+        buf.extend_from_slice(&hbor_to_vec(&StateWrites::default()).unwrap());
         varint::write(&mut buf, MAX_BEACON_WITNESS_EVENTS_PER_TX + 1).unwrap();
         buf.extend(std::iter::repeat_n(
             0u8,
@@ -345,40 +281,6 @@ mod tests {
                 if max == MAX_BEACON_WITNESS_EVENTS_PER_TX
                     && actual == MAX_BEACON_WITNESS_EVENTS_PER_TX + 1
         ));
-    }
-
-    /// A `Succeeded` receipt whose `database_updates` carries a partition
-    /// Reset encodes (the encoder is symmetric) but must not decode —
-    /// storage applies receipt updates without enumerating pre-existing
-    /// keys, so a Reset would silently diverge the live and sync JMT roots.
-    #[test]
-    fn decode_rejects_partition_reset_updates() {
-        use indexmap::IndexMap;
-
-        use crate::substate::NodeDatabaseUpdates;
-
-        let mut node = NodeDatabaseUpdates::default();
-        node.partition_updates.insert(
-            0u8,
-            PartitionDatabaseUpdates::Reset {
-                new_substate_values: IndexMap::new(),
-            },
-        );
-        let mut database_updates = DatabaseUpdates::default();
-        database_updates
-            .node_updates
-            .insert(vm_db_node_key([1u8; 16]), node);
-        assert!(has_partition_reset(&database_updates));
-
-        let receipt = ConsensusReceipt::Succeeded {
-            receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(b"r")),
-            database_updates,
-            beacon_witness_events: Vec::new(),
-            events: Vec::new(),
-        };
-        let bytes = hbor_to_vec(&receipt).unwrap();
-        let err = hbor_from_slice::<ConsensusReceipt>(&bytes).unwrap_err();
-        assert!(matches!(err, HborDecodeError::FailedValidation(_)));
     }
 
     #[test]

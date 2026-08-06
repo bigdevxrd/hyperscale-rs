@@ -1,189 +1,104 @@
-//! Shard assignment and write filtering for `DatabaseUpdates`.
+//! Shard assignment and write filtering for [`StateWrites`].
 //!
-//! An entity key carries its owner prefix — the identity leaf's routing
+//! A substate key carries its owner prefix — the identity leaf's routing
 //! half — so shard assignment is a prefix walk over the shard trie and
 //! nothing else. Genesis replicates the stdlib package to every shard's
 //! substate store for read availability, but each shard's prefix-rooted
 //! JMT must contain only its own subtree, so what a shard commits is
 //! filtered here first.
-//!
-//! This module also carries the canonicalisation a `writes_root` needs:
-//! `DatabaseUpdates` is built from `IndexMap`s whose order reflects
-//! execution touch order, so the root is taken over a key-sorted clone
-//! and is a pure function of content.
 
-use hyperscale_hbor::to_vec as hbor_to_vec;
-use hyperscale_storage::{DatabaseUpdates, PartitionDatabaseUpdates};
-use hyperscale_types::state_key::vm_db_node_key_owner;
-use hyperscale_types::{ShardId, ShardTrie, WritesRoot};
+use hyperscale_types::{Hash, ShardId, ShardTrie, StateWrites, WritesRoot};
 
-/// Filter genesis `DatabaseUpdates` to the entities whose owner prefix
-/// routes to `local_shard`, for building that shard's prefix-rooted JMT.
+use crate::executor::protocol_hash;
+
+/// Filter genesis writes to the cells whose owner prefix routes to
+/// `local_shard`, for building that shard's prefix-rooted JMT.
 ///
 /// The stdlib package is replicated to every shard's substate store for
 /// read availability, but the prefix-rooted JMT must contain only this
 /// shard's subtree — so the committed `state_root` is exactly the global
 /// tree's node at the shard prefix. Single-shard deployments root at the
-/// empty prefix, where every entity routes to the one shard and this is
+/// empty prefix, where every cell routes to the one shard and this is
 /// the identity filter.
 #[must_use]
-pub fn filter_genesis_updates_for_shard(
-    merged: &DatabaseUpdates,
+pub fn filter_genesis_writes_for_shard(
+    merged: &StateWrites,
     local_shard: ShardId,
     shard_trie: &ShardTrie,
-) -> DatabaseUpdates {
-    filter_updates_for_shard(merged, local_shard, shard_trie)
+) -> StateWrites {
+    filter_writes_for_shard(merged, local_shard, shard_trie)
 }
 
-// ============================================================================
-// Stage 2: Shard Filtering
-// ============================================================================
-
-/// Filter `DatabaseUpdates` for a single shard.
+/// Filter [`StateWrites`] for a single shard.
 ///
-/// An entity key carries its owner prefix — the identity leaves' routing
+/// A substate key carries its owner prefix — the identity leaf's routing
 /// half — so shard assignment is a prefix walk and nothing else.
 #[must_use]
-pub fn filter_updates_for_shard(
-    updates: &DatabaseUpdates,
+pub fn filter_writes_for_shard(
+    writes: &StateWrites,
     local_shard: ShardId,
     shard_trie: &ShardTrie,
-) -> DatabaseUpdates {
-    let mut filtered = DatabaseUpdates::default();
-    for (db_node_key, node_updates) in &updates.node_updates {
-        let Some(owner) = vm_db_node_key_owner(db_node_key) else {
-            continue;
-        };
-        if shard_trie.shard_for_prefix(owner) == local_shard {
-            filtered
-                .node_updates
-                .insert(db_node_key.clone(), node_updates.clone());
+) -> StateWrites {
+    let mut filtered = StateWrites::default();
+    for (key, change) in &writes.cells {
+        if shard_trie.shard_for_prefix(key.owner.0) == local_shard {
+            filtered.cells.insert(*key, change.clone());
         }
     }
     filtered
 }
 
-/// Compute the `writes_root` for a `GlobalReceipt` from filtered `DatabaseUpdates`.
+/// The `writes_root` for a [`GlobalReceipt`](hyperscale_types::GlobalReceipt)
+/// over globally-filtered writes.
 ///
-/// `DatabaseUpdates` is built from `IndexMap`s at every level — Radix's
-/// `StateUpdates` documents itself as "not 100% canonical form" because the
-/// `by_node` order reflects engine touch order rather than a content-derived
-/// order. To make `writes_root` a pure function of the *content* of the
-/// updates (independent of how the maps were populated), we sort all
-/// `IndexMap`s by key before encoding.
-///
-/// # Panics
-///
-/// Panics if encoding of [`DatabaseUpdates`] fails, which is unreachable in
-/// practice for these structures.
+/// [`StateWrites`] encodes in canonical key order by construction, so the
+/// root is the hash of the encoding — a pure function of content with no
+/// sort step. Empty writes commit to [`WritesRoot::ZERO`].
 #[must_use]
-pub fn compute_writes_root(updates: &DatabaseUpdates) -> WritesRoot {
-    use hyperscale_types::{Hash, WritesRoot};
-
-    if updates.node_updates.is_empty() {
+pub fn writes_root(writes: &StateWrites) -> WritesRoot {
+    if writes.is_empty() {
         return WritesRoot::ZERO;
     }
-
-    let mut canonical = updates.clone();
-    sort_database_updates(&mut canonical);
-    let encoded = hbor_to_vec(&canonical).expect("DatabaseUpdates encoding should not fail");
-    WritesRoot::from_raw(Hash::from_bytes(&encoded))
-}
-
-/// Sort every `IndexMap` inside `updates` by key, in-place.
-pub fn sort_database_updates(updates: &mut DatabaseUpdates) {
-    updates.node_updates.sort_keys();
-    for node_updates in updates.node_updates.values_mut() {
-        node_updates.partition_updates.sort_keys();
-        for partition_updates in node_updates.partition_updates.values_mut() {
-            match partition_updates {
-                PartitionDatabaseUpdates::Delta { substate_updates } => {
-                    substate_updates.sort_keys();
-                }
-                PartitionDatabaseUpdates::Reset {
-                    new_substate_values,
-                } => {
-                    new_substate_values.sort_keys();
-                }
-            }
-        }
-    }
+    WritesRoot::from_raw(Hash::from(writes.root(protocol_hash)))
 }
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_storage::{
-        DatabaseUpdate, DatabaseUpdates, DbSortKey, NodeDatabaseUpdates, PartitionDatabaseUpdates,
-    };
-    use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
-    use hyperscale_types::{ShardTrie, WritesRoot};
+    use hyperscale_types::{ShardId, ShardTrie, StateWrites, SubstateKey, WritesRoot};
+    use hyperscale_vm_effects::{Address, LocalKey};
 
     use super::*;
 
-    /// A `DatabaseUpdates` holding one cell under `owner`.
-    fn set_update(owner: [u8; 16], local: [u8; 16], value: Vec<u8>) -> DatabaseUpdates {
-        let mut updates = DatabaseUpdates::default();
-        let nu = updates
-            .node_updates
-            .entry(vm_db_node_key(owner))
-            .or_insert_with(NodeDatabaseUpdates::default);
-        nu.partition_updates.insert(
-            VM_PARTITION,
-            PartitionDatabaseUpdates::Delta {
-                substate_updates: std::iter::once((
-                    DbSortKey(local.to_vec()),
-                    DatabaseUpdate::Set(value),
-                ))
-                .collect(),
-            },
-        );
-        updates
-    }
-
-    fn merge(mut a: DatabaseUpdates, b: DatabaseUpdates) -> DatabaseUpdates {
-        for (k, v) in b.node_updates {
-            a.node_updates.insert(k, v);
+    fn writes(cells: &[([u8; 16], [u8; 16], Vec<u8>)]) -> StateWrites {
+        let mut writes = StateWrites::default();
+        for (owner, local, value) in cells {
+            writes.cells.insert(
+                SubstateKey {
+                    owner: Address(*owner),
+                    local: LocalKey(*local),
+                },
+                Some(value.clone()),
+            );
         }
-        a
+        writes
     }
 
-    // ── compute_writes_root ──────────────────────────────────────────────────
+    // ── writes_root ──────────────────────────────────────────────────────────
 
     #[test]
-    fn compute_writes_root_empty_is_zero() {
-        assert_eq!(
-            compute_writes_root(&DatabaseUpdates::default()),
-            WritesRoot::ZERO
-        );
+    fn writes_root_empty_is_zero() {
+        assert_eq!(writes_root(&StateWrites::default()), WritesRoot::ZERO);
     }
 
     #[test]
-    fn compute_writes_root_is_insertion_order_independent() {
-        // The cross-shard agreement contract requires that two validators which
-        // build the same logical `DatabaseUpdates` produce the same root
-        // regardless of how their underlying `IndexMap`s were populated. If
-        // this fails, validators executing the same transaction can disagree
-        // on `writes_root` and break global-receipt consensus.
-        let (a, b) = ([1u8; 16], [2u8; 16]);
-        let forward = merge(
-            set_update(a, [0; 16], vec![1]),
-            set_update(b, [0; 16], vec![1]),
-        );
-        let reverse = merge(
-            set_update(b, [0; 16], vec![1]),
-            set_update(a, [0; 16], vec![1]),
-        );
-        assert_eq!(compute_writes_root(&forward), compute_writes_root(&reverse));
+    fn writes_root_distinguishes_inputs() {
+        let a = writes(&[([1; 16], [0; 16], vec![1])]);
+        let b = writes(&[([2; 16], [0; 16], vec![1])]);
+        assert_ne!(writes_root(&a), writes_root(&b));
+        assert_eq!(writes_root(&a), writes_root(&a.clone()));
     }
 
-    #[test]
-    fn compute_writes_root_distinguishes_inputs() {
-        let a = set_update([1u8; 16], [0; 16], vec![1]);
-        let b = set_update([2u8; 16], [0; 16], vec![1]);
-        assert_ne!(compute_writes_root(&a), compute_writes_root(&b));
-    }
-
-    // ── filter_updates_for_shard ─────────────────────────────────────────────
+    // ── filter_writes_for_shard ──────────────────────────────────────────────
 
     #[test]
     fn filter_for_shard_keeps_only_this_shard_prefixes() {
@@ -191,33 +106,18 @@ mod tests {
         let left = [0x00; 16];
         let right = [0xFF; 16];
         assert_ne!(trie.shard_for_prefix(left), trie.shard_for_prefix(right));
-        let updates = merge(
-            set_update(left, [1; 16], vec![1]),
-            set_update(right, [1; 16], vec![2]),
-        );
+        let all = writes(&[(left, [1; 16], vec![1]), (right, [1; 16], vec![2])]);
 
-        let filtered = filter_updates_for_shard(&updates, trie.shard_for_prefix(left), &trie);
-        assert_eq!(filtered.node_updates.len(), 1);
-        assert_eq!(
-            vm_db_node_key_owner(filtered.node_updates.keys().next().unwrap()),
-            Some(left)
-        );
+        let filtered = filter_writes_for_shard(&all, trie.shard_for_prefix(left), &trie);
+        assert_eq!(filtered.cells.len(), 1);
+        assert_eq!(filtered.cells.keys().next().unwrap().owner, Address(left));
     }
 
     #[test]
-    fn filter_for_shard_drops_keys_outside_the_namespace() {
-        // An entity key that carries no owner prefix routes nowhere, so
-        // the filter drops it rather than committing it to every shard.
-        let mut updates = set_update([1u8; 16], [0; 16], vec![1]);
-        let value = updates
-            .node_updates
-            .shift_remove_index(0)
-            .expect("one entry")
-            .1;
-        updates.node_updates.insert(vec![0xAA; 50], value);
-
+    fn filter_for_single_shard_is_the_identity() {
+        let all = writes(&[([1; 16], [1; 16], vec![1]), ([9; 16], [2; 16], vec![2])]);
         let filtered =
-            filter_updates_for_shard(&updates, ShardId::ROOT, &ShardTrie::uniform_from_count(1));
-        assert!(filtered.node_updates.is_empty());
+            filter_writes_for_shard(&all, ShardId::ROOT, &ShardTrie::uniform_from_count(1));
+        assert_eq!(filtered, all);
     }
 }

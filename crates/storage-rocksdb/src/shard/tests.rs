@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use hyperscale_jmt::NibblePath;
 use hyperscale_storage::test_helpers::{
-    db_node_key, local_key, make_database_update, make_mapped_database_update, make_test_block,
-    make_test_block_with_anchor_wt, make_test_certified, make_test_execution_certificate,
-    make_test_qc, make_test_receipt, make_test_wave_certificate,
-    test_ec_storage_batch as helpers_test_ec_storage_batch,
+    database_updates_to_state_writes, db_node_key, local_key, make_database_update,
+    make_mapped_database_update, make_test_block, make_test_block_with_anchor_wt,
+    make_test_certified, make_test_execution_certificate, make_test_qc, make_test_receipt,
+    make_test_wave_certificate, test_ec_storage_batch as helpers_test_ec_storage_batch,
     test_ec_storage_roundtrip as helpers_test_ec_storage_roundtrip,
     test_witness_payload_range_reads as helpers_test_witness_payload_range_reads,
 };
@@ -60,7 +60,7 @@ fn updates_to_receipts(updates: &DatabaseUpdates) -> Vec<StoredReceipt> {
         tx_hash: TxHash::ZERO,
         consensus: Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
-            database_updates: updates.clone(),
+            writes: database_updates_to_state_writes(updates),
             beacon_witness_events: Vec::new(),
             events: Vec::new(),
         }),
@@ -1136,7 +1136,7 @@ fn rocks_commit_with(
             tx_hash: TxHash::ZERO,
             consensus: Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
-                database_updates: updates.clone(),
+                writes: database_updates_to_state_writes(updates),
                 beacon_witness_events: Vec::new(),
                 events: Vec::new(),
             }),

@@ -13,12 +13,12 @@ use hyperscale_effects_bridge::{account_address, encode_tree};
 use hyperscale_engine::genesis::stake_unit;
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, ProcessExecutionCache,
-    WaveBatchContext, XRD, genesis_updates,
+    WaveBatchContext, XRD, genesis_writes,
 };
 use hyperscale_storage::{
-    DatabaseUpdate, DbPartitionKey, DbSortKey, DbSubstateValue, PartitionDatabaseUpdates,
-    PartitionEntry, SubstateDatabase,
+    DbPartitionKey, DbSortKey, DbSubstateValue, PartitionEntry, SubstateDatabase,
 };
+use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BeaconWitnessEvent, BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash,
     RevealChain, ShardId, ShardTrie, Stake, StakePoolId, StakePoolSeat, Transaction,
@@ -47,23 +47,18 @@ struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)], pools: &[StakePoolSeat]) -> Self {
-        let updates = genesis_updates(accounts, pools);
+        let writes = genesis_writes(accounts, pools);
         let mut map = BTreeMap::new();
-        for (node_key, node_updates) in &updates.node_updates {
-            for (partition, partition_updates) in &node_updates.partition_updates {
-                let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates else {
-                    panic!("genesis VM updates are Delta-only");
-                };
-                for (sort_key, update) in substate_updates {
-                    let DatabaseUpdate::Set(value) = update else {
-                        panic!("genesis VM updates are Set-only");
-                    };
-                    map.insert(
-                        (node_key.clone(), *partition, sort_key.0.clone()),
-                        value.clone(),
-                    );
-                }
-            }
+        for (key, change) in &writes.cells {
+            let value = change.clone().expect("genesis writes are Set-only");
+            map.insert(
+                (
+                    vm_db_node_key(key.owner.0),
+                    VM_PARTITION,
+                    key.local.0.to_vec(),
+                ),
+                value,
+            );
         }
         Self(map)
     }

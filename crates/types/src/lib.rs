@@ -81,7 +81,7 @@ pub use hyperscale_crypto::{
     VrfOutput, VrfProof,
 };
 pub use hyperscale_hbor::HborSigned;
-pub use hyperscale_vm_types::{Address, LocalKey, SubstateKey};
+pub use hyperscale_vm_types::{Address, LocalKey, MAX_CELL_VALUE_LEN, StateWrites, SubstateKey};
 pub use network::{
     GossipMessage, MessageClass, NetworkMessage, Request, Signed, SignedContext, SignedVerifyError,
     TopicScope,
@@ -111,9 +111,7 @@ pub use provisioning::limits::{MAX_MERKLE_PROOF_LEN, MAX_STATE_ENTRIES_PER_TX};
 pub use provisioning::proof::MerkleInclusionProof;
 pub use provisioning::provisions::{Provisions, ProvisionsContext, ProvisionsVerifyError};
 pub use provisioning::substate::SubstateEntry;
-pub use receipt::consensus::{
-    ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_cells, has_partition_reset,
-};
+pub use receipt::consensus::{ConsensusReceipt, FAILED_RECEIPT_HASH, absorb_committed_cells};
 pub use receipt::event::{
     Event, EventExt, MAX_EVENT_PAYLOAD_BYTES, MAX_EVENT_TYPES, MAX_EVENTS_PER_TX,
 };

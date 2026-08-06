@@ -4620,7 +4620,7 @@ mod tests {
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
                     #[allow(clippy::default_trait_access)]
-                    database_updates: Default::default(),
+                    writes: Default::default(),
                     beacon_witness_events: Vec::new(),
                     events: Vec::new(),
                 }),

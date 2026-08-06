@@ -1,26 +1,64 @@
 //! Utilities for merging, filtering, and reconstructing `DatabaseUpdates`.
 
 use hyperscale_jmt::NibblePath;
-use hyperscale_types::StoredReceipt;
-use hyperscale_types::state_key::vm_db_node_key_owner;
+use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key, vm_db_node_key_owner};
+use hyperscale_types::{StateWrites, StoredReceipt};
+use indexmap::IndexMap;
 use indexmap::map::Entry;
 
-use crate::{DatabaseUpdate, DatabaseUpdates, NodeDatabaseUpdates, PartitionDatabaseUpdates};
+use crate::{
+    DatabaseUpdate, DatabaseUpdates, DbSortKey, NodeDatabaseUpdates, PartitionDatabaseUpdates,
+};
 
 /// Extract and merge `DatabaseUpdates` from stored receipts.
 ///
 /// Canonical projection from receipts to JMT/substate-write input.
-/// Failed receipts contribute nothing (`ConsensusReceipt::database_updates`
-/// returns `None`).
+/// Failed receipts contribute nothing (`ConsensusReceipt::writes`
+/// returns `None`). Later receipts win per cell, matching the receipts'
+/// commit order.
 #[must_use]
 pub fn merge_updates_from_receipts(receipts: &[StoredReceipt]) -> DatabaseUpdates {
-    let mut merged = DatabaseUpdates::default();
+    let mut merged = StateWrites::default();
     for receipt in receipts {
-        if let Some(database_updates) = receipt.consensus.database_updates() {
-            merge_into(&mut merged, database_updates);
+        if let Some(writes) = receipt.consensus.writes() {
+            merged.cells.extend(
+                writes
+                    .cells
+                    .iter()
+                    .map(|(key, change)| (*key, change.clone())),
+            );
         }
     }
-    merged
+    state_writes_to_database_updates(&merged)
+}
+
+/// Inflate flat writes into the `DatabaseUpdates` shape the apply paths
+/// speak: every cell under its owner's node key at the VM partition.
+#[must_use]
+pub fn state_writes_to_database_updates(writes: &StateWrites) -> DatabaseUpdates {
+    let mut updates = DatabaseUpdates::default();
+    for (key, change) in &writes.cells {
+        let node = updates
+            .node_updates
+            .entry(vm_db_node_key(key.owner.0))
+            .or_default();
+        let partition = node
+            .partition_updates
+            .entry(VM_PARTITION)
+            .or_insert_with(|| PartitionDatabaseUpdates::Delta {
+                substate_updates: IndexMap::new(),
+            });
+        let PartitionDatabaseUpdates::Delta { substate_updates } = partition else {
+            unreachable!("cells land in Delta partitions only")
+        };
+        substate_updates.insert(
+            DbSortKey(key.local.0.to_vec()),
+            change
+                .clone()
+                .map_or(DatabaseUpdate::Delete, DatabaseUpdate::Set),
+        );
+    }
+    updates
 }
 
 /// Restrict `updates` to the entities whose JMT leaves fall under

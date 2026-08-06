@@ -13,17 +13,16 @@ use hyperscale_engine::genesis::{account_artifact, entropy_key, vault_key};
 use hyperscale_engine::{
     DynSnapshot, ExecutedTx, ExecutionMode, Executor, Parallelism, PreviewGrants, PreviewInputs,
     PreviewOutcome, PreviewReport, ProcessExecutionCache, ResourceChange, WaveBatchContext, XRD,
-    genesis_updates,
+    genesis_writes,
 };
 use hyperscale_storage::{
-    DatabaseUpdate, DatabaseUpdates, DbPartitionKey, DbSortKey, DbSubstateValue,
-    PartitionDatabaseUpdates, PartitionEntry, SubstateDatabase,
+    DbPartitionKey, DbSortKey, DbSubstateValue, PartitionEntry, SubstateDatabase,
 };
 use hyperscale_types::state_key::{VM_PARTITION, vm_db_node_key};
 use hyperscale_types::{
     BlockHash, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash, RevealChain, ShardId,
-    ShardTrie, Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
-    absorb_committed_cells,
+    ShardTrie, StateWrites, Transaction, TransactionBody, TransactionEnvelope, Verified,
+    WeightedTimestamp, absorb_committed_cells,
 };
 use hyperscale_vm_effects::{
     AbiParam, Address, Constraint, EdgeRef, EnvelopeTree, Expr, GraphArg, GraphNode, IntentDecl,
@@ -60,48 +59,38 @@ struct MapDb(BTreeMap<(Vec<u8>, u8, Vec<u8>), Vec<u8>>);
 
 impl MapDb {
     fn genesis(accounts: &[([u8; 16], u128)]) -> Self {
-        let updates = genesis_updates(accounts, &[]);
+        let writes = genesis_writes(accounts, &[]);
         let mut map = BTreeMap::new();
-        for (node_key, node_updates) in &updates.node_updates {
-            for (partition, partition_updates) in &node_updates.partition_updates {
-                let PartitionDatabaseUpdates::Delta { substate_updates } = partition_updates else {
-                    panic!("genesis VM updates are Delta-only");
-                };
-                for (sort_key, update) in substate_updates {
-                    let DatabaseUpdate::Set(value) = update else {
-                        panic!("genesis VM updates are Set-only");
-                    };
-                    map.insert(
-                        (node_key.clone(), *partition, sort_key.0.clone()),
-                        value.clone(),
-                    );
-                }
-            }
+        for (key, change) in &writes.cells {
+            let value = change.clone().expect("genesis writes are Set-only");
+            map.insert(
+                (
+                    vm_db_node_key(key.owner.0),
+                    VM_PARTITION,
+                    key.local.0.to_vec(),
+                ),
+                value,
+            );
         }
         Self(map)
     }
 }
 
 impl MapDb {
-    /// Apply a receipt's committed updates, as the commit path would.
-    fn apply(&mut self, updates: &DatabaseUpdates) {
-        for (node_key, node_updates) in &updates.node_updates {
-            let PartitionDatabaseUpdates::Delta { substate_updates } = node_updates
-                .partition_updates
-                .get(&VM_PARTITION)
-                .expect("VM updates land in the VM partition")
-            else {
-                panic!("VM updates are Delta-only");
-            };
-            for (sort_key, update) in substate_updates {
-                let key = (node_key.clone(), VM_PARTITION, sort_key.0.clone());
-                match update {
-                    DatabaseUpdate::Set(value) => {
-                        self.0.insert(key, value.clone());
-                    }
-                    DatabaseUpdate::Delete => {
-                        self.0.remove(&key);
-                    }
+    /// Apply a receipt's committed writes, as the commit path would.
+    fn apply(&mut self, writes: &StateWrites) {
+        for (key, change) in &writes.cells {
+            let map_key = (
+                vm_db_node_key(key.owner.0),
+                VM_PARTITION,
+                key.local.0.to_vec(),
+            );
+            match change {
+                Some(value) => {
+                    self.0.insert(map_key, value.clone());
+                }
+                None => {
+                    self.0.remove(&map_key);
                 }
             }
         }
@@ -322,18 +311,8 @@ fn execute_anchored(
 
 /// The entropy leaf a stamp wrote, if any.
 fn entropy_cell(executed: &ExecutedTx, owner: [u8; 16]) -> Option<Vec<u8>> {
-    let key = entropy_key(owner);
-    let updates = executed.consensus.database_updates()?;
-    let node = updates.node_updates.get(&vm_db_node_key(owner))?;
-    let PartitionDatabaseUpdates::Delta { substate_updates } =
-        node.partition_updates.get(&VM_PARTITION)?
-    else {
-        return None;
-    };
-    match substate_updates.get(&DbSortKey(key.local.0.to_vec()))? {
-        DatabaseUpdate::Set(value) => Some(value.clone()),
-        DatabaseUpdate::Delete => None,
-    }
+    let writes = executed.consensus.writes()?;
+    writes.cells.get(&entropy_key(owner)).cloned().flatten()
 }
 
 /// The stamp writes a draw fixed by the anchor: the same anchor gives the
@@ -409,7 +388,7 @@ fn a_batch_baseline_decides_whether_two_payments_both_land() {
         let executed = execute_batch_on(&store, &executor, &[pay(seed, from)]);
         let updates = executed[0]
             .consensus
-            .database_updates()
+            .writes()
             .expect("a completed payment commits updates");
         threaded.push(vault_cell(updates, hot));
         store.apply(updates);
@@ -433,7 +412,7 @@ fn a_batch_baseline_decides_whether_two_payments_both_land() {
             vault_cell(
                 executed[0]
                     .consensus
-                    .database_updates()
+                    .writes()
                     .expect("a completed payment commits updates"),
                 hot,
             )
@@ -480,25 +459,14 @@ fn execute_batch_on(
     executor.execute_wave_batch(&ctx, &snapshot, transactions)
 }
 
-/// The raw update a batch made to an account's native vault, if any.
-fn vault_update(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<DatabaseUpdate> {
-    let key = vault_key(owner, XRD);
-    let node = updates.node_updates.get(&vm_db_node_key(owner))?;
-    let PartitionDatabaseUpdates::Delta { substate_updates } =
-        node.partition_updates.get(&VM_PARTITION)?
-    else {
-        return None;
-    };
-    substate_updates
-        .get(&DbSortKey(key.local.0.to_vec()))
-        .cloned()
+fn vault_cell(writes: &StateWrites, owner: [u8; 16]) -> Option<Vec<u8>> {
+    writes.cells.get(&vault_key(owner, XRD)).cloned().flatten()
 }
 
-fn vault_cell(updates: &DatabaseUpdates, owner: [u8; 16]) -> Option<Vec<u8>> {
-    match vault_update(updates, owner)? {
-        DatabaseUpdate::Set(value) => Some(value),
-        DatabaseUpdate::Delete => None,
-    }
+/// Whether the batch removed the vault cell outright — a drain, never a
+/// zero write.
+fn vault_removed(writes: &StateWrites, owner: [u8; 16]) -> bool {
+    writes.cells.get(&vault_key(owner, XRD)) == Some(&None)
 }
 
 #[test]
@@ -513,7 +481,7 @@ fn a_transfer_folds_to_identity_keyed_absolute_updates() {
     let executed = execute(&executor, &[tx]);
     assert_eq!(executed.len(), 1);
     let ConsensusReceipt::Succeeded {
-        database_updates,
+        writes: database_updates,
         receipt_hash,
         ..
     } = &executed[0].consensus
@@ -555,7 +523,8 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
     // own transaction only.
     assert!(matches!(executed[0].consensus, ConsensusReceipt::Failed));
     let ConsensusReceipt::Succeeded {
-        database_updates, ..
+        writes: database_updates,
+        ..
     } = &executed[1].consensus
     else {
         panic!("the covered transfer must succeed");
@@ -663,7 +632,8 @@ fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
     let executed = execute_on(&accounts, &executor, &[tx]);
     assert_eq!(executed.len(), 1);
     let ConsensusReceipt::Succeeded {
-        database_updates, ..
+        writes: database_updates,
+        ..
     } = &executed[0].consensus
     else {
         panic!("transfer must succeed: {:?}", executed[0].consensus);
@@ -706,7 +676,8 @@ fn a_missed_edge_bound_charges_its_payer_the_floor() {
     // The charge stands in for the receipt the execution never produced,
     // which is what keeps state moving through receipts alone.
     let Some(ConsensusReceipt::Succeeded {
-        database_updates, ..
+        writes: database_updates,
+        ..
     }) = executed[0].fee_receipt.as_ref()
     else {
         panic!("a charged abort settles a fee receipt");
@@ -738,15 +709,15 @@ fn a_payer_drained_by_its_own_fee_deletes_its_vault() {
     ));
     let executed = execute_on(&accounts, &executor, &[tx]);
     let ConsensusReceipt::Succeeded {
-        database_updates, ..
+        writes: database_updates,
+        ..
     } = &executed[0].consensus
     else {
         panic!("transfer must succeed: {:?}", executed[0].consensus);
     };
 
-    assert_eq!(
-        vault_update(database_updates, payer),
-        Some(DatabaseUpdate::Delete),
+    assert!(
+        vault_removed(database_updates, payer),
         "a drained payer vault is deleted, not zeroed"
     );
     // The recipient is untouched by the rule.
@@ -858,22 +829,9 @@ fn signed_publish(seed: u8, artifact: Vec<u8>) -> Transaction {
 }
 
 /// The raw update a batch made to a package's cell under `publisher`.
-fn package_cell(
-    updates: &DatabaseUpdates,
-    publisher: [u8; 16],
-    artifact: &[u8],
-) -> Option<Vec<u8>> {
+fn package_cell(writes: &StateWrites, publisher: [u8; 16], artifact: &[u8]) -> Option<Vec<u8>> {
     let key = package_key(publisher, package_hash(&ProtocolHasher, artifact));
-    let node = updates.node_updates.get(&vm_db_node_key(publisher))?;
-    let PartitionDatabaseUpdates::Delta { substate_updates } =
-        node.partition_updates.get(&VM_PARTITION)?
-    else {
-        return None;
-    };
-    match substate_updates.get(&DbSortKey(key.local.0.to_vec()))? {
-        DatabaseUpdate::Set(value) => Some(value.clone()),
-        DatabaseUpdate::Delete => None,
-    }
+    writes.cells.get(&key).cloned().flatten()
 }
 
 #[test]
@@ -891,7 +849,8 @@ fn a_publish_writes_the_artifact_under_its_publisher() {
     let executed = execute_on(&[(payer, 1_000_000)], &executor, &[tx]);
 
     let ConsensusReceipt::Succeeded {
-        database_updates, ..
+        writes: database_updates,
+        ..
     } = &executed[0].consensus
     else {
         panic!("a publish must succeed: {:?}", executed[0].consensus);
@@ -1128,7 +1087,8 @@ fn a_preview_agrees_with_the_wave_that_would_commit_it() {
     let verified = Arc::new(Verified::<Transaction>::from_persisted(tx));
     let executed = execute_on(&accounts, &executor, &[verified]);
     let ConsensusReceipt::Succeeded {
-        database_updates, ..
+        writes: database_updates,
+        ..
     } = &executed[0].consensus
     else {
         panic!("the transfer must succeed: {:?}", executed[0].consensus);

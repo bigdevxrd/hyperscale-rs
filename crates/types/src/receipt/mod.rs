@@ -23,8 +23,8 @@ mod tests {
 
     use crate::receipt::event::EventExt;
     use crate::{
-        BeaconWitnessRoot, ConsensusReceipt, DatabaseUpdates, Event, EventRoot, GlobalReceipt,
-        GlobalReceiptHash, Hash, OwnershipRoot, WritesRoot,
+        BeaconWitnessRoot, ConsensusReceipt, Event, EventRoot, GlobalReceipt, GlobalReceiptHash,
+        Hash, OwnershipRoot, StateWrites, WritesRoot,
     };
 
     fn make_event(seed: u8) -> Event {
@@ -38,7 +38,7 @@ mod tests {
     fn make_succeeded(events: Vec<Event>) -> ConsensusReceipt {
         ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
-            database_updates: DatabaseUpdates::default(),
+            writes: StateWrites::default(),
             beacon_witness_events: Vec::new(),
             events,
         }

@@ -49,6 +49,7 @@ pub use shard::store::{SubstateStore, VersionedStore};
 pub use shard::vote_registers::SafeVoteRegisterStore;
 pub use shard::writes::{
     filter_updates_to_prefix, merge_database_updates, merge_into, merge_updates_from_receipts,
+    state_writes_to_database_updates,
 };
 pub use tree::{CollectedWrites, JmtSnapshot, LeafSubstateKeyAssociation};
 

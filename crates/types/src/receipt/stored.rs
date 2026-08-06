@@ -47,7 +47,7 @@ mod tests {
     use hyperscale_vm_types::Address;
 
     use super::*;
-    use crate::{DatabaseUpdates, Event, FeeSummary, GlobalReceiptHash, Hash};
+    use crate::{Event, FeeSummary, GlobalReceiptHash, Hash, StateWrites};
 
     fn make_event(seed: u8) -> Event {
         Event {
@@ -63,7 +63,7 @@ mod tests {
             TxHash::from(Hash::from_bytes(b"synced_tx")),
             Arc::new(ConsensusReceipt::Succeeded {
                 receipt_hash: GlobalReceiptHash::ZERO,
-                database_updates: DatabaseUpdates::default(),
+                writes: StateWrites::default(),
                 events: vec![make_event(1)],
                 beacon_witness_events: Vec::new(),
             }),

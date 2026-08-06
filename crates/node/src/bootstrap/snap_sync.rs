@@ -357,7 +357,7 @@ mod tests {
     use std::sync::Arc;
 
     use hyperscale_storage::test_helpers::{
-        commit_block_with_updates, commit_block_with_witnesses, db_node_key, make_database_update,
+        commit_block_with_updates, commit_block_with_witnesses, make_state_writes,
         pin_snap_sync_replica,
     };
     use hyperscale_storage::{BoundaryStore, WitnessSeed};
@@ -452,8 +452,8 @@ mod tests {
                 } else {
                     vec![seed, seed, seed]
                 };
-                let updates = make_database_update(db_node_key(seed), 0, &[seed], value);
-                commit_block_with_updates(&storage, BlockHeight::new(u64::from(seed)), &updates);
+                let writes = make_state_writes(seed, seed, value);
+                commit_block_with_updates(&storage, BlockHeight::new(u64::from(seed)), &writes);
             }
             commit_block_with_witnesses(&storage, anchor.height, &[]);
             storage.pin_boundary(anchor.height).unwrap();

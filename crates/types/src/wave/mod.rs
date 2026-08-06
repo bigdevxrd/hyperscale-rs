@@ -44,11 +44,11 @@ mod tests {
 
     use crate::test_utils::test_transaction_with_prefixes;
     use crate::{
-        AggregateSignature, Attempt, BlockHeight, ConsensusReceipt, DatabaseUpdates,
-        ExecutionCertificate, ExecutionOutcome, FinalizedWave, GlobalReceiptHash,
-        GlobalReceiptRoot, Hash, MAX_EXECUTION_CERTIFICATES_PER_WAVE, NetworkDefinition,
-        ProvisionTxRoot, ProvisionTxRootsMap, RETENTION_HORIZON, ReceiptValidationError, ShardId,
-        SignerBitfield, StoredReceipt, TopologySnapshot, TxHash, TxOutcome, ValidatorId,
+        AggregateSignature, Attempt, BlockHeight, ConsensusReceipt, ExecutionCertificate,
+        ExecutionOutcome, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash,
+        MAX_EXECUTION_CERTIFICATES_PER_WAVE, NetworkDefinition, ProvisionTxRoot,
+        ProvisionTxRootsMap, RETENTION_HORIZON, ReceiptValidationError, ShardId, SignerBitfield,
+        StateWrites, StoredReceipt, TopologySnapshot, TxHash, TxOutcome, ValidatorId,
         ValidatorInfo, ValidatorSet, Verifiable, Verified, WaveCertificate, WaveId,
         WaveReceiptHash, WeightedTimestamp, compute_global_receipt_root,
         compute_global_receipt_root_with_proof, compute_merkle_root, tx_outcome_leaf,
@@ -541,7 +541,7 @@ mod tests {
     fn make_success_receipt() -> Arc<ConsensusReceipt> {
         Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
-            database_updates: DatabaseUpdates::default(),
+            writes: StateWrites::default(),
             beacon_witness_events: Vec::new(),
             events: Vec::new(),
         })
@@ -684,7 +684,7 @@ mod tests {
                     tx_hash: tx_a,
                     consensus: Arc::new(ConsensusReceipt::Succeeded {
                         receipt_hash: GlobalReceiptHash::ZERO,
-                        database_updates: DatabaseUpdates::default(),
+                        writes: StateWrites::default(),
                         beacon_witness_events: Vec::new(),
                         events: Vec::new(),
                     }),
@@ -743,7 +743,7 @@ mod tests {
                 tx_hash: tx_a,
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
-                    database_updates: DatabaseUpdates::default(),
+                    writes: StateWrites::default(),
                     beacon_witness_events: Vec::new(),
                     events: Vec::new(),
                 }),
@@ -778,7 +778,7 @@ mod tests {
                 tx_hash: tx_a,
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash,
-                    database_updates: DatabaseUpdates::default(),
+                    writes: StateWrites::default(),
                     beacon_witness_events: Vec::new(),
                     events: Vec::new(),
                 }),
@@ -829,7 +829,7 @@ mod tests {
                 tx_hash: tx_a,
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
-                    database_updates: DatabaseUpdates::default(),
+                    writes: StateWrites::default(),
                     beacon_witness_events: Vec::new(),
                     events: Vec::new(),
                 }),
@@ -862,7 +862,7 @@ mod tests {
                 tx_hash: tx_b,
                 consensus: Arc::new(ConsensusReceipt::Succeeded {
                     receipt_hash: GlobalReceiptHash::ZERO,
-                    database_updates: DatabaseUpdates::default(),
+                    writes: StateWrites::default(),
                     beacon_witness_events: Vec::new(),
                     events: Vec::new(),
                 }),

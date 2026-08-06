@@ -14,13 +14,13 @@ use hyperscale_types::{
     BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot, Block, BlockHash,
     BlockHeader, BlockHeight, CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, ChainOrigin,
     ConsensusReceipt, Epoch, Event, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome,
-    FeeSummary, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount,
+    FeeSummary, FinalizedWave, GlobalReceiptHash, GlobalReceiptRoot, Hash, InFlightCount, LocalKey,
     LocalReceiptRoot, LogLevel, PcQc2, PcQc3, PcSignerLengths, PcVector, PcXpProof,
     ProposerTimestamp, ProvisionsRoot, QuorumCertificate, Randomness, RatifyCert, RatifyRound,
     RevealChain, Round, ShardAnchor, ShardId, ShardLoad, ShardWitnessPayload, SignerBitfield,
-    SpcCert, SpcView, Stake, StakePoolId, StateRoot, StoredReceipt, TransactionRoot, TxHash,
-    TxOutcome, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId, WeightedTimestamp,
-    WitnessSources, compute_global_receipt_root, compute_merkle_root,
+    SpcCert, SpcView, Stake, StakePoolId, StateRoot, StateWrites, StoredReceipt, SubstateKey,
+    TransactionRoot, TxHash, TxOutcome, ValidatorId, Verifiable, Verified, WaveCertificate, WaveId,
+    WeightedTimestamp, WitnessSources, compute_global_receipt_root, compute_merkle_root,
 };
 
 use crate::tree::Jmt;
@@ -123,6 +123,62 @@ pub fn local_key(seed: &[u8]) -> Vec<u8> {
     let mut local = vec![0u8; 16];
     local[..seed.len().min(16)].copy_from_slice(&seed[..seed.len().min(16)]);
     local
+}
+
+/// Test-only inverse of
+/// [`state_writes_to_database_updates`](crate::state_writes_to_database_updates),
+/// for fixtures that build the storage shape directly and wrap it in a
+/// receipt.
+///
+/// # Panics
+///
+/// Panics on a key that is not VM-flat-shaped — fixtures commit the
+/// same shape the engine does.
+#[must_use]
+pub fn database_updates_to_state_writes(updates: &DatabaseUpdates) -> StateWrites {
+    use hyperscale_types::state_key::vm_db_node_key_owner;
+
+    use crate::{DatabaseUpdate, PartitionDatabaseUpdates};
+
+    let mut writes = StateWrites::default();
+    for (node_key, node) in &updates.node_updates {
+        let owner = vm_db_node_key_owner(node_key).expect("fixture keys are owner-shaped");
+        for partition in node.partition_updates.values() {
+            let PartitionDatabaseUpdates::Delta { substate_updates } = partition else {
+                panic!("fixture updates are Delta-only");
+            };
+            for (sort_key, update) in substate_updates {
+                let local: [u8; 16] = sort_key.0.as_slice().try_into().expect("16-byte local");
+                let key = SubstateKey {
+                    owner: Address(owner),
+                    local: LocalKey(local),
+                };
+                match update {
+                    DatabaseUpdate::Set(value) => writes.cells.insert(key, Some(value.clone())),
+                    DatabaseUpdate::Delete => writes.cells.insert(key, None),
+                };
+            }
+        }
+    }
+    writes
+}
+
+/// A [`StateWrites`] holding one cell: owner `[owner_seed; 16]`, local
+/// zero-padded from `local_seed` — the receipt-side twin of
+/// [`make_database_update`].
+#[must_use]
+pub fn make_state_writes(owner_seed: u8, local_seed: u8, value: Vec<u8>) -> StateWrites {
+    let mut local = [0u8; 16];
+    local[0] = local_seed;
+    let mut writes = StateWrites::default();
+    writes.cells.insert(
+        SubstateKey {
+            owner: Address([owner_seed; 16]),
+            local: LocalKey(local),
+        },
+        Some(value),
+    );
+    writes
 }
 
 /// Build a test `WaveCertificate` at the given height.
@@ -342,7 +398,7 @@ pub fn make_test_receipt(seed: u8) -> StoredReceipt {
     let tx_hash = TxHash::from(Hash::from_bytes(&[seed; 32]));
     let consensus = ConsensusReceipt::Succeeded {
         receipt_hash: GlobalReceiptHash::ZERO,
-        database_updates: DatabaseUpdates::default(),
+        writes: StateWrites::default(),
         beacon_witness_events: Vec::new(),
         events: vec![Event {
             emitter: Address([seed; 16]),
@@ -467,22 +523,22 @@ fn commit_empty_blocks_up_to(storage: &impl ShardChainWriter, target: BlockHeigh
     }
 }
 
-/// Commit `updates` at `height` through the production block-commit path.
+/// Commit `writes` at `height` through the production block-commit path.
 ///
-/// The updates ride a single-receipt finalized wave inside a test block,
+/// The writes ride a single-receipt finalized wave inside a test block,
 /// so substates, state history, the JMT, and leaf associations all land
 /// exactly as a live commit writes them. Returns the resulting state
 /// root.
 pub fn commit_block_with_updates(
     storage: &impl ShardChainWriter,
     height: BlockHeight,
-    updates: &DatabaseUpdates,
+    writes: &StateWrites,
 ) -> StateRoot {
     let receipt = StoredReceipt {
         tx_hash: TxHash::ZERO,
         consensus: Arc::new(ConsensusReceipt::Succeeded {
             receipt_hash: GlobalReceiptHash::ZERO,
-            database_updates: updates.clone(),
+            writes: writes.clone(),
             beacon_witness_events: Vec::new(),
             events: Vec::new(),
         }),
@@ -657,13 +713,8 @@ pub const fn seeded_owner(seed: u8) -> u8 {
 /// [`seeded_owner`] of its seed byte.
 pub fn seed_substate_commits(storage: &impl ShardChainWriter, entries: u8) {
     for seed in 1..=entries {
-        let updates = make_database_update(
-            db_node_key(seeded_owner(seed)),
-            0,
-            &[seed],
-            vec![seed, seed, seed],
-        );
-        commit_block_with_updates(storage, BlockHeight::new(u64::from(seed)), &updates);
+        let writes = make_state_writes(seeded_owner(seed), seed, vec![seed, seed, seed]);
+        commit_block_with_updates(storage, BlockHeight::new(u64::from(seed)), &writes);
     }
 }
 
