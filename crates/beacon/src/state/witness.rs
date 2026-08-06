@@ -15,7 +15,7 @@ use crate::rules;
 use crate::state::committee::abort_rotations;
 use crate::state::conviction::convict_pool;
 use crate::state::reshape::{draw_merge_keepers, draw_split_cohort, lapse_split, release_cohort};
-use crate::state::vrf::jail_validator;
+use crate::state::vrf::{jail_validator, on_missing_crossings_shard};
 use crate::state::withdrawals::deactivate_to_insufficient_stake;
 
 /// Outcome of the epoch's witness application —
@@ -451,6 +451,15 @@ pub(super) fn apply_shard_payload(
             let count = state.miss_counters.entry(*proposer_id).or_insert(0);
             *count += 1;
             if *count < MISSED_PROPOSAL_JAIL_THRESHOLD {
+                return None;
+            }
+            // Misses reaching the fold while the proposer's shard is
+            // missing crossings arrive through the halted chain's drained
+            // witness backlog; the count keeps the observation, but the
+            // jail defers so the frozen tip's custody stays seated for
+            // the halt recovery. A jail lands only on evidence folded
+            // after the shard crosses again.
+            if on_missing_crossings_shard(state, *proposer_id) {
                 return None;
             }
             // Threshold crossed: jail under Performance. `jail_validator`
@@ -2134,6 +2143,64 @@ mod tests {
         assert_eq!(members.len(), 4);
         assert!(!members.contains(&target));
         assert!(members.contains(&ValidatorId::new(4)));
+    }
+
+    /// A miss that crosses the threshold while the proposer's shard is
+    /// missing boundary crossings counts but does not jail: the misses
+    /// arrive through the halted shard's drained witness backlog, and
+    /// jailing on them exits custody holders the halt recovery needs.
+    /// The counter keeps the observation; a jail lands only on evidence
+    /// folded after the shard crosses again.
+    #[test]
+    fn missed_proposal_threshold_defers_jail_while_shard_misses_crossings() {
+        use hyperscale_types::{
+            BeaconWitnessLeafCount, BlockHash, BlockHeight, ShardBoundary, StateRoot,
+            WeightedTimestamp,
+        };
+
+        let mut state = single_pool_state(4);
+        state.committee = (0u64..4).map(ValidatorId::new).collect();
+        let shard = ShardId::leaf(1, 0);
+        state.boundaries.insert(
+            shard,
+            ShardBoundary {
+                state_root: StateRoot::ZERO,
+                block_hash: BlockHash::from_raw(Hash::from_bytes(b"frozen")),
+                height: BlockHeight::new(5),
+                weighted_timestamp: WeightedTimestamp::ZERO,
+                witness_leaf_count: BeaconWitnessLeafCount::ZERO,
+                witness_base: BeaconWitnessLeafCount::ZERO,
+                attested_work: 0,
+                substate_bytes: 0,
+                last_live_epoch: Epoch::new(1),
+                consecutive_misses: 3,
+                terminal_epoch: None,
+                terminal_delivered: false,
+                settled_waves_root: None,
+                reshape_admitted_epoch: None,
+            },
+        );
+
+        let target = ValidatorId::new(1);
+        state
+            .miss_counters
+            .insert(target, MISSED_PROPOSAL_JAIL_THRESHOLD - 1);
+
+        let effects = apply_witness_chunk(&mut state, 0, vec![missed_payload(target)]);
+
+        assert!(
+            effects.jailed.is_empty(),
+            "a halted shard's member must not be jailed on drained misses",
+        );
+        assert!(matches!(
+            state.validators.get(&target).unwrap().status,
+            ValidatorStatus::OnShard { .. },
+        ));
+        assert_eq!(
+            state.miss_counters.get(&target),
+            Some(&MISSED_PROPOSAL_JAIL_THRESHOLD),
+            "the observation still counts; only the jail defers",
+        );
     }
 
     // ─── Shard double-vote pairs (gossip-fed proposal lane) ─────────────
