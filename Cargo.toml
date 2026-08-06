@@ -120,20 +120,20 @@ tracing-test = "0.2.6"
 wasm-bindgen = "0.2.126"
 zeroize = "1.9.0"
 
-# VM dependencies (github.com/hyperscalers/hyperscale-vm @ 545b8ed).
+# VM dependencies (github.com/hyperscalers/hyperscale-vm @ d708a05).
 # `vm-effects` (types and the routing vocabulary) feeds admission through the
 # effects bridge; the kernel, runtimes, and stdlib blob are consumed only by
 # `crates/engine`. Bumps are deliberate rev-pin commits, never
 # `cargo update` drift. The wasmtime pin mirrors the VM repo's blessed engine
 # exactly (latest stable ahead of the 48 LTS, expected 2026-08-20); upgrades
 # are protocol events.
-hyperscale-hbor = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "5527e04" }
-hyperscale-vm-effects = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "5527e04" }
-hyperscale-vm-kernel = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "5527e04" }
-hyperscale-vm-ref = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "5527e04" }
-hyperscale-vm-runtime = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "5527e04", default-features = false }
-hyperscale-vm-stdlib = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "5527e04" }
-hyperscale-vm-types = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "5527e04" }
+hyperscale-hbor = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "d708a05" }
+hyperscale-vm-effects = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "d708a05" }
+hyperscale-vm-kernel = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "d708a05" }
+hyperscale-vm-ref = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "d708a05" }
+hyperscale-vm-runtime = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "d708a05", default-features = false }
+hyperscale-vm-stdlib = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "d708a05" }
+hyperscale-vm-types = { git = "https://github.com/hyperscalers/hyperscale-vm.git", rev = "d708a05" }
 # Reading a component's exports is pure parsing, so it rides the same
 # parser on native and on wasm32 rather than one runtime's introspection.
 wasmparser = "0.255.0"

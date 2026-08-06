@@ -12,12 +12,11 @@
 //! they do not know, which is what lets the artifact the chain stores be
 //! the artifact the engine compiles.
 
-use std::collections::BTreeSet;
-
 use hyperscale_types::VmStaticsError;
-use hyperscale_vm_effects::{PackageMetadata, check_abi};
-use hyperscale_vm_runtime::validate_component;
-use wasmparser::{BinaryReaderError, ComponentExternalKind, Parser, Payload};
+use hyperscale_vm_effects::{
+    AbiParam, Clause, MethodSignature, ModeExpr, PackageMetadata, TargetExpr, check_abi,
+};
+use hyperscale_vm_runtime::{ExportParam, component_export_params, validate_component};
 
 use crate::vm_metadata::{decode_metadata, encode_metadata};
 
@@ -129,16 +128,22 @@ fn find_section(artifact: &[u8]) -> Result<Option<&[u8]>, VmStaticsError> {
 
 /// The metadata a publish admits from an artifact, or why it does not.
 ///
-/// Four things are checkable today, and they are checked: the artifact
+/// Five things are checkable today, and they are checked: the artifact
 /// clears the deterministic profile, it declares a metadata section at
 /// all, the section decodes canonically and within the bounds the
-/// vocabulary fixes, and every method it describes is a function the
-/// component actually exports. Whether a signature over-approximates the
-/// code it describes is a compiler's judgement, and this is not one — an
-/// under-declaration is harmless because the capability gate never
-/// materialises a handle the declaration did not ask for, so a wrong
-/// signature costs its author a trap rather than costing anyone else
-/// safety.
+/// vocabulary fixes, every method it describes is a function the
+/// component actually exports, and each method's ABI binding agrees with
+/// that export's own type — same arity, a capability handle where the
+/// export takes a borrow of the resource the clause's mode implies, a
+/// bucket's amount where it takes bytes. Whether a signature
+/// over-approximates the code it describes is a compiler's judgement,
+/// and this is not one — an under-declaration is harmless because the
+/// capability gate never materialises a handle the declaration did not
+/// ask for, so a wrong signature costs its author a trap rather than
+/// costing anyone else safety. A binding that disagrees with the export
+/// is different: the disagreement surfaces at invocation, through
+/// whatever error channel each runtime happens to have, so it is refused
+/// here where the verdict is one.
 ///
 /// Every one of these is a pure function of the artifact's bytes, which
 /// is what lets the whole verdict be reached at admission rather than
@@ -149,55 +154,116 @@ fn find_section(artifact: &[u8]) -> Result<Option<&[u8]>, VmStaticsError> {
 /// # Errors
 ///
 /// [`VmStaticsError`] on an artifact outside the profile, an absent or
-/// non-canonical metadata section, or a declared method the component
-/// does not export.
+/// non-canonical metadata section, a declared method the component does
+/// not export, or an ABI binding the export's type cannot honour.
 pub fn admit_package(artifact: &[u8]) -> Result<PackageMetadata, VmStaticsError> {
     validate_component(artifact)
         .map_err(|error| VmStaticsError(format!("artifact is outside the profile: {error}")))?;
     let metadata = extract_metadata(artifact)?
         .ok_or_else(|| VmStaticsError("artifact declares no effect metadata section".into()))?;
-    let exports = component_func_exports(artifact)?;
+    let exports = component_export_params(artifact)
+        .map_err(|error| VmStaticsError(format!("artifact does not parse: {error}")))?;
     for (method, signature) in &metadata.methods {
-        if !exports.contains(method.as_str()) {
+        let Some(params) = exports.get(method.as_str()) else {
             return Err(VmStaticsError(format!(
                 "metadata declares method {method:?}, which the component does not export"
             )));
-        }
+        };
         // The binding is the vocabulary's to judge: every clause is a
         // pure function of the signature, and routing judges the same
         // predicate again for a package that reached a cache without
         // ever passing this gate.
         check_abi(signature)
             .map_err(|error| VmStaticsError(format!("method {method:?}: {error}")))?;
+        check_abi_against_export(method, signature, params)?;
     }
     Ok(metadata)
 }
 
-/// The component's own function exports, by name.
+/// Judge a method's ABI binding against the export type that will
+/// receive the arguments it builds.
 ///
-/// Scoped to the outermost component: a nested component's exports are
-/// its own, reachable through nothing a manifest can name.
-fn component_func_exports(artifact: &[u8]) -> Result<BTreeSet<String>, VmStaticsError> {
-    let parse =
-        |error: BinaryReaderError| VmStaticsError(format!("artifact does not parse: {error}"));
-    let mut exports = BTreeSet::new();
-    let mut depth = 0usize;
-    for payload in Parser::new(0).parse_all(artifact) {
-        match payload.map_err(parse)? {
-            Payload::ModuleSection { .. } | Payload::ComponentSection { .. } => depth += 1,
-            Payload::End(_) => depth = depth.saturating_sub(1),
-            Payload::ComponentExportSection(reader) if depth == 0 => {
-                for export in reader {
-                    let export = export.map_err(parse)?;
-                    if export.kind == ComponentExternalKind::Func {
-                        exports.insert(export.name.name.to_owned());
-                    }
+/// `check_abi` has already judged the binding against the signature, so
+/// clause and parameter indices resolve; what remains is whether the
+/// compiled export can take what the binding builds.
+fn check_abi_against_export(
+    method: &str,
+    signature: &MethodSignature,
+    params: &[ExportParam],
+) -> Result<(), VmStaticsError> {
+    if signature.abi.len() != params.len() {
+        return Err(VmStaticsError(format!(
+            "method {method:?}: the binding builds {} arguments, the export takes {}",
+            signature.abi.len(),
+            params.len()
+        )));
+    }
+    for (position, (binding, param)) in signature.abi.iter().zip(params).enumerate() {
+        match binding {
+            AbiParam::Handle(clause) => {
+                let ExportParam::Handle(resource) = param else {
+                    return Err(VmStaticsError(format!(
+                        "method {method:?}: ABI parameter {position} is a capability \
+                         handle, but the export takes {param:?}"
+                    )));
+                };
+                let expected = usize::try_from(*clause)
+                    .ok()
+                    .and_then(|index| signature.effects.get(index))
+                    .and_then(expected_resource);
+                if let Some(expected) = expected
+                    && resource != expected
+                {
+                    return Err(VmStaticsError(format!(
+                        "method {method:?}: ABI parameter {position} borrows \
+                         `{resource}`, but clause {clause}'s mode materialises a \
+                         `{expected}`"
+                    )));
                 }
             }
-            _ => {}
+            AbiParam::Bucket(_) => {
+                if *param != ExportParam::Bytes {
+                    return Err(VmStaticsError(format!(
+                        "method {method:?}: ABI parameter {position} is a bucket \
+                         amount, but the export takes {param:?}"
+                    )));
+                }
+            }
+            AbiParam::Derived(_) => {
+                if matches!(param, ExportParam::Handle(_)) {
+                    return Err(VmStaticsError(format!(
+                        "method {method:?}: ABI parameter {position} is a derived \
+                         value, but the export takes a resource borrow"
+                    )));
+                }
+            }
         }
     }
-    Ok(exports)
+    Ok(())
+}
+
+/// The state resource a clause's handle parameter borrows, when the
+/// clause pins one statically.
+///
+/// A `for-each` clause yields `None`: naming one as a handle parameter
+/// is a deterministic refusal at materialization, so there is no single
+/// resource to hold the export to here.
+const fn expected_resource(clause: &Clause) -> Option<&'static str> {
+    let Clause::Effect { target, mode } = clause else {
+        return None;
+    };
+    match (target, mode) {
+        (TargetExpr::Point(_), ModeExpr::Read) => Some("read-cell"),
+        (TargetExpr::Point(_), ModeExpr::Locked) => Some("locked-cell"),
+        (TargetExpr::Point(_), ModeExpr::Write) => Some("write-cell"),
+        (TargetExpr::Point(_), ModeExpr::Delta) => Some("delta-cell"),
+        (TargetExpr::Point(_), ModeExpr::Reserve(_)) => Some("reserve-cell"),
+        (TargetExpr::Entry { .. } | TargetExpr::Range { .. }, ModeExpr::Read) => Some("range-read"),
+        (TargetExpr::Entry { .. } | TargetExpr::Range { .. }, ModeExpr::Write) => {
+            Some("range-write")
+        }
+        _ => None,
+    }
 }
 
 fn write_uleb128(mut value: usize, out: &mut Vec<u8>) {
@@ -247,6 +313,7 @@ mod tests {
 
     use hyperscale_vm_effects::stdlib::{account_metadata, book_metadata};
     use hyperscale_vm_effects::{AbiParam, Accessibility, MethodSignature, PackageMetadata};
+    use hyperscale_vm_stdlib::{account_artifact, staking_artifact};
     use wat::parse_str;
 
     use super::*;
@@ -548,11 +615,104 @@ mod tests {
         ))
         .expect("the component assembles");
 
-        assert_eq!(
-            component_func_exports(&outer).expect("parses"),
-            BTreeSet::from(["shown".to_owned()])
-        );
+        let exports = component_export_params(&outer).expect("parses");
+        assert_eq!(exports.keys().collect::<Vec<_>>(), vec!["shown"]);
         let artifact = attach_metadata(&outer, &declaring(&["hidden"])).expect("attaches");
         assert!(admit_package(&artifact).is_err());
+    }
+
+    /// The committed stdlib artifacts pass the same gate a runtime
+    /// publish would: their authored metadata agrees with the export
+    /// types their blobs compile to. Without this the stdlib's binding
+    /// is judged by nothing — genesis seeds it into the cache directly.
+    #[test]
+    fn the_stdlib_artifacts_pass_the_publish_gate() {
+        for (name, artifact) in [
+            ("account", account_artifact()),
+            ("staking", staking_artifact()),
+        ] {
+            admit_package(artifact)
+                .unwrap_or_else(|error| panic!("{name}: the stdlib must admit: {}", error.0));
+        }
+    }
+
+    /// A component whose one export takes a `u64`, for bindings to
+    /// disagree with.
+    fn scalar_export() -> Vec<u8> {
+        parse_str(
+            r#"(component
+                 (core module $m
+                   (func (export "f") (param i64) (result i64) local.get 0))
+                 (core instance $i (instantiate $m))
+                 (func (export "m") (param "clock" u64) (result u64)
+                   (canon lift (core func $i "f"))))"#,
+        )
+        .expect("the component assembles")
+    }
+
+    #[test]
+    fn a_binding_the_export_type_cannot_honour_refuses_at_publish() {
+        use hyperscale_vm_effects::{Clause, Expr, ModeExpr, TargetExpr};
+
+        // Arity: the binding builds nothing, the export takes one.
+        let empty = declaring(&["m"]);
+        let artifact = attach_metadata(&scalar_export(), &empty).expect("attaches");
+        let refused = admit_package(&artifact).expect_err("arity must refuse");
+        assert!(refused.0.contains("arguments"), "{}", refused.0);
+
+        // A handle binding against a scalar parameter.
+        let mut wrong_kind = declaring(&["m"]);
+        {
+            let signature = wrong_kind.methods.get_mut("m").expect("declared");
+            signature.effects = vec![Clause::Effect {
+                target: TargetExpr::Point(Expr::SelfAddr),
+                mode: ModeExpr::Write,
+            }];
+            signature.abi = vec![AbiParam::Handle(0)];
+        }
+        let artifact = attach_metadata(&scalar_export(), &wrong_kind).expect("attaches");
+        let refused = admit_package(&artifact).expect_err("a handle needs a borrow");
+        assert!(refused.0.contains("capability handle"), "{}", refused.0);
+
+        // A derived value where the export takes a borrow of the wrong
+        // resource for the clause's mode.
+        let borrow_export = parse_str(
+            r#"(component
+                 (import "hyperscale:kernel/state" (instance $state
+                   (export "delta-cell" (type $dc (sub resource)))))
+                 (alias export $state "delta-cell" (type $delta))
+                 (core module $m
+                   (func (export "f") (param i32) (result i64) i64.const 0))
+                 (core instance $i (instantiate $m))
+                 (func (export "m") (param "vault" (borrow $delta)) (result u64)
+                   (canon lift (core func $i "f"))))"#,
+        )
+        .expect("the component assembles");
+        let mut wrong_resource = declaring(&["m"]);
+        {
+            let signature = wrong_resource.methods.get_mut("m").expect("declared");
+            signature.effects = vec![Clause::Effect {
+                target: TargetExpr::Point(Expr::SelfAddr),
+                mode: ModeExpr::Reserve(Expr::Arg(0)),
+            }];
+            signature.abi = vec![AbiParam::Handle(0)];
+        }
+        let artifact = attach_metadata(&borrow_export, &wrong_resource).expect("attaches");
+        let refused = admit_package(&artifact).expect_err("the borrowed resource must match");
+        assert!(refused.0.contains("reserve-cell"), "{}", refused.0);
+
+        // The same shape with the matching mode admits, so the refusals
+        // above are the disagreement and not the shape.
+        let mut sound = declaring(&["m"]);
+        {
+            let signature = sound.methods.get_mut("m").expect("declared");
+            signature.effects = vec![Clause::Effect {
+                target: TargetExpr::Point(Expr::SelfAddr),
+                mode: ModeExpr::Delta,
+            }];
+            signature.abi = vec![AbiParam::Handle(0)];
+        }
+        let artifact = attach_metadata(&borrow_export, &sound).expect("attaches");
+        assert!(admit_package(&artifact).is_ok());
     }
 }
