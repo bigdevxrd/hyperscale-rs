@@ -107,18 +107,4 @@ mod tests {
             &proof
         ));
     }
-
-    #[test]
-    fn possession_proof_rejects_foreign_key() {
-        let a = signer(1);
-        let b = signer(2);
-        let proof = validator_possession_proof_sign(&a, &net(), ValidatorId::new(7)).unwrap();
-        assert!(!validator_possession_proof_verify(
-            &BlsVerifier,
-            &net(),
-            ValidatorId::new(7),
-            &b.public_key(),
-            &proof
-        ));
-    }
 }

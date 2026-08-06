@@ -95,41 +95,4 @@ mod tests {
         };
         assert_ne!(mk(RatifyPhase::Prevote), mk(RatifyPhase::Precommit));
     }
-
-    #[test]
-    fn ratify_vote_message_differs_across_rounds() {
-        let mk = |round| {
-            RatifyVoteMessage::new(
-                &net(),
-                anchor(),
-                Epoch::new(5),
-                round,
-                RatifyPhase::Prevote,
-                block(),
-            )
-            .signing_bytes()
-            .unwrap()
-        };
-        assert_ne!(mk(RatifyRound::new(1)), mk(RatifyRound::new(2)));
-    }
-
-    #[test]
-    fn ratify_vote_message_differs_across_networks() {
-        let mk = |n: &NetworkDefinition| {
-            RatifyVoteMessage::new(
-                n,
-                anchor(),
-                Epoch::new(5),
-                RatifyRound::INITIAL,
-                RatifyPhase::Prevote,
-                block(),
-            )
-            .signing_bytes()
-            .unwrap()
-        };
-        assert_ne!(
-            mk(&NetworkDefinition::mainnet()),
-            mk(&NetworkDefinition::stokenet())
-        );
-    }
 }

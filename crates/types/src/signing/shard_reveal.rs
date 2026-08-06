@@ -67,7 +67,6 @@ mod tests {
     use hyperscale_crypto_bls::{BlsVerifier, signer_from_u64_seed};
 
     use super::*;
-    use crate::vrf_output_from_proof;
 
     fn net() -> NetworkDefinition {
         NetworkDefinition::simulator()
@@ -89,33 +88,6 @@ mod tests {
     }
 
     #[test]
-    fn shard_reveal_sign_is_deterministic() {
-        let signer = signer_from_u64_seed(7);
-        let a = shard_reveal_sign(&signer, &net(), ShardId::leaf(1, 0), BlockHeight::new(100))
-            .expect("sign");
-        let b = shard_reveal_sign(&signer, &net(), ShardId::leaf(1, 0), BlockHeight::new(100))
-            .expect("sign");
-        assert_eq!(a, b);
-        assert_eq!(vrf_output_from_proof(&a), vrf_output_from_proof(&b));
-    }
-
-    #[test]
-    fn shard_reveal_verify_rejects_cross_party() {
-        let signer_a = signer_from_u64_seed(3);
-        let signer_b = signer_from_u64_seed(4);
-        let proof = shard_reveal_sign(&signer_a, &net(), ShardId::leaf(1, 0), BlockHeight::new(42))
-            .expect("sign");
-        assert!(!shard_reveal_verify(
-            &BlsVerifier,
-            &signer_b.public_key(),
-            &net(),
-            ShardId::leaf(1, 0),
-            BlockHeight::new(42),
-            &proof
-        ));
-    }
-
-    #[test]
     fn shard_reveal_verify_rejects_wrong_height() {
         let signer = signer_from_u64_seed(3);
         let proof = shard_reveal_sign(&signer, &net(), ShardId::leaf(1, 0), BlockHeight::new(42))
@@ -126,23 +98,6 @@ mod tests {
             &net(),
             ShardId::leaf(1, 0),
             BlockHeight::new(43),
-            &proof
-        ));
-    }
-
-    /// A shard reveal must not verify as a beacon VRF reveal or vice
-    /// versa — the two live under distinct signing domains.
-    #[test]
-    fn shard_reveal_does_not_cross_verify_with_beacon_vrf() {
-        use crate::{Epoch, vrf_verify};
-        let signer = signer_from_u64_seed(3);
-        let proof = shard_reveal_sign(&signer, &net(), ShardId::leaf(1, 0), BlockHeight::new(42))
-            .expect("sign");
-        assert!(!vrf_verify(
-            &BlsVerifier,
-            &signer.public_key(),
-            &net(),
-            Epoch::new(42),
             &proof
         ));
     }

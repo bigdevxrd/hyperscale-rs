@@ -56,3 +56,60 @@ pub use validator_possession_proof::{
     ValidatorPossessionProofMessage, validator_possession_proof_sign,
     validator_possession_proof_verify,
 };
+
+#[cfg(test)]
+mod tests {
+    use hyperscale_hbor::HborSigned;
+
+    use super::*;
+    use crate::TransactionEnvelope;
+
+    /// Every signing domain in the crate, pairwise distinct. The domain is
+    /// framed into the preimage, so distinct domains give disjoint preimage
+    /// spaces — this one check is what stops a signature gathered for one
+    /// message type from verifying as any other, for every pair at once.
+    #[test]
+    fn signing_domains_are_pairwise_distinct() {
+        let domains: &[(&str, &[u8])] = &[
+            ("PcVoteMessage", PcVoteMessage::SIGNING_DOMAIN),
+            ("SpcEmptyViewMessage", SpcEmptyViewMessage::SIGNING_DOMAIN),
+            ("SpcRelayMessage", SpcRelayMessage::SIGNING_DOMAIN),
+            ("RatifyVoteMessage", RatifyVoteMessage::SIGNING_DOMAIN),
+            ("VrfRevealMessage", VrfRevealMessage::SIGNING_DOMAIN),
+            ("ExecVoteMessage", ExecVoteMessage::SIGNING_DOMAIN),
+            ("ExecVoteBatchMessage", ExecVoteBatchMessage::SIGNING_DOMAIN),
+            ("ExecCertBatchMessage", ExecCertBatchMessage::SIGNING_DOMAIN),
+            (
+                "StateProvisionsMessage",
+                StateProvisionsMessage::SIGNING_DOMAIN,
+            ),
+            ("ReadySignalMessage", ReadySignalMessage::SIGNING_DOMAIN),
+            ("BlockVoteMessage", BlockVoteMessage::SIGNING_DOMAIN),
+            ("BlockHeaderMessage", BlockHeaderMessage::SIGNING_DOMAIN),
+            ("TimeoutMessage", TimeoutMessage::SIGNING_DOMAIN),
+            (
+                "CertifiedBlockHeaderMessage",
+                CertifiedBlockHeaderMessage::SIGNING_DOMAIN,
+            ),
+            ("ShardRevealMessage", ShardRevealMessage::SIGNING_DOMAIN),
+            (
+                "ValidatorAddressMessage",
+                ValidatorAddressMessage::SIGNING_DOMAIN,
+            ),
+            ("ValidatorBindMessage", ValidatorBindMessage::SIGNING_DOMAIN),
+            (
+                "ValidatorPossessionProofMessage",
+                ValidatorPossessionProofMessage::SIGNING_DOMAIN,
+            ),
+            ("TransactionEnvelope", TransactionEnvelope::SIGNING_DOMAIN),
+        ];
+        for (i, (name_a, domain_a)) in domains.iter().enumerate() {
+            for (name_b, domain_b) in &domains[i + 1..] {
+                assert_ne!(
+                    domain_a, domain_b,
+                    "{name_a} and {name_b} share a signing domain"
+                );
+            }
+        }
+    }
+}

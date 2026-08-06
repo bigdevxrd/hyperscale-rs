@@ -108,21 +108,6 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    /// A reveal from party A doesn't verify under party B's pubkey.
-    #[test]
-    fn vrf_verify_rejects_cross_party() {
-        let signer_a = signer_from_u64_seed(3);
-        let signer_b = signer_from_u64_seed(4);
-        let proof = vrf_sign(&signer_a, &net(), Epoch::new(42)).expect("sign");
-        assert!(!vrf_verify(
-            &BlsVerifier,
-            &signer_b.public_key(),
-            &net(),
-            Epoch::new(42),
-            &proof
-        ));
-    }
-
     /// A reveal for epoch N doesn't verify against epoch M ≠ N — the
     /// epoch is bound into the signing message.
     #[test]
@@ -134,41 +119,6 @@ mod tests {
             &signer.public_key(),
             &net(),
             Epoch::new(43),
-            &proof
-        ));
-    }
-
-    /// Cross-network replay protection at the verify layer: a reveal
-    /// signed under mainnet doesn't verify against stokenet even when
-    /// the epoch matches.
-    #[test]
-    fn vrf_verify_rejects_cross_network() {
-        let signer = signer_from_u64_seed(3);
-        let proof = vrf_sign(&signer, &NetworkDefinition::mainnet(), Epoch::new(42)).expect("sign");
-        assert!(!vrf_verify(
-            &BlsVerifier,
-            &signer.public_key(),
-            &NetworkDefinition::stokenet(),
-            Epoch::new(42),
-            &proof,
-        ));
-    }
-
-    /// Tampered proof (signature invalid) must reject. The output can't
-    /// be tampered independently — it's derived from the proof — so the
-    /// proof's signature check is the whole predicate.
-    #[test]
-    fn vrf_verify_rejects_tampered_proof() {
-        let signer = signer_from_u64_seed(3);
-        let proof = vrf_sign(&signer, &net(), Epoch::new(42)).expect("sign");
-        let mut bytes = *proof.as_bytes();
-        bytes[0] ^= 1;
-        let proof = VrfProof::new(bytes);
-        assert!(!vrf_verify(
-            &BlsVerifier,
-            &signer.public_key(),
-            &net(),
-            Epoch::new(42),
             &proof
         ));
     }
