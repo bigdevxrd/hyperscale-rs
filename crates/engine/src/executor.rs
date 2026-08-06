@@ -770,17 +770,22 @@ impl Executor {
                 }
             }
         }
-        // A publish declares no effects for the loop above to walk, but
-        // its burn still has to read the vault it debits: an absent
-        // baseline value is indistinguishable from an absent cell, and
-        // the burn would silently apply to nothing.
+        // A manifest needn't touch its payer's own vault — a publish
+        // declares no effects at all, and a call can spend entirely from
+        // other parties' cells. The burn re-derives its debit from this
+        // baseline, so every collectible payer's vault joins it: an
+        // absent baseline value is indistinguishable from an absent
+        // cell, and the burn would silently apply to nothing.
+        //
+        // Collectible means the vault routes to the executing shard by
+        // the trie, not by wave locality: a single-shard wave's
+        // `Locality::All` claims every owner, and reading another
+        // shard's cell out of this shard's store is nondeterministic —
+        // members disagree on what they hold outside their own subtree,
+        // and a split baseline splits the wave's receipt roots.
         for tx in transactions {
-            let vm_tx = tx.hash();
-            if !publishes.contains_key(&vm_tx) {
-                continue;
-            }
             let key = tx.fee_vault();
-            if locality.is_local(key.owner)
+            if ctx.shard_trie.shard_for_prefix(key.owner) == ctx.local_shard
                 && let Some(value) = snapshot.substate(key)
             {
                 cells.insert(key, value);
@@ -827,12 +832,16 @@ impl Executor {
         // The fee payers this shard settles: a completed transaction
         // burns its attested actual from its payer's vault, on the
         // payer's shard only.
+        // Trie-routed, like the pre-read: a wave's own locality cannot
+        // decide fee ownership, because the single-shard arm's
+        // `Locality::All` would claim payers whose vaults live on
+        // shards this wave never engaged.
         let fee_by_tx: BTreeMap<TxHash, PayerFee> = transactions
             .iter()
             .filter_map(|tx| {
                 let vm = tx.body();
                 let vault = tx.fee_vault();
-                if !locality.is_local(vault.owner) {
+                if ctx.shard_trie.shard_for_prefix(vault.owner) != ctx.local_shard {
                     return None;
                 }
                 Some((

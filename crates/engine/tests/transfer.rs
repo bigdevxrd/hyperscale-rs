@@ -222,6 +222,10 @@ fn execute(executor: &Executor, transactions: &[Arc<Verified<Transaction>>]) -> 
 /// A signed single-node stamp: the account records the transaction's
 /// randomness draw in its entropy leaf.
 fn signed_stamp(seed: u8, owner: [u8; 16]) -> Transaction {
+    signed_stamp_with_fee(seed, owner, 1_000_000)
+}
+
+fn signed_stamp_with_fee(seed: u8, owner: [u8; 16], max_fee: u128) -> Transaction {
     let key = Ed25519PrivateKey::from_bytes(&[seed; 32]).unwrap();
     let tree = EnvelopeTree {
         root: IntentDecl {
@@ -241,7 +245,7 @@ fn signed_stamp(seed: u8, owner: [u8; 16]) -> Transaction {
         body: TransactionBody::Call(encode_tree(&tree)),
         subintent_sigs: Vec::new(),
         fee_payer: Address(account_address(&key.public_key().0)),
-        max_fee: 1_000_000,
+        max_fee,
         gas_limit: 1_000_000,
         validity_start_ms: 0,
         validity_end_ms: u64::MAX,
@@ -612,6 +616,38 @@ fn a_completed_transfer_burns_the_fee_ceiling_from_its_payer() {
     );
 }
 
+/// A fee-paying call whose manifest never touches the payer's own vault
+/// still pays: the batch baseline pre-reads every local payer's vault,
+/// so the burn has a cell to debit even when no declared effect loads
+/// one. The stamp is the canonical shape — it writes only the entropy
+/// leaf.
+#[test]
+fn a_call_that_never_touches_its_payers_vault_still_pays() {
+    let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
+    // A stamp's fuel far exceeds the tiny ceiling, so the burn is
+    // exactly `max_fee`.
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(
+        signed_stamp_with_fee(ALICE_SEED, alice(), 10),
+    ));
+    let executed = execute(&executor, &[tx]);
+    let ConsensusReceipt::Succeeded {
+        writes: database_updates,
+        ..
+    } = &executed[0].consensus
+    else {
+        panic!("the stamp must succeed: {:?}", executed[0].consensus);
+    };
+    assert!(
+        database_updates.cells.contains_key(&entropy_key(alice())),
+        "the stamp wrote its entropy leaf"
+    );
+    assert_eq!(
+        vault_cell(database_updates, alice()),
+        Some(encode_amount(1_000 - 10).to_vec()),
+        "the payer's vault carries the burn even though the manifest never loaded it"
+    );
+}
+
 /// A missed edge bound is an infeasibility, not a defect: the sender
 /// declared what it would accept and the world moved between signing and
 /// execution, so nothing but the class floor leaves its vault.
@@ -757,12 +793,12 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
         "the two accounts must sit on different shards"
     );
 
-    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
-        ALICE_SEED,
-        alice(),
-        far(),
-        100,
-    )));
+    // A zero ceiling: the fee burn is a payer-shard write, so a nonzero
+    // fee would make the union differ by exactly that cell between the
+    // two sides. Events are the subject here; the fee stays out of it.
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(
+        signed_transfer_with_fee(ALICE_SEED, alice(), far(), 100, 0),
+    ));
     let sender_side = execute_on_shard(&executor, near_shard, std::slice::from_ref(&tx));
     let recipient_side = execute_on_shard(&executor, far_shard, &[tx]);
 
