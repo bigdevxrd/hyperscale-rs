@@ -35,6 +35,12 @@ use crate::host::NodeHost;
 use crate::process::SubmitFanout;
 use crate::shard::{ShardLoop, ShardScopedInput, push_protocol_event, push_shard_input};
 
+/// Byte budget one outbound gossip batch accumulates before it flushes.
+/// Sized so a full batch — even one ending on a maximum-size envelope —
+/// encodes below the transport's frame cap, which would otherwise refuse
+/// the message and un-gossip the whole batch.
+const TX_GOSSIP_BYTE_BUDGET: usize = 8 * 1024 * 1024;
+
 impl<S, N, D> ShardLoop<S, N, D>
 where
     S: ShardStorage,
@@ -231,8 +237,15 @@ where
             .mempool
             .outbound_gossip_batches
             .entry(dst)
-            .or_insert_with(|| BatchAccumulator::new(max, window));
-        if batch.push(tx, now) {
+            .or_insert_with(|| BatchAccumulator::new(TX_GOSSIP_BYTE_BUDGET, window));
+        // Weighted by encoded size: the transport refuses frames past its
+        // size cap, and a refused batch un-gossips every transaction in
+        // it, so the accumulator flushes on bytes — a window of maximum
+        // envelopes must still ship. The count cap rides alongside so a
+        // flood of tiny transactions stays under the decode-side batch
+        // bound.
+        let bytes = tx.serialized_bytes().len();
+        if batch.push_weighted(tx, bytes, now) || batch.len() >= max {
             self.flush_tx_gossip_batch(dst);
         }
     }
