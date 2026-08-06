@@ -210,7 +210,11 @@ impl GenesisBoot {
 /// global set carries the pooled surplus a later reshape draws its child
 /// cohort from.
 #[must_use]
-pub fn build_genesis(genesis: &GenesisValidators, chain_config: BeaconChainConfig) -> GenesisBoot {
+pub fn build_genesis(
+    genesis: &GenesisValidators,
+    chain_config: BeaconChainConfig,
+    pools: &[StakePoolSeat],
+) -> GenesisBoot {
     let pool_id = StakePoolId::new(0);
     let validators: Vec<GenesisValidator> = genesis
         .validators
@@ -242,7 +246,7 @@ pub fn build_genesis(genesis: &GenesisValidators, chain_config: BeaconChainConfi
         initial_randomness: Randomness::new([0x42; 32]),
     };
     let state = Arc::new(build_genesis_beacon_state(&config));
-    let config_hash = genesis_config_hash(&config, &genesis.network);
+    let config_hash = genesis_config_hash(&config, &genesis.network, pools);
     let block = Arc::new(Verified::<CertifiedBeaconBlock>::genesis(config_hash));
     let topology_snapshot = Arc::new(state.derive_topology_snapshot(genesis.network.clone()));
     GenesisBoot {

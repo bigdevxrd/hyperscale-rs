@@ -466,7 +466,7 @@ impl SimulationRunner {
         // as `Pooled`; the seated ROOT validators, capped at the beacon
         // committee size, form the genesis beacon committee.
         let beacon_network = genesis_validators.network.clone();
-        let boot = build_genesis(&genesis_validators, chain_config);
+        let boot = build_genesis(&genesis_validators, chain_config, &network_config.pools);
         let mut pools = network_config.pools.clone();
         seed_founding_members(&boot.state, &mut pools);
         let beacon_config_hash = boot.config_hash;

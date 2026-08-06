@@ -414,7 +414,12 @@ impl ProductionRunnerBuilder {
         // ArcSwap update follows, so the topology is derived rather than
         // supplied alongside a beacon state it has to be kept consistent with.
         let beacon_network = genesis_validators.network.clone();
-        let boot = build_genesis(&genesis_validators, chain_config);
+        let seat_list: Vec<StakePoolSeat> = self
+            .genesis_config
+            .as_ref()
+            .map(|config| config.pools.clone())
+            .unwrap_or_default();
+        let boot = build_genesis(&genesis_validators, chain_config, &seat_list);
         // Warm-restart: resume the beacon coordinator from the latest
         // committed (block, state) in storage. On an empty store, commit the
         // genesis pair first so fresh-start and restart converge on the same

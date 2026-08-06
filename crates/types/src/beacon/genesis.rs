@@ -15,7 +15,8 @@ use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use crate::{
     BEACON_SIGNER_COUNT, ConsensusPublicKey, EPOCH_DURATION, EpochWindows, GenesisConfigHash, Hash,
     IMPOUND_EPOCHS_DEFAULT, NetworkDefinition, PRODUCTION_BEACON_COMMITTEE_SIZE, Randomness,
-    ReshapeThresholds, SHARD_CAPACITY, SHUFFLE_SYNC_HEADROOM, Stake, StakePoolId, ValidatorId,
+    ReshapeThresholds, SHARD_CAPACITY, SHUFFLE_SYNC_HEADROOM, Stake, StakePoolId, StakePoolSeat,
+    ValidatorId,
 };
 
 /// Domain tag for the genesis-config hash. Binds the digest to "beacon
@@ -283,12 +284,21 @@ pub struct BeaconGenesisConfig {
 pub fn genesis_config_hash(
     config: &BeaconGenesisConfig,
     network: &NetworkDefinition,
+    pools: &[StakePoolSeat],
 ) -> GenesisConfigHash {
     let mut h = Hasher::new();
     h.update(DOMAIN_BEACON_GENESIS);
     h.update(&[network.id]);
     let bytes = hbor_to_vec(config).expect("BeaconGenesisConfig HBOR encode is infallible");
     h.update(&bytes);
+    // The seated pool contracts are genesis configuration like everything
+    // above them: a deployment seating different pools diverges at its
+    // first contract-driven witness, so the handshake refuses it here
+    // rather than surfacing the difference as a genesis state-root
+    // split. Seats enter as configured — founding members derive from
+    // the folded state this config already determines.
+    let seats = hbor_to_vec(&pools.to_vec()).expect("StakePoolSeat HBOR encode is infallible");
+    h.update(&seats);
     GenesisConfigHash::from_raw(Hash::from_hash_bytes(h.finalize().as_bytes()))
 }
 
@@ -476,27 +486,33 @@ mod tests {
     fn config_hash_is_deterministic() {
         let a = sample_config();
         assert_eq!(
-            genesis_config_hash(&a, &net()),
-            genesis_config_hash(&a, &net())
+            genesis_config_hash(&a, &net(), &[]),
+            genesis_config_hash(&a, &net(), &[])
         );
     }
 
     #[test]
     fn config_hash_changes_on_any_field() {
         let base = sample_config();
-        let base_hash = genesis_config_hash(&base, &net());
+        let base_hash = genesis_config_hash(&base, &net(), &[]);
 
         let mut diff_randomness = base.clone();
         diff_randomness.initial_randomness = Randomness::new([0xCD; 32]);
-        assert_ne!(genesis_config_hash(&diff_randomness, &net()), base_hash);
+        assert_ne!(
+            genesis_config_hash(&diff_randomness, &net(), &[]),
+            base_hash
+        );
 
         let mut diff_pool_stake = base.clone();
         diff_pool_stake.initial_pools[0].total_stake = Stake::from_whole_tokens(2_000_000);
-        assert_ne!(genesis_config_hash(&diff_pool_stake, &net()), base_hash);
+        assert_ne!(
+            genesis_config_hash(&diff_pool_stake, &net(), &[]),
+            base_hash
+        );
 
         let mut diff_pubkey = base;
         diff_pubkey.initial_validators[0].pubkey = public_key_from_u64_seed(99);
-        assert_ne!(genesis_config_hash(&diff_pubkey, &net()), base_hash);
+        assert_ne!(genesis_config_hash(&diff_pubkey, &net(), &[]), base_hash);
     }
 
     /// Identical TOML on different networks must produce different
@@ -506,8 +522,34 @@ mod tests {
     fn config_hash_differs_across_networks() {
         let config = sample_config();
         assert_ne!(
-            genesis_config_hash(&config, &NetworkDefinition::mainnet()),
-            genesis_config_hash(&config, &NetworkDefinition::stokenet()),
+            genesis_config_hash(&config, &NetworkDefinition::mainnet(), &[]),
+            genesis_config_hash(&config, &NetworkDefinition::stokenet(), &[]),
+        );
+    }
+
+    /// Two deployments differing only in their seated pools refuse each
+    /// other at the handshake instead of discovering the divergence as a
+    /// genesis state-root split.
+    #[test]
+    fn config_hash_covers_the_seated_pools() {
+        let config = sample_config();
+        let seat = StakePoolSeat {
+            address: [0x50; 16],
+            id: StakePoolId::new(7777),
+            operator: [0x51; 16],
+            founding: Vec::new(),
+        };
+        let unseated = genesis_config_hash(&config, &net(), &[]);
+        assert_ne!(
+            genesis_config_hash(&config, &net(), std::slice::from_ref(&seat)),
+            unseated,
+        );
+
+        let mut other_operator = seat.clone();
+        other_operator.operator = [0x52; 16];
+        assert_ne!(
+            genesis_config_hash(&config, &net(), std::slice::from_ref(&seat)),
+            genesis_config_hash(&config, &net(), &[other_operator]),
         );
     }
 }

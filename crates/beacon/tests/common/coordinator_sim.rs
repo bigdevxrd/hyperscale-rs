@@ -236,7 +236,7 @@ impl CoordinatorSim {
         };
 
         let initial_state = build_genesis_beacon_state(&config);
-        let config_hash = genesis_config_hash(&config, &network);
+        let config_hash = genesis_config_hash(&config, &network, &[]);
         let genesis_block = Arc::new(Verified::<CertifiedBeaconBlock>::genesis(config_hash));
 
         let coordinators: Vec<BeaconCoordinator> = (0..pool_n)

@@ -2744,7 +2744,7 @@ mod tests {
     ) {
         let config = sample_genesis();
         let state = build_genesis_beacon_state(&config);
-        let config_hash = genesis_config_hash(&config, &NetworkDefinition::simulator());
+        let config_hash = genesis_config_hash(&config, &NetworkDefinition::simulator(), &[]);
         let block = Verified::<CertifiedBeaconBlock>::genesis(config_hash);
         (Arc::new(block), state, config_hash)
     }
@@ -3866,7 +3866,7 @@ mod tests {
             initial_randomness: Randomness::new([0xAB; 32]),
         };
         let state = build_genesis_beacon_state(&config);
-        let config_hash = genesis_config_hash(&config, &NetworkDefinition::simulator());
+        let config_hash = genesis_config_hash(&config, &NetworkDefinition::simulator(), &[]);
         let block = Arc::new(Verified::<CertifiedBeaconBlock>::genesis(config_hash));
         let mut coord = BeaconCoordinator::new(
             Arc::new(BlsVerifier),

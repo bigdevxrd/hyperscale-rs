@@ -76,7 +76,7 @@ fn fixture() -> Fixture {
         initial_randomness: Randomness::new([0x42; 32]),
     };
     let genesis_state = build_genesis_beacon_state(&config);
-    let config_hash = genesis_config_hash(&config, &network);
+    let config_hash = genesis_config_hash(&config, &network, &[]);
     let genesis_block = Arc::new(Verified::<CertifiedBeaconBlock>::genesis(config_hash));
 
     let validator_set = ValidatorSet::new(
