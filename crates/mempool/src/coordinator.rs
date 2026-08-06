@@ -655,19 +655,25 @@ impl MempoolCoordinator {
     /// return its terminal status action. `None` for a hash not in the
     /// pool (already terminal).
     ///
-    /// Lock release is deliberately unfiltered (every declared node, not
-    /// just the ones the current topology routes locally): at a reshape
-    /// boundary the head trie has already re-routed this shard's nodes to
-    /// its children, so a topology-filtered release would miss exactly the
-    /// locks the aborted chain took, and a terminated chain's lock set
-    /// dies with it regardless. A tx that never reached `Committed` holds
+    /// Lock release filters declared keys to the local shard, like its
+    /// lock/unlock siblings — only locally-routed keys were ever locked.
+    /// At a reshape boundary the head trie may have re-routed keys this
+    /// chain locked; skipping them is sound because a terminated chain's
+    /// lock set dies with it. A tx that never reached `Committed` holds
     /// no in-flight lock, so the release is skipped for it.
-    fn abort_one(&mut self, tx_hash: TxHash) -> Option<Action> {
+    fn abort_one(
+        &mut self,
+        topology_snapshot: &TopologySnapshot,
+        tx_hash: TxHash,
+    ) -> Option<Action> {
         let entry = self.pool.remove(&tx_hash)?;
         if matches!(entry.status, TransactionStatus::Committed(_)) {
+            let local_shard = self.local_shard;
+            let local =
+                |key: &DeclaredKey| topology_snapshot.shard_for_declared_key(key) == local_shard;
             let promotable = self.locks.unlock_declared(
-                entry.tx.admission_read_keys(),
-                entry.tx.admission_write_keys(),
+                entry.tx.admission_read_keys().into_iter().filter(local),
+                entry.tx.admission_write_keys().into_iter().filter(local),
             );
             for key in promotable {
                 self.promote_transactions_for_key(key);
@@ -692,7 +698,7 @@ impl MempoolCoordinator {
     /// wave certificate in a later block, and a terminated chain commits
     /// no later block, so an in-flight tx here is permanently undecidable —
     /// abort is its terminal state.
-    pub fn abort_in_flight(&mut self) -> Vec<Action> {
+    pub fn abort_in_flight(&mut self, topology_snapshot: &TopologySnapshot) -> Vec<Action> {
         let mut in_flight: Vec<TxHash> = self
             .pool
             .iter()
@@ -703,7 +709,7 @@ impl MempoolCoordinator {
 
         let mut actions = Vec::with_capacity(in_flight.len());
         for tx_hash in in_flight {
-            actions.extend(self.abort_one(tx_hash));
+            actions.extend(self.abort_one(topology_snapshot, tx_hash));
         }
         actions
     }
@@ -713,14 +719,18 @@ impl MempoolCoordinator {
     /// shard, once a terminated partner's settled set proves the
     /// transaction's cross-shard half will never finalize. Hashes not in
     /// the pool (already terminal) are skipped.
-    pub fn abort_transactions(&mut self, tx_hashes: &[TxHash]) -> Vec<Action> {
+    pub fn abort_transactions(
+        &mut self,
+        topology_snapshot: &TopologySnapshot,
+        tx_hashes: &[TxHash],
+    ) -> Vec<Action> {
         let mut sorted: Vec<TxHash> = tx_hashes.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
 
         let mut actions = Vec::with_capacity(sorted.len());
         for tx_hash in sorted {
-            actions.extend(self.abort_one(tx_hash));
+            actions.extend(self.abort_one(topology_snapshot, tx_hash));
         }
         actions
     }
@@ -2055,7 +2065,7 @@ mod tests {
         assert_eq!(mempool.in_flight(), 1);
         assert!(mempool.lock_contention_stats().locked_nodes > 0);
 
-        let actions = mempool.abort_in_flight();
+        let actions = mempool.abort_in_flight(&topology_snapshot);
         assert!(
             actions.iter().any(|a| matches!(
                 a,
@@ -2097,7 +2107,7 @@ mod tests {
         mempool.on_block_committed(&topology_snapshot, &certify(block, TEST_BLOCK_INTERVAL_MS));
         assert_eq!(mempool.in_flight(), 2);
 
-        let actions = mempool.abort_transactions(&[doomed_hash]);
+        let actions = mempool.abort_transactions(&topology_snapshot, &[doomed_hash]);
         assert!(
             actions.iter().any(|a| matches!(
                 a,
