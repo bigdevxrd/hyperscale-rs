@@ -24,11 +24,6 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: swatinem/rust-cache@v2
-      - name: Grant Read Access To hyperscale-vm
-        run: >
-          git config --global
-          url."https://x-access-token:${{ secrets.HYPERSCALE_VM_READ_TOKEN }}@github.com/hyperscalers/hyperscale-vm".insteadOf
-          "https://github.com/hyperscalers/hyperscale-vm"
       - name: Cargo Fmt
         run: cargo fmt --all --check
       - name: Cargo Clippy
@@ -73,11 +68,6 @@ jobs:
 
       - name: Install lld
         run: sudo apt-get update && sudo apt-get install -y lld
-      - name: Grant Read Access To hyperscale-vm
-        run: >
-          git config --global
-          url."https://x-access-token:${{ secrets.HYPERSCALE_VM_READ_TOKEN }}@github.com/hyperscalers/hyperscale-vm".insteadOf
-          "https://github.com/hyperscalers/hyperscale-vm"
       - name: Build Test Archive
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
@@ -179,8 +169,6 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             HYPERSCALE_VERSION=${{ env.VERSION }}
-          secrets: |
-            hyperscale_vm_token=${{ secrets.HYPERSCALE_VM_READ_TOKEN }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
@@ -315,13 +303,6 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
 
-      - name: Grant Read Access To hyperscale-vm
-        shell: bash
-        run: >
-          git config --global
-          url."https://x-access-token:${{ secrets.HYPERSCALE_VM_READ_TOKEN }}@github.com/hyperscalers/hyperscale-vm".insteadOf
-          "https://github.com/hyperscalers/hyperscale-vm"
-
       - name: Build Binaries
         shell: bash
         env:
@@ -435,11 +416,6 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen.outputs.version }}
-      - name: Grant Read Access To hyperscale-vm
-        run: >
-          git config --global
-          url."https://x-access-token:${{ secrets.HYPERSCALE_VM_READ_TOKEN }}@github.com/hyperscalers/hyperscale-vm".insteadOf
-          "https://github.com/hyperscalers/hyperscale-vm"
       - name: Assemble Site
         run: ./site/build.sh
       - name: Upload Site Bundle
