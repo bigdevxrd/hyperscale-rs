@@ -4,6 +4,8 @@ The consolidated register of the system's safety and liveness properties, with s
 
 **Classification.** *Safety* — never violated in any reachable state, regardless of timing. *Liveness* — eventually holds under eventual synchrony. *Assumption* — a premise the deployment must establish; other properties are conditional on it. *Determinism* — a functional property (same inputs ⇒ same outputs across replicas) that safety properties reduce to.
 
+**The VM family.** `INV-VM-*` IDs cited from these documents are stated in the VM's own register, [vm/docs/08-invariants.md](../vm/docs/08-invariants.md); this register owns every other family. The split follows the design boundary: the VM register covers execution semantics, the runtime, the object model, and the requirements the engine places on its host; this one covers the protocol that hosts it.
+
 **Suggested verification order** (dependency-first): INV-SEC-1 (the premise) → INV-SHARD-1..9 (single-chain safety) → INV-BEACON-1..12 (topology determinism) → INV-EXEC-1..10 (atomic commitment) → INV-RESHAPE-1..11 (atomicity under topology change) → INV-SEC-2..14 / INV-STATE / INV-ECON / INV-DET (the supporting mechanisms and reductions).
 
 ---
@@ -111,20 +113,6 @@ The consolidated register of the system's safety and liveness properties, with s
 | **INV-ECON-4** | Liveness | **Supply elasticity.** The admission price is the market-clearing marginal offering for exactly the target population (lookahead committees × shard size + buffer); scarcity lowers it toward the floor, so the pool refills exactly when topology demand outruns supply. |
 | **INV-ECON-5** | Determinism | **Deterministic pricing.** `min_stake` and every gate it feeds are pure functions of `BeaconState` (inherits INV-BEACON-2); the auto-reactivation sweep reprices after each promotion and terminates at a fixpoint. |
 | **INV-ECON-6** | Safety | **Co-hosting safety.** Co-hosted vnodes of one validator identity never sign concurrently (per-identity signer seat with an epoch fence); vnode resource sharing is invisible to consensus. |
-
-## VM cross-shard fee assurance — [06](06-resource-economics.md)
-
-| ID | Class | Property |
-|---|---|---|
-| **INV-VM-9** | Safety | **Commit-proof-gated engagement.** A non-payer shard engages a cross-shard VM transaction — admits it to a proposal, takes its locks, starts its deadline clock — only while holding a transaction commit proof: the payer shard's provisions bundle naming the transaction (empty entries for a commutative leg), consumable only against a commit-proven header of the payer block that committed it under its `max_fee` reservation. A certified-but-uncommitted payer block engages nothing; an insolvent payer's transaction never commits at the payer shard (the reservation is a block-validity condition) and so engages no counterpart lock anywhere. |
-| **INV-VM-10** | Safety | **Reservation resolution.** Every fee reservation a payer-shard block engages resolves exactly once, and fees never move cross-shard: a wave that finalizes burns at the payer shard — the EC-attested actual on success, the class floor on abort — inside the receipt its own settlement writes, and releases the remainder. A reservation is an accounting entry over the payer shard's own committed chain, never an on-chain hold, so release is that entry ceasing to be derivable. Under payer-shard termination there is therefore nothing to inherit and nothing to sweep: a successor's chain begins at its seeded genesis, so its ledger begins empty and the payer is unencumbered by construction. A wave the terminal leaves unfinalized settles no receipt and so burns nothing — the transaction's own effects are discarded either way. Payer balance plus held reservations plus cumulative burn is conserved throughout. |
-| **INV-VM-11** | Safety | **Echo-gated payer vote.** The payer shard's committee votes once per cross-shard VM wave, on a condition that is a pure function of its own chain: the success vote exists only with every counterpart participant's engagement echo — the (possibly empty) bundle the counterpart's committing block owes the payer — committed on the payer's chain; past the transaction's validity window without full echo coverage, the committee's single statement is the all-abort vote carrying the fee record. The payer never resolves a wave on a local timer after speaking: a counterpart's late in-window success EC loses worst-wins to the abort vote consistently on every participant, so no verdict splits. |
-
-## VM authorization — [04 §1](04-atomic-commitment.md)
-
-| ID | Class | Property |
-|---|---|---|
-| **INV-VM-12** | Safety | **Target authority.** A manifest node whose target's method declares that target's own authority is admitted only inside an intent that authority signed: the composer's account for a root-intent node, the declared signer's account for a subintent node. A method's accessibility is package metadata, content-addressed with the code it describes and judged at publish, so no transaction can weaken it and no shard can read it differently. An un-securified account's address is the hash of the key that owns it, so the rule's only satisfier is a signature already in the envelope — which makes the whole verdict a pure function of signed content, with no state read and no rule evaluation. It is reached at admission, so an envelope that fails it never enters a block and nobody pays for it; every later derivation of the same envelope applies the same rule, so nothing downstream can widen it. |
 
 ## Determinism substrate — [07](07-determinism-and-testing.md)
 

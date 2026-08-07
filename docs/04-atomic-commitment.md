@@ -95,4 +95,4 @@ Any deviation lands in an abort path whose verdict both sides compute identicall
 
 ## 8. Properties
 
-The atomic-commitment invariants this document motivates — INV-EXEC-1 through INV-EXEC-10, and the VM's target-authority rule INV-VM-12 — are stated precisely in [08-invariants.md](08-invariants.md).
+The atomic-commitment invariants this document motivates — INV-EXEC-1 through INV-EXEC-10 — are stated precisely in [08-invariants.md](08-invariants.md); the VM's target-authority rule INV-VM-12 is stated in the VM register, [vm/docs/08-invariants.md](../vm/docs/08-invariants.md).
