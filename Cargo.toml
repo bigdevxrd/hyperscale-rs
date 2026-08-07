@@ -132,12 +132,12 @@ zeroize = "1.9.0"
 # mirrors the VM repo's blessed engine exactly (latest stable ahead of the
 # 48 LTS, expected 2026-08-20); upgrades are protocol events.
 hyperscale-hbor = { path = "vm/crates/hbor" }
-hyperscale-vm-effects = { path = "vm/crates/vm-effects" }
-hyperscale-vm-kernel = { path = "vm/crates/vm-kernel" }
-hyperscale-vm-ref = { path = "vm/crates/vm-ref" }
-hyperscale-vm-runtime = { path = "vm/crates/vm-runtime", default-features = false }
-hyperscale-vm-stdlib = { path = "vm/crates/vm-stdlib" }
-hyperscale-vm-types = { path = "vm/crates/vm-types" }
+hyperscale-vm-effects = { path = "vm/crates/effects" }
+hyperscale-vm-kernel = { path = "vm/crates/kernel" }
+hyperscale-vm-ref = { path = "vm/crates/ref" }
+hyperscale-vm-runtime = { path = "vm/crates/runtime", default-features = false }
+hyperscale-vm-stdlib = { path = "vm/crates/stdlib" }
+hyperscale-vm-types = { path = "vm/crates/types" }
 
 [workspace.lints.rust]
 missing_docs = "warn"
