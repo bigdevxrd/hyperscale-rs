@@ -123,7 +123,7 @@ impl Routing {
     }
 }
 
-/// Everything the bridge derives from a envelope.
+/// Everything the bridge derives from an envelope.
 ///
 /// The routing identity plus the declaration hash each subintent
 /// signature must cover, in tree order. Derivation has already checked

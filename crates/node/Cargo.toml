@@ -7,7 +7,6 @@ description = "Combined node state machine"
 [dependencies]
 hyperscale-beacon.workspace = true
 hyperscale-core.workspace = true
-hyperscale-effects-bridge.workspace = true
 hyperscale-shard.workspace = true
 hyperscale-metrics.workspace = true
 hyperscale-dispatch.workspace = true

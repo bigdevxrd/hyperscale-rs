@@ -1746,8 +1746,8 @@ impl SubstateCountSource<'_> {
     /// byte total behind *its* parent, so the total behind `parent_hash` is
     /// the parent's own attested claim advanced by the parent's byte delta.
     /// A committed parent skips even that and reads the reconciled frontier.
-    /// Only the parent is consulted, so a block no longer waits on deltas
-    /// for ancestors above it.
+    /// Only the parent is consulted; a block never waits on deltas for
+    /// ancestors above it.
     ///
     /// Trusting the parent's claim rests on the parent's own vote having
     /// checked it against this same recurrence: a poisoned claim never

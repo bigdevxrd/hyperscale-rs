@@ -24,8 +24,8 @@ hyperscale-hbor.workspace = true
 
 # The blessed engine runs native; the reference interpreter is the
 # wasm32 implementation by decision (the in-browser simulation), not a
-# fallback. Phase 2's differential guarantee — byte-identical receipts
-# and fuel across both runtimes — is what makes the split sound.
+# fallback. The differential guarantee — byte-identical receipts and
+# fuel across both runtimes — is what makes the split sound.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 hyperscale-vm-runtime = { workspace = true, features = ["engine"] }
 wasmtime.workspace = true

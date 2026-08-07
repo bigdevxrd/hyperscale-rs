@@ -156,7 +156,7 @@ pub fn envelope_identity(vm: &TransactionEnvelope) -> ManifestHash {
 pub struct BridgeStatics {
     /// Published package metadata, growing as blocks commit.
     pub cache: PackageCache,
-    /// Instance registrations, genesis-static this phase.
+    /// Instance registrations, genesis-static.
     pub instances: InstanceRegistry,
 }
 

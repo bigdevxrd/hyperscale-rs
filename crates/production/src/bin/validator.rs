@@ -198,7 +198,7 @@ pub struct ValidatorConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeConfig {
-    /// Radix network this node is configured for. Bound into every
+    /// Network this node is configured for. Bound into every
     /// signed consensus message to prevent cross-network replay.
     /// Parsed from a network name (`"mainnet"`, `"stokenet"`,
     /// `"simulator"`, etc.) via [`NetworkDefinition::from_str`].
@@ -326,7 +326,7 @@ pub struct ThreadsConfig {
     pub consensus_threads: usize,
 
     /// Threads in the throughput pool (0 = auto). General crypto
-    /// verification, transaction signature validation, and Radix Engine
+    /// verification, transaction signature validation, and engine
     /// execution share this pool; in-handler `par_iter` fans batches
     /// across the same workers.
     #[serde(default)]

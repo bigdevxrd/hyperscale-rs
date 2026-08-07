@@ -426,9 +426,9 @@ pub fn merge_straddler_setup() -> MergeStraddlerSetup {
 
 /// A validity window bracketing `now`.
 ///
-/// Opens 5 s before and closes 150 s after, well under Radix's ~5-minute
-/// ceiling, so a transaction built with this window stays valid across a
-/// reshape that shuffles placement meanwhile.
+/// Opens 5 s before and closes 150 s after, so a transaction built with
+/// this window stays valid across a reshape that shuffles placement
+/// meanwhile.
 #[must_use]
 pub fn validity_around(now: Duration) -> TimestampRange {
     TimestampRange::new(

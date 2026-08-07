@@ -23,7 +23,7 @@ The state root in every shard block header is the shard's subtree root at that b
 **Owner-prefixed keying** is the rule that keeps this partition meaningful. Every substate's flat storage key is an owner prefix and a local half, both fixed-width, and its JMT leaf key is those two halves by identity:
 
 ```
-flat key:  tag || owner(16) || partition || local(16)
+flat key:  owner(16) || local(16)
 leaf key:  [ owner | local ]
 ```
 
@@ -54,18 +54,17 @@ The commit pipeline (the `crates/node` commit coordinator) accumulates committed
 A **checkpoint** is the durable, servable image of a shard at an epoch boundary — the material behind every snap-sync anchor.
 
 - **When.** Boundary detection runs at commit time, on the *child* of the boundary block: the crossing is detected when a committed block's `parent_qc.weighted_timestamp` lands in a new epoch window. The child's parent-QC timestamp is the canonical one ([01-consensus-layers.md](01-consensus-layers.md) §1.3), so every replica pins the same boundary block. The boundary block's own QC would not serve: it can be re-certified with a different timestamp, which would flip the verdict.
-- **What.** A hard-link snapshot that pins the full state at the boundary height: substates, JMT nodes, and the leaf-key association table used for range serving. Each shard retains a ring of recent boundary pins sized to the join budget: a joiner syncing a large shard must be able to finish against a boundary its peers still pin, so production retention covers the full `ready_timeout_epochs` budget plus slack for the attestation lag of the anchor a joiner selects at placement. Hard links pin superseded SSTs, so the ring's disk overhead scales with churn across the window, not with state size.
+- **What.** A hard-link snapshot that pins the full state at the boundary height: substates and JMT nodes. Each shard retains a ring of recent boundary pins sized to the join budget: a joiner syncing a large shard must be able to finish against a boundary its peers still pin, so production retention covers the full `ready_timeout_epochs` budget plus slack for the attestation lag of the anchor a joiner selects at placement. Hard links pin superseded SSTs, so the ring's disk overhead scales with churn across the window, not with state size.
 - **Attestation.** The same boundary block is the shard's contribution to the beacon that epoch. The resulting `ShardBoundary` record, projected to shards as `ShardAnchor { state_root, block_hash, height, weighted_timestamp, settled_waves_root }`, is the beacon-attested description of the checkpoint. An anchor is trustworthy not because a peer served it but because the joiner's own beacon fold produced it.
 
 ## 5. Snap-sync
 
 Snap-sync lets a node acquire a shard's state directly at an anchor, without replaying history. It serves three consumers: fresh joiners, reshape observers building a child store, and merge keepers building the sibling half ([02-dynamic-sharding.md](02-dynamic-sharding.md)).
 
-The assembler (`SnapSync`, sans-io, in `crates/node`) partitions the shard's key span into disjoint sub-ranges fetched in parallel. Each response chunk carries leaves `(leaf_key, storage_key, value)` and a range proof. Three independent bindings tie every chunk to the beacon-attested anchor before a byte is imported (INV-STATE-3):
+The assembler (`SnapSync`, sans-io, in `crates/node`) partitions the shard's key span into disjoint sub-ranges fetched in parallel. Each response chunk carries leaves `(key, value)` — the substate key is the JMT leaf key by identity — and a range proof. Two independent bindings tie every chunk to the beacon-attested anchor before a byte is imported (INV-STATE-3):
 
-1. The **range proof** proves the leaf set into `anchor.state_root`, completeness included: a serving peer cannot omit in-span leaves undetected.
-2. Each leaf key's low half must equal `blake3(storage_key)[16..]`. This binds the shipped raw key — and, through the high half, its claimed owner — without any ownership metadata.
-3. Claimed value hashes are recomputed from the shipped raw values.
+1. The **range proof** proves the leaf set into `anchor.state_root`, completeness included: a serving peer cannot omit in-span leaves undetected. Because the leaf key *is* the substate key, the proof binds each shipped key — and, through its owner half, the claimed owner — with no ownership metadata to consult.
+2. Claimed value hashes are recomputed from the shipped raw values.
 
 Verified chunks are staged durably as they arrive (`BoundaryStore::stage_import_chunk`), together with a progress record binding the staged data to its exact anchor; the store proper is untouched until every sub-range is exhausted. The finalize (`BoundaryStore::finalize_boundary_import`) then rebuilds the subtree from the staged leaves and returns the computed root, which the caller compares against the anchor one final time. Staging keeps the assembler's memory bounded by a single wire chunk regardless of shard size, and the progress record lets a restarted joiner resume an interrupted sync against the same anchor without refetching finished sub-ranges — a record that does not bind the currently attested anchor and fetch geometry is wiped instead. An anchor that goes stale mid-sync (evicted from the serving ring) is handled the same way: wipe and retry against the advanced anchor rather than failure.
 

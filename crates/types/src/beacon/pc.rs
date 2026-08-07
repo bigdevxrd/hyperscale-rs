@@ -118,11 +118,8 @@ impl PcVector {
         Self(Vec::new())
     }
 
-    /// Build a `PcVector` from an iterator of elements.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the collected length exceeds [`MAX_VOTE_VECTOR_LEN`].
+    /// Build a `PcVector` from an iterator of elements. The length cap
+    /// is enforced at encode and decode, not here.
     #[must_use]
     pub fn new<I: IntoIterator<Item = PcValueElement>>(elements: I) -> Self {
         Self(elements.into_iter().collect::<Vec<_>>())
@@ -192,11 +189,8 @@ pub struct PcVote1 {
 }
 
 impl PcVote1 {
-    /// Build a `PcVote1` from its parts.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `prefix_sigs.len() > MAX_PREFIX_SIGS`.
+    /// Build a `PcVote1` from its parts. The prefix-sig cap is enforced
+    /// at encode and decode, not here.
     #[must_use]
     pub const fn new(
         validator: ValidatorId,
@@ -357,11 +351,8 @@ pub struct PcVote2 {
 impl PcVote2 {
     /// Build a `PcVote2` from its parts. Accepts either a raw `PcQc1`
     /// or a `Verified<PcQc1>` for `qc1` — the wrapper preserves the
-    /// marker for the round-2 verifier's short-circuit.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `prefix_sigs.len() > MAX_PREFIX_SIGS`.
+    /// marker for the round-2 verifier's short-circuit. The prefix-sig
+    /// cap is enforced at encode and decode, not here.
     #[must_use]
     pub fn new(
         validator: ValidatorId,

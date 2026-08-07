@@ -466,10 +466,10 @@ pub fn events_land_on_their_emitters_home_shard(c: &mut impl Cluster) {
 /// that carries the rule is the counterpart's mark moving at all.
 ///
 /// The byte level is checked for stability rather than for conservation
-/// across a reshape: storage bonds do not exist yet, so there is no
-/// conserved quantity to balance. What is checkable today is that the channel
-/// neither invents nor loses state — a quiesced network's recorded levels
-/// do not drift.
+/// across a reshape: without storage bonds there is no conserved
+/// quantity to balance. What is checkable is that the channel neither
+/// invents nor loses state — a quiesced network's recorded levels do
+/// not drift.
 ///
 /// # Panics
 ///
@@ -777,8 +777,8 @@ pub fn abort_floor_settles_on_deadline(c: &mut impl FaultableCluster) {
 /// withdrawal loses a deterministic race it could not have foreseen — the
 /// sender declared honestly and another transaction got there first — so
 /// it settles the class floor, not the ceiling. What matters is that it
-/// settles something: the same attempt used to cost nothing at all, which
-/// made trapping strictly cheaper than succeeding for identical work.
+/// settles something: an attempt that cost nothing would make trapping
+/// strictly cheaper than succeeding for identical work.
 ///
 /// # Panics
 ///
@@ -859,8 +859,8 @@ fn preview_change(report: &PreviewReport, owner: [u8; 16]) -> ResourceChange {
 /// plausible numbers nobody ever checked against a commit would be
 /// decoration.
 ///
-/// Free credit is the one grant a preview carries today: it prices the
-/// fee without charging it, which is what lets a wallet cost an envelope
+/// Free credit is the one grant a preview carries: it prices the fee
+/// without charging it, which is what lets a wallet cost an envelope
 /// its payer could not cover.
 ///
 /// # Panics

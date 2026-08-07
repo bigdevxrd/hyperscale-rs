@@ -95,9 +95,9 @@ mod tests {
 
     #[test]
     fn decode_rejects_the_node_set_shape() {
-        // Hand-roll the prior wire layout — entries plus target and owned
-        // node lists — to confirm a peer can't keep shipping node sets the
-        // receiver now derives for itself.
+        // Hand-roll a wire layout carrying entries plus target and owned
+        // node lists, to confirm a peer can't ship node sets the receiver
+        // derives for itself.
         let entry = ProvisionEntry::new(TxHash::from(Hash::from_bytes(b"tx")), vec![]);
         let mut buf = hbor_to_vec(&entry).unwrap();
         buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());

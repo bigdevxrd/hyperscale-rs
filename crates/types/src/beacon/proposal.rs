@@ -59,11 +59,8 @@ pub struct BeaconProposal {
 }
 
 impl BeaconProposal {
-    /// Build a `BeaconProposal` from its parts.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any list or map exceeds its per-proposer cap.
+    /// Build a `BeaconProposal` from its parts. Per-proposer caps are
+    /// enforced at encode and decode, not here.
     #[must_use]
     pub fn new(
         boundary_qcs: BTreeMap<ShardId, Option<QuorumCertificate>>,

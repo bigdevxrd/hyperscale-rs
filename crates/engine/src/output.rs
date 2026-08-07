@@ -22,12 +22,13 @@ pub struct ExecutedTx {
     /// Node-local diagnostics (fees, logs, error). Never crosses the wire;
     /// dropped when this record is forwarded to a peer.
     pub metadata: ExecutionMetadata,
-    /// What the payer owes if the wave aborts this transaction: a receipt
-    /// carrying the fee debit and nothing else. Built beside the
-    /// execution receipt because an abort discards the transaction's own
-    /// effects but not its charge, and state moves only through receipts.
-    /// Present only where this shard is the fee payer of a cross-shard
-    /// transaction — the one shape a wave can abort after executing.
+    /// A receipt carrying the payer's fee debit and nothing else: the
+    /// class charge of a failed or infeasible attempt, or the floor a
+    /// cross-shard leg holds in reserve against a wave abort. Built
+    /// beside the execution receipt because a transaction whose effects
+    /// are discarded still owes its charge, and state moves only through
+    /// receipts. Present only where this shard is the fee payer of an
+    /// outcome that charges one.
     pub fee_receipt: Option<ConsensusReceipt>,
     /// What this shard attests it did for the transaction, under the
     /// engine's schedule. Rides the wave certificate's outcome rather than

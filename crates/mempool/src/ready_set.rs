@@ -8,10 +8,10 @@
 //!   transaction, or already claimed by another ready-set transaction.
 //! - **neither** — never added, or explicitly removed.
 //!
-//! Conflicts key on [`DeclaredKey`] — the node-granular projection of the
-//! declared sets today, finer once effect metadata derives sub-node
-//! slots. Three maintained reverse indices keep add/remove/block/promote
-//! O(1) in the number of transactions touching a given key:
+//! Conflicts key on [`DeclaredKey`] — the node-granular projection of
+//! the declared sets. Three maintained reverse indices keep
+//! add/remove/block/promote O(1) in the number of transactions touching
+//! a given key:
 //!
 //! - `ready_txs_by_key`: key → ready hashes declaring it.
 //! - `txs_deferred_by_key`: key → deferred hashes blocked by it.

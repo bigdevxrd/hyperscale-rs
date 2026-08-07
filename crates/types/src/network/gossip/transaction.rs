@@ -36,10 +36,7 @@ pub struct TransactionGossip {
 
 impl TransactionGossip {
     /// Build a gossip batch from a vector of `Arc`-wrapped transactions.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `transactions.len() > MAX_GOSSIP_TX_BATCH`.
+    /// The batch cap is enforced at encode and decode, not here.
     #[must_use]
     pub const fn new(transactions: Vec<Arc<Transaction>>) -> Self {
         Self { transactions }

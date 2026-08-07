@@ -12,7 +12,7 @@
 //
 // Shard P is the payer's (fee_payer's prefix routes there); shard Q is a
 // non-payer counterpart. One cross-shard VM transaction whose legs are
-// commutative (D23: empty dependency sets), so the payer's bundle carries
+// commutative (empty dependency sets), so the payer's bundle carries
 // transaction hashes and no state — it exists because it is the
 // engagement evidence, not because state needs provisioning.
 //
@@ -125,7 +125,7 @@
 //   quint verify --main=fee_bonded_abort --invariant=invNoBondOnAbort --max-steps=12 specs/vm_fee_assurance.qnt
 //     (broken twin: an abort bonds substates it never wrote)
 //   quint verify --main=fee_ungated   --invariant=invEngageGated --max-steps=8 specs/vm_fee_assurance.qnt
-//     (pre-D21 twin: an optimistic counterpart engages locks for an
+//     (ungated twin: an optimistic counterpart engages locks for an
 //      insolvent payer that never commits)
 //   quint test   --main=fee_certified --match=certifiedAbandon specs/vm_fee_assurance.qnt
 //   quint verify --main=fee_certified --invariant=invEngageGated --max-steps=8 specs/vm_fee_assurance.qnt
@@ -161,7 +161,7 @@ module vm_fee_assurance {
   // is barred strictly after it at Q; P's deadline vote arms strictly
   // after it at P.
   const WINDOW: int
-  // Broken twin: Q engages without the commit proof (the pre-D21
+  // Broken twin: Q engages without the commit proof (the ungated
   // optimistic counterpart).
   const ENGAGE_UNGATED: bool
   // Broken twin: the payer's bundle is consumable against a certified
@@ -709,7 +709,7 @@ module fee_insolvent {
   ).*
 }
 
-// Broken twin: the pre-D21 optimistic counterpart — engagement without
+// Broken twin: the ungated optimistic counterpart — engagement without
 // evidence, against an insolvent payer that never commits.
 module fee_ungated {
   import vm_fee_assurance(

@@ -408,9 +408,9 @@ where
 
 /// Whether the payer of a transaction can cover its signed fee
 /// ceiling, read at the local committed tip. `true` for anything the
-/// policy does not judge: Radix transactions, remote payers (their
-/// balance is unreadable here — the payer shard's own admission judges
-/// them), an unwired store, or unavailable history.
+/// policy does not judge: remote payers (their balance is unreadable
+/// here — the payer shard's own admission judges them), an unwired
+/// store, or unavailable history.
 fn payer_covers_fee_ceiling<S: SubstateStore>(
     tx: &Verified<Transaction>,
     topology: &TopologySnapshot,

@@ -12,7 +12,7 @@ Rust implementation of the Hyperscale protocol: a sharded smart-contract network
 - **A self-regulating validator economy.** The minimum activation stake is a market-clearing price recomputed every epoch from topology demand — rising when validator supply is abundant, falling when splits need staffing — while vnodes let one host run many validator identities, so a seat's marginal cost is its stake, not hardware.
 - **Determinism as the spine.** The entire protocol stack is sans-io pure state machines. The same code runs under production I/O (tokio, libp2p, RocksDB) and under a deterministic simulator where whole multi-shard networks — fault injection included — replay byte-identically from a seed.
 
-**[Architecture documentation → docs/](docs/)** — the whole story in a five-page overview, per-subsystem deep dives, and a consolidated invariant register intended as the starting point for formal verification.
+**[Architecture documentation → docs/](docs/)** — the whole story in a five-page overview, per-subsystem deep dives, and a consolidated invariant register intended as the starting point for formal verification. The execution engine — an effect-typed VM whose every state access is declared before execution — lives in the [`vm/`](vm/) submodule with [its own documentation suite](vm/docs/).
 
 **[Formal models → specs/](specs/)** — an in-progress track of machine-checked [Quint](https://quint-lang.org/) models (verified with Apalache) of the critical safety properties. Each is transcribed from the implementation it models and cross-checked against it by the deterministic scenario suite.
 
@@ -25,10 +25,12 @@ Rust implementation of the Hyperscale protocol: a sharded smart-contract network
 | [`crypto`](crates/crypto) | Consensus crypto interface: `Signer`/`Verifier` traits and related abstractions |
 | [`crypto-bls`](crates/crypto-bls) | Production BLS12-381 signing, verification, and certificate aggregation |
 | [`crypto-mock`](crates/crypto-mock) | Deterministic keyed-hash scheme for simulation with constant-cost sign and verify |
+| [`demo`](crates/demo) | Browser-drivable session over the deterministic simulation |
 | [`dispatch`](crates/dispatch) | Abstract trait for scheduling CPU-intensive work across priority-isolated pools |
 | [`dispatch-pooled`](crates/dispatch-pooled) | Production dispatch using rayon thread pools with core allocation and pinning |
 | [`dispatch-sync`](crates/dispatch-sync) | Deterministic inline dispatch for simulation (runs closures on calling thread) |
-| [`engine`](crates/engine) | Radix Engine integration for smart contract execution |
+| [`effects-bridge`](crates/effects-bridge) | The workspace's binding to the VM effect vocabulary: decode, admit, and route transactions |
+| [`engine`](crates/engine) | Batch executor over the VM kernel: wave execution, fee settlement, receipt projection |
 | [`execution`](crates/execution) | Transaction execution with cross-shard coordination |
 | [`jmt`](crates/jmt) | Jellyfish Merkle Tree with generic hasher and batched multiproofs |
 | [`mempool`](crates/mempool) | Transaction pool management |
@@ -119,7 +121,7 @@ newgrp docker
 
 ## Cloning with Submodules
 
-This repository uses git submodules for vendor dependencies. When cloning, use:
+The execution engine is consumed as the [`vm/`](vm/) git submodule. When cloning, use:
 
 ```bash
 git clone --recurse-submodules https://github.com/flightofthefox/hyperscale-rs.git
@@ -216,45 +218,6 @@ Example command (adjust ports as needed):
 
 
 ## Troubleshooting
-
-### Windows: "Path too long" Error
-
-`hyperscale-rs` depends on the git monorepo `hyperscalers/radixdlt-scrypto`. Its
-`radix-transaction-scenarios` crate contains generated fixture paths longer than
-Windows `MAX_PATH` (~260). Cargo fetches via git but checks out with **libgit2**,
-which fails unless long paths are enabled system-wide. Shorter `CARGO_HOME` does
-not help — the in-repo suffix alone is ~268 characters.
-
-**Enable Windows long paths:**
-
-1. Open **PowerShell** as Administrator.
-2. Run:
-   ```powershell
-   New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
-   ```
-3. Restart the machine (or sign out and back in).
-4. Run:
-   ```bash
-   git config --global core.longpaths true
-   ```
-
-Long paths are the required fix. The repository `.cargo/config.toml` stays
-platform-neutral (CMake policy only) so Linux and CI are unchanged.
-
-Optional local Cargo settings for Windows belong in `.cargo/config.local.toml`
-(gitignored). Cargo does not load that file automatically — copy its contents
-into your working copy of `.cargo/config.toml`, then run
-`git update-index --skip-worktree .cargo/config.toml` so local edits are not
-committed:
-
-```toml
-# .cargo/config.local.toml (local only, not committed)
-[net]
-git-fetch-with-cli = true
-```
-
-`git-fetch-with-cli` alone does not replace enabling long paths; checkout still
-uses libgit2 unless `LongPathsEnabled` is set.
 
 ### Windows: "Can't find clang.dll" or "libclang.dll"
 

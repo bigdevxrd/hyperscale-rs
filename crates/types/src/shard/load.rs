@@ -72,16 +72,6 @@ impl ShardLoad {
             substate_bytes,
         }
     }
-
-    /// Work attested between `self` and the later `next`.
-    ///
-    /// Saturating in the same direction the counter runs: a successor
-    /// total below this one cannot happen on one chain, and answering
-    /// zero keeps a fold that meets one from crediting a wrap.
-    #[must_use]
-    pub const fn work_since(self, next: Self) -> u64 {
-        next.cumulative_work.saturating_sub(self.cumulative_work)
-    }
 }
 
 #[cfg(test)]
@@ -106,19 +96,6 @@ mod tests {
         let unresolved = later.advance(5, None);
         assert_eq!(unresolved.cumulative_work, 105);
         assert_eq!(unresolved.substate_bytes, None);
-    }
-
-    #[test]
-    fn work_since_differences_the_running_total() {
-        let earlier = ShardLoad::ZERO.advance(400, None);
-        let later = earlier.advance(90, None);
-        assert_eq!(earlier.work_since(later), 90);
-
-        // Idempotent against the total already recorded.
-        assert_eq!(later.work_since(later), 0);
-
-        // A total below the recorded one credits nothing rather than wrapping.
-        assert_eq!(later.work_since(earlier), 0);
     }
 
     #[test]

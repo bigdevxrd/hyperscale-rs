@@ -37,11 +37,8 @@ pub struct WaveId {
 }
 
 impl WaveId {
-    /// Create a new `WaveId`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `remote_shards.len() > MAX_REMOTE_SHARDS_PER_WAVE`.
+    /// Create a new `WaveId`. The remote-shard cap is enforced at encode
+    /// and decode, not here.
     #[must_use]
     pub const fn new(
         shard_id: ShardId,

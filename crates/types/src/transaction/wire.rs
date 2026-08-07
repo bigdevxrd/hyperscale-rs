@@ -271,12 +271,6 @@ impl Transaction {
         &self.serialized_bytes
     }
 
-    /// The envelope bytes as an owned `Vec`. For read-only access, prefer
-    /// [`Self::serialized_bytes`].
-    pub fn transaction_bytes(&self) -> Vec<u8> {
-        self.serialized_bytes.clone()
-    }
-
     /// Pre-serialized wire bytes of the full `Transaction`.
     /// Computed on first call and cached.
     ///
@@ -657,9 +651,9 @@ mod tests {
 
     #[test]
     fn decode_rejects_the_declared_set_shape() {
-        // Hand-roll the prior wire layout (envelope bytes plus declared
-        // read/write sets and a mirrored validity range) to confirm a
-        // peer can't keep shipping fields the derivation now owns.
+        // Hand-roll a wire layout carrying envelope bytes plus declared
+        // read/write sets and a mirrored validity range, to confirm a
+        // peer can't ship fields the derivation owns.
         let tx = fixture(b"graph bytes");
         let mut buf = hbor_to_vec(&tx).unwrap();
         buf.extend_from_slice(&hbor_to_vec(&Vec::<[u8; 16]>::new()).unwrap());

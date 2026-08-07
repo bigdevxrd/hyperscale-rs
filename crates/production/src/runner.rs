@@ -211,7 +211,7 @@ pub struct ProductionRunnerBuilder {
     /// Pool instances the process-wide statics seat, when that set must be
     /// wider than this cluster's own genesis seating.
     world_pools: Vec<StakePoolSeat>,
-    /// Radix network definition for transaction validation.
+    /// Network definition for transaction validation.
     /// Defaults to simulator network if not set.
     network_definition: Option<NetworkDefinition>,
     /// Mempool configuration.
@@ -270,7 +270,7 @@ impl ProductionRunnerBuilder {
         }
     }
 
-    /// Set the Radix network definition for transaction validation.
+    /// Set the network definition for transaction validation.
     #[must_use]
     pub fn network_definition(mut self, network: NetworkDefinition) -> Self {
         self.network_definition = Some(network);
@@ -1186,9 +1186,8 @@ impl ProductionRunner {
 
 struct NetworkBuildArgs {
     network_config: Libp2pConfig,
-    /// Radix network identity, bound into signed bind handshake
-    /// messages so a signature collected on one network can't validate
-    /// on another.
+    /// Network identity, bound into signed bind handshake messages so a
+    /// signature collected on one network can't validate on another.
     network: NetworkDefinition,
     ed25519_keypair: Keypair,
     /// Shards hosted by this host. Drives per-shard request stream

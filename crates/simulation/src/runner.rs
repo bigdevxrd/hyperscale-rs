@@ -249,8 +249,8 @@ pub struct SimulationRunner {
     pools: Vec<StakePoolSeat>,
 
     /// The [`Executor`] every host runs, retained so a harness can reach
-    /// the engine-side surfaces that are not part of wave execution —
-    /// preview being the only one today.
+    /// engine-side surfaces that are not part of wave execution, such as
+    /// preview.
     engine: Arc<Executor>,
 
     /// Beacon genesis config hash, retained for runtime-built
@@ -701,8 +701,8 @@ impl SimulationRunner {
             .then(|| &**host.shard_io(shard).storage())
     }
 
-    /// The cluster's engine, for the engine-side surfaces that are not
-    /// part of wave execution — preview being the only one today.
+    /// The cluster's engine, for engine-side surfaces that are not part
+    /// of wave execution, such as preview.
     #[must_use]
     pub fn engine(&self) -> &Executor {
         &self.engine

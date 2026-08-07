@@ -443,8 +443,6 @@ impl SimulationRunner {
             shard,
             recovered,
             shard_config: &ShardConsensusConfig::default(),
-            // Harness default: the routing overlay runs in every
-            // simulation; prod stays off unless configured.
             mempool_config: MempoolConfig {
                 share_declared_reads: self.share_declared_reads,
                 ..MempoolConfig::default()

@@ -81,11 +81,8 @@ pub struct BeaconBlock {
 }
 
 impl BeaconBlock {
-    /// Build a `BeaconBlock` from its parts.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `committed_proposals.len() > MAX_BEACON_COMMITTEE`.
+    /// Build a `BeaconBlock` from its parts. Per-field caps are enforced
+    /// at encode and decode, not here.
     #[must_use]
     pub const fn new(
         epoch: Epoch,
@@ -101,11 +98,7 @@ impl BeaconBlock {
     }
 
     /// Build a `BeaconBlock` carrying per-shard boundary contributions.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `committed_proposals.len() > MAX_BEACON_COMMITTEE` or
-    /// `shard_contributions.len() > MAX_SHARDS`.
+    /// Per-field caps are enforced at encode and decode, not here.
     #[must_use]
     pub const fn new_with_contributions(
         epoch: Epoch,

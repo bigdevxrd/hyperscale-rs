@@ -136,9 +136,9 @@ analysis still resolve to the property they were written about.
 - **INV-EXEC-4 (Conflict verdicts).** Retired with the cross-shard conflict
   detector. It was node-shaped, and the only thing it could ever have fired
   on was a cycle formed by two transactions each holding what the other
-  needs. No stdlib method declares a read effect, so no such cycle can form
-  today; when one can, what breaks it is the payer's deadline abort
-  (INV-EXEC-5) rather than a hash-order tiebreak. The cost of the change is
+  needs. No stdlib method declares a read effect, so no such cycle can
+  form; if a future method introduces one, what breaks it is the payer's
+  deadline abort (INV-EXEC-5) rather than a hash-order tiebreak. The cost of the change is
   a floor: the tiebreak settled one side of a cycle, the deadline settles
   neither.
 - **INV-EXEC-6 (Ownership merge).** Retired with the engine that resolved

@@ -596,10 +596,10 @@ impl Display for BeaconWitnessLeafCount {
 /// Strong Prefix Consensus view counter.
 ///
 /// SPC drives one slot through a sequence of views. Each view runs an
-/// inner Prefix Consensus instance under a distinct domain context
-/// (`spc_ctx || view.to_le_bytes()`); a `(slot, view)` pair uniquely
-/// identifies the PC instance whose round-3 cert any embedded `PcQc3`
-/// belongs to.
+/// inner Prefix Consensus instance under its own signing scope (the
+/// typed `PcScope` pairing the slot's epoch with the view); a
+/// `(slot, view)` pair uniquely identifies the PC instance whose
+/// round-3 cert any embedded `PcQc3` belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Hbor)]
 #[hbor(transparent)]
 pub struct SpcView(u32);

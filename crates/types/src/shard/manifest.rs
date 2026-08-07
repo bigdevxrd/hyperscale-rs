@@ -46,11 +46,8 @@ impl Default for BlockManifest {
 }
 
 impl BlockManifest {
-    /// Build a manifest from its parts.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any input vec exceeds its bounded cap.
+    /// Build a manifest from its parts. Per-field caps are enforced at
+    /// encode and decode, not here.
     #[must_use]
     pub const fn new(
         tx_hashes: Vec<TxHash>,

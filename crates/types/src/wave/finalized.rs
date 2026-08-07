@@ -218,12 +218,8 @@ impl FinalizedWave {
         Some(Self::new(certificate, receipts))
     }
 
-    /// Build a `FinalizedWave` from raw inputs, wrapping `receipts` into
-    /// its bounded type.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `receipts.len() > MAX_TXS_PER_BLOCK`.
+    /// Build a `FinalizedWave` from raw inputs. The receipt-count cap is
+    /// enforced at encode and decode, not here.
     #[must_use]
     pub const fn new(certificate: Arc<WaveCertificate>, receipts: Vec<StoredReceipt>) -> Self {
         Self {

@@ -102,11 +102,8 @@ impl Eq for Provisions {}
 
 impl Provisions {
     /// Create a new provisions. The content hash is computed lazily on
-    /// first call to [`Self::hash`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `transactions.len() > MAX_TXS_PER_BLOCK`.
+    /// first call to [`Self::hash`]. The entry cap is enforced at encode
+    /// and decode, not here.
     #[must_use]
     pub const fn new(
         source_shard: ShardId,

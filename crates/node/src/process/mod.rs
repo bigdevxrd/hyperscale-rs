@@ -192,10 +192,6 @@ where
     /// See [`DispatchHandles`]. Cloned once per delegated-action dispatch.
     pub(crate) dispatch_handles: Arc<DispatchHandles<S, N>>,
 
-    /// Stateless transaction validator (signature + format + EC checks).
-    /// `Arc` so it can be cloned into the `tx_validation` pool closure
-    /// on each batch flush.
-
     /// Process-level beacon chain storage. One handle per host,
     /// shared across every vnode's `Action::CommitBeaconBlock`
     /// handler. The implementation serializes writes internally

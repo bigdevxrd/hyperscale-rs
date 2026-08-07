@@ -493,8 +493,8 @@ fn build_fee_receipt(
 /// What judging and storing one artifact costs, whatever the verdict:
 /// the shard reached it from these bytes before it knew the answer.
 ///
-/// One unit per byte is a placeholder against phase 6's measured
-/// baselines, like every other number in the fee model.
+/// One unit per byte is a placeholder until measured baselines set the
+/// real rate, like every other number in the fee model.
 pub const fn publish_work(artifact: &[u8]) -> u64 {
     artifact.len() as u64
 }

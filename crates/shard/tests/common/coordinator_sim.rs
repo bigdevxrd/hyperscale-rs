@@ -1980,6 +1980,6 @@ pub fn perturb_header_timestamp(h: &BlockHeader) -> BlockHeader {
         h.reveal_chain(),
         h.split_child_roots(),
         h.settled_waves_root(),
-        ShardLoad::ZERO,
+        h.load(),
     )
 }

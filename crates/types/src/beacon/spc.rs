@@ -48,8 +48,8 @@ use crate::{
 ///
 /// Tracked locally as `max_high` by every SPC participant and reported
 /// in [`SpcEmptyViewMsg`]s. The `proof` is the round-3 cert from the
-/// PC instance that ran in `view` (`view`'s signing scope is derived
-/// from the slot's SPC context and `view.to_le_bytes()`). Wire decode
+/// PC instance that ran in `view` (its signatures are scoped by the
+/// typed `PcScope` pairing the slot's epoch with `view`). Wire decode
 /// lands `proof` as `Verifiable::Unverified`; locally-built triples
 /// from [`Verified::<SpcHighTriple>::from_verified_proof`] preserve
 /// the marker so the triple's verifier short-circuits the embedded

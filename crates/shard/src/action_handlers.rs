@@ -310,10 +310,9 @@ pub fn build_proposal<S: ShardChainWriter>(
         .saturating_sub(finalized_tx_count);
 
     // The running gas total: the parent's advanced by what this block's
-    // certificates report. An unresolvable parent load would make the
-    // header unverifiable to everyone else, so it degrades to the parent's
-    // own total rather than inventing one, and the check abstains the same
-    // way on the voting side.
+    // certificates report. An unresolvable parent load falls back to a
+    // zero baseline; a voter that cannot resolve the parent abstains
+    // from the load check on its side.
     let load = parent_load
         .unwrap_or(ShardLoad::ZERO)
         .advance(work_over_certificates(&certificates), substate_bytes);
