@@ -478,6 +478,7 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
         alice(),
         500,
     )));
+    let floor = over.body().abort_floor();
     let fine = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
         ALICE_SEED,
         alice(),
@@ -489,20 +490,78 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
     // Input order is preserved: the infeasible reservation aborts its
     // own transaction only.
     assert!(matches!(executed[0].consensus, ConsensusReceipt::Failed));
-    let ConsensusReceipt::Succeeded {
-        writes: database_updates,
-        ..
-    } = &executed[1].consensus
-    else {
-        panic!("the covered transfer must succeed");
-    };
+    assert!(
+        matches!(executed[1].consensus, ConsensusReceipt::Succeeded { .. }),
+        "the covered transfer must succeed"
+    );
+
+    // Commit the batch the way the settlement path does — every settled
+    // receipt's writes merged in hash order, later receipts winning per
+    // cell. Whichever side of the failure the transfer's hash lands on,
+    // the committed end state carries both its movement and the
+    // failure's floor debit.
+    let mut store = MapDb::genesis(&[(alice(), 1_000), (bob(), 50)]);
+    let mut ordered: Vec<&ExecutedTx> = executed.iter().collect();
+    ordered.sort_by_key(|e| e.tx_hash);
+    for e in &ordered {
+        if let Some(writes) = e.consensus.writes() {
+            store.apply(writes);
+        }
+        if let Some(writes) = e.fee_receipt.as_ref().and_then(ConsensusReceipt::writes) {
+            store.apply(writes);
+        }
+    }
     assert_eq!(
-        vault_cell(database_updates, alice()),
+        store.substate(vault_key(alice(), XRD)),
         Some(encode_amount(1_000 - 25 - TRANSFER_FEE).to_vec())
     );
     assert_eq!(
-        vault_cell(database_updates, bob()),
-        Some(encode_amount(75).to_vec())
+        store.substate(vault_key(bob(), XRD)),
+        Some(encode_amount(75 - floor).to_vec()),
+        "the credit lands and the failure's floor stays charged"
+    );
+}
+
+/// A charged failure's debit survives a sibling folded after it: the
+/// charge joins the batch's cumulative burn when the fee receipt is
+/// built, so a later credit to the same vault carries the debit in its
+/// own absolute write instead of reverting it at commit.
+#[test]
+fn a_failed_charge_survives_a_later_sibling_credit() {
+    let executor = Executor::new(&world_accounts(), ExecutionMode::Serial);
+    let failed = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        BOB_SEED,
+        bob(),
+        alice(),
+        500,
+    )));
+    let floor = failed.body().abort_floor();
+    // Receipts fold and commit hash-ascending, and only a credit landing
+    // after the failure can revert its debit — so pick a transfer amount
+    // whose hash does.
+    let (amount, credit) = (100u128..200)
+        .map(|amount| {
+            let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+                ALICE_SEED,
+                alice(),
+                bob(),
+                amount,
+            )));
+            (amount, tx)
+        })
+        .find(|(_, tx)| tx.hash() > failed.hash())
+        .expect("some amount in range hashes after the failure");
+
+    let executed = execute(&executor, &[Arc::clone(&failed), Arc::clone(&credit)]);
+    assert!(matches!(executed[0].consensus, ConsensusReceipt::Failed));
+    let ConsensusReceipt::Succeeded { writes, .. } = &executed[1].consensus else {
+        panic!("the credit must succeed");
+    };
+    // The credit's own absolute write carries the failure's floor debit.
+    assert_eq!(
+        vault_cell(writes, bob()),
+        Some(encode_amount(50 + amount - floor).to_vec()),
+        "a later sibling's write must layer the charged floor, not revert it"
     );
 }
 

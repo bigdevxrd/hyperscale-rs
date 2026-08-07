@@ -623,8 +623,18 @@ fn assemble_executed_tx(
     // Built before this transaction's own burn folds in: a charge settles
     // over the state its siblings left, not over its own.
     let fee_receipt = fee.and_then(|payer| {
-        charge_for(&receipt.outcome, payer)
-            .and_then(|amount| build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, amount))
+        let amount = charge_for(&receipt.outcome, payer)?;
+        let built = build_fee_receipt(ctx, base, fold, tx_hash, payer.vault, amount)?;
+        // A charge that settles unconditionally joins the cumulative
+        // burn: a sibling folded later that writes this vault must carry
+        // the debit, or its absolute update would revert the charge at
+        // commit. The floor a completed cross-shard leg holds in reserve
+        // stays out — whether it settles is the wave's verdict, unknown
+        // at fold time.
+        if !matches!(receipt.outcome, Outcome::Completed { .. }) {
+            *fold.fees_applied.entry(payer.vault).or_insert(0) += amount;
+        }
+        Some(built)
     });
     let cached = if matches!(receipt.outcome, Outcome::Completed { .. }) {
         // The kernel's own flatten: this receipt's owned part folded to
