@@ -884,14 +884,7 @@ impl VmStatics for StubVmStatics {
             ));
         }
         let canonical = |chunks: &[u8]| {
-            let mut prefixes: Vec<[u8; 16]> = chunks
-                .chunks_exact(16)
-                .map(|chunk| {
-                    let mut owner = [0u8; 16];
-                    owner.copy_from_slice(chunk);
-                    owner
-                })
-                .collect();
+            let mut prefixes: Vec<[u8; 16]> = chunks.as_chunks::<16>().0.to_vec();
             prefixes.sort_unstable();
             prefixes.dedup();
             prefixes
