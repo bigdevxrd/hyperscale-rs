@@ -2,6 +2,7 @@
 name = "hyperscale-jmt"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Jellyfish Merkle Tree with generic hasher and batched multiproofs"
 
 [features]

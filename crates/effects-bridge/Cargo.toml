@@ -2,6 +2,7 @@
 name = "hyperscale-effects-bridge"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "The workspace's binding to the VM effect vocabulary: protocol hasher and declared-effects adapter"
 
 [dependencies]

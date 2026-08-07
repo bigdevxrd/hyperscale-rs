@@ -2,6 +2,7 @@
 name = "hyperscale-storage-rocksdb"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "RocksDB storage implementation for production"
 
 [dependencies]

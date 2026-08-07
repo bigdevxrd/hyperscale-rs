@@ -2,6 +2,7 @@
 name = "hyperscale-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Core types for Hyperscale consensus: Event, Action, and StateMachine trait"
 
 [dependencies]

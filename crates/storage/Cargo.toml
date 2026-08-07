@@ -2,6 +2,7 @@
 name = "hyperscale-storage"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Storage traits, JMT state tree, and shared types"
 
 [dependencies]

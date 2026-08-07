@@ -2,6 +2,7 @@
 name = "hyperscale-crypto-mock"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Deterministic hash-MAC implementation of the consensus crypto interface for simulation"
 
 [dependencies]

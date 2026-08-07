@@ -2,6 +2,7 @@
 name = "hyperscale-spammer"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Transaction spammer for Hyperscale network"
 
 [lib]

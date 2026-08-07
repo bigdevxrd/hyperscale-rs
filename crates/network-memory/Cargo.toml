@@ -2,6 +2,7 @@
 name = "hyperscale-network-memory"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Deterministic in-memory network transport for simulation"
 
 [dependencies]

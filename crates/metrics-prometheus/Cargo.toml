@@ -2,6 +2,7 @@
 name = "hyperscale-metrics-prometheus"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Prometheus metrics recorder for hyperscale"
 
 [dependencies]

@@ -2,6 +2,7 @@
 name = "hyperscale-scenarios"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Portable node-behavioral scenarios run on both the simulation and production harnesses."
 
 [dependencies]

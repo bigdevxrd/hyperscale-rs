@@ -2,6 +2,7 @@
 name = "hyperscale-node"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Combined node state machine"
 
 [dependencies]

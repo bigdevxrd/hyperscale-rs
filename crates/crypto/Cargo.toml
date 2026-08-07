@@ -2,6 +2,7 @@
 name = "hyperscale-crypto"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Consensus crypto interface: role newtypes and Signer/Verifier traits"
 
 [features]

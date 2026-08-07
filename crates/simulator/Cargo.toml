@@ -2,6 +2,7 @@
 name = "hyperscale-simulator"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Long-running workload simulator"
 
 [dependencies]

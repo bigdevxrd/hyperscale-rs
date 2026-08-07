@@ -2,6 +2,7 @@
 name = "hyperscale-provisions"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Centralized provision coordination for cross-shard transactions"
 
 [dependencies]
