@@ -118,13 +118,12 @@ impl AddressBook {
                     return IngestOutcome::Stale;
                 }
                 occupied.insert(record);
-                IngestOutcome::Recorded
             }
             Entry::Vacant(vacant) => {
                 vacant.insert(record);
-                IngestOutcome::Recorded
             }
         }
+        IngestOutcome::Recorded
     }
 
     /// The newest verified record for `validator`, if any.

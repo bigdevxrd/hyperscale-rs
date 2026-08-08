@@ -86,7 +86,6 @@ impl ShardTrie {
     }
 
     /// The live shards, in heap-index order.
-    #[must_use]
     pub fn leaves(&self) -> impl ExactSizeIterator<Item = ShardId> + '_ {
         self.leaves.iter().copied()
     }

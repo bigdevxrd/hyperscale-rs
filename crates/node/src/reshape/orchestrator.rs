@@ -375,7 +375,6 @@ impl ReadyAssert {
                 }
                 state.backoff = (state.backoff * 2).min(READY_REASSERT_MAX);
                 state.due = now.plus(state.backoff);
-                true
             }
             _ => {
                 *slot = Some(Self {
@@ -384,9 +383,9 @@ impl ReadyAssert {
                     due: now.plus(READY_REASSERT_MIN),
                     backoff: READY_REASSERT_MIN,
                 });
-                true
             }
         }
+        true
     }
 }
 

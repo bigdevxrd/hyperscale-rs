@@ -416,7 +416,6 @@ where
                     termination,
                 });
             }
-            Ok(())
         }
         Node::Internal(internal) => {
             let arity = 1usize << ARITY_BITS as usize;
@@ -467,9 +466,9 @@ where
                     siblings_out.push(sibling_hash);
                 }
             }
-            Ok(())
         }
     }
+    Ok(())
 }
 
 /// Reconstruct the subtree hash for `claims` and report how many
