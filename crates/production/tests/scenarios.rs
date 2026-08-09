@@ -2,10 +2,9 @@
 //!
 //! Each `#[test]` builds a [`ProdCluster`] and drives the identical
 //! `hyperscale_scenarios` body the simulation harness runs. These exercise a
-//! real multi-host cluster at wall-clock, so they are a nightly/manual job: run
-//! under `--features ci` (5-minute production epochs) or explicitly with
-//! `-- --ignored` (a 30-second epoch, the simulation default). Default
-//! `cargo test` skips them.
+//! real multi-host cluster at wall-clock, so they are a nightly/manual job that
+//! default `cargo test` skips: run them with `-- --ignored`, adding
+//! `--features short-epochs` to trade production parity for a quick answer.
 
 mod support;
 
@@ -43,12 +42,12 @@ use hyperscale_scenarios::{
 use serial_test::serial;
 use support::ProdCluster;
 
-/// Production epoch length: the real 5-minute deployment epoch under `ci`, a
-/// 30-second epoch otherwise — mirroring `simulation`'s `EPOCH_MS` so a budget
-/// carries the same epoch semantics on both harnesses.
-#[cfg(feature = "ci")]
+/// Production epoch length: the real 5-minute deployment epoch, or the
+/// 30-second one under `short-epochs` — mirroring `simulation`'s `EPOCH_MS` so
+/// a budget carries the same epoch semantics on both harnesses.
+#[cfg(not(feature = "short-epochs"))]
 const EPOCH_MS: u64 = 300_000;
-#[cfg(not(feature = "ci"))]
+#[cfg(feature = "short-epochs")]
 const EPOCH_MS: u64 = 30_000;
 
 /// Baseline single-shard config: resharding disarmed, four-validator committee,
@@ -66,10 +65,7 @@ const fn liveness_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn liveness_baseline_prod() {
     let mut cluster = ProdCluster::start(&liveness_config(), 7, EPOCH_MS);
     liveness_baseline(&mut cluster);
@@ -77,10 +73,7 @@ fn liveness_baseline_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn single_transfer_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&liveness_config(), 7, EPOCH_MS, genesis_accounts(1, 1));
@@ -89,10 +82,7 @@ fn single_transfer_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn abort_converges_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&liveness_config(), 7, EPOCH_MS, genesis_accounts(1, 1));
@@ -124,10 +114,7 @@ const fn fault_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn gossip_drop_engages_fetch_fallback_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&fault_config(), 7, EPOCH_MS, genesis_accounts(1, 1));
@@ -136,10 +123,7 @@ fn gossip_drop_engages_fetch_fallback_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn partition_halts_and_heals_prod() {
     let mut cluster = ProdCluster::start(&fault_config(), 7, EPOCH_MS);
     cluster.run_faultable(partition_halts_and_heals);
@@ -147,10 +131,7 @@ fn partition_halts_and_heals_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn isolated_validator_still_settles_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&fault_config(), 7, EPOCH_MS, genesis_accounts(1, 1));
@@ -172,10 +153,7 @@ const fn seven_host_fault_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn minority_fragment_rejoins_after_partition_prod() {
     let mut cluster = ProdCluster::start(&seven_host_fault_config(), 7, EPOCH_MS);
     cluster.run_faultable(minority_fragment_rejoins_after_partition);
@@ -183,10 +161,7 @@ fn minority_fragment_rejoins_after_partition_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn partition_heals_at_exact_quorum_prod() {
     let mut cluster = ProdCluster::start(&fault_config(), 7, EPOCH_MS);
     cluster.run_faultable(partition_heals_at_exact_quorum);
@@ -209,10 +184,7 @@ const fn split_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn split_lifecycle_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&split_config(), 11, EPOCH_MS, genesis_accounts(1, 1));
@@ -221,10 +193,7 @@ fn split_lifecycle_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn zipf_payments_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&liveness_config(), 42, EPOCH_MS, genesis_accounts(24, 6));
@@ -234,10 +203,7 @@ fn zipf_payments_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn hot_recipient_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&liveness_config(), 42, EPOCH_MS, genesis_accounts(12, 1));
@@ -247,10 +213,7 @@ fn hot_recipient_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_fraction_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -277,10 +240,7 @@ const fn cross_shard_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn abort_floor_settles_on_deadline_prod() {
     let mut cluster = ProdCluster::start_with_grown_accounts(
         &cross_shard_config(),
@@ -293,10 +253,7 @@ fn abort_floor_settles_on_deadline_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn participant_count_sweep_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -310,10 +267,7 @@ fn participant_count_sweep_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_provisions_drop_fetch_fallback_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -326,10 +280,7 @@ fn cross_shard_provisions_drop_fetch_fallback_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_exec_cert_drop_fetch_fallback_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -342,10 +293,7 @@ fn cross_shard_exec_cert_drop_fetch_fallback_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_compound_drop_fetch_fallback_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -358,10 +306,7 @@ fn cross_shard_compound_drop_fetch_fallback_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_transaction_da_fetch_fallback_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -374,10 +319,7 @@ fn cross_shard_transaction_da_fetch_fallback_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_header_fetch_fallback_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -390,10 +332,7 @@ fn cross_shard_header_fetch_fallback_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_provisions_recovers_after_transient_outage_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -406,10 +345,7 @@ fn cross_shard_provisions_recovers_after_transient_outage_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn inter_shard_partition_strands_ticks_until_it_heals_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -422,10 +358,7 @@ fn inter_shard_partition_strands_ticks_until_it_heals_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn beacon_pool_partition_stalls_epoch_production_prod() {
     let mut cluster = ProdCluster::start(&split_config(), 11, EPOCH_MS);
     cluster.run_faultable(beacon_pool_partition_stalls_epoch_production);
@@ -433,10 +366,7 @@ fn beacon_pool_partition_stalls_epoch_production_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn cross_shard_provisions_fetch_with_request_loss_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -451,10 +381,7 @@ fn cross_shard_provisions_fetch_with_request_loss_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn livelock_resolves_promptly_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&split_config(), 11, EPOCH_MS, livelock_accounts());
@@ -463,10 +390,7 @@ fn livelock_resolves_promptly_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn merge_lifecycle_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -495,10 +419,7 @@ const fn straddler_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn split_straddler_atomic_prod() {
     let setup = split_straddler_setup();
     let mut cluster =
@@ -508,10 +429,7 @@ fn split_straddler_atomic_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn split_terminating_payer_releases_its_reservation_prod() {
     let setup = split_straddler_setup();
     let mut cluster =
@@ -521,10 +439,7 @@ fn split_terminating_payer_releases_its_reservation_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn split_straddler_ec_partition_atomic_prod() {
     let setup = split_straddler_setup();
     let mut cluster =
@@ -552,10 +467,7 @@ const fn merge_straddler_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn merge_straddler_atomic_prod() {
     let setup = merge_straddler_setup();
     let mut cluster = ProdCluster::start_with_grown_accounts(
@@ -588,10 +500,7 @@ const fn halt_recovery_config() -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn halted_shard_recovers_by_committee_redraw_prod() {
     let setup = halt_straddler_setup();
     let mut cluster =
@@ -601,10 +510,7 @@ fn halted_shard_recovers_by_committee_redraw_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn halted_shard_straddler_atomic_prod() {
     let setup = halt_straddler_setup();
     let mut cluster =
@@ -614,10 +520,7 @@ fn halted_shard_straddler_atomic_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn multi_vnode_progress_prod() {
     // `liveness_config` already hosts the committee at two vnodes per host — the
     // same-shard multi-vnode hosting under test.
@@ -643,10 +546,7 @@ const fn witness_config(validators: u32) -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn delegation_folds_into_beacon_state_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0x57AC, EPOCH_MS, Vec::new());
@@ -655,10 +555,7 @@ fn delegation_folds_into_beacon_state_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn register_validator_pools_a_node_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0x5EED, EPOCH_MS, Vec::new());
@@ -667,10 +564,7 @@ fn register_validator_pools_a_node_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn register_without_capacity_is_rejected_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0x0CA9, EPOCH_MS, Vec::new());
@@ -679,10 +573,7 @@ fn register_without_capacity_is_rejected_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn stake_withdraw_drops_effective_stake_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0xD7A1, EPOCH_MS, Vec::new());
@@ -691,10 +582,7 @@ fn stake_withdraw_drops_effective_stake_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0xE1EC, EPOCH_MS, Vec::new());
@@ -703,10 +591,7 @@ fn withdrawal_ejects_a_validator_that_a_deposit_reactivates_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn registered_validator_activates_onto_a_shard_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0xAC11, EPOCH_MS, Vec::new());
@@ -715,10 +600,7 @@ fn registered_validator_activates_onto_a_shard_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn re_registration_of_a_live_validator_is_a_no_op_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0xDEAD, EPOCH_MS, Vec::new());
@@ -727,10 +609,7 @@ fn re_registration_of_a_live_validator_is_a_no_op_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn pool_capacity_caps_registrations_prod() {
     let mut cluster =
         ProdCluster::start_with_accounts(&witness_config(4), 0xCA9A, EPOCH_MS, Vec::new());
@@ -759,10 +638,7 @@ const fn grow_config(target_shards: u32) -> ScenarioConfig {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn grow_reaches_two_shard_topology_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &grow_config(2),
@@ -775,10 +651,7 @@ fn grow_reaches_two_shard_topology_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn grow_reaches_four_shard_topology_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &grow_config(4),
@@ -791,10 +664,7 @@ fn grow_reaches_four_shard_topology_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn merge_seats_full_keeper_committee_prod() {
     let mut cluster = ProdCluster::start_with_accounts(
         &split_config(),
@@ -807,10 +677,7 @@ fn merge_seats_full_keeper_committee_prod() {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    not(feature = "ci"),
-    ignore = "real-QUIC production scenario; run with --features ci or -- --ignored"
-)]
+#[ignore = "real-QUIC production scenario; run with -- --ignored"]
 fn surviving_sibling_split_seats_full_committees_prod() {
     let setup = split_straddler_setup();
     let mut cluster =

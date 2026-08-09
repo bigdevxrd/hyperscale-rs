@@ -73,12 +73,12 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
         run: >
           cargo nextest archive --cargo-profile ci
-          --features hyperscale-simulation/ci
+          --features hyperscale-simulation/bls,hyperscale-simulation/production-epochs
           --archive-file nextest-archive.tar.zst
       - name: Doc Tests
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
-        run: cargo test --doc --profile ci --features hyperscale-simulation/ci
+        run: cargo test --doc --profile ci --features hyperscale-simulation/bls,hyperscale-simulation/production-epochs
       - name: Upload Test Archive
         uses: actions/upload-artifact@v4
         with:

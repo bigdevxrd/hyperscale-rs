@@ -1,7 +1,7 @@
 //! Portable scenarios run on the simulation harness.
 //!
 //! Each `#[test]` builds a [`SimCluster`] and drives a `hyperscale_scenarios`
-//! body. The identical body runs on production under `#[cfg(feature = "ci")]`.
+//! body. The identical body runs on production behind `#[ignore]`.
 
 mod support;
 

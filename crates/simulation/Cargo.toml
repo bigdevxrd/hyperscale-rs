@@ -6,10 +6,11 @@ license.workspace = true
 description = "Simulation runner"
 
 [features]
-# Run the sims at production parity: the 5-minute beacon epoch and real BLS
-# signatures. Off by default so local runs use a fast 30s epoch and the
-# constant-cost mock scheme.
-ci = []
+# Sign with real BLS12-381 instead of the constant-cost mock scheme.
+bls = []
+# Run the sims on the 5-minute production beacon epoch instead of the fast 30s
+# local one.
+production-epochs = []
 
 [dependencies]
 hyperscale-crypto-bls.workspace = true

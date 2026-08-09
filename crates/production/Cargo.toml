@@ -14,10 +14,10 @@ name = "hyperscale-keygen"
 path = "src/bin/keygen.rs"
 
 [features]
-# Run the portable scenario suite at the 5-minute production epoch for parity
-# with a real deployment. Off by default so the slow real-QUIC scenarios are a
-# nightly/manual job rather than part of `cargo test`.
-ci = []
+# Run the portable scenario suite on a fast 30s beacon epoch instead of the
+# 5-minute production one, matching the simulation harness's local default.
+# For quick local checks; a parity run leaves it off.
+short-epochs = []
 
 [dependencies]
 hyperscale-crypto-bls.workspace = true

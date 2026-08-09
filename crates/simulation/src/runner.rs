@@ -61,11 +61,11 @@ pub enum CryptoScheme {
 }
 
 impl Default for CryptoScheme {
-    /// Real BLS under the `ci` feature, which runs the sims at production
+    /// Real BLS under the `bls` feature, which runs the sims at production
     /// parity; the constant-cost mock otherwise, so local runs finish
     /// quickly.
     fn default() -> Self {
-        if cfg!(feature = "ci") {
+        if cfg!(feature = "bls") {
             Self::Bls
         } else {
             Self::Mock
