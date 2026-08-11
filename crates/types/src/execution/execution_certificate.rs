@@ -710,7 +710,7 @@ mod tests {
         TxOutcome::new(
             TxHash::from(Hash::from_bytes(&[seed; 4])),
             ExecutionOutcome::Succeeded {
-                receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(&[seed + 100; 4])),
+                receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(&[b'r', seed])),
             },
         )
     }
