@@ -1067,7 +1067,15 @@ impl VerificationPipeline {
         // first in height order, so nothing prepares over a version the
         // tree never persisted. A child that does apply updates keeps
         // deferring, because its prepared snapshot would chain to one.
+        //
+        // A terminating boundary block is the exception the emptiness test
+        // alone does not catch: it coasts its chain to the cut carrying no
+        // certificates, but its child-subtree and terminal root claims are
+        // answered from the tree, so it needs the version a bare tick-less
+        // block does not.
+        let reads_the_tree = split_child_roots_required || terminal_roots_required;
         let parent_qc_attested = block.certificates().is_empty()
+            && !reads_the_tree
             && self
                 .verified_certified_blocks
                 .contains_key(&parent_block_hash);
