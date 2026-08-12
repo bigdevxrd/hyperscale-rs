@@ -70,6 +70,17 @@ type Attestations = Vec<(ValidatorId, ConsensusSignature)>;
 /// Shared validator key map, updated atomically on topology changes.
 type SharedValidatorKeys = Arc<ArcSwap<ValidatorKeyMap>>;
 
+/// A completed bind exchange, handed to the event loop for registration.
+///
+/// The event loop is the only writer of the validator-peer map, so a binding
+/// takes effect there rather than in the handler task that verified it.
+pub struct VerifiedBind {
+    /// Peer that proved control of every listed validator's consensus key.
+    pub peer_id: Libp2pPeerId,
+    /// Validators the peer attested as in this exchange.
+    pub validators: Vec<ValidatorId>,
+}
+
 /// Stream protocol identifier for the validator-bind handshake.
 pub const VALIDATOR_BIND_PROTOCOL: StreamProtocol =
     StreamProtocol::new("/hyperscale/validator-bind/1.0.0");
@@ -292,8 +303,11 @@ struct BindContext {
     validator_keys: SharedValidatorKeys,
     /// Scheme verifier every inbound bind attestation is checked against.
     verifier: Arc<dyn Verifier>,
-    /// Validator-id → peer-id map populated on successful bind.
+    /// Validator-id → peer-id map, read here to skip binds for peers already
+    /// bound. Written only by the event loop.
     validator_peers: Arc<DashMap<ValidatorId, Libp2pPeerId>>,
+    /// Verified bindings, sent to the event loop for registration.
+    verified_binds: mpsc::UnboundedSender<VerifiedBind>,
 }
 
 impl BindContext {
@@ -322,6 +336,19 @@ impl BindContext {
                 }
             })
             .collect()
+    }
+
+    /// Hand a verified exchange to the event loop for registration.
+    ///
+    /// Registering there orders the binding against the eviction the loop
+    /// performs when a peer's last connection closes. A handshake that
+    /// completes as its connection dies is discarded instead of resurrecting
+    /// a mapping no further close event would clear.
+    fn register(&self, peer_id: Libp2pPeerId, attestations: &Attestations) {
+        let _ = self.verified_binds.send(VerifiedBind {
+            peer_id,
+            validators: attestations.iter().map(|(vid, _)| *vid).collect(),
+        });
     }
 }
 
@@ -363,6 +390,9 @@ pub struct ValidatorBindHandle {
 /// The service runs two concurrent loops:
 /// 1. **Inbound**: accepts `/hyperscale/validator-bind/1.0.0` streams from peers.
 /// 2. **Outbound**: opens bind streams to peers when triggered by the event loop.
+///
+/// Returns the handle plus the receiving end of the verified-binding stream,
+/// which the event loop drains to write the validator-peer map.
 pub fn spawn_validator_bind_service(
     mut control: Control,
     network: NetworkDefinition,
@@ -371,7 +401,7 @@ pub fn spawn_validator_bind_service(
     local_peer_id: Libp2pPeerId,
     validator_keys: SharedValidatorKeys,
     verifier: Arc<dyn Verifier>,
-) -> ValidatorBindHandle {
+) -> (ValidatorBindHandle, mpsc::UnboundedReceiver<VerifiedBind>) {
     assert!(
         !local_vnodes.is_empty(),
         "validator-bind service requires at least one hosted vnode"
@@ -383,6 +413,7 @@ pub fn spawn_validator_bind_service(
     );
 
     let (bind_tx, bind_rx) = mpsc::unbounded_channel();
+    let (verified_binds, verified_binds_rx) = mpsc::unbounded_channel();
 
     let ctx = BindContext {
         network,
@@ -391,6 +422,7 @@ pub fn spawn_validator_bind_service(
         validator_keys,
         verifier,
         validator_peers,
+        verified_binds,
     };
 
     let join_handle = spawn(async move {
@@ -410,10 +442,13 @@ pub fn spawn_validator_bind_service(
         info!("Validator-bind service stopped");
     });
 
-    ValidatorBindHandle {
-        bind_tx,
-        join_handle,
-    }
+    (
+        ValidatorBindHandle {
+            bind_tx,
+            join_handle,
+        },
+        verified_binds_rx,
+    )
 }
 
 /// A retry request: peer ID + which attempt this is (0-based).
@@ -580,8 +615,8 @@ async fn handle_inbound(
                 validator_id = vid.inner(),
                 "Validator-bind verified (inbound)"
             );
-            ctx.validator_peers.insert(*vid, peer_id);
         }
+        ctx.register(peer_id, &remote_attestations);
 
         Ok(())
     })
@@ -637,8 +672,8 @@ async fn handle_outbound(
                 validator_id = vid.inner(),
                 "Validator-bind verified (outbound)"
             );
-            ctx.validator_peers.insert(*vid, peer_id);
         }
+        ctx.register(peer_id, &remote_attestations);
 
         Ok(())
     })

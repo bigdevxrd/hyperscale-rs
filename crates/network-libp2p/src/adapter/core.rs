@@ -279,8 +279,9 @@ impl Libp2pAdapter {
         let shared_keys = Arc::new(ArcSwap::from(validator_keys));
 
         // Spawn the validator-bind service. This handles cryptographic
-        // ValidatorId ↔ PeerId binding via signatures.
-        let bind_handle = spawn_validator_bind_service(
+        // ValidatorId ↔ PeerId binding via signatures. Verified bindings go
+        // to the event loop, the sole writer of `validator_peers`.
+        let (bind_handle, verified_binds_rx) = spawn_validator_bind_service(
             stream_control.clone(),
             network.clone(),
             validator_peers.clone(),
@@ -335,6 +336,7 @@ impl Libp2pAdapter {
                 config.version_interop_mode,
                 registry,
                 event_loop_validator_peers,
+                verified_binds_rx,
                 validation_tx,
                 validation_rx,
                 bind_trigger_tx,

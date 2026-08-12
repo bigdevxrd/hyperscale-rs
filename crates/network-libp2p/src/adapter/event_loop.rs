@@ -35,7 +35,7 @@ use super::gossipsub::ValidationReport;
 use crate::address_book::AddressBook;
 use crate::config::VersionInteroperabilityMode;
 use crate::fault_gate::FaultState;
-use crate::validator_bind::LocalVnodeIdentity;
+use crate::validator_bind::{LocalVnodeIdentity, VerifiedBind};
 
 /// Interval for periodic maintenance tasks in the event loop.
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5);
@@ -78,6 +78,7 @@ pub(super) async fn run(
     version_interop_mode: VersionInteroperabilityMode,
     registry: Arc<HandlerRegistry>,
     validator_peers: Arc<DashMap<ValidatorId, Libp2pPeerId>>,
+    mut verified_binds_rx: mpsc::UnboundedReceiver<VerifiedBind>,
     validation_tx: mpsc::UnboundedSender<ValidationReport>,
     mut validation_rx: mpsc::UnboundedReceiver<ValidationReport>,
     bind_trigger_tx: mpsc::UnboundedSender<Libp2pPeerId>,
@@ -263,6 +264,24 @@ pub(super) async fn run(
             // no-op); NewListenAddr below covers prompt startup announcement.
             _ = announce_interval.tick() => {
                 announce_validator_addresses(&mut swarm, &network, &local_vnodes);
+            }
+
+            // Register a completed bind exchange. Applying it here — rather
+            // than in the handler task that verified it — orders it against
+            // the eviction below: a handshake that lands after its peer's
+            // last connection closed is dropped, since no further close
+            // event would clear the mapping it would otherwise install.
+            Some(bind) = verified_binds_rx.recv() => {
+                if swarm.is_connected(&bind.peer_id) {
+                    for validator in bind.validators {
+                        validator_peers.insert(validator, bind.peer_id);
+                    }
+                } else {
+                    debug!(
+                        peer = %bind.peer_id,
+                        "Dropping validator-bind result for a disconnected peer"
+                    );
+                }
             }
 
             // Drain gossipsub validation results and report to swarm.
