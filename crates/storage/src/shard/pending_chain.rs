@@ -10,11 +10,11 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_types::{
-    BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
-    CertifiedBlockHeader, ConsensusReceipt, DeclaredRange, EntryKey, ExecutionCertificate,
-    Finalization, FinalizationHash, MerkleInclusionProof, PreparedCommit, QuorumCertificate,
-    RETENTION_HORIZON, ShardId, ShardWitnessPayload, StateRoot, SubstateKey, TerminalRoots, TickId,
-    Transaction, TxHash, Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
+    BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock, CertifiedBlockHeader,
+    ConsensusReceipt, DeclaredRange, EntryKey, ExecutionCertificate, Finalization,
+    FinalizationHash, MerkleInclusionProof, QuorumCertificate, RETENTION_HORIZON, ShardId,
+    ShardWitnessPayload, StateRoot, SubstateKey, TerminalRoots, TickId, Transaction, TxHash,
+    Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
     local_settled_tx_hashes, settled_txs_root_from_hashes,
 };
 use hyperscale_vm_effects::{Address, CollectionId};
@@ -22,8 +22,8 @@ use hyperscale_vm_effects::{Address, CollectionId};
 use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
 use crate::tree::proofs::generate_proof;
 use crate::{
-    BlockForSync, JmtSnapshot, ParentAnchor, ShardChainReader, ShardChainWriter, SubstateStore,
-    Substates, VersionedStore, entry_overlay_range, merge_entry_overlay,
+    BlockForSync, JmtSnapshot, ShardChainReader, SubstateStore, Substates, VersionedStore,
+    entry_overlay_range, merge_entry_overlay,
 };
 
 /// Cached base-storage reads observed through a [`SubstateView`].
@@ -789,11 +789,19 @@ pub struct SubstateView<S> {
 
 impl<S> SubstateView<S> {
     /// Pending JMT snapshots from the anchored chain, in commit order.
-    /// Pass to `prepare_block_commit` so chained verification can find
-    /// tree nodes from prior unpersisted blocks.
+    /// Carry into a `ParentAnchor` so chained verification can find tree
+    /// nodes from prior unpersisted blocks and the prepared batch can
+    /// judge its priors against them.
     #[must_use]
     pub fn pending_snapshots(&self) -> &[Arc<JmtSnapshot>] {
         &self.jmt_snapshots
+    }
+
+    /// The persisted store this view reads through — the writer a
+    /// commit pipeline anchors this view's state on.
+    #[must_use]
+    pub const fn base(&self) -> &Arc<S> {
+        &self.base
     }
 }
 
@@ -1130,43 +1138,6 @@ impl<S: TreeReader + Send + Sync> TreeReader for SubstateView<S> {
 
     fn root_path(&self) -> NibblePath {
         (*self.base).root_path()
-    }
-}
-
-impl<S: ShardChainWriter> ShardChainWriter for SubstateView<S> {
-    fn prepare_block_commit(
-        self: &Arc<Self>,
-        parent: ParentAnchor<'_>,
-        finalizations: &[Arc<Verifiable<Finalization>>],
-        block_height: BlockHeight,
-        pending_snapshots: &[Arc<JmtSnapshot>],
-        base_reads: Option<&BaseReadCache>,
-    ) -> (StateRoot, Arc<JmtSnapshot>, PreparedCommit) {
-        // Drain the view's own cache when the caller didn't supply one.
-        // This is the common path: execution reads through the view,
-        // prepare_block_commit consumes the accumulated priors so the
-        // base's capture_history can skip the StateCf multi_get.
-        let drained = if base_reads.is_none() {
-            Some(self.take_base_reads())
-        } else {
-            None
-        };
-        let effective = base_reads.or(drained.as_ref());
-        self.base.prepare_block_commit(
-            parent,
-            finalizations,
-            block_height,
-            pending_snapshots,
-            effective,
-        )
-    }
-
-    fn commit_block(
-        &self,
-        certified: &Arc<Verified<CertifiedBlock>>,
-        witness: &BeaconWitnessCommit,
-    ) -> StateRoot {
-        (*self.base).commit_block(certified, witness)
     }
 }
 

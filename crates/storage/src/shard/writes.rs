@@ -1,6 +1,7 @@
 //! Merging and filtering [`StateWrites`].
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use hyperscale_hbor::{from_slice, to_vec};
 use hyperscale_jmt::{Key as JmtKey, NibblePath};
@@ -9,6 +10,8 @@ use hyperscale_types::{
     StateWrites, StoredReceipt, SubstateKey, entry_leaf_key,
 };
 use hyperscale_vm_kernel::Substates;
+
+use crate::tree::JmtSnapshot;
 
 /// Extract and merge the writes from stored receipts, resolving what
 /// they moved against the state they land on.
@@ -146,6 +149,37 @@ pub fn entry_leaf_rows(entries: &SettledEntries) -> BTreeMap<SubstateKey, Option
             (leaf_key, leaf_value)
         })
         .collect()
+}
+
+/// The latest pending write of `key` across the unpersisted ancestor
+/// chain, or `None` when no pending block touched it and the persisted
+/// store owns the answer.
+///
+/// The outer `Some` distinguishes a pending tombstone (`Some(None)`)
+/// from no pending write at all.
+///
+/// This is the writer-side spelling of the overlay-first read the
+/// pending chain's views make: a batch prepared over unpersisted
+/// ancestors applies only after they have, so its priors must be judged
+/// against their settled writes, not the persisted store.
+///
+/// Latest by snapshot height rather than slice position, so the answer
+/// does not depend on how a caller happened to order the chain.
+#[allow(clippy::option_option)] // outer = "a pending block wrote it", inner = that write
+pub fn pending_write<K: Ord>(
+    pending: &[Arc<JmtSnapshot>],
+    writes_of: impl Fn(&SettledWrites) -> &BTreeMap<K, Option<Vec<u8>>>,
+    key: &K,
+) -> Option<Option<Vec<u8>>> {
+    pending
+        .iter()
+        .filter_map(|snapshot| {
+            writes_of(&snapshot.settled)
+                .get(key)
+                .map(|prior| (snapshot.new_height, prior))
+        })
+        .max_by_key(|(height, _)| *height)
+        .map(|(_, prior)| prior.clone())
 }
 
 /// One entry's self-describing leaf encoding: the bytes its leaf row

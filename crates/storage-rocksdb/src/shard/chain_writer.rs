@@ -7,8 +7,7 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, JmtSnapshot, ParentAnchor, ShardChainWriter, Substates,
-    merge_writes_from_receipts,
+    JmtSnapshot, ParentAnchor, ShardChainWriter, Substates, merge_writes_from_receipts,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, Block, BlockHeight, CertifiedBlock, Finalization, PreparedCommit,
@@ -29,8 +28,6 @@ impl ShardChainWriter for RocksDbShardStorage {
         parent: ParentAnchor<'_>,
         finalizations: &[Arc<Verifiable<Finalization>>],
         block_height: BlockHeight,
-        pending_snapshots: &[Arc<JmtSnapshot>],
-        base_reads: Option<&BaseReadCache>,
     ) -> (StateRoot, Arc<JmtSnapshot>, PreparedCommit) {
         // Everything the ticks carried, for storage; only what they
         // decided reaches state.
@@ -50,7 +47,7 @@ impl ShardChainWriter for RocksDbShardStorage {
         if receipts.is_empty() {
             let jmt_snapshot = Arc::new(noop_jmt_snapshot(
                 &SnapshotTreeStore::new(&self.db, self.root_path.clone()),
-                pending_snapshots,
+                parent.pending,
                 parent.state_root,
                 parent.height,
                 block_height,
@@ -71,7 +68,7 @@ impl ShardChainWriter for RocksDbShardStorage {
         let parent_version = jmt_parent_height(parent.height, parent.state_root)
             .map(BlockHeight::inner)
             .map(|pv| {
-                resolve_materialized_root(&snapshot_store, pending_snapshots, pv)
+                resolve_materialized_root(&snapshot_store, parent.pending, pv)
                     .map_or(pv, |(v, _)| v)
             });
 
@@ -84,7 +81,7 @@ impl ShardChainWriter for RocksDbShardStorage {
         // compose only once something has said what they moved from.
         let settled = merge_writes_from_receipts(&settling, &mut |key| parent.state.cell(key));
 
-        let (computed_root, collected) = if pending_snapshots.is_empty() {
+        let (computed_root, collected) = if parent.pending.is_empty() {
             put_at_version(
                 &snapshot_store,
                 parent_version,
@@ -92,7 +89,7 @@ impl ShardChainWriter for RocksDbShardStorage {
                 &settled,
             )
         } else {
-            let overlay = OverlayTreeReader::new(&snapshot_store, pending_snapshots);
+            let overlay = OverlayTreeReader::new(&snapshot_store, parent.pending);
             put_at_version(&overlay, parent_version, block_height.inner(), &settled)
         };
 
@@ -111,8 +108,8 @@ impl ShardChainWriter for RocksDbShardStorage {
             &settled,
             block_height.inner(),
             /* write_history */ true,
-            base_reads,
-            pending_snapshots,
+            parent.base_reads,
+            parent.pending,
         );
 
         let cf = self.cf();

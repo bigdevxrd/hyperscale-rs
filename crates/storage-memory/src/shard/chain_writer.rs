@@ -9,7 +9,7 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, JmtSnapshot, ParentAnchor, ShardChainWriter, Substates, covers_strictly_more,
+    JmtSnapshot, ParentAnchor, ShardChainWriter, Substates, covers_strictly_more,
     merge_writes_from_receipts, widest_tick_copies,
 };
 use hyperscale_types::{
@@ -26,10 +26,6 @@ impl ShardChainWriter for SimShardStorage {
         parent: ParentAnchor<'_>,
         finalizations: &[Arc<Verifiable<Finalization>>],
         block_height: BlockHeight,
-        pending_snapshots: &[Arc<JmtSnapshot>],
-        // Memory backend already keeps state in-memory — the priors
-        // hint is irrelevant to its perf and is ignored.
-        _base_reads: Option<&BaseReadCache>,
     ) -> (StateRoot, Arc<JmtSnapshot>, PreparedCommit) {
         // Everything the ticks carried, for storage; only what they
         // decided reaches state.
@@ -49,7 +45,7 @@ impl ShardChainWriter for SimShardStorage {
             let s = read_or_recover(&self.state);
             let snapshot = Arc::new(noop_jmt_snapshot(
                 &s.tree_store,
-                pending_snapshots,
+                parent.pending,
                 parent.state_root,
                 parent.height,
                 block_height,
@@ -74,8 +70,7 @@ impl ShardChainWriter for SimShardStorage {
         let parent_version = jmt_parent_height(parent.height, parent.state_root)
             .map(BlockHeight::inner)
             .map(|pv| {
-                resolve_materialized_root(&s.tree_store, pending_snapshots, pv)
-                    .map_or(pv, |(v, _)| v)
+                resolve_materialized_root(&s.tree_store, parent.pending, pv).map_or(pv, |(v, _)| v)
             });
 
         // One resolution, feeding both the tree and the substate store —
@@ -85,7 +80,7 @@ impl ShardChainWriter for SimShardStorage {
         // once something has said what they moved from.
         let settled = merge_writes_from_receipts(&settling, &mut |key| parent.state.cell(key));
 
-        let (result_root, collected) = if pending_snapshots.is_empty() {
+        let (result_root, collected) = if parent.pending.is_empty() {
             put_at_version(
                 &s.tree_store,
                 parent_version,
@@ -93,7 +88,7 @@ impl ShardChainWriter for SimShardStorage {
                 &settled,
             )
         } else {
-            let overlay = OverlayTreeReader::new(&s.tree_store, pending_snapshots);
+            let overlay = OverlayTreeReader::new(&s.tree_store, parent.pending);
             put_at_version(&overlay, parent_version, block_height.inner(), &settled)
         };
 

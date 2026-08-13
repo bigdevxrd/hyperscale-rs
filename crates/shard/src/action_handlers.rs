@@ -10,8 +10,8 @@ use hyperscale_core::{Action, ActionContext, PreparedBlock, ProtocolEvent};
 use hyperscale_metrics::record_signature_verification_latency;
 use hyperscale_network::Network;
 use hyperscale_storage::{
-    JmtSnapshot, ParentAnchor, ShardChainWriter, ShardStorage, SubstateStore, Substates,
-    TerminalWindow,
+    JmtSnapshot, ParentAnchor, ShardChainWriter, ShardStorage, SubstateStore, SubstateView,
+    Substates, TerminalWindow,
 };
 use hyperscale_types::network::gossip::{CertifiedBlockHeaderGossip, ShardForkProofGossip};
 use hyperscale_types::network::notification::{
@@ -185,7 +185,7 @@ pub struct ProposalResult {
 
 /// Build a proposal block, always computing the state root via `prepare_block_commit`.
 ///
-/// Uses the overlay (`pending_snapshots`) when the JMT hasn't committed the
+/// Uses the overlay (the view's pending snapshots) when the JMT hasn't committed the
 /// parent yet, so certificates are always included when available.
 ///
 /// Algorithm:
@@ -196,7 +196,7 @@ pub struct ProposalResult {
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)] // one linear block-assembly pipeline
 pub fn build_proposal<S: ShardChainWriter + Substates>(
-    storage: &Arc<S>,
+    view: &Arc<SubstateView<S>>,
     proposer: ValidatorId,
     height: BlockHeight,
     round: Round,
@@ -226,20 +226,21 @@ pub fn build_proposal<S: ShardChainWriter + Substates>(
     committee_anchor_epoch: Epoch,
     carry_split_child_roots: bool,
     terminal_roots: Option<TerminalRoots>,
-    pending_snapshots: &[Arc<JmtSnapshot>],
 ) -> ProposalResult {
-    let (state_root, jmt_snapshot, prepared) = storage.prepare_block_commit(
+    // The proposer builds on an anchored view of its parent — the state
+    // this block's settling movements land on, the pending chain its
+    // priors are judged against, and the reads execution accumulated.
+    let base_reads = view.take_base_reads();
+    let (state_root, jmt_snapshot, prepared) = view.base().prepare_block_commit(
         ParentAnchor {
             state_root: parent_state_root,
             height: parent_block_height,
-            // The proposer builds on an anchored view of its parent —
-            // the state this block's settling movements land on.
-            state: storage.as_ref(),
+            state: view.as_ref(),
+            pending: view.pending_snapshots(),
+            base_reads: Some(&base_reads),
         },
         &certificates,
         height,
-        pending_snapshots,
-        None,
     );
 
     let split_child_roots = carry_split_child_roots
@@ -822,17 +823,18 @@ where
             let view = ctx
                 .pending_chain
                 .view_at(parent_block_hash, parent_block_height);
-            let pending_snapshots = view.pending_snapshots().to_vec();
-            let (computed_root, jmt_snapshot, prepared) = view.prepare_block_commit(
+            // The view is freshly anchored — nothing has read through
+            // it, so there is no execution cache to carry.
+            let (computed_root, jmt_snapshot, prepared) = view.base().prepare_block_commit(
                 ParentAnchor {
                     state_root: parent_state_root,
                     height: parent_block_height,
                     state: view.as_ref(),
+                    pending: view.pending_snapshots(),
+                    base_reads: None,
                 },
                 &finalizations,
                 block_height,
-                &pending_snapshots,
-                None,
             );
             // A terminating shard's boundary header carries what it leaves
             // its successors and its surviving counterparts; recompute the
@@ -944,7 +946,6 @@ where
             let view = ctx
                 .pending_chain
                 .view_at(parent_block_hash, parent_block_height);
-            let pending_snapshots = view.pending_snapshots().to_vec();
             // Drop transactions whose payer cannot cover its cumulative
             // reservation demand — the builder-side form of the voters'
             // reservation verification, reading the same
@@ -1075,7 +1076,6 @@ where
                 committee_anchor_epoch,
                 carry_split_child_roots,
                 terminal_roots,
-                &pending_snapshots,
             );
             let block_hash = result.block_hash;
             let bytes_delta = result.jmt_snapshot.bytes_delta;

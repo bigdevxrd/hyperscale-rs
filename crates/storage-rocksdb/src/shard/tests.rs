@@ -717,11 +717,11 @@ fn test_prepare_then_commit_matches_direct() {
             state_root: parent_root,
             height: BlockHeight::GENESIS,
             state: &*s_prepared,
+            pending: &[],
+            base_reads: None,
         },
         &[],
         BlockHeight::new(1),
-        &[],
-        None,
     );
     let block = make_test_block(BlockHeight::new(1));
     let result_prepared = prepared(
@@ -787,14 +787,14 @@ fn a_rewrite_over_a_pending_tombstone_is_not_a_noop() {
             state_root: storage.state_root(),
             height: BlockHeight::GENESIS,
             state: &*storage,
+            pending: &[],
+            base_reads: None,
         },
         &[finalization_with_writes(
             BlockHeight::new(1),
             writes.clone(),
         )],
         BlockHeight::new(1),
-        &[],
-        None,
     );
     prepared1(
         SyncHint::FlushNow,
@@ -812,22 +812,22 @@ fn a_rewrite_over_a_pending_tombstone_is_not_a_noop() {
             state_root: root1,
             height: BlockHeight::new(1),
             state: &*storage,
+            pending: &[],
+            base_reads: None,
         },
         &[finalization_with_writes(BlockHeight::new(2), tombstones)],
         BlockHeight::new(2),
-        &[],
-        None,
     );
     let (_root3, _snap3, prepared3) = storage.prepare_block_commit(
         ParentAnchor {
             state_root: root2,
             height: BlockHeight::new(2),
             state: &*storage,
+            pending: std::slice::from_ref(&snap2),
+            base_reads: None,
         },
         &[finalization_with_writes(BlockHeight::new(3), writes)],
         BlockHeight::new(3),
-        std::slice::from_ref(&snap2),
-        None,
     );
     prepared2(
         SyncHint::FlushNow,

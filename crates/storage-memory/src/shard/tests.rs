@@ -571,11 +571,11 @@ fn test_prepare_then_commit_fast_path() {
             state_root: parent_root,
             height: BlockHeight::GENESIS,
             state: &*s_prepared,
+            pending: &[],
+            base_reads: None,
         },
         &[],
         BlockHeight::new(1),
-        &[],
-        None,
     );
     let certified = make_test_certified(block.clone());
     let result_prepared = prepared(SyncHint::FlushNow, &certified, &no_witness());
@@ -599,11 +599,11 @@ fn test_prepare_commit_state_root_matches() {
             state_root: parent_root,
             height: BlockHeight::GENESIS,
             state: &*storage,
+            pending: &[],
+            base_reads: None,
         },
         &[],
         BlockHeight::new(1),
-        &[],
-        None,
     );
     let certified = make_test_certified(block);
     // Embed the supplied verified QC by replacing the helper's

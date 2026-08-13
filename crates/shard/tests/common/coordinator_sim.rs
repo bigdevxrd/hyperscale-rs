@@ -1491,7 +1491,6 @@ impl ShardCoordinatorSim {
                 };
                 let view = self.pending_chains[emitter_idx]
                     .view_at(parent_block_hash, parent_block_height);
-                let pending_snapshots = view.pending_snapshots().to_vec();
                 let terminal_roots = carry_terminal_roots.then(|| {
                     self.pending_chains[emitter_idx].terminal_roots_in_window(
                         &TerminalWindow {
@@ -1546,7 +1545,6 @@ impl ShardCoordinatorSim {
                     committee_anchor_epoch,
                     carry_split_child_roots,
                     terminal_roots,
-                    &pending_snapshots,
                 );
                 let block_hash = result.block_hash;
                 let bytes_delta = result.jmt_snapshot.bytes_delta;
@@ -1812,17 +1810,16 @@ impl ShardCoordinatorSim {
                 });
                 let view = self.pending_chains[emitter_idx]
                     .view_at(parent_block_hash, parent_block_height);
-                let pending_snapshots = view.pending_snapshots().to_vec();
-                let (computed_root, jmt_snapshot, prepared) = view.prepare_block_commit(
+                let (computed_root, jmt_snapshot, prepared) = view.base().prepare_block_commit(
                     ParentAnchor {
                         state_root: parent_state_root,
                         height: parent_block_height,
                         state: view.as_ref(),
+                        pending: view.pending_snapshots(),
+                        base_reads: None,
                     },
                     &finalizations,
                     block_height,
-                    &pending_snapshots,
-                    None,
                 );
                 let verify_result = expected_root.verify(&StateRootContext {
                     computed_root: &computed_root,

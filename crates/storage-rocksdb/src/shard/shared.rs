@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::{
-    AdoptSource, BaseReadCache, BlockForSync, BoundaryStore, GenesisCommit, ImportProgress,
-    JmtSnapshot, ParentAnchor, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter,
-    SubstateStore, Substates, VersionedStore, WitnessSeed,
+    AdoptSource, BlockForSync, BoundaryStore, GenesisCommit, ImportProgress, JmtSnapshot,
+    ParentAnchor, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateStore,
+    Substates, VersionedStore, WitnessSeed,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock,
@@ -222,16 +222,9 @@ impl ShardChainWriter for SharedStorage {
         parent: ParentAnchor<'_>,
         finalizations: &[Arc<Verifiable<Finalization>>],
         block_height: BlockHeight,
-        pending_snapshots: &[Arc<JmtSnapshot>],
-        base_reads: Option<&BaseReadCache>,
     ) -> (StateRoot, Arc<JmtSnapshot>, PreparedCommit) {
-        self.0.prepare_block_commit(
-            parent,
-            finalizations,
-            block_height,
-            pending_snapshots,
-            base_reads,
-        )
+        self.0
+            .prepare_block_commit(parent, finalizations, block_height)
     }
 
     fn commit_block(

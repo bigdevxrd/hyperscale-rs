@@ -13,7 +13,7 @@
 //! On each commit, the JMT is updated and a new state root hash is
 //! computed.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -22,7 +22,8 @@ use hyperscale_hbor::from_slice;
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_metrics::record_storage_read;
 use hyperscale_storage::{
-    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateStore, Substates, entry_leaf_value, tree,
+    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateStore, Substates, entry_leaf_value,
+    pending_write, tree,
 };
 use hyperscale_types::{
     Block, BlockHeight, ChainOrigin, EntryLeaf, ProtocolHasher, QuorumCertificate,
@@ -95,30 +96,6 @@ pub struct RocksDbShardStorage {
     /// and letting a write that raises nothing (e.g. a timeout
     /// retransmit) skip the fsync entirely.
     pub(crate) vote_registers: Mutex<HashMap<ValidatorId, (ChainOrigin, SafeVoteRegisters)>>,
-}
-
-/// The latest pending write of `key` across the unpersisted ancestor
-/// chain, or `None` when no pending block touched it and the persisted
-/// store owns the answer. The outer `Some` distinguishes a pending
-/// tombstone (`Some(None)`) from no pending write at all.
-///
-/// Latest by snapshot height rather than slice position, so the answer
-/// does not depend on how a caller happened to order the chain.
-#[allow(clippy::option_option)] // outer = "a pending block wrote it", inner = that write
-fn pending_prior<K: Ord>(
-    pending: &[Arc<JmtSnapshot>],
-    writes_of: impl Fn(&SettledWrites) -> &BTreeMap<K, Option<Vec<u8>>>,
-    key: &K,
-) -> Option<Option<Vec<u8>>> {
-    pending
-        .iter()
-        .filter_map(|snapshot| {
-            writes_of(&snapshot.settled)
-                .get(key)
-                .map(|prior| (snapshot.new_height, prior))
-        })
-        .max_by_key(|(height, _)| *height)
-        .map(|(_, prior)| prior.clone())
 }
 
 impl RocksDbShardStorage {
@@ -524,7 +501,7 @@ impl RocksDbShardStorage {
         let mut miss_keys: Vec<SubstateKey> = Vec::new();
         let mut miss_indices: Vec<usize> = Vec::new();
         for (index, key) in writes.cells().keys().enumerate() {
-            if let Some(prior) = pending_prior(pending, |settled| settled.cells(), key) {
+            if let Some(prior) = pending_write(pending, |settled| settled.cells(), key) {
                 priors.push(Some(prior));
                 continue;
             }
@@ -645,7 +622,7 @@ impl RocksDbShardStorage {
         let mut miss_keys: Vec<SubstateKey> = Vec::new();
         let mut miss_indices: Vec<usize> = Vec::new();
         for (index, entry) in writes.entries().keys().enumerate() {
-            if let Some(prior) = pending_prior(pending, |settled| settled.entries(), entry) {
+            if let Some(prior) = pending_write(pending, |settled| settled.entries(), entry) {
                 priors.push(Some(prior));
                 continue;
             }

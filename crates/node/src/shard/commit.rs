@@ -23,7 +23,7 @@ use crossbeam::channel::Sender;
 use hyperscale_core::{CommitSource, PreparedBlock, ProtocolEvent};
 use hyperscale_dispatch::{Dispatch, DispatchPool};
 use hyperscale_metrics::{record_block_committed, set_block_height};
-use hyperscale_storage::{ChainEntry, ParentAnchor, PendingChain, ShardChainWriter, ShardStorage};
+use hyperscale_storage::{ChainEntry, ParentAnchor, PendingChain, ShardStorage};
 use hyperscale_types::{
     BeaconWitnessCommit, BlockHash, BlockHeight, CertifiedBlock, ConsensusReceipt, EpochWindows,
     Finalization, LocalTimestamp, PreparedCommit, ShardId, StateRoot, SyncHint, Verifiable,
@@ -164,19 +164,20 @@ where
         block.header().parent_block_hash(),
         pending.parent_block_height,
     );
-    let pending_snapshots = view.pending_snapshots().to_vec();
 
     let finalizations: Vec<Arc<Verifiable<Finalization>>> = block.certificates().to_vec();
-    let (computed_root, jmt_snapshot, prepared) = view.prepare_block_commit(
+    // The view is freshly anchored — nothing has read through it, so
+    // there is no execution cache to carry.
+    let (computed_root, jmt_snapshot, prepared) = view.base().prepare_block_commit(
         ParentAnchor {
             state_root: pending.parent_state_root,
             height: pending.parent_block_height,
             state: view.as_ref(),
+            pending: view.pending_snapshots(),
+            base_reads: None,
         },
         &finalizations,
         height,
-        &pending_snapshots,
-        None,
     );
 
     // The sync-block ingress validator rejects peer-shipped divergent
