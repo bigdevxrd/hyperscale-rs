@@ -12,8 +12,8 @@
 use hyperscale_hbor::{from_slice_with_depth, to_vec_with_depth};
 use hyperscale_types::{MAX_EVENT_TYPES, MAX_TX_BYTES_LEN, VmStaticsError};
 use hyperscale_vm_effects::{
-    Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH, MAX_VALUE_DEPTH,
-    MethodSignature, ModeExpr, PackageMetadata, TargetExpr,
+    Accessibility, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH,
+    MAX_VALUE_DEPTH, MethodSignature, ModeExpr, PackageMetadata, TargetExpr,
 };
 
 /// The bound on an encoded metadata section.
@@ -94,6 +94,12 @@ fn check_metadata(metadata: &PackageMetadata) -> Result<(), VmStaticsError> {
 }
 
 fn check_signature(signature: &MethodSignature) -> Result<(), VmStaticsError> {
+    if let Accessibility::Guarded(identity) = &signature.accessibility {
+        check_expr(identity, 0)?;
+    }
+    if let Some(minted) = &signature.mints {
+        check_expr(minted, 0)?;
+    }
     for output in &signature.outputs {
         check_expr(output, 0)?;
     }
@@ -199,7 +205,9 @@ fn check_expr(expr: &Expr, depth: usize) -> Result<(), VmStaticsError> {
         | Expr::SelfAddr
         | Expr::FreshId { .. }
         | Expr::FreshKey { .. } => Ok(()),
-        Expr::Field(inner, _) | Expr::ResourceOf(inner) => check_expr(inner, deeper),
+        Expr::Field(inner, _) | Expr::ResourceOf(inner) | Expr::IdsOf(inner) => {
+            check_expr(inner, deeper)
+        }
         Expr::Lookup {
             map: first,
             key: second,
@@ -207,9 +215,19 @@ fn check_expr(expr: &Expr, depth: usize) -> Result<(), VmStaticsError> {
         | Expr::Pack {
             hi: first,
             lo: second,
+        }
+        | Expr::NfBucket {
+            resource: first,
+            ids: second,
         } => {
             check_expr(first, deeper)?;
             check_expr(second, deeper)
+        }
+        Expr::List(elements) => {
+            for element in elements {
+                check_expr(element, deeper)?;
+            }
+            Ok(())
         }
         Expr::SelfResource { material } => {
             for part in material {
@@ -240,8 +258,8 @@ mod tests {
         VAULT, account_metadata, amm_metadata, book_metadata, splitter_metadata,
     };
     use hyperscale_vm_effects::{
-        Accessibility, Address, AddressClass, CallSite, LocalKey, ParamType, RoleId, SubstateKey,
-        Value,
+        Accessibility, Address, AddressClass, CallSite, EdgeContent, LocalKey, ParamType, RoleId,
+        SubstateKey, Value,
     };
 
     use super::*;
@@ -341,6 +359,7 @@ mod tests {
         // for-each body, a call site, and a deep literal.
         let signature = MethodSignature {
             accessibility: Accessibility::Guarded(Expr::SelfAddr),
+            mints: None,
             abi: Vec::new(),
             params: vec![
                 ParamType::U64,
@@ -360,6 +379,7 @@ mod tests {
                         local: LocalKey([4; 16]),
                     }),
                     Value::Bucket {
+                        content: EdgeContent::Fungible,
                         resource: Address::new([5; 31], AddressClass::Component),
                     },
                     Value::U128(u128::MAX),
