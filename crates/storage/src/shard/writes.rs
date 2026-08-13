@@ -228,31 +228,31 @@ pub fn entry_overlay_range(
         .collect()
 }
 
-/// A base range read with an overlay applied: overlay values and
-/// removals win per order key.
+/// The layered range read every overlay reader shares: fetch the base
+/// interval at a limit widened by the overlay's removal count, then let
+/// overlay values and removals win per order key.
 ///
-/// The base fetch is widened by the overlay's removal count, so a
-/// mostly-deleted interval still fills the limit from the survivors
-/// behind it.
+/// The widening is what lets a mostly-deleted interval still fill
+/// `limit` from the survivors behind it.
+///
+/// `base` receives the widened limit and may refuse (`None`), which
+/// refuses the whole read — the height-pinned fetch's shape. The
+/// widening arithmetic lives only here: a second copy would be a second
+/// chance to fill a mostly-deleted interval short.
 #[must_use]
-pub fn merge_entry_overlay(
-    base: &(impl Substates + ?Sized),
+pub fn merge_entry_overlay_with(
+    base: impl FnOnce(usize) -> Option<Vec<(u128, Vec<u8>)>>,
     overlay: Vec<(u128, Option<Vec<u8>>)>,
-    owner: Address,
-    collection: CollectionId,
-    lo: u128,
-    hi: u128,
     limit: usize,
-) -> Vec<(u128, Vec<u8>)> {
-    if lo > hi || limit == 0 {
-        return Vec::new();
+) -> Option<Vec<(u128, Vec<u8>)>> {
+    if limit == 0 {
+        return Some(Vec::new());
     }
     let tombstones = overlay
         .iter()
         .filter(|(_, change)| change.is_none())
         .count();
-    let mut merged: BTreeMap<u128, Vec<u8>> = base
-        .entries_in_range(owner, collection, lo, hi, limit.saturating_add(tombstones))
+    let mut merged: BTreeMap<u128, Vec<u8>> = base(limit.saturating_add(tombstones))?
         .into_iter()
         .collect();
     for (order, change) in overlay {
@@ -265,7 +265,30 @@ pub fn merge_entry_overlay(
             }
         }
     }
-    merged.into_iter().take(limit).collect()
+    Some(merged.into_iter().take(limit).collect())
+}
+
+/// [`merge_entry_overlay_with`] over a [`Substates`] base — the
+/// infallible form every overlaid `entries_in_range` takes.
+#[must_use]
+pub fn merge_entry_overlay(
+    base: &(impl Substates + ?Sized),
+    overlay: Vec<(u128, Option<Vec<u8>>)>,
+    owner: Address,
+    collection: CollectionId,
+    lo: u128,
+    hi: u128,
+    limit: usize,
+) -> Vec<(u128, Vec<u8>)> {
+    if lo > hi {
+        return Vec::new();
+    }
+    merge_entry_overlay_with(
+        |widened| Some(base.entries_in_range(owner, collection, lo, hi, widened)),
+        overlay,
+        limit,
+    )
+    .unwrap_or_default()
 }
 
 /// Whether `key`'s leading bits equal `prefix` — the subtree-membership

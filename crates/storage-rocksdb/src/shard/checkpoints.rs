@@ -34,14 +34,14 @@ use super::column_families::{
     StateCf, SubstateBytesCf,
 };
 use super::core::RocksDbShardStorage;
-use super::entry_key::{EntryKeyCodec, entry_range_bounds};
+use super::entry_key::scan_entries;
 use super::jmt_snapshot_store::SnapshotTreeStore;
 use super::jmt_stored::{StoredNode, StoredNodeKey, VersionedStoredNode};
 use super::metadata::{read_jmt_metadata, write_jmt_metadata};
 use crate::StorageError;
 use crate::typed_cf::{
-    DbCodec, ImportProgressEntry, TypedCf, batch_delete, batch_put, get, iter_all, meta_delete,
-    meta_read, meta_write,
+    ImportProgressEntry, TypedCf, batch_delete, batch_put, get, iter_all, meta_delete, meta_read,
+    meta_write,
 };
 
 /// Queue the staging CF's full range and the progress record for
@@ -478,20 +478,14 @@ impl Substates for CheckpointStore {
         }
         let cf = CfHandles::resolve(&self.db);
         let entries_cf = EntriesCf::handle(&cf);
-        let (start, end) = entry_range_bounds(owner, collection, lo, hi);
-        let mut hits = Vec::new();
-        let mut iter = self.db.raw_iterator_cf(entries_cf);
-        iter.seek(&start);
-        while iter.valid() && hits.len() < limit {
-            let Some(raw_key) = iter.key() else { break };
-            if raw_key >= end.as_slice() {
-                break;
-            }
-            let key = EntryKeyCodec.decode(raw_key);
-            hits.push((key.order, iter.value().unwrap_or_default().to_vec()));
-            iter.next();
-        }
-        hits
+        scan_entries(
+            self.db.raw_iterator_cf(entries_cf),
+            owner,
+            collection,
+            lo,
+            hi,
+            Some(limit),
+        )
     }
 }
 

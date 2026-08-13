@@ -14,7 +14,7 @@ use hyperscale_vm_effects::{Address, CollectionId};
 use rocksdb::{DB, ReadOptions, Snapshot};
 
 use super::column_families::{CfHandles, EntriesCf, EntriesHistoryCf, StateCf, StateHistoryCf};
-use super::entry_key::{EntryKeyCodec, VersionedEntryKeyCodec, entry_range_bounds};
+use super::entry_key::{VersionedEntryKeyCodec, entry_range_bounds, scan_entries};
 use crate::typed_cf::{DbCodec, HborCodec, TypedCf, get};
 
 /// Length of the version suffix on each state-history key (`u64` big-endian).
@@ -104,30 +104,24 @@ impl Substates for RocksDbSnapshot<'_> {
         }
         let cf = CfHandles::resolve(self.db);
         let entries_cf = EntriesCf::handle(&cf);
-        let (start, end) = entry_range_bounds(owner, collection, lo, hi);
         let at_tip = self.version >= self.current_version;
 
         // The interval's current rows, ascending by order key. At the
         // tip they are the answer, so the walk stops at the limit;
         // historically they are the base the history overlay corrects.
-        let mut current: BTreeMap<u128, Vec<u8>> = BTreeMap::new();
-        let mut iter = self.db.raw_iterator_cf_opt(entries_cf, self.read_opts());
-        iter.seek(&start);
-        while iter.valid() {
-            let Some(raw_key) = iter.key() else { break };
-            if raw_key >= end.as_slice() {
-                break;
-            }
-            let key = EntryKeyCodec.decode(raw_key);
-            current.insert(key.order, iter.value().unwrap_or_default().to_vec());
-            if at_tip && current.len() == limit {
-                break;
-            }
-            iter.next();
-        }
+        let rows = scan_entries(
+            self.db.raw_iterator_cf_opt(entries_cf, self.read_opts()),
+            owner,
+            collection,
+            lo,
+            hi,
+            at_tip.then_some(limit),
+        );
         if at_tip {
-            return current.into_iter().collect();
+            return rows;
         }
+        let mut current: BTreeMap<u128, Vec<u8>> = rows.into_iter().collect();
+        let (start, end) = entry_range_bounds(owner, collection, lo, hi);
 
         // Historical overlay: for each order with history rows after V,
         // the value at V is the prior of the smallest such row — the

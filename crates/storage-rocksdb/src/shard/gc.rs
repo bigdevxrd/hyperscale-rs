@@ -7,7 +7,7 @@
 //!   values, so deleting old history entries only costs the ability to
 //!   serve historical reads beyond the retention window.
 
-use rocksdb::WriteBatch;
+use rocksdb::{ColumnFamily, WriteBatch};
 
 use super::column_families::{
     EntriesHistoryCf, JmtNodesCf, StaleEntriesHistoryCf, StaleJmtNodesCf, StaleStateHistoryCf,
@@ -15,7 +15,7 @@ use super::column_families::{
 };
 use super::core::RocksDbShardStorage;
 use super::jmt_stored::StaleTreePart;
-use crate::typed_cf::{self, TypedCf};
+use crate::typed_cf::{self, DbCodec, TypedCf};
 
 impl RocksDbShardStorage {
     /// Run garbage collection for stale JMT nodes.
@@ -155,10 +155,6 @@ impl RocksDbShardStorage {
     ///
     /// The number of entries deleted.
     pub fn run_state_history_gc(&self) -> usize {
-        const BATCH_FLUSH_THRESHOLD: usize = 10_000;
-
-        let start = std::time::Instant::now();
-
         let (current_version, _) = self.read_jmt_metadata();
         // Must match `snapshot_at`'s floor calculation exactly — see
         // boundary invariant above.
@@ -169,21 +165,51 @@ impl RocksDbShardStorage {
         }
 
         let cf = self.cf();
-        let history_cf = StateHistoryCf::handle(&cf);
-        let stale_history_cf = StaleStateHistoryCf::handle(&cf);
+        self.run_history_gc_pass::<StaleStateHistoryCf>(
+            cutoff,
+            StateHistoryCf::handle(&cf),
+            StaleStateHistoryCf::handle(&cf),
+            "state-history",
+        ) + self.run_history_gc_pass::<StaleEntriesHistoryCf>(
+            cutoff,
+            EntriesHistoryCf::handle(&cf),
+            StaleEntriesHistoryCf::handle(&cf),
+            "entries-history",
+        )
+    }
 
-        // Walk the version-indexed stale set in ascending order — each
-        // entry lists the raw `state_history` keys written at that
-        // version. Stops as soon as we reach a version past the cutoff,
-        // so GC cost is proportional to deletes-needed, not CF size.
+    /// One history-GC pass: walk `Stale`'s version-indexed stale set in
+    /// ascending order — each row lists the raw history keys written at
+    /// that version, so cost is proportional to deletes-needed, not CF
+    /// size — deleting the listed rows at or below `cutoff`, flushing
+    /// incrementally, and compacting the deleted span afterwards.
+    ///
+    /// The compaction is load-bearing for reclamation: tombstones only
+    /// free disk once compaction rewrites the affected SSTs, and the
+    /// oldest rows (exactly what GC targets) live in L5-L6 (Zstd tier)
+    /// which see no natural compaction pressure.
+    ///
+    /// Returns the rows deleted through the last successful write.
+    fn run_history_gc_pass<Stale>(
+        &self,
+        cutoff: u64,
+        history_cf: &ColumnFamily,
+        stale_cf: &ColumnFamily,
+        pass: &str,
+    ) -> usize
+    where
+        Stale: TypedCf<Key = u64, Value = Vec<Vec<u8>>>,
+        Stale::KeyCodec: DbCodec<u64>,
+    {
+        const BATCH_FLUSH_THRESHOLD: usize = 10_000;
+
+        let start = std::time::Instant::now();
         let mut batch = WriteBatch::default();
         let mut deleted = 0;
         let mut lowest_deleted_key: Option<Vec<u8>> = None;
         let mut highest_deleted_key: Option<Vec<u8>> = None;
 
-        for (version, history_keys) in
-            typed_cf::iter_all::<StaleStateHistoryCf>(&self.db, stale_history_cf)
-        {
+        for (version, history_keys) in typed_cf::iter_all::<Stale>(&self.db, stale_cf) {
             if version > cutoff {
                 break;
             }
@@ -196,11 +222,11 @@ impl RocksDbShardStorage {
                 batch.delete_cf(history_cf, raw_key);
                 deleted += 1;
             }
-            typed_cf::batch_delete::<StaleStateHistoryCf>(&mut batch, stale_history_cf, &version);
+            typed_cf::batch_delete::<Stale>(&mut batch, stale_cf, &version);
 
             if deleted >= BATCH_FLUSH_THRESHOLD {
                 if let Err(e) = self.db.write(std::mem::take(&mut batch)) {
-                    tracing::error!("State-history GC write failed: {}", e);
+                    tracing::error!(pass, "History GC write failed: {}", e);
                     return deleted;
                 }
                 batch = WriteBatch::default();
@@ -210,17 +236,12 @@ impl RocksDbShardStorage {
         if !batch.is_empty()
             && let Err(e) = self.db.write(batch)
         {
-            tracing::error!("State-history GC write failed: {}", e);
+            tracing::error!(pass, "History GC write failed: {}", e);
             // Return the count we already persisted in prior batches
             // rather than 0 — callers use this to log progress.
             return deleted;
         }
 
-        // Tombstones only reclaim disk once compaction rewrites the
-        // affected SSTs. Under write-heavy workloads the oldest entries
-        // (exactly what GC targets) live in L5-L6 (Zstd tier) which see
-        // no natural compaction pressure. Issue a compact_range over
-        // the deleted key span to trigger reclamation.
         if let (Some(lo), Some(hi)) = (lowest_deleted_key, highest_deleted_key) {
             self.db
                 .compact_range_cf(history_cf, Some(lo.as_slice()), Some(hi.as_slice()));
@@ -229,48 +250,14 @@ impl RocksDbShardStorage {
         let elapsed = start.elapsed();
         if deleted > 0 {
             tracing::info!(
+                pass,
                 deleted,
                 cutoff,
-                current_version,
                 elapsed_ms = elapsed.as_millis(),
-                "State-history GC completed"
+                "History GC pass completed"
             );
         }
 
-        deleted + self.run_entries_history_gc(cutoff)
-    }
-
-    /// The entry-index half of history GC: walk the version-indexed
-    /// stale set for `entries_history` exactly as the cell pass walks
-    /// its own, deleting prior-value rows at or below the cutoff.
-    fn run_entries_history_gc(&self, cutoff: u64) -> usize {
-        if cutoff == 0 {
-            return 0;
-        }
-        let cf = self.cf();
-        let entries_history_cf = EntriesHistoryCf::handle(&cf);
-        let stale_cf = StaleEntriesHistoryCf::handle(&cf);
-
-        let mut batch = WriteBatch::default();
-        let mut deleted = 0;
-        for (version, history_keys) in
-            typed_cf::iter_all::<StaleEntriesHistoryCf>(&self.db, stale_cf)
-        {
-            if version > cutoff {
-                break;
-            }
-            for raw_key in &history_keys {
-                batch.delete_cf(entries_history_cf, raw_key);
-                deleted += 1;
-            }
-            typed_cf::batch_delete::<StaleEntriesHistoryCf>(&mut batch, stale_cf, &version);
-        }
-        if !batch.is_empty()
-            && let Err(e) = self.db.write(batch)
-        {
-            tracing::error!("Entries-history GC write failed: {}", e);
-            return 0;
-        }
         deleted
     }
 }

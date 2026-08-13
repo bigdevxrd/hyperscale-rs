@@ -7,6 +7,7 @@
 //! the same forward seek historical cell reads use.
 
 use hyperscale_types::{Address, CollectionId, EntryKey};
+use rocksdb::{DB, DBRawIteratorWithThreadMode};
 
 use crate::typed_cf::{DbCodec, DbEncode};
 
@@ -107,6 +108,36 @@ pub fn entry_range_bounds(
     end.extend_from_slice(&[0xFF; VERSION_LEN]);
     end.push(0xFF);
     (start, end)
+}
+
+/// Walk `iter` over `[lo, hi]` of one collection, ascending by order
+/// key, yielding at most `limit` rows — `None` walks the whole interval,
+/// the base a historical read's overlay corrects afterwards.
+///
+/// The one decoder of the entries CF's iteration order: every
+/// tip-shaped range read goes through here, so the seek-start,
+/// bound-end, and limit rules cannot drift between readers.
+pub fn scan_entries(
+    mut iter: DBRawIteratorWithThreadMode<'_, DB>,
+    owner: Address,
+    collection: CollectionId,
+    lo: u128,
+    hi: u128,
+    limit: Option<usize>,
+) -> Vec<(u128, Vec<u8>)> {
+    let (start, end) = entry_range_bounds(owner, collection, lo, hi);
+    let mut hits = Vec::new();
+    iter.seek(&start);
+    while iter.valid() && limit.is_none_or(|cap| hits.len() < cap) {
+        let Some(raw_key) = iter.key() else { break };
+        if raw_key >= end.as_slice() {
+            break;
+        }
+        let key = EntryKeyCodec.decode(raw_key);
+        hits.push((key.order, iter.value().unwrap_or_default().to_vec()));
+        iter.next();
+    }
+    hits
 }
 
 #[cfg(test)]

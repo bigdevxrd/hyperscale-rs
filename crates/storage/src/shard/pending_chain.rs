@@ -23,7 +23,7 @@ use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
 use crate::tree::proofs::generate_proof;
 use crate::{
     BlockForSync, JmtSnapshot, ShardChainReader, SubstateStore, Substates, VersionedStore,
-    entry_overlay_range, merge_entry_overlay,
+    entry_overlay_range, merge_entry_overlay, merge_entry_overlay_with,
 };
 
 /// Cached base-storage reads observed through a [`SubstateView`].
@@ -1046,9 +1046,8 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
 
         // Base interval at the persisted tip, then each pending block's
         // settled entries in commit order up to `block_height` — the
-        // view's overlay walk, narrowed to one collection interval. The
-        // base fetch widens by the overlay's removals, exactly as every
-        // other layered range read does.
+        // view's overlay walk, narrowed to one collection interval and
+        // merged by the one widening rule every layered range read uses.
         let mut overlay: BTreeMap<EntryKey, Option<Vec<u8>>> = BTreeMap::new();
         for (h, snapshot) in &self.versioned_settled {
             if *h > block_height {
@@ -1058,31 +1057,17 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
                 overlay.insert(*key, change.clone());
             }
         }
-        let overlay_in_range =
-            entry_overlay_range(&overlay, range.owner, range.collection, range.lo, range.hi);
-        let tombstones = overlay_in_range
-            .iter()
-            .filter(|(_, change)| change.is_none())
-            .count();
-        let widened = DeclaredRange {
-            cap: range
-                .cap
-                .saturating_add(u32::try_from(tombstones).unwrap_or(u32::MAX)),
-            ..range
-        };
-        let base = (*self.base).get_entries_at_height(widened, persisted_version)?;
-        let mut merged: BTreeMap<u128, Vec<u8>> = base.into_iter().collect();
-        for (order, change) in overlay_in_range {
-            match change {
-                Some(value) => {
-                    merged.insert(order, value);
-                }
-                None => {
-                    merged.remove(&order);
-                }
-            }
-        }
-        Some(merged.into_iter().take(range.cap as usize).collect())
+        merge_entry_overlay_with(
+            |widened| {
+                let widened_range = DeclaredRange {
+                    cap: u32::try_from(widened).unwrap_or(u32::MAX),
+                    ..range
+                };
+                (*self.base).get_entries_at_height(widened_range, persisted_version)
+            },
+            entry_overlay_range(&overlay, range.owner, range.collection, range.lo, range.hi),
+            range.cap as usize,
+        )
     }
 
     fn generate_merkle_proofs(
