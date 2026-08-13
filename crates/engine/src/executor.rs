@@ -454,6 +454,7 @@ fn build_fee_receipt(
                 debit: floor,
             },
         )]),
+        entries: BTreeMap::new(),
     };
     let receipt_hash = GlobalReceipt::new(
         true,

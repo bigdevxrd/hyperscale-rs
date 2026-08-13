@@ -1,7 +1,14 @@
 //! Merging and filtering [`StateWrites`].
 
+use std::collections::BTreeMap;
+
+use hyperscale_hbor::{from_slice, to_vec};
 use hyperscale_jmt::{Key as JmtKey, NibblePath};
-use hyperscale_types::{SettledWrites, StateWrites, StoredReceipt, SubstateKey};
+use hyperscale_types::{
+    Address, CollectionId, EntryKey, EntryLeaf, ProtocolHasher, SettledEntries, SettledWrites,
+    StateWrites, StoredReceipt, SubstateKey, entry_leaf_key,
+};
+use hyperscale_vm_kernel::Substates;
 
 /// Extract and merge the writes from stored receipts, resolving what
 /// they moved against the state they land on.
@@ -55,6 +62,9 @@ pub fn fold_state_writes(merged: &mut StateWrites, writes: &StateWrites) {
         let entry = merged.movements.entry(*key).or_default();
         *entry = entry.then(*movement);
     }
+    for (key, change) in &writes.entries {
+        merged.entries.insert(*key, change.clone());
+    }
 }
 
 /// Merge writes in order; later entries win per cell.
@@ -67,23 +77,151 @@ pub fn merge_state_writes(list: &[&StateWrites]) -> StateWrites {
     merged
 }
 
-/// Restrict `writes` to the cells whose JMT leaves fall under `prefix` —
-/// the subset of a followed chain's block writes that belongs to a store
-/// rooted there.
+/// Restrict `writes` to the cells and entries whose JMT leaves fall
+/// under `prefix` — the subset of a followed chain's block writes that
+/// belongs to a store rooted there.
 ///
 /// A substate key's leading bits are its owner prefix — the identity
 /// leaf's routing half — so every cell of one owner shares the prefix
-/// decision.
+/// decision, and an entry's leaf is prefixed by its collection's owner
+/// the same way.
 #[must_use]
 pub fn filter_writes_to_prefix(writes: &SettledWrites, prefix: &NibblePath) -> SettledWrites {
-    SettledWrites::from_absolutes(
+    SettledWrites::from_parts(
         writes
             .cells()
             .iter()
             .filter(|(key, _)| key_under_prefix(&key.to_bytes(), prefix))
             .map(|(key, change)| (*key, change.clone()))
             .collect(),
+        writes
+            .entries()
+            .iter()
+            .filter(|(key, _)| {
+                key_under_prefix(&entry_leaf_key(&ProtocolHasher, **key).to_bytes(), prefix)
+            })
+            .map(|(key, change)| (*key, change.clone()))
+            .collect(),
     )
+}
+
+/// Decode a leaf back to the entry it commits, if it is one.
+///
+/// An entry leaf's value parses as an [`EntryLeaf`] and the leaf key
+/// re-derives from it under the leaf's owner. A cell value cannot
+/// satisfy both — the leaf-key derivation is domain-separated — so this
+/// is the import path's discriminator, and the index it rebuilds equals
+/// the tree's entry leaves by construction.
+#[must_use]
+pub fn entry_from_leaf(key: SubstateKey, value: &[u8]) -> Option<(EntryKey, Vec<u8>)> {
+    let leaf: EntryLeaf = from_slice(value).ok()?;
+    let entry_key = EntryKey {
+        owner: key.owner,
+        collection: leaf.collection,
+        order: leaf.order,
+    };
+    (entry_leaf_key(&ProtocolHasher, entry_key) == key).then_some((entry_key, leaf.value))
+}
+
+/// The leaf-row form of a settled set's entries: each entry keyed by its
+/// derived leaf key, valued by its self-describing [`EntryLeaf`]
+/// encoding, `None` a removal.
+///
+/// This is what commits — into the state CF, the history log, and the
+/// tree — beside the cells; the order-keyed index is maintained
+/// separately by each backend, and at every height it must equal these
+/// leaves.
+///
+/// # Panics
+///
+/// Panics if an entry value exceeds the encoder's bounds, which none
+/// within the cell cap can.
+#[must_use]
+pub fn entry_leaf_rows(entries: &SettledEntries) -> BTreeMap<SubstateKey, Option<Vec<u8>>> {
+    entries
+        .iter()
+        .map(|(key, change)| {
+            let leaf_key = entry_leaf_key(&ProtocolHasher, *key);
+            let leaf_value = change.as_ref().map(|value| {
+                to_vec(&EntryLeaf {
+                    collection: key.collection,
+                    order: key.order,
+                    value: value.clone(),
+                })
+                .expect("an entry leaf within the cell cap stays within the encoder's bounds")
+            });
+            (leaf_key, leaf_value)
+        })
+        .collect()
+}
+
+/// The slice of an entry-keyed overlay covering one collection's
+/// `[lo, hi]` interval, ascending; `None` values are removals.
+#[must_use]
+pub fn entry_overlay_range(
+    overlay: &BTreeMap<EntryKey, Option<Vec<u8>>>,
+    owner: Address,
+    collection: CollectionId,
+    lo: u128,
+    hi: u128,
+) -> Vec<(u128, Option<Vec<u8>>)> {
+    if lo > hi {
+        return Vec::new();
+    }
+    let lo_key = EntryKey {
+        owner,
+        collection,
+        order: lo,
+    };
+    let hi_key = EntryKey {
+        owner,
+        collection,
+        order: hi,
+    };
+    overlay
+        .range(lo_key..=hi_key)
+        .map(|(key, change)| (key.order, change.clone()))
+        .collect()
+}
+
+/// A base range read with an overlay applied: overlay values and
+/// removals win per order key.
+///
+/// The base fetch is widened by the overlay's removal count, so a
+/// mostly-deleted interval still fills the limit from the survivors
+/// behind it.
+#[must_use]
+pub fn merge_entry_overlay(
+    base: &(impl Substates + ?Sized),
+    overlay: Vec<(u128, Option<Vec<u8>>)>,
+    owner: Address,
+    collection: CollectionId,
+    lo: u128,
+    hi: u128,
+    limit: usize,
+) -> Vec<(u128, Vec<u8>)> {
+    if lo > hi || limit == 0 {
+        return Vec::new();
+    }
+    let tombstones = overlay
+        .iter()
+        .filter(|(_, change)| change.is_none())
+        .count();
+    let mut merged: BTreeMap<u128, Vec<u8>> = base
+        .entries_in_range(owner, collection, lo, hi, limit.saturating_add(tombstones))
+        .into_iter()
+        .collect();
+    for (order, change) in overlay {
+        match change {
+            Some(value) => {
+                merged.insert(order, value);
+            }
+            None => {
+                merged.remove(&order);
+            }
+        }
+    }
+    merged.into_iter().take(limit).collect()
 }
 
 /// Whether `key`'s leading bits equal `prefix` — the subtree-membership
@@ -157,5 +295,78 @@ mod tests {
             filter_writes_to_prefix(&merged, &NibblePath::empty()),
             merged
         );
+    }
+    #[test]
+    fn entries_fold_last_writer_wins_and_filter_by_owner_prefix() {
+        let key = |order: u128| EntryKey {
+            owner: test_prefix(0x00),
+            collection: CollectionId([4; 16]),
+            order,
+        };
+        let mut first = StateWrites::default();
+        first.entries.insert(key(5), Some(vec![1]));
+        first.entries.insert(key(9), Some(vec![9]));
+        let mut second = StateWrites::default();
+        second.entries.insert(key(5), None);
+        let merged = merge_state_writes(&[&first, &second]);
+        assert_eq!(merged.entries[&key(5)], None);
+        assert_eq!(merged.entries[&key(9)], Some(vec![9]));
+
+        // The prefix filter follows the collection owner's leaf prefix.
+        let settled = merged.resolve(&mut |_| None);
+        let mut left = NibblePath::empty();
+        left.push_bits(0, 1);
+        let mut right = NibblePath::empty();
+        right.push_bits(1, 1);
+        assert_eq!(filter_writes_to_prefix(&settled, &left), settled);
+        assert!(filter_writes_to_prefix(&settled, &right).is_empty());
+    }
+
+    #[test]
+    fn a_leaf_round_trips_to_its_entry_and_a_cell_does_not() {
+        let key = EntryKey {
+            owner: test_prefix(7),
+            collection: CollectionId([4; 16]),
+            order: 12,
+        };
+        let rows = entry_leaf_rows(&BTreeMap::from([(key, Some(vec![3, 3]))]));
+        let (leaf_key, leaf_value) = rows.into_iter().next().unwrap();
+        assert_eq!(
+            entry_from_leaf(leaf_key, &leaf_value.unwrap()),
+            Some((key, vec![3, 3]))
+        );
+        // An ordinary cell value never re-derives the leaf key.
+        assert_eq!(entry_from_leaf(leaf_key, &[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn overlay_merge_wins_per_order_and_tombstones_widen_the_fetch() {
+        struct Base;
+        impl Substates for Base {
+            fn cell(&self, _key: SubstateKey) -> Option<Vec<u8>> {
+                None
+            }
+            fn entries_in_range(
+                &self,
+                _owner: Address,
+                _collection: CollectionId,
+                lo: u128,
+                hi: u128,
+                limit: usize,
+            ) -> Vec<(u128, Vec<u8>)> {
+                (lo..=hi)
+                    .take(limit)
+                    .map(|order| (order, vec![u8::try_from(order % 251).unwrap()]))
+                    .collect()
+            }
+        }
+        let owner: Address = test_prefix(1);
+        let collection = CollectionId([4; 16]);
+        // Overlay: delete order 0, overwrite order 1, insert nothing new.
+        let overlay = vec![(0u128, None), (1, Some(vec![99]))];
+        let merged = merge_entry_overlay(&Base, overlay, owner, collection, 0, 100, 2);
+        // The tombstone widened the base fetch, so the limit still fills:
+        // order 0 is gone, 1 is overwritten, 2 survives from the base.
+        assert_eq!(merged, vec![(1, vec![99]), (2, vec![2])]);
     }
 }

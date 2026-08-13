@@ -10,7 +10,8 @@
 use rocksdb::WriteBatch;
 
 use super::column_families::{
-    JmtNodesCf, StaleJmtNodesCf, StaleStateHistoryCf, StateHistoryCf, SubstateBytesCf,
+    EntriesHistoryCf, JmtNodesCf, StaleEntriesHistoryCf, StaleJmtNodesCf, StaleStateHistoryCf,
+    StateHistoryCf, SubstateBytesCf,
 };
 use super::core::RocksDbShardStorage;
 use super::jmt_stored::StaleTreePart;
@@ -236,6 +237,40 @@ impl RocksDbShardStorage {
             );
         }
 
+        deleted + self.run_entries_history_gc(cutoff)
+    }
+
+    /// The entry-index half of history GC: walk the version-indexed
+    /// stale set for `entries_history` exactly as the cell pass walks
+    /// its own, deleting prior-value rows at or below the cutoff.
+    fn run_entries_history_gc(&self, cutoff: u64) -> usize {
+        if cutoff == 0 {
+            return 0;
+        }
+        let cf = self.cf();
+        let entries_history_cf = EntriesHistoryCf::handle(&cf);
+        let stale_cf = StaleEntriesHistoryCf::handle(&cf);
+
+        let mut batch = WriteBatch::default();
+        let mut deleted = 0;
+        for (version, history_keys) in
+            typed_cf::iter_all::<StaleEntriesHistoryCf>(&self.db, stale_cf)
+        {
+            if version > cutoff {
+                break;
+            }
+            for raw_key in &history_keys {
+                batch.delete_cf(entries_history_cf, raw_key);
+                deleted += 1;
+            }
+            typed_cf::batch_delete::<StaleEntriesHistoryCf>(&mut batch, stale_cf, &version);
+        }
+        if !batch.is_empty()
+            && let Err(e) = self.db.write(batch)
+        {
+            tracing::error!("Entries-history GC write failed: {}", e);
+            return 0;
+        }
         deleted
     }
 }

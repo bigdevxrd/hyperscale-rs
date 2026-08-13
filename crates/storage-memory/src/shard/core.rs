@@ -348,12 +348,13 @@ impl Substates for SimShardStorage {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        // Default-version snapshot, like `cell` — one read path.
+        <Self as SubstateStore>::snapshot(self).entries_in_range(owner, collection, lo, hi, limit)
     }
 }

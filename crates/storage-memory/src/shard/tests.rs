@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use hyperscale_hbor::from_slice;
 use hyperscale_storage::test_helpers::{
-    make_settled_writes, make_test_block, make_test_block_with_anchor_wt, make_test_certified,
-    make_test_qc, state_key,
+    entry_key, make_settled_entries, make_settled_writes, make_test_block,
+    make_test_block_with_anchor_wt, make_test_certified, make_test_qc, state_key,
 };
 use hyperscale_storage::tree::{jmt_parent_height, put_at_version};
 use hyperscale_storage::{
@@ -15,11 +16,11 @@ use hyperscale_types::test_utils::{
 };
 use hyperscale_types::{
     Address, AddressClass, BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHeight,
-    CertifiedBlock, ChainOrigin, ConsensusReceipt, Finalization, GlobalReceiptHash, Hash, LocalKey,
-    ProposerTimestamp, QuorumCertificate, RETENTION_HORIZON, Round, SafeVoteRegisters,
-    SettledWrites, ShardId, StateRoot, StoredReceipt, SubstateKey, SyncHint, TickHalf, TickId,
-    TimestampRange, Transaction, TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp,
-    WitnessSources,
+    CertifiedBlock, ChainOrigin, ConsensusReceipt, EntryLeaf, Finalization, GlobalReceiptHash,
+    Hash, LocalKey, ProposerTimestamp, ProtocolHasher, QuorumCertificate, RETENTION_HORIZON, Round,
+    SafeVoteRegisters, SettledWrites, ShardId, StateRoot, StoredReceipt, SubstateKey, SyncHint,
+    TickHalf, TickId, TimestampRange, Transaction, TxHash, ValidatorId, Verifiable, Verified,
+    WeightedTimestamp, WitnessSources, entry_leaf_key,
 };
 
 fn no_witness() -> BeaconWitnessCommit {
@@ -184,6 +185,69 @@ fn commit_empty(
     qc: &Verified<QuorumCertificate>,
 ) -> StateRoot {
     commit_with(storage, &SettledWrites::default(), block, qc)
+}
+
+#[test]
+fn entries_commit_serve_ranges_and_keep_history() {
+    let storage = SimShardStorage::default();
+
+    // Version 1: three entries in one collection.
+    storage.commit_shared(&make_settled_entries(
+        7,
+        &[
+            (5, Some(vec![5])),
+            (10, Some(vec![10])),
+            (20, Some(vec![20])),
+        ],
+    ));
+    let root_v1 = storage.state_root();
+    assert_ne!(root_v1, StateRoot::ZERO, "entries move the root");
+
+    let key = entry_key(7, 5);
+    assert_eq!(
+        storage.entries_in_range(key.owner, key.collection, 0, u128::MAX, 10),
+        vec![(5, vec![5]), (10, vec![10]), (20, vec![20])],
+    );
+    // Bounds and the cap hold.
+    assert_eq!(
+        storage.entries_in_range(key.owner, key.collection, 6, 20, 1),
+        vec![(10, vec![10])],
+    );
+    // The leaf form is readable by its derived key and self-describes.
+    let leaf = storage
+        .cell(entry_leaf_key(&ProtocolHasher, key))
+        .expect("the entry commits a leaf");
+    let decoded = from_slice::<EntryLeaf>(&leaf).unwrap();
+    assert_eq!((decoded.order, decoded.value), (5, vec![5]));
+
+    // Version 2: overwrite one, remove one, add one.
+    storage.commit_shared(&make_settled_entries(
+        7,
+        &[(10, Some(vec![99])), (20, None), (30, Some(vec![30]))],
+    ));
+    assert_ne!(storage.state_root(), root_v1);
+    assert_eq!(
+        storage.entries_in_range(key.owner, key.collection, 0, u128::MAX, 10),
+        vec![(5, vec![5]), (10, vec![99]), (30, vec![30])],
+    );
+
+    // The historical scan at version 1 answers the old interval.
+    assert_eq!(
+        storage.snapshot_at(BlockHeight::new(1)).entries_in_range(
+            key.owner,
+            key.collection,
+            0,
+            u128::MAX,
+            10
+        ),
+        vec![(5, vec![5]), (10, vec![10]), (20, vec![20])],
+    );
+    // And another collection's interval stays empty.
+    assert!(
+        storage
+            .entries_in_range(state_key(9, 0).owner, key.collection, 0, u128::MAX, 10)
+            .is_empty()
+    );
 }
 
 #[test]

@@ -6,12 +6,15 @@
 //! value is the value at V. If no such entry exists, `StateCf[K]` was
 //! stable since V and is the answer.
 
+use std::collections::BTreeMap;
+
 use hyperscale_storage::Substates;
 use hyperscale_types::SubstateKey;
 use hyperscale_vm_effects::{Address, CollectionId};
 use rocksdb::{DB, ReadOptions, Snapshot};
 
-use super::column_families::{CfHandles, StateCf, StateHistoryCf};
+use super::column_families::{CfHandles, EntriesCf, EntriesHistoryCf, StateCf, StateHistoryCf};
+use super::entry_key::{EntryKeyCodec, VersionedEntryKeyCodec, entry_range_bounds};
 use crate::typed_cf::{DbCodec, HborCodec, TypedCf, get};
 
 /// Length of the version suffix on each state-history key (`u64` big-endian).
@@ -90,12 +93,74 @@ impl Substates for RocksDbSnapshot<'_> {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        if lo > hi || limit == 0 {
+            return Vec::new();
+        }
+        let cf = CfHandles::resolve(self.db);
+        let entries_cf = EntriesCf::handle(&cf);
+        let (start, end) = entry_range_bounds(owner, collection, lo, hi);
+        let at_tip = self.version >= self.current_version;
+
+        // The interval's current rows, ascending by order key. At the
+        // tip they are the answer, so the walk stops at the limit;
+        // historically they are the base the history overlay corrects.
+        let mut current: BTreeMap<u128, Vec<u8>> = BTreeMap::new();
+        let mut iter = self.db.raw_iterator_cf_opt(entries_cf, self.read_opts());
+        iter.seek(&start);
+        while iter.valid() {
+            let Some(raw_key) = iter.key() else { break };
+            if raw_key >= end.as_slice() {
+                break;
+            }
+            let key = EntryKeyCodec.decode(raw_key);
+            current.insert(key.order, iter.value().unwrap_or_default().to_vec());
+            if at_tip && current.len() == limit {
+                break;
+            }
+            iter.next();
+        }
+        if at_tip {
+            return current.into_iter().collect();
+        }
+
+        // Historical overlay: for each order with history rows after V,
+        // the value at V is the prior of the smallest such row — the
+        // per-key rule `cell` applies, per order over the interval.
+        let history_cf = EntriesHistoryCf::handle(&cf);
+        let mut overridden: BTreeMap<u128, Option<Vec<u8>>> = BTreeMap::new();
+        let value_codec: HborCodec<Option<Vec<u8>>> = HborCodec::default();
+        let mut iter = self.db.raw_iterator_cf_opt(history_cf, self.read_opts());
+        iter.seek(&start);
+        while iter.valid() {
+            let Some(raw_key) = iter.key() else { break };
+            if raw_key >= end.as_slice() {
+                break;
+            }
+            let (key, version) = VersionedEntryKeyCodec.decode(raw_key);
+            if version > self.version && !overridden.contains_key(&key.order) {
+                overridden.insert(
+                    key.order,
+                    value_codec.decode(iter.value().unwrap_or_default()),
+                );
+            }
+            iter.next();
+        }
+        for (order, prior) in overridden {
+            match prior {
+                Some(value) => {
+                    current.insert(order, value);
+                }
+                None => {
+                    current.remove(&order);
+                }
+            }
+        }
+        current.into_iter().take(limit).collect()
     }
 }

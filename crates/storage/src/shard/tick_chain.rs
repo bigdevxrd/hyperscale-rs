@@ -46,7 +46,7 @@ use hyperscale_types::{
 use hyperscale_vm_effects::{Address, CollectionId};
 
 use crate::lock_recover::{read_or_recover, write_or_recover};
-use crate::shard::writes::fold_state_writes;
+use crate::shard::writes::{entry_overlay_range, fold_state_writes, merge_entry_overlay};
 use crate::{Substates, VersionedStore};
 
 /// One cross-shard transaction's provisional contribution to a tick.
@@ -499,13 +499,21 @@ impl<Snap: Substates> Substates for TickViewSnapshot<Snap> {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        merge_entry_overlay(
+            &self.base_snapshot,
+            entry_overlay_range(&self.overlay.entries, owner, collection, lo, hi),
+            owner,
+            collection,
+            lo,
+            hi,
+            limit,
+        )
     }
 }
 
@@ -644,13 +652,14 @@ mod tests {
         }
     }
 
-    fn writes(entries: &[(SubstateKey, Option<&[u8]>)]) -> StateWrites {
+    fn writes(cells: &[(SubstateKey, Option<&[u8]>)]) -> StateWrites {
         StateWrites {
-            cells: entries
+            cells: cells
                 .iter()
                 .map(|(k, v)| (*k, v.map(<[u8]>::to_vec)))
                 .collect(),
             movements: BTreeMap::new(),
+            entries: BTreeMap::new(),
         }
     }
 

@@ -20,6 +20,7 @@ mod collected_writes;
 pub mod proofs;
 mod snapshot;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -32,6 +33,8 @@ use hyperscale_types::state_key::jmt_value_hash;
 use hyperscale_types::{BlockHeight, Hash, SettledWrites, StateRoot, SubstateKey, SubstateLeaf};
 use rayon::prelude::*;
 pub use snapshot::JmtSnapshot;
+
+use crate::shard::writes::entry_leaf_rows;
 
 /// Layered tree reader that overlays pending JMT snapshots on a base store.
 ///
@@ -287,11 +290,21 @@ pub fn noop_jmt_snapshot<S: TreeReader>(
 /// a type, not a check, because the failure it prevents is silent: this
 /// walk would simply not see a movement, and the root would be attested
 /// without the change in it.
-fn flatten_work_items(writes: &SettledWrites) -> Vec<(SubstateKey, Option<&[u8]>)> {
+///
+/// Ordered-collection entries flatten to their leaf form — the derived
+/// leaf key, the self-describing [`hyperscale_types::EntryLeaf`]
+/// value — so the attested root covers every entry the way it covers
+/// every cell.
+fn flatten_work_items(writes: &SettledWrites) -> Vec<(SubstateKey, Option<Cow<'_, [u8]>>)> {
     writes
         .cells()
         .iter()
-        .map(|(key, change)| (*key, change.as_deref()))
+        .map(|(key, change)| (*key, change.as_deref().map(Cow::Borrowed)))
+        .chain(
+            entry_leaf_rows(writes.entries())
+                .into_iter()
+                .map(|(key, change)| (key, change.map(Cow::Owned))),
+        )
         .collect()
 }
 
@@ -356,7 +369,9 @@ pub fn put_at_version<S: TreeReader + Sync>(
     let mut updates: Vec<(Key, Option<LeafValue>)> = work_items
         .par_iter()
         .map(|(key, value_ref)| {
-            let jmt_value = value_ref.map(|v| LeafValue::new(hash_value(v), v.len() as u64));
+            let jmt_value = value_ref
+                .as_deref()
+                .map(|v| LeafValue::new(hash_value(v), v.len() as u64));
             (key.to_bytes(), jmt_value)
         })
         .collect();

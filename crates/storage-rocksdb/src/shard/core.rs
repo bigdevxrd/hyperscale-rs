@@ -13,19 +13,21 @@
 //! On each commit, the JMT is updated and a new state root hash is
 //! computed.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use hyperscale_hbor::from_slice;
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_metrics::record_storage_read;
 use hyperscale_storage::{
-    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateStore, Substates, tree,
+    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateStore, Substates, entry_leaf_rows, tree,
 };
 use hyperscale_types::{
-    Block, BlockHeight, ChainOrigin, QuorumCertificate, SafeVoteRegisters, SettledWrites,
-    StateRoot, SubstateKey, ValidatorId, Verified,
+    Block, BlockHeight, ChainOrigin, EntryKey, EntryLeaf, ProtocolHasher, QuorumCertificate,
+    SafeVoteRegisters, SettledWrites, StateRoot, SubstateKey, ValidatorId, Verified,
+    entry_leaf_key,
 };
 use hyperscale_vm_effects::{Address, CollectionId};
 use rocksdb::{
@@ -36,9 +38,11 @@ use tracing::field::Empty;
 use tracing::{Level, Span, instrument};
 
 use super::column_families::{
-    ALL_COLUMN_FAMILIES, CfHandles, HOT_WRITE_COLUMN_FAMILIES, JmtNodesCf, STATE_HISTORY_CF,
-    StaleJmtNodesCf, StaleStateHistoryCf, StateCf, StateHistoryCf, SubstateBytesCf,
+    ALL_COLUMN_FAMILIES, CfHandles, EntriesCf, EntriesHistoryCf, HOT_WRITE_COLUMN_FAMILIES,
+    JmtNodesCf, STATE_HISTORY_CF, StaleEntriesHistoryCf, StaleJmtNodesCf, StaleStateHistoryCf,
+    StateCf, StateHistoryCf, SubstateBytesCf,
 };
+use super::entry_key::VersionedEntryKeyCodec;
 use super::jmt_snapshot_store::SnapshotTreeStore;
 use super::jmt_stored::{StaleTreePart, StoredNode, StoredNodeKey, VersionedStoredNode};
 use super::metadata::{
@@ -547,6 +551,14 @@ impl RocksDbShardStorage {
             }
         }
 
+        self.append_entry_writes_to_batch(
+            batch,
+            writes,
+            version,
+            write_history,
+            &mut stale_history_keys,
+        );
+
         // Index the history keys by version so GC can delete them without
         // scanning StateHistoryCf. Skipped when write_history is false
         // (genesis) — nothing was written.
@@ -556,6 +568,101 @@ impl RocksDbShardStorage {
                 stale_history_cf,
                 &version,
                 &stale_history_keys,
+            );
+        }
+    }
+
+    /// The entries half of a substate write batch: each entry's leaf row
+    /// rides the same state/history pipeline a cell does, and the
+    /// order-keyed index row beside it keeps range scans native.
+    ///
+    /// The index's history prior is decoded from the leaf's prior — one
+    /// read serves both logs, and the two cannot disagree. Leaf history
+    /// keys accumulate into the caller's `stale_history_keys`, which owns
+    /// the version's stale-set row.
+    fn append_entry_writes_to_batch(
+        &self,
+        batch: &mut WriteBatch,
+        writes: &SettledWrites,
+        version: u64,
+        write_history: bool,
+        stale_history_keys: &mut Vec<Vec<u8>>,
+    ) {
+        if writes.entries().is_empty() {
+            return;
+        }
+        let cf = self.cf();
+        let state_cf = StateCf::handle(&cf);
+        let history_cf = StateHistoryCf::handle(&cf);
+        let entries_cf = EntriesCf::handle(&cf);
+        let entries_history_cf = EntriesHistoryCf::handle(&cf);
+        let stale_entries_history_cf = StaleEntriesHistoryCf::handle(&cf);
+
+        let leaf_rows = entry_leaf_rows(writes.entries());
+        let leaf_keys: Vec<SubstateKey> = leaf_rows.keys().copied().collect();
+        let leaf_priors: Vec<Option<Vec<u8>>> =
+            multi_get::<StateCf>(&*self.db, state_cf, &leaf_keys);
+
+        let history_key_codec = VersionedSubstateKeyCodec;
+        let entries_history_key_codec = VersionedEntryKeyCodec;
+        let mut stale_entries_history_keys: Vec<Vec<u8>> = Vec::new();
+        // `entry_leaf_rows` is keyed by the derived leaf key; pair each
+        // row back to its entry by deriving the same key from the map.
+        let mut by_leaf: BTreeMap<SubstateKey, EntryKey> = BTreeMap::new();
+        for entry_key in writes.entries().keys() {
+            by_leaf.insert(entry_leaf_key(&ProtocolHasher, *entry_key), *entry_key);
+        }
+
+        for ((leaf_key, change), prior) in leaf_rows.iter().zip(leaf_priors) {
+            // Setting a leaf to the value it already holds — the same
+            // entry value written again — changes nothing anywhere; so
+            // does removing an absent one.
+            let is_noop = change.as_ref().map_or_else(
+                || prior.is_none(),
+                |new| matches!(&prior, Some(p) if p == new),
+            );
+            if is_noop {
+                continue;
+            }
+            let entry_key = by_leaf[leaf_key];
+            // The index's prior is inside the leaf's prior.
+            let index_prior: Option<Vec<u8>> = prior.as_deref().map(|bytes| {
+                from_slice::<EntryLeaf>(bytes)
+                    .expect("a committed entry leaf decodes")
+                    .value
+            });
+            if write_history {
+                let history_key = (*leaf_key, version);
+                stale_history_keys.push(history_key_codec.encode(&history_key));
+                batch_put::<StateHistoryCf>(batch, history_cf, &history_key, &prior);
+                let entries_history_key = (entry_key, version);
+                stale_entries_history_keys
+                    .push(entries_history_key_codec.encode(&entries_history_key));
+                batch_put::<EntriesHistoryCf>(
+                    batch,
+                    entries_history_cf,
+                    &entries_history_key,
+                    &index_prior,
+                );
+            }
+            if let Some(leaf_value) = change {
+                batch_put::<StateCf>(batch, state_cf, leaf_key, leaf_value);
+                let value = writes.entries()[&entry_key]
+                    .clone()
+                    .expect("a leaf value exists exactly where the entry value does");
+                batch_put::<EntriesCf>(batch, entries_cf, &entry_key, &value);
+            } else {
+                batch_delete::<StateCf>(batch, state_cf, leaf_key);
+                batch_delete::<EntriesCf>(batch, entries_cf, &entry_key);
+            }
+        }
+
+        if write_history && !stale_entries_history_keys.is_empty() {
+            batch_put::<StaleEntriesHistoryCf>(
+                batch,
+                stale_entries_history_cf,
+                &version,
+                &stale_entries_history_keys,
             );
         }
     }
@@ -668,13 +775,14 @@ impl Substates for RocksDbShardStorage {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        // Default-version snapshot, like `cell` — one read path.
+        <Self as SubstateStore>::snapshot(self).entries_in_range(owner, collection, lo, hi, limit)
     }
 }
 

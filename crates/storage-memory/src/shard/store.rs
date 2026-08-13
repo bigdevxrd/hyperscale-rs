@@ -76,6 +76,8 @@ impl VersionedStore for SimShardStorage {
         SimSnapshot {
             current_state: guard.current_state.clone(),
             state_history: guard.state_history.clone(),
+            current_entries: guard.current_entries.clone(),
+            entries_history: guard.entries_history.clone(),
             version: height.inner(),
             current_version,
         }

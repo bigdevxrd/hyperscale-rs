@@ -662,7 +662,11 @@ fn stub_execute(
             debit: 0,
         });
     }
-    let writes = StateWrites { cells, movements };
+    let writes = StateWrites {
+        cells,
+        movements,
+        entries: BTreeMap::new(),
+    };
     let receipt_hash = GlobalReceipt::new(
         true,
         EventRoot::ZERO,

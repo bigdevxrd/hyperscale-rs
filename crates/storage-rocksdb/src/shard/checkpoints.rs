@@ -19,7 +19,7 @@ use hyperscale_jmt::{KEY_BYTES, NibblePath, Node as JmtNode, NodeKey as JmtNodeK
 use hyperscale_storage::tree::{import_leaf_updates, jmt_parent_height, put_at_version};
 use hyperscale_storage::{
     AdoptSource, BoundaryStore, ImportProgress, JmtSnapshot, Substates, WitnessSeed,
-    filter_writes_to_prefix, merge_writes_from_receipts,
+    entry_from_leaf, filter_writes_to_prefix, merge_writes_from_receipts,
 };
 use hyperscale_types::{
     Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt, SubstateKey, SubstateLeaf,
@@ -30,17 +30,18 @@ use rocksdb::{ColumnFamily, DB, Options, WriteBatch};
 use tracing::warn;
 
 use super::column_families::{
-    ALL_COLUMN_FAMILIES, BeaconWitnessesCf, CfHandles, ImportStagingCf, JmtNodesCf, StateCf,
-    SubstateBytesCf,
+    ALL_COLUMN_FAMILIES, BeaconWitnessesCf, CfHandles, EntriesCf, ImportStagingCf, JmtNodesCf,
+    StateCf, SubstateBytesCf,
 };
 use super::core::RocksDbShardStorage;
+use super::entry_key::{EntryKeyCodec, entry_range_bounds};
 use super::jmt_snapshot_store::SnapshotTreeStore;
 use super::jmt_stored::{StoredNode, StoredNodeKey, VersionedStoredNode};
 use super::metadata::{read_jmt_metadata, write_jmt_metadata};
 use crate::StorageError;
 use crate::typed_cf::{
-    ImportProgressEntry, TypedCf, batch_delete, batch_put, get, iter_all, meta_delete, meta_read,
-    meta_write,
+    DbCodec, ImportProgressEntry, TypedCf, batch_delete, batch_put, get, iter_all, meta_delete,
+    meta_read, meta_write,
 };
 
 /// Queue the staging CF's full range and the progress record for
@@ -259,8 +260,16 @@ impl RocksDbShardStorage {
                 );
             }
             let state_cf = StateCf::handle(&cf);
+            let entries_cf = EntriesCf::handle(&cf);
             for leaf in &batch_leaves {
                 batch_put::<StateCf>(&mut batch, state_cf, &leaf.key, &leaf.value);
+                // The ordered entry index is derived state: rebuild it
+                // from the leaves themselves, which is also the assertion
+                // that it equals them — the row exists exactly where the
+                // leaf re-derives.
+                if let Some((entry_key, value)) = entry_from_leaf(leaf.key, &leaf.value) {
+                    batch_put::<EntriesCf>(&mut batch, entries_cf, &entry_key, &value);
+                }
             }
             bytes_total += result.batch.bytes_delta;
 
@@ -455,13 +464,34 @@ impl Substates for CheckpointStore {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        // The checkpoint is frozen at its pinned height, so its index is
+        // the answer directly — the same trivial branch a current-tip
+        // snapshot takes.
+        if lo > hi || limit == 0 {
+            return Vec::new();
+        }
+        let cf = CfHandles::resolve(&self.db);
+        let entries_cf = EntriesCf::handle(&cf);
+        let (start, end) = entry_range_bounds(owner, collection, lo, hi);
+        let mut hits = Vec::new();
+        let mut iter = self.db.raw_iterator_cf(entries_cf);
+        iter.seek(&start);
+        while iter.valid() && hits.len() < limit {
+            let Some(raw_key) = iter.key() else { break };
+            if raw_key >= end.as_slice() {
+                break;
+            }
+            let key = EntryKeyCodec.decode(raw_key);
+            hits.push((key.order, iter.value().unwrap_or_default().to_vec()));
+            iter.next();
+        }
+        hits
     }
 }
 
@@ -794,7 +824,7 @@ mod tests {
         let storage = open_storage(temp.path());
         let fresh_dir = TempDir::new().unwrap();
         let fresh = open_storage(fresh_dir.path());
-        test_boundary_import_roundtrip(&storage, &fresh, |seed| commit_one(&storage, seed));
+        test_boundary_import_roundtrip(&storage, &fresh, |writes| storage.commit(writes).unwrap());
     }
 
     /// An import leaf whose top byte places it under one trie half.

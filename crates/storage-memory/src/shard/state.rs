@@ -5,10 +5,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use hyperscale_storage::JmtSnapshot;
 use hyperscale_storage::tree::{carry_noop_root, jmt_parent_height, put_at_version};
+use hyperscale_storage::{JmtSnapshot, entry_leaf_rows};
 use hyperscale_types::{
-    Block, BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt,
+    Block, BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, EntryKey,
     ExecutionCertificate, ExecutionMetadata, Finalization, FinalizationHash, ProvisionHash,
     Provisions, QuorumCertificate, SafeVoteRegisters, SettledWrites, ShardWitnessPayload,
     StateRoot, StoredReceipt, SubstateKey, TickId, Transaction, TxHash, ValidatorId,
@@ -37,6 +37,13 @@ pub struct SharedState {
     /// `None` means the key was absent immediately before the write at
     /// that version. Consumed by historical reads and the retention GC.
     pub state_history: BTreeMap<(SubstateKey, u64), Option<Vec<u8>>>,
+    /// Current value per ordered-collection entry — the order-native
+    /// mirror of the entry leaves in `current_state`. Derived state: at
+    /// every height it equals the tree's entry leaves.
+    pub current_entries: BTreeMap<EntryKey, Vec<u8>>,
+    /// Per-write prior-value entries for the entry index, mirroring
+    /// `state_history` row for row.
+    pub entries_history: BTreeMap<(EntryKey, u64), Option<Vec<u8>>>,
     /// Committed substate byte total per version, written in
     /// lockstep with each applied snapshot. Consensus-critical:
     /// shard-witness derivation reads it, so it must be identical on
@@ -56,6 +63,8 @@ impl SharedState {
             current_root_hash: StateRoot::ZERO,
             current_state: BTreeMap::new(),
             state_history: BTreeMap::new(),
+            current_entries: BTreeMap::new(),
+            entries_history: BTreeMap::new(),
             substate_bytes: BTreeMap::new(),
         }
     }
@@ -286,7 +295,10 @@ pub fn apply_writes(
     version: u64,
     write_history: bool,
 ) {
-    for (key, change) in writes.cells() {
+    // Each entry's leaf row rides the same state/history pipeline a
+    // cell does; the index rows beside them keep range scans native.
+    let leaf_rows = entry_leaf_rows(writes.entries());
+    for (key, change) in writes.cells().iter().chain(&leaf_rows) {
         let prior = state.current_state.get(key).cloned();
         if write_history {
             state.state_history.insert((*key, version), prior);
@@ -297,6 +309,20 @@ pub fn apply_writes(
             }
             None => {
                 state.current_state.remove(key);
+            }
+        }
+    }
+    for (key, change) in writes.entries() {
+        let prior = state.current_entries.get(key).cloned();
+        if write_history {
+            state.entries_history.insert((*key, version), prior);
+        }
+        match change {
+            Some(value) => {
+                state.current_entries.insert(*key, value.clone());
+            }
+            None => {
+                state.current_entries.remove(key);
             }
         }
     }

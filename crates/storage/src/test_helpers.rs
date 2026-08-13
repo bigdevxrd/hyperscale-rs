@@ -14,10 +14,10 @@ use hyperscale_types::{
     Address, AddressClass, AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert,
     BeaconChainConfig, BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot,
     Block, BlockHash, BlockHeader, BlockHeaderParts, BlockHeight, CertifiedBeaconBlock,
-    CertifiedBlock, ChainOrigin, ConsensusReceipt, Epoch, Event, ExecutionCertificate,
-    ExecutionMetadata, ExecutionOutcome, FeeSummary, Finalization, GlobalReceiptHash,
-    GlobalReceiptRoot, Hash, LocalKey, LogLevel, MerkleInclusionProof, PcQc2, PcQc3,
-    PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp, ProvisionEntry, ProvisionHash,
+    CertifiedBlock, ChainOrigin, CollectionId, ConsensusReceipt, EntryKey, Epoch, Event,
+    ExecutionCertificate, ExecutionMetadata, ExecutionOutcome, FeeSummary, Finalization,
+    GlobalReceiptHash, GlobalReceiptRoot, Hash, LocalKey, LogLevel, MerkleInclusionProof, PcQc2,
+    PcQc3, PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp, ProvisionEntry, ProvisionHash,
     Provisions, QuorumCertificate, Randomness, RatifyCert, RatifyRound, RevealChain, Round,
     SafeVoteRegisters, SettledWrites, ShardAnchor, ShardId, ShardWitnessPayload, SignerBitfield,
     SpcCert, SpcView, Stake, StakePoolId, StateRoot, StateWrites, StoredReceipt, SubstateKey,
@@ -88,6 +88,31 @@ pub fn make_settled_writes(owner_seed: u8, local_seed: u8, value: Vec<u8>) -> Se
         state_key(owner_seed, local_seed),
         Some(value),
     )]))
+}
+
+/// A settled set carrying only ordered-collection entries of one
+/// collection, for the tests that exercise the entry pipeline.
+#[must_use]
+pub fn make_settled_entries(owner_seed: u8, entries: &[(u128, Option<Vec<u8>>)]) -> SettledWrites {
+    SettledWrites::from_parts(
+        BTreeMap::new(),
+        entries
+            .iter()
+            .map(|(order, change)| (entry_key(owner_seed, *order), change.clone()))
+            .collect(),
+    )
+}
+
+/// The entry key for `order` in the test collection under owner
+/// `[owner_seed; 31]` — the identity [`make_settled_entries`] writes
+/// under.
+#[must_use]
+pub const fn entry_key(owner_seed: u8, order: u128) -> EntryKey {
+    EntryKey {
+        owner: Address::new([owner_seed; 31], AddressClass::Component),
+        collection: CollectionId([0xEE; 16]),
+        order,
+    }
 }
 
 /// The substate key for owner `[owner_seed; 16]`, local zero-padded from
@@ -788,13 +813,19 @@ pub fn test_boundary_unpinned_height_not_served<S: BoundaryStore>(
 /// # Panics
 ///
 /// Panics if any assertion fails (this is a test helper).
-pub fn test_boundary_import_roundtrip<S>(serving: &S, fresh: &S, commit_one: impl Fn(u8))
+pub fn test_boundary_import_roundtrip<S>(serving: &S, fresh: &S, commit: impl Fn(&SettledWrites))
 where
     S: BoundaryStore + SubstateStore,
 {
-    for seed in 1..=6u8 {
-        commit_one(seed);
+    for seed in 1..=5u8 {
+        commit(&make_settled_writes(seed, seed, vec![seed, seed, seed]));
     }
+    // The sixth commit is two ordered-collection entries, so the round
+    // trip covers entry leaves and the index rebuild beside the cells.
+    commit(&make_settled_entries(
+        7,
+        &[(5, Some(vec![5])), (10, Some(vec![10]))],
+    ));
     let source_root = serving.state_root();
     serving.pin_boundary(BlockHeight::new(6)).unwrap();
 
@@ -824,7 +855,7 @@ where
             }
         })
         .collect();
-    assert_eq!(leaves.len(), 6);
+    assert_eq!(leaves.len(), 7);
     let probe = leaves
         .iter()
         .find(|l| l.value == [3, 3, 3])
@@ -840,6 +871,18 @@ where
     fresh.pin_boundary(BlockHeight::new(6)).unwrap();
     let fresh_boundary = fresh.open_boundary(BlockHeight::new(6)).expect("pinned");
     assert_eq!(fresh_boundary.cell(probe), Some(vec![3, 3, 3]),);
+
+    // The ordered index re-derived from the imported leaves answers the
+    // same interval the serving store does.
+    let entry = entry_key(7, 5);
+    assert_eq!(
+        fresh.entries_in_range(entry.owner, entry.collection, 0, u128::MAX, 10),
+        serving.entries_in_range(entry.owner, entry.collection, 0, u128::MAX, 10),
+    );
+    assert_eq!(
+        fresh.entries_in_range(entry.owner, entry.collection, 0, u128::MAX, 10),
+        vec![(5, vec![5]), (10, vec![10])],
+    );
 
     // A second import is rejected — the store is no longer empty.
     assert!(

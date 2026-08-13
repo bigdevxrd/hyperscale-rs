@@ -12,6 +12,7 @@ pub(crate) mod chain_writer;
 pub(crate) mod checkpoints;
 pub(crate) mod column_families;
 pub(crate) mod core;
+pub(crate) mod entry_key;
 pub(crate) mod execution_certs;
 pub(crate) mod gc;
 pub(crate) mod jmt_snapshot_store;

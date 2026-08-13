@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::ops::Bound;
 
 use hyperscale_storage::Substates;
-use hyperscale_types::SubstateKey;
+use hyperscale_types::{EntryKey, SubstateKey};
 use hyperscale_vm_effects::{Address, CollectionId};
 
 /// Point-in-time snapshot of in-memory storage scoped to a specific
@@ -20,6 +20,8 @@ use hyperscale_vm_effects::{Address, CollectionId};
 pub struct SimSnapshot {
     pub(crate) current_state: BTreeMap<SubstateKey, Vec<u8>>,
     pub(crate) state_history: BTreeMap<(SubstateKey, u64), Option<Vec<u8>>>,
+    pub(crate) current_entries: BTreeMap<EntryKey, Vec<u8>>,
+    pub(crate) entries_history: BTreeMap<(EntryKey, u64), Option<Vec<u8>>>,
     /// Target version for all reads from this snapshot.
     pub(crate) version: u64,
     /// Current committed tip at snapshot-construction time. When
@@ -54,6 +56,48 @@ pub fn value_at_version(
     }
 }
 
+/// The entries of one collection's `[lo, hi]` interval at `version`:
+/// the current index rows corrected by the per-order first history
+/// write after `version` — the rule [`value_at_version`] applies to a
+/// cell, applied per order over the interval.
+pub fn entries_in_range_at(
+    current_entries: &BTreeMap<EntryKey, Vec<u8>>,
+    entries_history: &BTreeMap<(EntryKey, u64), Option<Vec<u8>>>,
+    lo_key: EntryKey,
+    hi_key: EntryKey,
+    limit: usize,
+    version: u64,
+    current_version: u64,
+) -> Vec<(u128, Vec<u8>)> {
+    if lo_key.order > hi_key.order || limit == 0 {
+        return Vec::new();
+    }
+    let mut merged: BTreeMap<u128, Vec<u8>> = current_entries
+        .range(lo_key..=hi_key)
+        .map(|(key, value)| (key.order, value.clone()))
+        .collect();
+    if version < current_version {
+        let mut overridden: BTreeMap<u128, Option<Vec<u8>>> = BTreeMap::new();
+        for ((key, write_version), prior) in entries_history.range((lo_key, 0)..=(hi_key, u64::MAX))
+        {
+            if *write_version > version && !overridden.contains_key(&key.order) {
+                overridden.insert(key.order, prior.clone());
+            }
+        }
+        for (order, prior) in overridden {
+            match prior {
+                Some(value) => {
+                    merged.insert(order, value);
+                }
+                None => {
+                    merged.remove(&order);
+                }
+            }
+        }
+    }
+    merged.into_iter().take(limit).collect()
+}
+
 impl Substates for SimSnapshot {
     fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         value_at_version(
@@ -67,12 +111,28 @@ impl Substates for SimSnapshot {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        entries_in_range_at(
+            &self.current_entries,
+            &self.entries_history,
+            EntryKey {
+                owner,
+                collection,
+                order: lo,
+            },
+            EntryKey {
+                owner,
+                collection,
+                order: hi,
+            },
+            limit,
+            self.version,
+            self.current_version,
+        )
     }
 }

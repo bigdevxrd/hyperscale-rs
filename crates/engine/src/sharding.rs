@@ -26,9 +26,15 @@ pub fn filter_genesis_writes_for_shard(
     local_shard: ShardId,
     shard_trie: &ShardTrie,
 ) -> SettledWrites {
-    SettledWrites::from_absolutes(
+    SettledWrites::from_parts(
         merged
             .cells()
+            .iter()
+            .filter(|(key, _)| shard_trie.shard_for_prefix(key.owner) == local_shard)
+            .map(|(key, change)| (*key, change.clone()))
+            .collect(),
+        merged
+            .entries()
             .iter()
             .filter(|(key, _)| shard_trie.shard_for_prefix(key.owner) == local_shard)
             .map(|(key, change)| (*key, change.clone()))
@@ -55,6 +61,11 @@ pub fn filter_writes_for_shard(
     for (key, movement) in &writes.movements {
         if shard_trie.shard_for_prefix(key.owner) == local_shard {
             filtered.movements.insert(*key, *movement);
+        }
+    }
+    for (key, change) in &writes.entries {
+        if shard_trie.shard_for_prefix(key.owner) == local_shard {
+            filtered.entries.insert(*key, change.clone());
         }
     }
     filtered

@@ -13,15 +13,15 @@ use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::import_leaf_updates;
 use hyperscale_storage::{
     AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportProgress, Substates, WitnessSeed,
-    filter_writes_to_prefix, merge_writes_from_receipts,
+    entry_from_leaf, filter_writes_to_prefix, merge_writes_from_receipts,
 };
 use hyperscale_types::{
-    Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt, SubstateKey, SubstateLeaf,
+    Block, BlockHeight, ChainOrigin, EntryKey, StateRoot, StoredReceipt, SubstateKey, SubstateLeaf,
 };
 use hyperscale_vm_effects::{Address, CollectionId};
 
 use super::core::SimShardStorage;
-use super::snapshot::value_at_version;
+use super::snapshot::{entries_in_range_at, value_at_version};
 use super::state::{SharedState, apply_state_writes};
 
 /// A pinned boundary served from the live versioned store.
@@ -64,13 +64,30 @@ impl Substates for SimBoundary {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        let state = read_or_recover(&self.state);
+        entries_in_range_at(
+            &state.current_entries,
+            &state.entries_history,
+            EntryKey {
+                owner,
+                collection,
+                order: lo,
+            },
+            EntryKey {
+                owner,
+                collection,
+                order: hi,
+            },
+            limit,
+            self.version,
+            state.current_block_height.inner(),
+        )
     }
 }
 
@@ -171,6 +188,12 @@ impl BoundaryStore for SimShardStorage {
             state.tree_store.insert(key, Arc::new(node));
         }
         for leaf in leaves {
+            // The ordered entry index is derived state: rebuild it from
+            // the leaves themselves — the row exists exactly where the
+            // leaf re-derives.
+            if let Some((entry_key, value)) = entry_from_leaf(leaf.key, &leaf.value) {
+                state.current_entries.insert(entry_key, value);
+            }
             state.current_state.insert(leaf.key, leaf.value);
         }
 
@@ -354,7 +377,7 @@ mod tests {
     fn imported_boundary_state_reproduces_the_root() {
         let storage = SimShardStorage::default();
         let fresh = SimShardStorage::default();
-        test_boundary_import_roundtrip(&storage, &fresh, |seed| commit_one(&storage, seed));
+        test_boundary_import_roundtrip(&storage, &fresh, |writes| storage.commit_shared(writes));
     }
 
     /// One write under the owner prefix `[seed; 16]` wrapped as a synced

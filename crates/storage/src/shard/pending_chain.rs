@@ -5,16 +5,16 @@
 //! given anchor — orphaned blocks are not ancestors of the canonical
 //! chain, so they are structurally invisible to anchored views.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
-    CertifiedBlockHeader, ConsensusReceipt, ExecutionCertificate, Finalization, FinalizationHash,
-    MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON, ShardId,
-    ShardWitnessPayload, StateRoot, SubstateKey, TerminalRoots, TickId, Transaction, TxHash,
-    Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
+    CertifiedBlockHeader, ConsensusReceipt, EntryKey, ExecutionCertificate, Finalization,
+    FinalizationHash, MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON,
+    ShardId, ShardWitnessPayload, StateRoot, SubstateKey, TerminalRoots, TickId, Transaction,
+    TxHash, Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
     local_settled_tx_hashes, settled_txs_root_from_hashes,
 };
 use hyperscale_vm_effects::{Address, CollectionId};
@@ -23,7 +23,7 @@ use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
 use crate::tree::proofs::generate_proof;
 use crate::{
     BlockForSync, JmtSnapshot, ParentAnchor, ShardChainReader, ShardChainWriter, SubstateStore,
-    Substates, VersionedStore,
+    Substates, VersionedStore, entry_overlay_range, merge_entry_overlay,
 };
 
 /// Cached base-storage reads observed through a [`SubstateView`].
@@ -764,6 +764,9 @@ pub struct SubstateView<S> {
     /// Flattened pending substates from the anchored chain, in commit order.
     /// Later entries override earlier ones for the same key.
     overlay: OverlayEntries,
+    /// Flattened pending ordered-collection entries from the same chain,
+    /// on the same last-writer-wins terms.
+    overlay_entries: BTreeMap<EntryKey, Option<Vec<u8>>>,
     /// JMT snapshots from the same chain, in commit order. Exposed via
     /// [`Self::pending_snapshots`] so handlers can pass them to
     /// `prepare_block_commit` for chained verification.
@@ -801,6 +804,7 @@ impl<S> SubstateView<S> {
             base,
             anchor_height,
             overlay: HashMap::new(),
+            overlay_entries: BTreeMap::new(),
             jmt_snapshots: Vec::new(),
             jmt_nodes: HashMap::new(),
             versioned_settled: Vec::new(),
@@ -870,9 +874,13 @@ impl<S: Substates> SubstateView<S> {
         // to pick a baseline, and the only one on hand is however far
         // this validator has persisted — which is not a quantity
         // consensus agrees on.
+        let mut overlay_entries: BTreeMap<EntryKey, Option<Vec<u8>>> = BTreeMap::new();
         for entry in chain {
             for (key, change) in entry.jmt_snapshot.settled.cells() {
                 overlay.insert(*key, change.clone());
+            }
+            for (key, change) in entry.jmt_snapshot.settled.entries() {
+                overlay_entries.insert(*key, change.clone());
             }
             for (key, node) in &entry.jmt_snapshot.nodes {
                 jmt_nodes.insert(key.clone(), Arc::clone(node));
@@ -885,6 +893,7 @@ impl<S: Substates> SubstateView<S> {
             base,
             anchor_height,
             overlay,
+            overlay_entries,
             jmt_snapshots,
             jmt_nodes,
             versioned_settled,
@@ -900,13 +909,21 @@ impl<S: Substates> Substates for SubstateView<S> {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        merge_entry_overlay(
+            &*self.base,
+            entry_overlay_range(&self.overlay_entries, owner, collection, lo, hi),
+            owner,
+            collection,
+            lo,
+            hi,
+            limit,
+        )
     }
 }
 
@@ -915,6 +932,7 @@ impl<S: Substates> Substates for SubstateView<S> {
 pub struct ViewSnapshot<Snap> {
     base_snapshot: Snap,
     overlay: Arc<OverlayEntries>,
+    overlay_entries: Arc<BTreeMap<EntryKey, Option<Vec<u8>>>>,
     /// Shared with the parent `SubstateView` so reads through this
     /// snapshot populate the same cache as direct-impl reads.
     base_reads: Arc<Mutex<BaseReadCache>>,
@@ -932,13 +950,21 @@ impl<Snap: Substates> Substates for ViewSnapshot<Snap> {
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        merge_entry_overlay(
+            &self.base_snapshot,
+            entry_overlay_range(&self.overlay_entries, owner, collection, lo, hi),
+            owner,
+            collection,
+            lo,
+            hi,
+            limit,
+        )
     }
 }
 
@@ -960,6 +986,7 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
             // Clone the overlay into an Arc so the snapshot is `'static`
             // with respect to the view's overlay map.
             overlay: Arc::new(self.overlay.clone()),
+            overlay_entries: Arc::new(self.overlay_entries.clone()),
             // Share the base-read cache so reads via either the view's
             // direct impl or this snapshot populate the same map.
             base_reads: Arc::clone(&self.base_reads),

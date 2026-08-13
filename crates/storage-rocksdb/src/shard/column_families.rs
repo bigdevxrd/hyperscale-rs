@@ -4,12 +4,13 @@
 //! what they store, and how their keys/values are encoded.
 
 use hyperscale_types::{
-    BlockHeight, BlockMetadata, ChainOrigin, ConsensusReceipt, ExecutionCertificate,
+    BlockHeight, BlockMetadata, ChainOrigin, ConsensusReceipt, EntryKey, ExecutionCertificate,
     ExecutionMetadata, Finalization, FinalizationHash, Hash, ProvisionHash, Provisions,
     SafeVoteRegisters, ShardWitnessPayload, SubstateKey, TickId, Transaction, ValidatorId,
 };
 use rocksdb::{ColumnFamily, DB};
 
+use super::entry_key::{EntryKeyCodec, VersionedEntryKeyCodec};
 use super::jmt_stored::{StaleTreePart, StoredNodeKey, VersionedStoredNode};
 use super::substate_key::SubstateKeyCodec;
 use super::versioned_key::VersionedSubstateKeyCodec;
@@ -38,6 +39,19 @@ pub const STATE_CF: &str = "state";
 /// key immediately before the write at `write_version`. A `None` value
 /// means "key was absent before the write."
 pub const STATE_HISTORY_CF: &str = "state_history";
+
+/// Ordered-collection entry index — current live entries, keyed
+/// `owner ++ collection ++ order_BE` so one collection's entries are
+/// contiguous and iterate ascending.
+pub const ENTRIES_CF: &str = "entries";
+
+/// Entry-index history log — per-write prior values, keyed
+/// `entry_key ++ write_version_BE`, mirroring `state_history`.
+pub const ENTRIES_HISTORY_CF: &str = "entries_history";
+
+/// Version-indexed list of `entries_history` keys written at each
+/// version, mirroring `stale_state_history` for the entry index's GC.
+pub const STALE_ENTRIES_HISTORY_CF: &str = "stale_entries_history";
 
 /// Column family name for block metadata (header + manifest) keyed by height.
 pub const BLOCKS_CF: &str = "blocks";
@@ -167,6 +181,9 @@ pub const ALL_COLUMN_FAMILIES: &[&str] = &[
     STATE_CF,
     STATE_HISTORY_CF,
     STALE_STATE_HISTORY_CF,
+    ENTRIES_CF,
+    ENTRIES_HISTORY_CF,
+    STALE_ENTRIES_HISTORY_CF,
     CERTIFICATES_CF,
     JMT_NODES_CF,
     STALE_JMT_NODES_CF,
@@ -193,6 +210,9 @@ pub struct CfHandles<'a> {
     state: &'a ColumnFamily,
     state_history: &'a ColumnFamily,
     stale_state_history: &'a ColumnFamily,
+    entries: &'a ColumnFamily,
+    entries_history: &'a ColumnFamily,
+    stale_entries_history: &'a ColumnFamily,
     blocks: &'a ColumnFamily,
     transactions: &'a ColumnFamily,
     certificates: &'a ColumnFamily,
@@ -223,6 +243,9 @@ impl<'a> CfHandles<'a> {
             state: resolve(STATE_CF),
             state_history: resolve(STATE_HISTORY_CF),
             stale_state_history: resolve(STALE_STATE_HISTORY_CF),
+            entries: resolve(ENTRIES_CF),
+            entries_history: resolve(ENTRIES_HISTORY_CF),
+            stale_entries_history: resolve(STALE_ENTRIES_HISTORY_CF),
             blocks: resolve(BLOCKS_CF),
             transactions: resolve(TRANSACTIONS_CF),
             certificates: resolve(CERTIFICATES_CF),
@@ -455,6 +478,60 @@ impl TypedCf for StateHistoryCf {
     type Handles<'a> = CfHandles<'a>;
     fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
         cf.state_history
+    }
+}
+
+/// Ordered-collection entry index — current-value-per-entry, the
+/// order-native mirror of the entry leaves in `StateCf`.
+///
+/// Key: `owner ++ collection ++ order_BE`. Value: the raw entry value.
+/// An absent row means "no entry at this order" — removals delete.
+/// Derived state: at every height the index equals the tree's entry
+/// leaves, and the snap-sync import re-derives it from them.
+pub struct EntriesCf;
+impl TypedCf for EntriesCf {
+    const NAME: &'static str = ENTRIES_CF;
+    type Key = EntryKey;
+    type Value = Vec<u8>;
+    type KeyCodec = EntryKeyCodec;
+    type ValueCodec = RawCodec;
+    type Handles<'a> = CfHandles<'a>;
+    fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
+        cf.entries
+    }
+}
+
+/// Entry-index history log — per-write prior values for historical
+/// range reads, mirroring `StateHistoryCf` row for row.
+///
+/// Key: `(entry_key, write_version)`. Value: the value the entry held
+/// immediately before the write; `None` means it was absent.
+pub struct EntriesHistoryCf;
+impl TypedCf for EntriesHistoryCf {
+    const NAME: &'static str = ENTRIES_HISTORY_CF;
+    type Key = (EntryKey, u64);
+    type Value = Option<Vec<u8>>;
+    type KeyCodec = VersionedEntryKeyCodec;
+    type ValueCodec = HborCodec<Option<Vec<u8>>>;
+    type Handles<'a> = CfHandles<'a>;
+    fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
+        cf.entries_history
+    }
+}
+
+/// Version-indexed list of `entries_history` keys written at each
+/// version, for the same incremental GC `StaleStateHistoryCf` gives the
+/// cell history.
+pub struct StaleEntriesHistoryCf;
+impl TypedCf for StaleEntriesHistoryCf {
+    const NAME: &'static str = STALE_ENTRIES_HISTORY_CF;
+    type Key = u64; // write_version
+    type Value = Vec<Vec<u8>>; // raw `entries_history` keys
+    type KeyCodec = BeU64Codec;
+    type ValueCodec = HborCodec<Vec<Vec<u8>>>;
+    type Handles<'a> = CfHandles<'a>;
+    fn handle<'a>(cf: &Self::Handles<'a>) -> &'a ColumnFamily {
+        cf.stale_entries_history
     }
 }
 
