@@ -1,15 +1,18 @@
-//! Cross-shard agreement receipt (Tier 1).
+//! The executing shard's signed receipt (Tier 1).
 
 use hyperscale_hbor::Hbor;
 
 use crate::{BeaconWitnessRoot, EventRoot, GlobalReceiptHash, Hash, WritesRoot};
 
-/// Cross-shard agreement receipt — ensures validators on different shards
-/// executing the same transaction reach the same outcome.
+/// The receipt an executing shard signs over: one shard's attestation of
+/// what a transaction did.
 ///
-/// Contains `writes_root` — a commitment over the transaction's global
-/// writes, before shard filtering — so cross-shard agreement covers
-/// state changes, not just outcome + events.
+/// Contains `writes_root` — a commitment over the writes this shard
+/// attests. For a batch with cross-shard members the delta is projected
+/// to the executing shard before the root is taken, and the fee burn
+/// lands only on the payer's side, so the participants in one
+/// transaction produce per-shard hashes; agreement across shards is
+/// outcome-level in the certificates, never hash equality.
 ///
 /// This hash is what validators sign over in execution votes.
 /// Ephemeral — never written to storage, only lives for EC aggregation.
@@ -60,10 +63,10 @@ impl GlobalReceipt {
         self.beacon_witness_root
     }
 
-    /// Commitment over the transaction's global writes: the hash of the
-    /// canonical `StateWrites` encoding, covering every shard's cells
-    /// (not shard-filtered), so cross-shard validators agree on the same
-    /// state changes.
+    /// Commitment over the writes this shard attests: the hash of the
+    /// canonical `StateWrites` encoding. Projected to the executing
+    /// shard for any batch with cross-shard members; a whole-locality
+    /// batch commits the full fold.
     #[must_use]
     pub const fn writes_root(&self) -> WritesRoot {
         self.writes_root

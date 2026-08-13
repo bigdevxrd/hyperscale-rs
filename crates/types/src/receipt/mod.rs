@@ -1,15 +1,23 @@
 //! Receipt model for transaction execution results.
 //!
-//! | Tier | Type | Contents | Cross-shard identical? |
-//! |------|------|----------|------------------------|
-//! | **Global**    | [`GlobalReceipt`](global::GlobalReceipt)         | success bit + `event_root` + `beacon_witness_root` + `writes_root` | Yes |
-//! | **Consensus** | [`ConsensusReceipt`](consensus::ConsensusReceipt) | variant tag + (Succeeded:) shard-filtered writes + events + beacon-witness events + precomputed `receipt_hash` | No |
-//! | **Metadata**  | [`ExecutionMetadata`](metadata::ExecutionMetadata) | fees, logs, errors | No (local-only) |
-//! | **Stored**    | [`StoredReceipt`](stored::StoredReceipt)         | `tx_hash` + consensus + optional metadata | n/a (storage shape) |
+//! | Tier | Type | Contents |
+//! |------|------|----------|
+//! | **Global**    | [`GlobalReceipt`](global::GlobalReceipt)         | success bit + `event_root` + `beacon_witness_root` + `writes_root` |
+//! | **Consensus** | [`ConsensusReceipt`](consensus::ConsensusReceipt) | variant tag + (Succeeded:) shard-filtered writes + events + beacon-witness events + precomputed `receipt_hash` |
+//! | **Metadata**  | [`ExecutionMetadata`](metadata::ExecutionMetadata) | fees, logs, errors (local-only) |
+//! | **Stored**    | [`StoredReceipt`](stored::StoredReceipt)         | `tx_hash` + consensus + optional metadata |
 //!
-//! `GlobalReceipt::receipt_hash()` is signed over in execution votes/certificates.
-//! Per-shard state correctness is enforced by `state_root` in the block header,
-//! with per-tx attribution via `local_receipt_root` (`ConsensusReceipt::local_receipt_hash`).
+//! `GlobalReceipt::receipt_hash()` is what execution votes and
+//! certificates sign: the executing shard's own attestation. A batch
+//! with cross-shard members hashes the shard-projected delta, and the
+//! fee burn is a payer-shard write, so participants certify per-shard
+//! hashes and no verifier compares them across shards — agreement is
+//! outcome-level, settlement combines verdicts. The event root is the
+//! one union term: it covers every shard's events while each shard
+//! stores only its own emitters'.
+//! Per-shard state correctness is enforced by `state_root` in the block
+//! header, with per-tx attribution via `local_receipt_root`
+//! (`ConsensusReceipt::local_receipt_hash`).
 
 pub mod consensus;
 pub mod event;

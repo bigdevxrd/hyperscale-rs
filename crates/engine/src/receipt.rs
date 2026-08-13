@@ -1,13 +1,15 @@
-//! The shard-invariant execution output and its per-shard projection.
+//! The engine's execution output and its per-shard projection.
 //!
 //! Receipt projection runs in two stages:
 //!
-//! - the engine turns its own receipt into a [`CachedOutput`] — every
-//!   field is shard-invariant for a given transaction. This is the
-//!   cacheable stage.
+//! - the engine turns its own receipt into a [`CachedOutput`]. For a
+//!   whole-locality batch every field is shard-invariant; for a batch
+//!   with cross-shard members the writes and the receipt hash already
+//!   carry the executing shard's projection.
 //! - [`project_to_shard`] consumes the cached output and a target shard
 //!   to produce the final [`ExecutedTx`]. Only the `writes` slice, the
-//!   events, and the beacon facts are shard-specific.
+//!   events, and the beacon facts are shard-specific — a no-op on
+//!   writes the executor already projected.
 
 use hyperscale_types::{
     Address, BeaconWitnessEvent, ConsensusReceipt, Event, ExecutionMetadata, GlobalReceiptHash,
@@ -17,12 +19,13 @@ use hyperscale_types::{
 use crate::output::ExecutedTx;
 use crate::sharding::filter_writes_for_shard;
 
-/// Shard-invariant projection of an execution receipt.
+/// Cached projection of an execution receipt.
 ///
-/// Carries everything needed to assemble an [`ExecutedTx`] for any
-/// participating shard. The transaction's effective state is canonical
-/// across participating shards by way of provisioning, so every field
-/// here is identical on every shard that executes the same transaction.
+/// Carries everything needed to assemble an [`ExecutedTx`]. Under whole
+/// locality every field is identical on every shard that executes the
+/// same transaction, and the output serves any target; under owned
+/// locality the writes and the receipt hash are the executing shard's
+/// own, and the output serves only that shard.
 /// The per-shard writes slice is *not* cached — it's re-derived per
 /// call from `raw_writes` via [`project_to_shard`].
 pub struct CachedOutput {

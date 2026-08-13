@@ -50,23 +50,23 @@ pub static FAILED_RECEIPT_HASH: LazyLock<GlobalReceiptHash> = LazyLock::new(|| {
 ///
 /// `Succeeded` carries the shard-filtered writes and events produced by
 /// the transaction, the beacon-witness events the engine surfaced for
-/// the shard's accumulator, plus the precomputed `receipt_hash` (which
-/// depends on a `writes_root` derived from globally-filtered writes not
-/// stored here). `Failed` carries no payload — every failure is
-/// consensus-equivalent.
+/// the shard's accumulator, plus the precomputed `receipt_hash`.
+/// `Failed` carries no payload — every failure is consensus-equivalent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsensusReceipt {
     /// Engine committed the tx; carries the precomputed receipt hash and
     /// the writes/events the local shard needs.
     Succeeded {
         /// Precomputed [`GlobalReceiptHash`] — cannot be recomputed from
-        /// this variant alone, since it folds in `writes_root` derived
-        /// from globally-filtered (not shard-filtered) writes that
-        /// aren't carried here.
+        /// this variant alone: its event root covers the union of every
+        /// shard's events while only the local emitters' are carried,
+        /// and under whole locality its writes root can cover more than
+        /// the local slice.
         receipt_hash: GlobalReceiptHash,
-        /// Substate writes filtered to the local shard. The global
-        /// `writes_root` on `receipt_hash` covers writes for all shards;
-        /// this field is only what the local shard needs to apply.
+        /// Substate writes filtered to the local shard — what this shard
+        /// applies at settlement. For a cross-shard member this is also
+        /// exactly what the `receipt_hash` writes root covers, since the
+        /// delta is projected to the executing shard before hashing.
         writes: StateWrites,
         /// Beacon-witness events the engine surfaced for this tx. Folded
         /// into the shard's beacon-witness accumulator at block-assembly

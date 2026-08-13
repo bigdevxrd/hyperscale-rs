@@ -945,10 +945,11 @@ fn hash_of(executed: &ExecutedTx) -> Hash {
 }
 
 /// A transfer's two legs emit from accounts on different shards. Each
-/// shard's receipt keeps only the events its own instances emitted, while
-/// the receipt hash — which covers the union — stays identical, so the
-/// committees agree on what the transaction emitted without either shard
-/// storing the other's events.
+/// shard's receipt keeps only the events its own instances emitted,
+/// while the receipt hash stays identical under whole locality — this
+/// batch has no abortable member, so the writes root covers the full
+/// fold on both sides. On the abortable path the roots are per shard by
+/// design; the union event root is what both paths share.
 #[test]
 fn an_event_lands_only_on_its_emitters_home_shard() {
     let executor = Executor::new(ExecutionMode::Serial);
@@ -973,7 +974,7 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
     assert_eq!(
         hash_of(&sender_side[0]),
         hash_of(&recipient_side[0]),
-        "the receipt hash covers the union, so it cannot differ by shard",
+        "under whole locality the hash covers the full fold, so it cannot differ by shard",
     );
 }
 

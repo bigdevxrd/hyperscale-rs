@@ -61,7 +61,9 @@ pub fn filter_writes_for_shard(
 }
 
 /// The `writes_root` for a [`GlobalReceipt`](hyperscale_types::GlobalReceipt)
-/// over globally-filtered writes.
+/// over the writes the executing shard attests — the shard-projected
+/// delta for a batch with cross-shard members, the full fold for a
+/// whole-locality batch.
 ///
 /// [`StateWrites`] encodes in canonical key order by construction, so the
 /// root is the hash of the encoding — a pure function of content with no
