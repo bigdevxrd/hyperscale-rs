@@ -19,8 +19,8 @@ use std::sync::{Arc, LazyLock};
 use arc_swap::ArcSwap;
 use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use hyperscale_types::{
-    DeclaredKey, DeclaredRange, Derived, EnvelopeExt, Routing, TransactionEnvelope, VmStatics,
-    VmStaticsError, declared_work,
+    DeclaredKey, DeclaredRange, Derived, EnvelopeExt, MAX_STATE_ENTRIES_PER_TX, Routing,
+    TransactionEnvelope, VmStatics, VmStaticsError, declared_work,
 };
 use hyperscale_vm_effects::stdlib::{AUTH, ENTROPY, VALIDATORS, VAULT, XRD as XRD_ROLE};
 use hyperscale_vm_effects::{
@@ -205,6 +205,30 @@ fn classify_declared_access(routing: &RoutedTransaction) -> DeclaredAccess {
     }
     access.declared_modes.sort_unstable();
     access
+}
+
+/// Refuse a declaration whose provisions could outgrow one bundle.
+///
+/// The wire codec refuses a provision bundle past
+/// [`MAX_STATE_ENTRIES_PER_TX`], so a declaration that could ask for
+/// more is refused here — at admission, before an honest server does
+/// enumeration work a bundle it cannot encode would throw away. A cell
+/// serves one entry; a range serves at most its declared cap.
+fn check_provision_weight(provision_keys: &BTreeSet<DeclaredKey>) -> Result<(), VmStaticsError> {
+    let weight: usize = provision_keys
+        .iter()
+        .map(|key| match key {
+            DeclaredKey::Cell(_) => 1,
+            DeclaredKey::Range(range) => usize::try_from(range.cap).unwrap_or(usize::MAX),
+        })
+        .fold(0, usize::saturating_add);
+    if weight > MAX_STATE_ENTRIES_PER_TX {
+        return Err(VmStaticsError(format!(
+            "declared provisions could serve {weight} entries, past the \
+             {MAX_STATE_ENTRIES_PER_TX} one bundle may carry"
+        )));
+    }
+    Ok(())
 }
 
 /// The admission key for one effect target: substate-granular for
@@ -462,6 +486,7 @@ impl VmStatics for BridgeStatics {
             provision_keys,
             declared_modes,
         } = classify_declared_access(&routing);
+        check_provision_weight(&provision_keys)?;
         let prefixes = |keys: &BTreeSet<DeclaredKey>| -> Vec<Address> {
             keys.iter()
                 .map(DeclaredKey::owner)
@@ -512,9 +537,9 @@ mod tests {
     };
     use hyperscale_vm_effects::stdlib::{VAULT, account_metadata};
     use hyperscale_vm_effects::{
-        AuthBase, Constraint, EdgeRef, EvidenceRef, GraphArg, GraphNode, Hasher, IntentDecl,
-        ManifestGraph, PackageHash, Proposal, ResourceAddr, RoleSet, Rule, Subintent,
-        SubintentHash, YieldBinding, YieldParam, child_key, nullifier_key,
+        AddressClass, AuthBase, CollectionId, Constraint, EdgeRef, EvidenceRef, GraphArg,
+        GraphNode, Hasher, IntentDecl, ManifestGraph, PackageHash, Proposal, ResourceAddr, RoleSet,
+        Rule, Subintent, SubintentHash, YieldBinding, YieldParam, child_key, nullifier_key,
     };
     use hyperscale_vm_manifest_builder::signing::sign_subintent;
 
@@ -1070,5 +1095,37 @@ mod tests {
             tree.subintents[0].decl.hash(&ProtocolHasher)
         );
         let _typed: SubintentHash = tree.subintents[0].decl.hash(&ProtocolHasher);
+    }
+
+    /// The provision-weight cap: cells count one, ranges count their
+    /// declared cap, and a set the wire codec could not carry as one
+    /// bundle is refused at admission.
+    #[test]
+    fn a_declaration_past_one_bundles_weight_is_refused() {
+        let owner = Address::new([9; 31], AddressClass::Component);
+        let range = |cap: u32, salt: u128| {
+            DeclaredKey::Range(DeclaredRange {
+                owner,
+                collection: CollectionId([3; 16]),
+                lo: salt,
+                hi: salt,
+                cap,
+            })
+        };
+        let cap_u32 = u32::try_from(MAX_STATE_ENTRIES_PER_TX).unwrap();
+
+        let at_cap: BTreeSet<DeclaredKey> = [range(cap_u32, 0)].into();
+        assert!(check_provision_weight(&at_cap).is_ok());
+
+        let over: BTreeSet<DeclaredKey> = [range(cap_u32, 0), range(1, 1)].into();
+        assert!(check_provision_weight(&over).is_err());
+
+        let cells_count: BTreeSet<DeclaredKey> = [
+            DeclaredKey::substate(owner, [1; 16]),
+            range(cap_u32 - 1, 0),
+            range(1, 1),
+        ]
+        .into();
+        assert!(check_provision_weight(&cells_count).is_err());
     }
 }

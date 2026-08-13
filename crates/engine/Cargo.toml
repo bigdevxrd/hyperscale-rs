@@ -21,7 +21,6 @@ indexmap.workspace = true
 tracing.workspace = true
 
 hyperscale-hbor.workspace = true
-hyperscale-storage-memory.workspace = true
 
 # The blessed engine runs native; the reference interpreter is the
 # wasm32 implementation by decision (the in-browser simulation), not a
@@ -41,6 +40,7 @@ hyperscale-vm-runtime.workspace = true
 # run would notice it rejecting the artifact's metadata section — and the
 # first thing to notice would be the browser build.
 [dev-dependencies]
+hyperscale-storage-memory.workspace = true
 hyperscale-transactions.workspace = true
 hyperscale-types = { workspace = true, features = ["test-utils"] }
 hyperscale-vm-manifest-builder.workspace = true

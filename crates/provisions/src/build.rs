@@ -109,10 +109,24 @@ where
                     );
                     return None;
                 };
-                if let Some(value) = value {
-                    all_keys.push(leaf_key);
-                    entries.push(SubstateEntry::new(leaf_key, Some(value)));
-                }
+                let Some(value) = value else {
+                    // The index enumerated this order at this height, so
+                    // its leaf must exist — the "index ≡ leaves"
+                    // invariant. Serving without it would ship an
+                    // under-provisioned bundle whose failure surfaces as
+                    // untraceable receipt divergence on the target shard;
+                    // refusing keeps the defect at its source.
+                    warn!(
+                        source_shard = source_shard.inner(),
+                        block_height = source_block_height.inner(),
+                        tx_hash = %req.tx_hash,
+                        order,
+                        "build_provisions: entry index names an order with no leaf"
+                    );
+                    return None;
+                };
+                all_keys.push(leaf_key);
+                entries.push(SubstateEntry::new(leaf_key, Some(value)));
             }
         }
         staged.push((req.tx_hash, entries));
