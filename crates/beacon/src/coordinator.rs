@@ -127,20 +127,36 @@ pub fn retention_floor(
         // predecessor observes successor-live and stops coasting — and evicts
         // the window mid-handoff.
         //
-        // A terminal record pins the cut's own window rather than the fold's:
-        // the shard leaves the trie at its cut, so the window that closes it
-        // is the newest one whose trie carries the shard at all, while the
-        // contribution delivering the record folds two windows later. Keying
-        // on the fold would evict the window the record exists to be read
-        // through — the shard would stop resolving a terminal cut, and with
-        // it a settled set, while its roots sat in a record still held. The
-        // window below absorbs the same signing slack as a live boundary's.
+        // A terminal record pins the cut's own window: the shard leaves
+        // the trie at its cut, so that window is the newest whose trie
+        // carries the shard at all, and dropping it would stop resolving
+        // the terminal — and with it a settled set — while its roots sat
+        // in a record still held. The window below absorbs the same
+        // signing slack as a live boundary's.
         .chain(
             state
                 .boundaries
                 .values()
                 .filter_map(|b| b.terminal_epoch)
                 .map(|terminal| Epoch::new(terminal.inner().saturating_sub(1))),
+        )
+        // And each settled-window floor pins the windows the settled
+        // evidence reaches back to. A departed shard's set names every
+        // settlement from that floor to its cut, and each named
+        // certificate resolves its signing committee at its own vote
+        // anchor — the committing block's window, which can sit several
+        // epochs before the cut. Pinning only the cut's window would let
+        // a survivor acquire the set, fetch the certificate, and then
+        // drop it unverifiable: the committee that signed it evicted
+        // while the evidence it authenticates was still readable. One
+        // derivation with the serve and the terminal proposer
+        // (`live_settled_window_floors`), so the schedule never stops
+        // resolving what the attested window can still name.
+        .chain(
+            state
+                .live_settled_window_floors()
+                .into_values()
+                .map(|floor| Epoch::new(windows.epoch_for(floor).inner().saturating_sub(1))),
         )
         .min()
         .unwrap_or(Epoch::GENESIS);
