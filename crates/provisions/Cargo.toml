@@ -19,6 +19,9 @@ serde.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+hyperscale-jmt.workspace = true
+hyperscale-storage = { workspace = true, features = ["test-utils"] }
+hyperscale-storage-memory.workspace = true
 hyperscale-types = { workspace = true, features = ["test-utils"] }
 proptest.workspace = true
 

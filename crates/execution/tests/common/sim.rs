@@ -41,12 +41,12 @@ use hyperscale_storage::{
 use hyperscale_types::test_utils::{TestCommittee, certify, make_live_block};
 use hyperscale_types::{
     Address, AggregateSignature, BeaconWitnessRoot, Block, BlockHeight, CertifiedBlock,
-    ConsensusReceipt, EventRoot, ExecutionCertificate, ExecutionMetadata, ExecutionOutcome,
-    Finalization, GlobalReceipt, LocalKey, MerkleInclusionProof, Movement, ProvisionEntry,
-    Provisions, RevealChain, SettledWrites, ShardId, ShardTrie, SignerBitfield, StateRoot,
-    StateWrites, StoredReceipt, SubstateKey, TickHalf, TickId, TopologySchedule, TopologySnapshot,
-    Transaction, TxHash, TxOutcome, ValidatorId, Verifiable, Verified, WeightedTimestamp,
-    compute_global_receipt_root, read_amount,
+    ConsensusReceipt, DeclaredRange, EventRoot, ExecutionCertificate, ExecutionMetadata,
+    ExecutionOutcome, Finalization, GlobalReceipt, LocalKey, MerkleInclusionProof, Movement,
+    ProvisionEntry, Provisions, RevealChain, SettledWrites, ShardId, ShardTrie, SignerBitfield,
+    StateRoot, StateWrites, StoredReceipt, SubstateKey, TickHalf, TickId, TopologySchedule,
+    TopologySnapshot, Transaction, TxHash, TxOutcome, ValidatorId, Verifiable, Verified,
+    WeightedTimestamp, compute_global_receipt_root, read_amount,
 };
 use hyperscale_vm_effects::CollectionId;
 
@@ -168,6 +168,15 @@ impl SubstateStore for StubBase {
     fn state_root(&self) -> StateRoot {
         StateRoot::ZERO
     }
+    fn get_entries_at_height(
+        &self,
+        _range: DeclaredRange,
+        _block_height: BlockHeight,
+    ) -> Option<Vec<(u128, Vec<u8>)>> {
+        // The map holds no entries at any height.
+        Some(Vec::new())
+    }
+
     fn get_substate_at_height(
         &self,
         _key: SubstateKey,

@@ -19,10 +19,11 @@ use hyperscale_storage::{
 };
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock,
-    CertifiedBlockHeader, ChainOrigin, ConsensusReceipt, ExecutionCertificate, Finalization,
-    FinalizationHash, MerkleInclusionProof, PreparedCommit, Provisions, QuorumCertificate,
-    SafeVoteRegisters, SettledWrites, ShardWitnessPayload, StateRoot, StoredReceipt, SubstateKey,
-    SubstateLeaf, TickId, Transaction, TxHash, ValidatorId, Verifiable, Verified,
+    CertifiedBlockHeader, ChainOrigin, ConsensusReceipt, DeclaredRange, ExecutionCertificate,
+    Finalization, FinalizationHash, MerkleInclusionProof, PreparedCommit, Provisions,
+    QuorumCertificate, SafeVoteRegisters, SettledWrites, ShardWitnessPayload, StateRoot,
+    StoredReceipt, SubstateKey, SubstateLeaf, TickId, Transaction, TxHash, ValidatorId, Verifiable,
+    Verified,
 };
 use hyperscale_vm_effects::{Address, CollectionId};
 
@@ -115,6 +116,14 @@ impl SubstateStore for SharedStorage {
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
         self.0.get_substate_at_height(key, block_height)
+    }
+
+    fn get_entries_at_height(
+        &self,
+        range: DeclaredRange,
+        block_height: BlockHeight,
+    ) -> Option<Vec<(u128, Vec<u8>)>> {
+        self.0.get_entries_at_height(range, block_height)
     }
 
     fn generate_merkle_proofs(

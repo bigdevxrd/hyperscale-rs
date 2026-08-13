@@ -15,8 +15,8 @@ use hyperscale_core::ProvisionsRequest;
 use hyperscale_jmt::TreeReader as JmtTreeReader;
 use hyperscale_storage::{SubstateStore, SubstateView, VersionedStore};
 use hyperscale_types::{
-    BlockHeight, MerkleInclusionProof, ProvisionEntry, Provisions, RevealChain, ShardId,
-    SubstateEntry, SubstateKey, TxHash, WeightedTimestamp,
+    BlockHeight, EntryKey, MerkleInclusionProof, ProtocolHasher, ProvisionEntry, Provisions,
+    RevealChain, ShardId, SubstateEntry, SubstateKey, TxHash, WeightedTimestamp, entry_leaf_key,
 };
 use tracing::warn;
 
@@ -72,6 +72,47 @@ where
             if let Some(value) = value {
                 all_keys.push(*key);
                 entries.push(SubstateEntry::new(*key, Some(value)));
+            }
+        }
+        // A declared interval serves as the entry leaves it holds at the
+        // source height: enumerate the orders from the versioned index,
+        // then read each leaf like any other — the receiver re-derives
+        // the interval from the self-describing leaf values, and every
+        // leaf verifies against the source root like a cell's does.
+        for range in &req.local_ranges {
+            let Some(held) = view.get_entries_at_height(*range, source_block_height) else {
+                warn!(
+                    source_shard = source_shard.inner(),
+                    target_shard = target_shard.inner(),
+                    block_height = source_block_height.inner(),
+                    tx_hash = %req.tx_hash,
+                    "build_provisions: height unavailable for range"
+                );
+                return None;
+            };
+            for (order, _) in held {
+                let leaf_key = entry_leaf_key(
+                    &ProtocolHasher,
+                    EntryKey {
+                        owner: range.owner,
+                        collection: range.collection,
+                        order,
+                    },
+                );
+                let Some(value) = view.get_substate_at_height(leaf_key, source_block_height) else {
+                    warn!(
+                        source_shard = source_shard.inner(),
+                        target_shard = target_shard.inner(),
+                        block_height = source_block_height.inner(),
+                        tx_hash = %req.tx_hash,
+                        "build_provisions: height unavailable for entry leaf"
+                    );
+                    return None;
+                };
+                if let Some(value) = value {
+                    all_keys.push(leaf_key);
+                    entries.push(SubstateEntry::new(leaf_key, Some(value)));
+                }
             }
         }
         staged.push((req.tx_hash, entries));

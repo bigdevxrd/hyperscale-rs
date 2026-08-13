@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_types::{
-    ConsensusPublicKey, DeclaredKey, ExecutionCertificate, ShardId, ShardTrie, SubstateKey,
-    TopologySnapshot, Transaction, TxHash, ValidatorId, Verifiable, VoteCount,
+    ConsensusPublicKey, DeclaredKey, DeclaredRange, ExecutionCertificate, ShardId, ShardTrie,
+    SubstateKey, TopologySnapshot, Transaction, TxHash, ValidatorId, Verifiable, VoteCount,
 };
 
 /// Per-shard recipient lists for provision broadcasting.
@@ -135,22 +135,30 @@ pub fn provision_request(
         .filter_map(DeclaredKey::cell)
         .filter(|cell| trie.shard_for_prefix(cell.owner) == local_shard)
         .collect();
+    let local_ranges: Vec<DeclaredRange> = tx
+        .routing()
+        .provision_keys
+        .iter()
+        .filter_map(DeclaredKey::range)
+        .filter(|range| trie.shard_for_prefix(range.owner) == local_shard)
+        .collect();
     let payer_shard = trie.shard_for_prefix(tx.body().fee_payer);
-    let targets: Vec<ShardId> = if local_keys.is_empty() && payer_shard != local_shard {
-        // The engagement echo: a counterpart with nothing to serve still
-        // owes the payer its commitment of the transaction — the evidence
-        // the payer's vote waits for — and owes nobody else anything.
-        vec![payer_shard]
-    } else {
-        tx.routing()
-            .all_prefixes()
-            .into_iter()
-            .map(|prefix| trie.shard_for_prefix(prefix))
-            .filter(|&s| s != local_shard)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    };
+    let targets: Vec<ShardId> =
+        if local_keys.is_empty() && local_ranges.is_empty() && payer_shard != local_shard {
+            // The engagement echo: a counterpart with nothing to serve still
+            // owes the payer its commitment of the transaction — the evidence
+            // the payer's vote waits for — and owes nobody else anything.
+            vec![payer_shard]
+        } else {
+            tx.routing()
+                .all_prefixes()
+                .into_iter()
+                .map(|prefix| trie.shard_for_prefix(prefix))
+                .filter(|&s| s != local_shard)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        };
     if targets.is_empty() {
         return None;
     }
@@ -158,6 +166,7 @@ pub fn provision_request(
         tx_hash: tx.hash(),
         targets,
         local_keys,
+        local_ranges,
     })
 }
 

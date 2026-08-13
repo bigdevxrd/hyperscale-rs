@@ -8,7 +8,8 @@ use hyperscale_storage::tree::carry_noop_root;
 use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{JmtSnapshot, SubstateStore, VersionedStore};
 use hyperscale_types::{
-    Block, BlockHeight, MerkleInclusionProof, QuorumCertificate, StateRoot, SubstateKey, Verified,
+    Block, BlockHeight, DeclaredRange, MerkleInclusionProof, QuorumCertificate, StateRoot,
+    SubstateKey, Verified,
 };
 use rocksdb::{WriteBatch, WriteOptions};
 
@@ -66,6 +67,36 @@ impl SubstateStore for RocksDbShardStorage {
             current_version,
         };
         Some(snap.cell(key))
+    }
+
+    fn get_entries_at_height(
+        &self,
+        range: DeclaredRange,
+        block_height: BlockHeight,
+    ) -> Option<Vec<(u128, Vec<u8>)>> {
+        use hyperscale_storage::Substates;
+        let snapshot = self.db.snapshot();
+        let (current_version, _) = read_jmt_metadata(&snapshot);
+        if block_height.inner() > current_version {
+            return None;
+        }
+        let floor = current_version.saturating_sub(self.jmt_history_length);
+        if block_height.inner() < floor {
+            return None;
+        }
+        let snap = RocksDbSnapshot {
+            snapshot,
+            db: &self.db,
+            version: block_height.inner(),
+            current_version,
+        };
+        Some(snap.entries_in_range(
+            range.owner,
+            range.collection,
+            range.lo,
+            range.hi,
+            range.cap as usize,
+        ))
     }
 
     fn generate_merkle_proofs(

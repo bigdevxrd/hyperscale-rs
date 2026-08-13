@@ -21,22 +21,29 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hyperscale_types::{Address, DeclaredKey, Mode, ModeKind, SubstateKey, compatible};
+use hyperscale_types::{
+    Address, CollectionId, DeclaredKey, Mode, ModeKind, SubstateKey, compatible,
+};
 
 /// How unresolved legs are reaching the cells they claimed.
 ///
-/// Claims and candidates are both [`DeclaredKey`]s, which name either one
-/// cell or a whole owner prefix. Two of them overlap when they are equal
-/// or when either names the prefix the other sits under — a range claim
-/// covers the points inside it. Overlap alone decides nothing; what
-/// decides is whether the modes on the two sides can be in flight
-/// together.
+/// Claims and candidates are both [`DeclaredKey`]s, which name one cell,
+/// a whole owner prefix, or one collection interval. A prefix covers the
+/// points and collections inside it; a collection interval covers other
+/// intervals of the same collection and nothing else — an interval is
+/// over entries, and no point cell is an entry. Overlap alone decides
+/// nothing; what decides is whether the modes on the two sides can be in
+/// flight together.
 #[derive(Debug, Default)]
 pub struct ProvisionalCells {
     cells: BTreeMap<SubstateKey, BTreeSet<ModeKind>>,
     prefixes: BTreeMap<Address, BTreeSet<ModeKind>>,
+    /// Modes held per collection, interval-insensitive: two intervals of
+    /// one collection contend by mode alone, the conservative half of
+    /// the kernel's overlap arithmetic.
+    collections: BTreeMap<(Address, CollectionId), BTreeSet<ModeKind>>,
     /// Every mode held anywhere under an owner, for the case where the
-    /// *candidate* names the range and the claims sit inside it.
+    /// *candidate* names the prefix and the claims sit inside it.
     owners: BTreeMap<Address, BTreeSet<ModeKind>>,
 }
 
@@ -52,6 +59,12 @@ impl ProvisionalCells {
                 }
                 DeclaredKey::Prefix(owner) => {
                     self.prefixes.entry(*owner).or_default().insert(kind);
+                }
+                DeclaredKey::Range(range) => {
+                    self.collections
+                        .entry((range.owner, range.collection))
+                        .or_default()
+                        .insert(kind);
                 }
             }
         }
@@ -75,11 +88,18 @@ impl ProvisionalCells {
             let candidate = mode.kind();
             let held: &[&BTreeSet<ModeKind>] = &match key {
                 // A claimed prefix covers every cell under it, so both
-                // the point's own claims and its owner's range claims
+                // the point's own claims and its owner's prefix claims
                 // are in the way.
                 DeclaredKey::Cell(cell) => [self.cells.get(cell), self.prefixes.get(&cell.owner)],
-                // A candidate range covers every claim under its owner.
+                // A candidate prefix covers every claim under its owner.
                 DeclaredKey::Prefix(owner) => [self.owners.get(owner), None],
+                // A candidate interval contends with claims on its own
+                // collection and with a prefix claim over its owner —
+                // never with point cells, which no interval contains.
+                DeclaredKey::Range(range) => [
+                    self.collections.get(&(range.owner, range.collection)),
+                    self.prefixes.get(&range.owner),
+                ],
             }
             .map(Option::into_iter)
             .into_iter()

@@ -523,8 +523,8 @@ mod tests {
     use std::sync::Mutex;
 
     use hyperscale_types::{
-        Address, AddressClass, Hash, LocalKey, MerkleInclusionProof, Movement, ShardId, StateRoot,
-        encode_amount,
+        Address, AddressClass, DeclaredRange, Hash, LocalKey, MerkleInclusionProof, Movement,
+        ShardId, StateRoot, encode_amount,
     };
 
     use super::*;
@@ -629,6 +629,15 @@ mod tests {
         fn state_root(&self) -> StateRoot {
             StateRoot::ZERO
         }
+        fn get_entries_at_height(
+            &self,
+            _range: DeclaredRange,
+            _block_height: BlockHeight,
+        ) -> Option<Vec<(u128, Vec<u8>)>> {
+            // Stub state holds no entries at any height.
+            Some(Vec::new())
+        }
+
         fn get_substate_at_height(
             &self,
             _key: SubstateKey,

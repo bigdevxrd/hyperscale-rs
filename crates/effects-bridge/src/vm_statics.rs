@@ -19,8 +19,8 @@ use std::sync::{Arc, LazyLock};
 use arc_swap::ArcSwap;
 use hyperscale_hbor::{from_slice as hbor_from_slice, to_vec as hbor_to_vec};
 use hyperscale_types::{
-    DeclaredKey, Derived, EnvelopeExt, Routing, TransactionEnvelope, VmStatics, VmStaticsError,
-    declared_work,
+    DeclaredKey, DeclaredRange, Derived, EnvelopeExt, Routing, TransactionEnvelope, VmStatics,
+    VmStaticsError, declared_work,
 };
 use hyperscale_vm_effects::stdlib::{AUTH, ENTROPY, VALIDATORS, VAULT, XRD as XRD_ROLE};
 use hyperscale_vm_effects::{
@@ -207,14 +207,36 @@ fn classify_declared_access(routing: &RoutedTransaction) -> DeclaredAccess {
     access
 }
 
-/// The admission key for one effect target: substate-granular for points,
-/// owner-granular for collection targets.
+/// The admission key for one effect target: substate-granular for
+/// points, interval-granular for collection targets — an entry is its
+/// width-one interval.
 const fn admission_key(target: &EffectTarget) -> DeclaredKey {
     match target {
         EffectTarget::Point(key) => DeclaredKey::Cell(*key),
-        EffectTarget::Entry { owner, .. } | EffectTarget::Range { owner, .. } => {
-            DeclaredKey::Prefix(*owner)
-        }
+        EffectTarget::Entry {
+            owner,
+            collection,
+            order,
+        } => DeclaredKey::Range(DeclaredRange {
+            owner: *owner,
+            collection: *collection,
+            lo: *order,
+            hi: *order,
+            cap: 1,
+        }),
+        EffectTarget::Range {
+            owner,
+            collection,
+            lo,
+            hi,
+            cap,
+        } => DeclaredKey::Range(DeclaredRange {
+            owner: *owner,
+            collection: *collection,
+            lo: *lo,
+            hi: *hi,
+            cap: *cap,
+        }),
     }
 }
 

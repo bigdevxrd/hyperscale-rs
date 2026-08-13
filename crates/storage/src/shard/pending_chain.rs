@@ -11,10 +11,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock,
-    CertifiedBlockHeader, ConsensusReceipt, EntryKey, ExecutionCertificate, Finalization,
-    FinalizationHash, MerkleInclusionProof, PreparedCommit, QuorumCertificate, RETENTION_HORIZON,
-    ShardId, ShardWitnessPayload, StateRoot, SubstateKey, TerminalRoots, TickId, Transaction,
-    TxHash, Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
+    CertifiedBlockHeader, ConsensusReceipt, DeclaredRange, EntryKey, ExecutionCertificate,
+    Finalization, FinalizationHash, MerkleInclusionProof, PreparedCommit, QuorumCertificate,
+    RETENTION_HORIZON, ShardId, ShardWitnessPayload, StateRoot, SubstateKey, TerminalRoots, TickId,
+    Transaction, TxHash, Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
     local_settled_tx_hashes, settled_txs_root_from_hashes,
 };
 use hyperscale_vm_effects::{Address, CollectionId};
@@ -1026,6 +1026,57 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
         Some(value)
     }
 
+    fn get_entries_at_height(
+        &self,
+        range: DeclaredRange,
+        block_height: BlockHeight,
+    ) -> Option<Vec<(u128, Vec<u8>)>> {
+        let persisted_version = (*self.base).jmt_height();
+        if block_height <= persisted_version {
+            return (*self.base).get_entries_at_height(range, block_height);
+        }
+
+        // Base interval at the persisted tip, then each pending block's
+        // settled entries in commit order up to `block_height` — the
+        // view's overlay walk, narrowed to one collection interval. The
+        // base fetch widens by the overlay's removals, exactly as every
+        // other layered range read does.
+        let mut overlay: BTreeMap<EntryKey, Option<Vec<u8>>> = BTreeMap::new();
+        for (h, snapshot) in &self.versioned_settled {
+            if *h > block_height {
+                break;
+            }
+            for (key, change) in snapshot.settled.entries() {
+                overlay.insert(*key, change.clone());
+            }
+        }
+        let overlay_in_range =
+            entry_overlay_range(&overlay, range.owner, range.collection, range.lo, range.hi);
+        let tombstones = overlay_in_range
+            .iter()
+            .filter(|(_, change)| change.is_none())
+            .count();
+        let widened = DeclaredRange {
+            cap: range
+                .cap
+                .saturating_add(u32::try_from(tombstones).unwrap_or(u32::MAX)),
+            ..range
+        };
+        let base = (*self.base).get_entries_at_height(widened, persisted_version)?;
+        let mut merged: BTreeMap<u128, Vec<u8>> = base.into_iter().collect();
+        for (order, change) in overlay_in_range {
+            match change {
+                Some(value) => {
+                    merged.insert(order, value);
+                }
+                None => {
+                    merged.remove(&order);
+                }
+            }
+        }
+        Some(merged.into_iter().take(range.cap as usize).collect())
+    }
+
     fn generate_merkle_proofs(
         &self,
         keys: &[SubstateKey],
@@ -1211,6 +1262,15 @@ mod tests {
         fn state_root(&self) -> StateRoot {
             StateRoot::ZERO
         }
+        fn get_entries_at_height(
+            &self,
+            _range: DeclaredRange,
+            _block_height: BlockHeight,
+        ) -> Option<Vec<(u128, Vec<u8>)>> {
+            // Stub state holds no entries at any height.
+            Some(Vec::new())
+        }
+
         fn get_substate_at_height(
             &self,
             _key: SubstateKey,

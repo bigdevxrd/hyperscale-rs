@@ -25,6 +25,7 @@ use hyperscale_effects_bridge::{
     witness_from_event,
 };
 use hyperscale_metrics::record_transaction_executed;
+use hyperscale_storage::entry_from_leaf;
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventExt, EventRoot,
     ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, Movement, PrincipalAddr, ProvisionalHolds,
@@ -841,7 +842,16 @@ impl Executor {
             for entries in lists {
                 for entry in entries.iter() {
                     if let Some(value) = entry.value.as_ref() {
-                        base.cells.insert(entry.key, value.clone());
+                        // A provisioned leaf is a cell or an
+                        // ordered-collection entry, and the leaf says
+                        // which: an entry re-derives its own key, and
+                        // lands in the interval map the kernel's range
+                        // capabilities read.
+                        if let Some((entry_key, entry_value)) = entry_from_leaf(entry.key, value) {
+                            base.entries.insert(entry_key, entry_value);
+                        } else {
+                            base.cells.insert(entry.key, value.clone());
+                        }
                     }
                 }
             }

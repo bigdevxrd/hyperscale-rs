@@ -10,7 +10,7 @@ use hyperscale_types::{
     BeaconBlockHash, BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot,
     BlockHash, BlockHeader, BlockHeight, BlockManifest, BlockVote, CandidateBeaconBlock,
     CertificateRoot, CertifiedBeaconBlock, CertifiedBlock, CertifiedBlockHeader,
-    ConsensusPublicKey, Epoch, ExecutionCertificate, ExecutionVote, Finalization,
+    ConsensusPublicKey, DeclaredRange, Epoch, ExecutionCertificate, ExecutionVote, Finalization,
     GlobalReceiptRoot, Hash, HeaderFetchCount, LocalReceiptRoot, PcQc1, PcQc2, PcVector, PcVote1,
     PcVote2, PcVote3, PcVoteEquivocation, PrincipalAddr, ProposerTimestamp, ProvisionHash,
     ProvisionTxRootsMap, Provisions, ProvisionsRoot, QuorumCertificate, RatifyPhase, RatifyRound,
@@ -161,6 +161,10 @@ pub struct ProvisionsRequest {
     /// none still stages its transaction: the payer shard's bundle is
     /// the engagement evidence and flows with empty entries.
     pub local_keys: Vec<SubstateKey>,
+    /// The locally owned collection intervals of the same read set,
+    /// served as the entry leaves the interval holds at the source
+    /// height.
+    pub local_ranges: Vec<DeclaredRange>,
 }
 
 /// One payer's fee-reservation demand, verified against its vault

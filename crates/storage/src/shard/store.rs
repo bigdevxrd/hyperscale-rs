@@ -3,7 +3,7 @@
 //! This module defines the storage abstraction used by runners to persist
 //! substate state.
 
-use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot, SubstateKey};
+use hyperscale_types::{BlockHeight, DeclaredRange, MerkleInclusionProof, StateRoot, SubstateKey};
 
 use crate::Substates;
 
@@ -78,6 +78,19 @@ pub trait SubstateStore: Substates + Send + Sync + 'static {
         key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>>;
+
+    /// The entries of one collection interval at a specific historical
+    /// block height, capped and ascending — the enumeration a provision
+    /// serves, byte-identical to what an executor materializing the
+    /// declared range at that height would read.
+    ///
+    /// Returns `None` if the height is unavailable (garbage-collected or
+    /// not yet committed).
+    fn get_entries_at_height(
+        &self,
+        range: DeclaredRange,
+        block_height: BlockHeight,
+    ) -> Option<Vec<(u128, Vec<u8>)>>;
 
     /// Generate a batched merkle multiproof for the given substate keys.
     ///

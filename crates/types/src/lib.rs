@@ -225,7 +225,7 @@ pub use topology::shard_prefix::shard_prefix_path;
 pub use topology::snapshot::{ReshapeSeat, ShardAnchor, TopologySnapshot};
 pub use topology::trie::ShardTrie;
 pub use topology::validator::{ValidatorInfo, ValidatorSet};
-pub use transaction::declared_key::DeclaredKey;
+pub use transaction::declared_key::{DeclaredKey, DeclaredRange};
 pub use transaction::limits::MAX_TX_BYTES_LEN;
 pub use transaction::status::{
     TransactionDecision, TransactionError, TransactionStatus, TransactionStatusParseError,

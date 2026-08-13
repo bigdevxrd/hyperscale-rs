@@ -15,8 +15,8 @@ use hyperscale_engine::{
 use hyperscale_storage::{SubstateStore, Substates, TickChain, TickOutput, VersionedStore};
 use hyperscale_transactions::{Client, Terms};
 use hyperscale_types::{
-    BlockHeight, ComponentAddr, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash,
-    MerkleInclusionProof, NetworkId, PrincipalAddr, ProvisionalHolds, RevealChain, SchemeId,
+    BlockHeight, ComponentAddr, ConsensusReceipt, DeclaredRange, Ed25519PrivateKey, EnvelopeExt,
+    Hash, MerkleInclusionProof, NetworkId, PrincipalAddr, ProvisionalHolds, RevealChain, SchemeId,
     SettledWrites, ShardId, ShardTrie, StateRoot, StateWrites, SubstateKey, TimestampRange,
     Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
     absorb_committed_cells,
@@ -114,6 +114,15 @@ impl SubstateStore for MapDb {
     fn state_root(&self) -> StateRoot {
         StateRoot::ZERO
     }
+    fn get_entries_at_height(
+        &self,
+        _range: DeclaredRange,
+        _block_height: BlockHeight,
+    ) -> Option<Vec<(u128, Vec<u8>)>> {
+        // The map holds no entries at any height.
+        Some(Vec::new())
+    }
+
     fn get_substate_at_height(
         &self,
         _key: SubstateKey,

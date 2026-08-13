@@ -5,8 +5,8 @@ use std::sync::Arc;
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::lock_recover::read_or_recover;
 use hyperscale_storage::tree::proofs::generate_proof;
-use hyperscale_storage::{SubstateStore, VersionedStore};
-use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot, SubstateKey};
+use hyperscale_storage::{SubstateStore, Substates, VersionedStore};
+use hyperscale_types::{BlockHeight, DeclaredRange, MerkleInclusionProof, StateRoot, SubstateKey};
 
 use super::core::SimShardStorage;
 use super::snapshot::SimSnapshot;
@@ -43,6 +43,28 @@ impl SubstateStore for SimShardStorage {
             return None;
         }
         Some(self.snapshot_at(block_height).cell(key))
+    }
+
+    fn get_entries_at_height(
+        &self,
+        range: DeclaredRange,
+        block_height: BlockHeight,
+    ) -> Option<Vec<(u128, Vec<u8>)>> {
+        let current_version = read_or_recover(&self.state).current_block_height.inner();
+        if block_height.inner() > current_version {
+            return None;
+        }
+        let floor = current_version.saturating_sub(self.jmt_history_length);
+        if block_height.inner() < floor {
+            return None;
+        }
+        Some(self.snapshot_at(block_height).entries_in_range(
+            range.owner,
+            range.collection,
+            range.lo,
+            range.hi,
+            range.cap as usize,
+        ))
     }
 
     fn generate_merkle_proofs(
