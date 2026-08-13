@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use hyperscale_jmt::{Blake3Hasher, Tree, TreeReader};
 use hyperscale_metrics::record_fetch_response_sent;
-use hyperscale_storage::{ShardStorage, SubstateDatabase};
+use hyperscale_storage::{ShardStorage, Substates};
 use hyperscale_types::network::request::GetStateRangeRequest;
 use hyperscale_types::network::response::{
     GetStateRangeResponse, MAX_LEAVES_PER_STATE_RANGE, StateRangeChunk,
@@ -65,7 +65,7 @@ pub fn serve_state_range_request<S: ShardStorage>(
     let mut budget = SOFT_RESPONSE_BYTES;
     for (leaf_key, _) in &range.leaves {
         let key = SubstateKey::from_bytes(*leaf_key).expect("a stored leaf key names an address");
-        let Some(value) = boundary.substate(key) else {
+        let Some(value) = boundary.cell(key) else {
             warn!(height = version, "state range: leaf value missing");
             return unavailable;
         };

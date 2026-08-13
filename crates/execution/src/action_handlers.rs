@@ -258,7 +258,6 @@ where
         }
         Action::ExecuteTransactions {
             tick,
-            block_hash,
             tick_ts,
             tick_reveal,
             requests,
@@ -276,10 +275,8 @@ where
             // the hold standing for it are never both visible.
             let holds = view.holds();
             let tick_ctx = TickBatchContext {
-                par: ctx.par,
                 local_shard: ctx.shard,
                 shard_trie,
-                block_hash,
                 tick_ts,
                 tick_reveal,
                 holds: &holds,

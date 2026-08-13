@@ -15,7 +15,7 @@ use hyperscale_types::{
     StoredReceipt, SubstateLeaf,
 };
 
-use crate::SubstateDatabase;
+use crate::Substates;
 
 /// The default number of boundary pins a backend retains before
 /// evicting the oldest.
@@ -107,7 +107,7 @@ pub trait BoundaryStore {
     /// A pinned boundary opened for serving: the JMT at the pinned
     /// version plus substate reads at that same state — a leaf
     /// enumerated out of the tree is read back by its own key.
-    type Boundary: TreeReader + SubstateDatabase + Send;
+    type Boundary: TreeReader + Substates + Send;
 
     /// Pin the committed state at `height` — the shard's epoch boundary
     /// block — keeping a backend-configured number of recent pins

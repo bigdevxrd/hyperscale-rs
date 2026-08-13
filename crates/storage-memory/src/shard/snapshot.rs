@@ -10,8 +10,9 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use hyperscale_storage::SubstateDatabase;
+use hyperscale_storage::Substates;
 use hyperscale_types::SubstateKey;
+use hyperscale_vm_effects::{Address, CollectionId};
 
 /// Point-in-time snapshot of in-memory storage scoped to a specific
 /// version within the retention window. Retention enforcement happens
@@ -53,8 +54,8 @@ pub fn value_at_version(
     }
 }
 
-impl SubstateDatabase for SimSnapshot {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for SimSnapshot {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         value_at_version(
             &self.current_state,
             &self.state_history,
@@ -62,5 +63,16 @@ impl SubstateDatabase for SimSnapshot {
             self.version,
             self.current_version,
         )
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }

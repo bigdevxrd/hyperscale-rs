@@ -16,8 +16,8 @@ use hyperscale_storage::test_helpers::{
     test_witness_payload_range_reads as helpers_test_witness_payload_range_reads, with_provisions,
 };
 use hyperscale_storage::{
-    ParentAnchor, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateDatabase,
-    SubstateStore, VersionedStore,
+    ParentAnchor, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateStore,
+    Substates, VersionedStore,
 };
 use hyperscale_types::{
     Address, AddressClass, AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, Block,
@@ -153,7 +153,7 @@ fn test_basic_substate_operations() {
     let key = state_key(3, 10);
 
     // Initially empty
-    assert!(storage.substate(key).is_none());
+    assert!(storage.cell(key).is_none());
 
     // Commit a value
     storage
@@ -161,7 +161,7 @@ fn test_basic_substate_operations() {
         .unwrap();
 
     // Now we can read it
-    assert_eq!(storage.substate(key), Some(vec![99, 88, 77]));
+    assert_eq!(storage.cell(key), Some(vec![99, 88, 77]));
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn test_snapshot() {
     let snapshot = storage.snapshot();
 
     // Snapshot can read data
-    assert_eq!(snapshot.substate(key), Some(vec![1]));
+    assert_eq!(snapshot.cell(key), Some(vec![1]));
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn test_commit_certificate_with_writes_persists_both() {
 
     // Verify the substate was written to the state CF via direct key lookup.
     assert_eq!(
-        storage.substate(state_key(1, 10)),
+        storage.cell(state_key(1, 10)),
         Some(vec![99, 88, 77]),
         "value should match what was written"
     );
@@ -871,7 +871,7 @@ fn test_substates_survive_reopen() {
         assert_eq!(cert.unwrap().receipt_hash(), cert_id);
 
         // Verify the substate was written via direct key lookup.
-        let value = storage.substate(state_key(1, 10));
+        let value = storage.cell(state_key(1, 10));
         assert_eq!(value, Some(vec![42]), "substate should survive reopen");
     }
 }
@@ -1103,7 +1103,7 @@ fn test_state_history_create_delete_create() {
     for (v, want) in expected {
         let snap =
             <RocksDbShardStorage as VersionedStore>::snapshot_at(&storage, BlockHeight::new(*v));
-        let got = snap.substate(key);
+        let got = snap.cell(key);
         assert_eq!(
             &got, want,
             "state-history read at V={v}: want={want:?}, got={got:?}"
@@ -1240,7 +1240,7 @@ fn test_genesis_skips_history_entries() {
     );
 
     // StateCf must hold the genesis write (readable via current-tip snapshot).
-    assert_eq!(storage.substate(state_key(1, 1)), Some(vec![0xAA]));
+    assert_eq!(storage.cell(state_key(1, 1)), Some(vec![0xAA]));
 }
 
 /// Witness retention follows the commit-carried floor (a `WriteBatch`

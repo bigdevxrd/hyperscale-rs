@@ -5,12 +5,12 @@
 
 use hyperscale_types::{BlockHeight, MerkleInclusionProof, StateRoot, SubstateKey};
 
-use crate::SubstateDatabase;
+use crate::Substates;
 
 /// Extension trait for substate storage with snapshots, historical reads,
 /// and JMT state roots.
 ///
-/// This trait extends `SubstateDatabase` with additional methods needed
+/// This trait extends `Substates` with additional methods needed
 /// for deterministic simulation and state commitment:
 /// - `snapshot()` - Create isolated views for parallel execution
 /// - `jmt_height()` / `state_root()` - JMT state commitment
@@ -20,10 +20,10 @@ use crate::SubstateDatabase;
 /// `commit_block()`.
 ///
 /// Runner storage types (`SimShardStorage`, `RocksDbShardStorage`) implement this trait
-/// along with `SubstateDatabase`. They additionally implement [`VersionedStore`]
+/// along with `Substates`. They additionally implement [`VersionedStore`]
 /// for explicit historical-version reads; views do not, since a view carries
 /// a bound anchor and has no meaningful answer for an arbitrary version.
-pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
+pub trait SubstateStore: Substates + Send + Sync + 'static {
     /// The snapshot type returned by this storage.
     ///
     /// All snapshots are version-aware — reads return the value as of
@@ -31,7 +31,7 @@ pub trait SubstateStore: SubstateDatabase + Send + Sync + 'static {
     /// chosen by the impl's [`Self::snapshot`] default (typically the
     /// current committed tip). For views, it is the view's bound
     /// anchor height.
-    type Snapshot<'a>: SubstateDatabase + Send + Sync
+    type Snapshot<'a>: Substates + Send + Sync
     where
         Self: 'a;
 

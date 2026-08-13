@@ -21,12 +21,13 @@ use std::time::Instant;
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_metrics::record_storage_read;
 use hyperscale_storage::{
-    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateDatabase, SubstateStore, tree,
+    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateStore, Substates, tree,
 };
 use hyperscale_types::{
     Block, BlockHeight, ChainOrigin, QuorumCertificate, SafeVoteRegisters, SettledWrites,
     StateRoot, SubstateKey, ValidatorId, Verified,
 };
+use hyperscale_vm_effects::{Address, CollectionId};
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamilyDescriptor, DB, DBCompressionType, Options,
     SliceTransform, WriteBatch,
@@ -58,7 +59,7 @@ use crate::typed_cf::{DbEncode, TypedCf, batch_delete, batch_put, get, multi_get
 /// - Bloom filters for key existence checks
 /// - Binary Blake3 JMT for cryptographic state commitment
 ///
-/// Implements `SubstateDatabase` directly, plus the `SubstateStore` extension
+/// Implements `Substates` directly, plus the `SubstateStore` extension
 /// for snapshots, node listing, and JMT state roots.
 ///
 /// JMT tree nodes are persisted in the `jmt_nodes` column family. JMT metadata
@@ -641,17 +642,17 @@ impl GenesisCommit for RocksDbShardStorage {
     }
 }
 
-impl SubstateDatabase for RocksDbShardStorage {
+impl Substates for RocksDbShardStorage {
     #[instrument(level = Level::DEBUG, skip_all, fields(
         found = Empty,
         latency_us = Empty,
     ))]
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         // Default-version snapshot (= current committed tip) reads
         // the latest value for this key. Delegating to `snapshot()`
         // keeps a single read path.
         let start = Instant::now();
-        let result = <Self as SubstateStore>::snapshot(self).substate(key);
+        let result = <Self as SubstateStore>::snapshot(self).cell(key);
         let elapsed = start.elapsed();
         record_storage_read(elapsed.as_secs_f64());
 
@@ -663,6 +664,17 @@ impl SubstateDatabase for RocksDbShardStorage {
         );
 
         result
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -691,7 +703,6 @@ impl TreeReader for RocksDbShardStorage {
 #[cfg(test)]
 mod test_helpers {
     use hyperscale_metrics::record_storage_write;
-    use hyperscale_storage::CommittableSubstateDatabase;
 
     use super::*;
 
@@ -761,13 +772,6 @@ mod test_helpers {
             tracing::debug!(new_version, "commit complete");
 
             Ok(())
-        }
-    }
-
-    impl CommittableSubstateDatabase for RocksDbShardStorage {
-        fn commit(&mut self, writes: &SettledWrites) {
-            Self::commit(self, writes)
-                .expect("Storage commit failed - cannot maintain consistent state");
         }
     }
 }

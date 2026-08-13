@@ -12,12 +12,13 @@ use hyperscale_jmt::{NibblePath, Node, NodeKey, TreeReader};
 use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::import_leaf_updates;
 use hyperscale_storage::{
-    AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportProgress, SubstateDatabase, WitnessSeed,
+    AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportProgress, Substates, WitnessSeed,
     filter_writes_to_prefix, merge_writes_from_receipts,
 };
 use hyperscale_types::{
     Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt, SubstateKey, SubstateLeaf,
 };
+use hyperscale_vm_effects::{Address, CollectionId};
 
 use super::core::SimShardStorage;
 use super::snapshot::value_at_version;
@@ -49,8 +50,8 @@ impl TreeReader for SimBoundary {
     }
 }
 
-impl SubstateDatabase for SimBoundary {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for SimBoundary {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         let state = read_or_recover(&self.state);
         value_at_version(
             &state.current_state,
@@ -59,6 +60,17 @@ impl SubstateDatabase for SimBoundary {
             self.version,
             state.current_block_height.inner(),
         )
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -190,7 +202,7 @@ impl BoundaryStore for SimShardStorage {
         height: BlockHeight,
         receipts: &[StoredReceipt],
     ) -> Result<StateRoot, String> {
-        let merged = merge_writes_from_receipts(receipts, &mut |key| self.substate(key));
+        let merged = merge_writes_from_receipts(receipts, &mut |key| self.cell(key));
         let mut state = write_or_recover(&self.state);
         if height <= state.current_block_height {
             return Err(format!(
@@ -318,7 +330,7 @@ mod tests {
         .unwrap();
         let (leaf, _) = chunk.leaves.first().expect("one substate committed");
         let value = boundary
-            .substate(SubstateKey::from_bytes(*leaf).expect("a stored leaf key names an address"))
+            .cell(SubstateKey::from_bytes(*leaf).expect("a stored leaf key names an address"))
             .expect("leaf resolves");
         assert_eq!(value, vec![1]);
     }

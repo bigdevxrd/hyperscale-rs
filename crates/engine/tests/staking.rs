@@ -13,17 +13,16 @@ use hyperscale_effects_bridge::genesis::genesis_world_with_pools;
 use hyperscale_effects_bridge::{ProtocolHasher, account_address};
 use hyperscale_engine::genesis::{pool_address, staking_artifact};
 use hyperscale_engine::{
-    ExecutedTx, ExecutionMode, Executor, Parallelism, TickBatchContext, XRD, genesis_writes,
+    ExecutedTx, ExecutionMode, Executor, TickBatchContext, XRD, genesis_writes,
 };
-use hyperscale_storage::SubstateDatabase;
+use hyperscale_storage::Substates;
 use hyperscale_transactions::{Client, Terms};
 use hyperscale_types::{
-    BeaconWitnessEvent, BlockHash, ComponentAddr, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt,
-    Hash, NetworkId, PrincipalAddr, ProvisionalHolds, RevealChain, ShardId, ShardTrie, Stake,
-    StakePoolId, StakePoolSeat, SubstateKey, TimestampRange, Transaction, Verified,
-    WeightedTimestamp,
+    BeaconWitnessEvent, ComponentAddr, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, NetworkId,
+    PrincipalAddr, ProvisionalHolds, RevealChain, ShardId, ShardTrie, Stake, StakePoolId,
+    StakePoolSeat, SubstateKey, TimestampRange, Transaction, Verified, WeightedTimestamp,
 };
-use hyperscale_vm_effects::package_hash;
+use hyperscale_vm_effects::{Address, CollectionId, package_hash};
 use hyperscale_vm_manifest_builder::native::{account, staking};
 
 /// The identifier the beacon folds the seated pool under.
@@ -50,9 +49,20 @@ impl MapDb {
     }
 }
 
-impl SubstateDatabase for MapDb {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for MapDb {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         self.0.get(&key).cloned()
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -130,10 +140,8 @@ fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
     let store = MapDb::genesis(&[(delegator(), 10_000)], &[]);
     let trie = ShardTrie::single();
     let ctx = TickBatchContext {
-        par: Parallelism::Sequential,
         local_shard: ShardId::ROOT,
         shard_trie: &trie,
-        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
         tick_ts: WeightedTimestamp::from_millis(1_000),
         tick_reveal: RevealChain::ZERO,
         holds: &ProvisionalHolds::new(),

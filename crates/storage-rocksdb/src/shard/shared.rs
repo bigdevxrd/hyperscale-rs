@@ -5,9 +5,9 @@
 //! same underlying database via cheap Arc clones, each going through the same
 //! storage-trait implementations.
 //!
-//! The orphan rule prevents implementing foreign traits (`SubstateDatabase`,
-//! `CommittableSubstateDatabase`) for `Arc<RocksDbShardStorage>` directly. This
-//! newtype sidesteps that while providing zero-cost delegation.
+//! The orphan rule prevents implementing foreign traits for
+//! `Arc<RocksDbShardStorage>` directly. This newtype sidesteps that
+//! while providing zero-cost delegation.
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeRea
 use hyperscale_storage::{
     AdoptSource, BaseReadCache, BlockForSync, BoundaryStore, GenesisCommit, ImportProgress,
     JmtSnapshot, ParentAnchor, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter,
-    SubstateDatabase, SubstateStore, VersionedStore, WitnessSeed,
+    SubstateStore, Substates, VersionedStore, WitnessSeed,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, BeaconWitnessLeafCount, Block, BlockHash, BlockHeight, CertifiedBlock,
@@ -24,6 +24,7 @@ use hyperscale_types::{
     SafeVoteRegisters, SettledWrites, ShardWitnessPayload, StateRoot, StoredReceipt, SubstateKey,
     SubstateLeaf, TickId, Transaction, TxHash, ValidatorId, Verifiable, Verified,
 };
+use hyperscale_vm_effects::{Address, CollectionId};
 
 use super::core::RocksDbShardStorage;
 use super::snapshot::RocksDbSnapshot;
@@ -36,9 +37,9 @@ use super::snapshot::RocksDbSnapshot;
 ///
 /// # Why a newtype?
 ///
-/// Rust's orphan rule prevents implementing foreign traits (`SubstateDatabase`,
-/// `CommittableSubstateDatabase`) for `Arc<RocksDbShardStorage>`. This local newtype
-/// can implement all traits while `Arc::clone` keeps sharing cheap.
+/// Rust's orphan rule prevents implementing foreign traits for
+/// `Arc<RocksDbShardStorage>`. This local newtype can implement all
+/// traits while `Arc::clone` keeps sharing cheap.
 #[derive(Clone)]
 pub struct SharedStorage(pub Arc<RocksDbShardStorage>);
 
@@ -62,9 +63,20 @@ impl std::ops::Deref for SharedStorage {
     }
 }
 
-impl SubstateDatabase for SharedStorage {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
-        self.0.substate(key)
+impl Substates for SharedStorage {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
+        self.0.cell(key)
+    }
+
+    fn entries_in_range(
+        &self,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        self.0.entries_in_range(owner, collection, lo, hi, limit)
     }
 }
 
@@ -220,10 +232,6 @@ impl ShardChainWriter for SharedStorage {
     ) -> StateRoot {
         self.0.commit_block(certified, witness)
     }
-
-    fn memory_usage_bytes(&self) -> (u64, u64) {
-        self.0.memory_usage_bytes()
-    }
 }
 
 impl SafeVoteRegisterStore for SharedStorage {
@@ -304,19 +312,5 @@ impl ShardChainReader for SharedStorage {
 
     fn get_beacon_witness_payload_range(&self, start: u64, end: u64) -> Vec<ShardWitnessPayload> {
         self.0.get_beacon_witness_payload_range(start, end)
-    }
-}
-
-#[cfg(test)]
-mod test_helpers {
-    use hyperscale_storage::CommittableSubstateDatabase;
-
-    use super::*;
-
-    impl CommittableSubstateDatabase for SharedStorage {
-        fn commit(&mut self, writes: &SettledWrites) {
-            RocksDbShardStorage::commit(&self.0, writes)
-                .expect("Storage commit failed - cannot maintain consistent state");
-        }
     }
 }

@@ -15,13 +15,14 @@ use hyperscale_jmt::NibblePath;
 use hyperscale_storage::lock_recover::{read_or_recover, write_or_recover};
 use hyperscale_storage::tree::put_at_version;
 use hyperscale_storage::{
-    DedupWindow, GenesisCommit, ImportProgress, RecoveredState, SubstateDatabase, SubstateStore,
+    DedupWindow, GenesisCommit, ImportProgress, RecoveredState, SubstateStore, Substates,
     replay_window,
 };
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHeight, Hash, QuorumCertificate, SettledWrites, StateRoot,
     SubstateKey, Verified, WeightedTimestamp,
 };
+use hyperscale_vm_effects::{Address, CollectionId};
 
 use super::state::{ConsensusState, SharedState, apply_writes};
 
@@ -32,7 +33,7 @@ use super::state::{ConsensusState, SharedState, apply_writes};
 /// capturing per-write prior values for historical reads. This mirrors
 /// `RocksDbShardStorage`'s two-CF layout.
 ///
-/// Implements `SubstateDatabase` directly, plus the `SubstateStore` /
+/// Implements `Substates` directly, plus the `SubstateStore` /
 /// `VersionedStore` extensions for snapshots, owner-prefix listing, and
 /// JMT state roots.
 ///
@@ -338,10 +339,21 @@ impl GenesisCommit for SimShardStorage {
     }
 }
 
-impl SubstateDatabase for SimShardStorage {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for SimShardStorage {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         // Default-version snapshot (= current committed tip) reads the
         // latest value from `current_state`.
-        <Self as SubstateStore>::snapshot(self).substate(key)
+        <Self as SubstateStore>::snapshot(self).cell(key)
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }

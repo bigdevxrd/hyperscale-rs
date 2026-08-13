@@ -33,7 +33,7 @@ impl SubstateStore for SimShardStorage {
         key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        use hyperscale_storage::SubstateDatabase;
+        use hyperscale_storage::Substates;
         let current_version = read_or_recover(&self.state).current_block_height.inner();
         if block_height.inner() > current_version {
             return None;
@@ -42,7 +42,7 @@ impl SubstateStore for SimShardStorage {
         if block_height.inner() < floor {
             return None;
         }
-        Some(self.snapshot_at(block_height).substate(key))
+        Some(self.snapshot_at(block_height).cell(key))
     }
 
     fn generate_merkle_proofs(

@@ -17,12 +17,13 @@ use hyperscale_types::{
     Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
     local_settled_tx_hashes, settled_txs_root_from_hashes,
 };
+use hyperscale_vm_effects::{Address, CollectionId};
 
 use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
 use crate::tree::proofs::generate_proof;
 use crate::{
-    BlockForSync, JmtSnapshot, ParentAnchor, ShardChainReader, ShardChainWriter, SubstateDatabase,
-    SubstateStore, VersionedStore,
+    BlockForSync, JmtSnapshot, ParentAnchor, ShardChainReader, ShardChainWriter, SubstateStore,
+    Substates, VersionedStore,
 };
 
 /// Cached base-storage reads observed through a [`SubstateView`].
@@ -743,7 +744,7 @@ type JmtNodeIndex = HashMap<JmtNodeKey, Arc<JmtNode>>;
 /// Anchored read view over base storage + a slice of pending blocks.
 ///
 /// Built once per anchor by [`PendingChain::view_at`] and cached via an
-/// `Arc`. Implements [`SubstateDatabase`], [`SubstateStore`],
+/// `Arc`. Implements [`Substates`], [`SubstateStore`],
 /// [`ShardChainWriter`], and `jmt::TreeReader` so it can substitute
 /// for the base storage in delegated action handlers.
 ///
@@ -821,7 +822,7 @@ impl<S> SubstateView<S> {
     }
 }
 
-/// Apply overlay entries on top of a base `SubstateDatabase` read.
+/// Apply overlay entries on top of a base `Substates` read.
 ///
 /// If `base_reads_cache` is provided, every base-storage read (overlay
 /// miss) is recorded there exactly once per key — the first observed
@@ -830,14 +831,14 @@ impl<S> SubstateView<S> {
 /// `multi_get_cf` on `StateCf`.
 fn overlay_get(
     overlay: &OverlayEntries,
-    base: &dyn SubstateDatabase,
+    base: &dyn Substates,
     key: SubstateKey,
     base_reads_cache: Option<&Mutex<BaseReadCache>>,
 ) -> Option<Vec<u8>> {
     if let Some(v) = overlay.get(&key) {
         return v.clone();
     }
-    let value = base.substate(key);
+    let value = base.cell(key);
     if let Some(cache) = base_reads_cache {
         lock_or_recover(cache)
             .entry(key)
@@ -846,7 +847,7 @@ fn overlay_get(
     value
 }
 
-impl<S: SubstateDatabase> SubstateView<S> {
+impl<S: Substates> SubstateView<S> {
     /// Build a view from a chain of entries in commit order (earliest first).
     /// Takes borrowed entries so the caller can hold a read lock over the
     /// chain index for the duration of the walk without cloning.
@@ -892,9 +893,20 @@ impl<S: SubstateDatabase> SubstateView<S> {
     }
 }
 
-impl<S: SubstateDatabase> SubstateDatabase for SubstateView<S> {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl<S: Substates> Substates for SubstateView<S> {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         overlay_get(&self.overlay, &*self.base, key, Some(&self.base_reads))
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -908,14 +920,25 @@ pub struct ViewSnapshot<Snap> {
     base_reads: Arc<Mutex<BaseReadCache>>,
 }
 
-impl<Snap: SubstateDatabase> SubstateDatabase for ViewSnapshot<Snap> {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl<Snap: Substates> Substates for ViewSnapshot<Snap> {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         overlay_get(
             &self.overlay,
             &self.base_snapshot,
             key,
             Some(&self.base_reads),
         )
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -1067,10 +1090,6 @@ impl<S: ShardChainWriter> ShardChainWriter for SubstateView<S> {
     ) -> StateRoot {
         (*self.base).commit_block(certified, witness)
     }
-
-    fn memory_usage_bytes(&self) -> (u64, u64) {
-        (*self.base).memory_usage_bytes()
-    }
 }
 
 #[cfg(test)]
@@ -1118,17 +1137,39 @@ mod tests {
         }
     }
 
-    impl SubstateDatabase for StubStore {
-        fn substate(&self, _key: SubstateKey) -> Option<Vec<u8>> {
+    impl Substates for StubStore {
+        fn cell(&self, _key: SubstateKey) -> Option<Vec<u8>> {
             None
+        }
+
+        fn entries_in_range(
+            &self,
+            _owner: Address,
+            _collection: CollectionId,
+            _lo: u128,
+            _hi: u128,
+            _limit: usize,
+        ) -> Vec<(u128, Vec<u8>)> {
+            Vec::new()
         }
     }
 
     /// Empty snapshot for `StubStore` — returns no data.
     struct StubSnapshot;
-    impl SubstateDatabase for StubSnapshot {
-        fn substate(&self, _key: SubstateKey) -> Option<Vec<u8>> {
+    impl Substates for StubSnapshot {
+        fn cell(&self, _key: SubstateKey) -> Option<Vec<u8>> {
             None
+        }
+
+        fn entries_in_range(
+            &self,
+            _owner: Address,
+            _collection: CollectionId,
+            _lo: u128,
+            _hi: u128,
+            _limit: usize,
+        ) -> Vec<(u128, Vec<u8>)> {
+            Vec::new()
         }
     }
 
@@ -1382,8 +1423,8 @@ mod tests {
 
         let view = chain.view_at(h2, BlockHeight::new(2));
         // h2's parent chain: h2 → h1 → ZERO. Should see both writes.
-        assert_eq!(view.substate(cell(owner, [1; 16])), Some(vec![10]));
-        assert_eq!(view.substate(cell(owner, [2; 16])), Some(vec![20]));
+        assert_eq!(view.cell(cell(owner, [1; 16])), Some(vec![10]));
+        assert_eq!(view.cell(cell(owner, [2; 16])), Some(vec![20]));
     }
 
     #[test]
@@ -1414,7 +1455,7 @@ mod tests {
 
         // View anchored at h1: should see h1's value, not the orphan's.
         let view = chain.view_at(h1, BlockHeight::new(1));
-        assert_eq!(view.substate(cell(owner, [1; 16])), Some(vec![10]));
+        assert_eq!(view.cell(cell(owner, [1; 16])), Some(vec![10]));
     }
 
     #[test]
@@ -1486,7 +1527,7 @@ mod tests {
     fn view_at_committed_tip_with_no_commits_returns_base_only() {
         let chain = empty_chain();
         let view = chain.view_at_committed_tip();
-        assert_eq!(view.substate(cell(test_prefix(9), [1; 16])), None);
+        assert_eq!(view.cell(cell(test_prefix(9), [1; 16])), None);
     }
 
     // ── chain reader accessors ────────────────────────────────────────

@@ -49,7 +49,7 @@ impl SubstateStore for RocksDbShardStorage {
         key: SubstateKey,
         block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        use hyperscale_storage::SubstateDatabase;
+        use hyperscale_storage::Substates;
         let snapshot = self.db.snapshot();
         let (current_version, _) = read_jmt_metadata(&snapshot);
         if block_height.inner() > current_version {
@@ -65,7 +65,7 @@ impl SubstateStore for RocksDbShardStorage {
             version: block_height.inner(),
             current_version,
         };
-        Some(snap.substate(key))
+        Some(snap.cell(key))
     }
 
     fn generate_merkle_proofs(

@@ -35,7 +35,9 @@ pub use beacon::chain_writer::BeaconChainWriter;
 pub use beacon::ratify_registers::RatifyRegisterStore;
 pub use beacon::storage::BeaconStorage;
 use hyperscale_jmt::TreeReader;
-use hyperscale_types::{SettledWrites, SubstateKey};
+/// The substate content contract state backends implement — the vm
+/// kernel's, so the executor and the chain read one vocabulary.
+pub use hyperscale_vm_kernel::Substates;
 pub use shard::boundary::{
     AdoptSource, BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportProgress, WitnessSeed,
 };
@@ -93,22 +95,4 @@ impl<S> ShardStorage for S where
         + Sync
         + 'static
 {
-}
-
-/// Read access to a substate store.
-///
-/// Object-safe: the execution seam borrows one as `dyn SubstateDatabase`
-/// so a single batch entry point serves every backend's snapshot type.
-pub trait SubstateDatabase {
-    /// The value at `key`, or `None` if absent.
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>>;
-}
-
-/// Write access to a substate store. Test and genesis paths commit
-/// through it directly; the live path goes through `ShardChainWriter`.
-pub trait CommittableSubstateDatabase {
-    /// Apply `writes` to the store. Values only — a store holds values,
-    /// so whatever moved has already been resolved against what it moved
-    /// from.
-    fn commit(&mut self, writes: &SettledWrites);
 }

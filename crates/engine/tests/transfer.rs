@@ -9,19 +9,19 @@ use hyperscale_effects_bridge::vm_statics::package_key;
 use hyperscale_effects_bridge::{ProtocolHasher, account_address, admit_package, attach_metadata};
 use hyperscale_engine::genesis::{account_artifact, entropy_key, vault_key};
 use hyperscale_engine::{
-    ExecutedTx, ExecutionMode, Executor, Parallelism, PreviewGrants, PreviewInputs, PreviewOutcome,
+    ExecutedTx, ExecutionMode, Executor, PreviewGrants, PreviewInputs, PreviewOutcome,
     PreviewReport, ResourceChange, TickBatchContext, XRD, genesis_writes,
 };
-use hyperscale_storage::{SubstateDatabase, SubstateStore, TickChain, TickOutput, VersionedStore};
+use hyperscale_storage::{SubstateStore, Substates, TickChain, TickOutput, VersionedStore};
 use hyperscale_transactions::{Client, Terms};
 use hyperscale_types::{
-    BlockHash, BlockHeight, ComponentAddr, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash,
+    BlockHeight, ComponentAddr, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, Hash,
     MerkleInclusionProof, NetworkId, PrincipalAddr, ProvisionalHolds, RevealChain, SchemeId,
     SettledWrites, ShardId, ShardTrie, StateRoot, StateWrites, SubstateKey, TimestampRange,
     Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
     absorb_committed_cells,
 };
-use hyperscale_vm_effects::{AbiParam, Address, Expr, package_hash};
+use hyperscale_vm_effects::{AbiParam, Address, CollectionId, Expr, package_hash};
 use hyperscale_vm_kernel::{amount_cell, encode_amount};
 use hyperscale_vm_manifest_builder::GraphBuilder;
 use hyperscale_vm_manifest_builder::native::account;
@@ -84,9 +84,20 @@ impl MapDb {
     }
 }
 
-impl SubstateDatabase for MapDb {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for MapDb {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         self.0.get(&key).cloned()
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -257,10 +268,8 @@ fn execute_anchored(
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (bob(), 50)]);
     let trie = ShardTrie::single();
     let ctx = TickBatchContext {
-        par: Parallelism::Sequential,
         local_shard: ShardId::ROOT,
         shard_trie: &trie,
-        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
         tick_ts: WeightedTimestamp::from_millis(1_000),
         tick_reveal: reveal,
         holds: &ProvisionalHolds::new(),
@@ -405,16 +414,14 @@ fn execute_on(
 /// Execute one batch against an explicit store, so a caller can thread
 /// committed state between batches the way the commit path does.
 fn execute_batch_on(
-    snapshot_store: &(dyn SubstateDatabase + Sync),
+    snapshot_store: &(dyn Substates + Sync),
     executor: &Executor,
     transactions: &[Arc<Verified<Transaction>>],
 ) -> Vec<ExecutedTx> {
     let trie = ShardTrie::single();
     let ctx = TickBatchContext {
-        par: Parallelism::Sequential,
         local_shard: ShardId::ROOT,
         shard_trie: &trie,
-        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
         tick_ts: WeightedTimestamp::from_millis(1_000),
         tick_reveal: RevealChain::ZERO,
         holds: &ProvisionalHolds::new(),
@@ -428,8 +435,8 @@ fn execute_batch_on(
 /// assertion about a balance has to name the state the movement lands
 /// on. These tests start from `accounts` and settle one batch onto it.
 /// A receipt's writes as they settle onto the state they land on.
-fn settled_on(writes: &StateWrites, state: &impl SubstateDatabase) -> SettledWrites {
-    writes.resolve(&mut |key| state.substate(key))
+fn settled_on(writes: &StateWrites, state: &impl Substates) -> SettledWrites {
+    writes.resolve(&mut |key| state.cell(key))
 }
 
 fn settled(writes: &StateWrites, accounts: &[(PrincipalAddr, u128)]) -> SettledWrites {
@@ -540,11 +547,11 @@ fn an_uncovered_withdrawal_aborts_and_the_batch_carries_on() {
         }
     }
     assert_eq!(
-        store.substate(vault_key(alice(), *XRD)),
+        store.cell(vault_key(alice(), *XRD)),
         Some(encode_amount(1_000 - 25 - TRANSFER_FEE).to_vec())
     );
     assert_eq!(
-        store.substate(vault_key(bob(), *XRD)),
+        store.cell(vault_key(bob(), *XRD)),
         Some(encode_amount(75 - floor).to_vec()),
         "the credit lands and the failure's floor stays charged"
     );
@@ -598,7 +605,7 @@ fn a_failed_charge_survives_a_later_sibling_credit() {
     db.apply(charge);
     db.apply(writes);
     assert_eq!(
-        db.substate(vault_key(bob(), *XRD)),
+        db.cell(vault_key(bob(), *XRD)),
         Some(encode_amount(50 + amount - floor).to_vec()),
         "a later sibling's credit must compose with the charged floor, not revert it"
     );
@@ -813,7 +820,7 @@ fn shared_payer_burns_accumulate_across_a_batch() {
         store.apply(writes);
     }
     assert_eq!(
-        store.substate(vault_key(alice(), *XRD)),
+        store.cell(vault_key(alice(), *XRD)),
         Some(encode_amount(1_000 - 10 - 11 - 12).to_vec()),
         "every burn in the batch reaches the committed balance"
     );
@@ -916,10 +923,8 @@ fn execute_on_shard(
     let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (far(), 50)]);
     let trie = ShardTrie::uniform(1);
     let ctx = TickBatchContext {
-        par: Parallelism::Sequential,
         local_shard,
         shard_trie: &trie,
-        block_hash: BlockHash::from_raw(Hash::from_bytes(b"block")),
         tick_ts: WeightedTimestamp::from_millis(1_000),
         tick_reveal: RevealChain::ZERO,
         holds: &ProvisionalHolds::new(),

@@ -30,7 +30,7 @@ use crate::shard::unresolved::{replay_window, unresolved_replay_floor};
 use crate::tree::Jmt;
 use crate::{
     BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportProgress, RecoveredState,
-    SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateDatabase, SubstateStore,
+    SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateStore, Substates,
     WitnessSeed,
 };
 
@@ -813,7 +813,7 @@ where
         .iter()
         .map(|(leaf_key, _)| {
             let value = boundary
-                .substate(
+                .cell(
                     SubstateKey::from_bytes(*leaf_key).expect("a stored leaf key names an address"),
                 )
                 .expect("resolves");
@@ -839,7 +839,7 @@ where
     // Imported raw substates read back at the imported state.
     fresh.pin_boundary(BlockHeight::new(6)).unwrap();
     let fresh_boundary = fresh.open_boundary(BlockHeight::new(6)).expect("pinned");
-    assert_eq!(fresh_boundary.substate(probe), Some(vec![3, 3, 3]),);
+    assert_eq!(fresh_boundary.cell(probe), Some(vec![3, 3, 3]),);
 
     // A second import is rejected — the store is no longer empty.
     assert!(

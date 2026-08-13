@@ -7,9 +7,8 @@ use hyperscale_storage::test_helpers::{
 };
 use hyperscale_storage::tree::{jmt_parent_height, put_at_version};
 use hyperscale_storage::{
-    CommittableSubstateDatabase, DedupWindow, ParentAnchor, SafeVoteRegisterStore,
-    ShardChainReader, ShardChainWriter, SubstateDatabase, SubstateStore, VersionedStore,
-    test_helpers,
+    DedupWindow, ParentAnchor, SafeVoteRegisterStore, ShardChainReader, ShardChainWriter,
+    SubstateStore, Substates, VersionedStore, test_helpers,
 };
 use hyperscale_types::test_utils::{
     install_stub_vm_statics, stub_transaction, test_prefix, test_principal, test_transaction,
@@ -84,12 +83,6 @@ impl SimShardStorage {
 
         s.current_block_height = BlockHeight::new(new_version);
         s.current_root_hash = new_root;
-    }
-}
-
-impl CommittableSubstateDatabase for SimShardStorage {
-    fn commit(&mut self, writes: &SettledWrites) {
-        self.commit_shared(writes);
     }
 }
 
@@ -195,41 +188,41 @@ fn commit_empty(
 
 #[test]
 fn test_basic_substate_operations() {
-    let mut storage = SimShardStorage::default();
+    let storage = SimShardStorage::default();
 
     let key = state_key(1, 10);
 
     // Initially empty
-    assert!(storage.substate(key).is_none());
+    assert!(storage.cell(key).is_none());
 
     // Commit a value
     let writes = SettledWrites::from_absolutes(BTreeMap::from([(key, Some(vec![99, 88, 77]))]));
-    storage.commit(&writes);
+    storage.commit_shared(&writes);
 
     // Now we can read it
-    assert_eq!(storage.substate(key), Some(vec![99, 88, 77]));
+    assert_eq!(storage.cell(key), Some(vec![99, 88, 77]));
 }
 
 #[test]
 fn test_snapshot_isolation() {
-    let mut storage = SimShardStorage::default();
+    let storage = SimShardStorage::default();
 
     let key = state_key(1, 10);
 
     // Write initial value
-    storage.commit(&make_settled_writes(1, 10, vec![1]));
+    storage.commit_shared(&make_settled_writes(1, 10, vec![1]));
 
     // Take snapshot
     let snapshot = storage.snapshot();
 
     // Modify storage
-    storage.commit(&make_settled_writes(1, 10, vec![2]));
+    storage.commit_shared(&make_settled_writes(1, 10, vec![2]));
 
     // Snapshot has old value
-    assert_eq!(snapshot.substate(key), Some(vec![1]));
+    assert_eq!(snapshot.cell(key), Some(vec![1]));
 
     // Storage has new value
-    assert_eq!(storage.substate(key), Some(vec![2]));
+    assert_eq!(storage.cell(key), Some(vec![2]));
 }
 
 #[test]
@@ -787,13 +780,13 @@ fn test_snapshot_at_version_is_deterministic_across_persistence_lag() {
     let key = state_key(node_seed, 1);
 
     assert_eq!(
-        snap_a.substate(key),
+        snap_a.cell(key),
         Some(vec![3]),
         "validator A must see block-3 value at v3, not its current (block-5) value"
     );
     assert_eq!(
-        snap_a.substate(key),
-        snap_b.substate(key),
+        snap_a.cell(key),
+        snap_b.cell(key),
         "validators at different persisted heights must agree on version-3 state"
     );
 }
@@ -821,7 +814,7 @@ fn test_snapshot_resolves_floor_among_many_versions() {
     for target in [1u64, 10, 20, 25, 49, 50] {
         let snap = storage.snapshot_at(BlockHeight::new(target));
         assert_eq!(
-            snap.substate(key),
+            snap.cell(key),
             Some(vec![u8::try_from(target).unwrap_or(u8::MAX)]),
             "snapshot_at({target}) should resolve to block-{target} value"
         );
@@ -877,7 +870,7 @@ fn test_state_history_create_delete_create() {
 
     for (v, want) in expected {
         let snap = storage.snapshot_at(BlockHeight::new(*v));
-        let got = snap.substate(key);
+        let got = snap.cell(key);
         assert_eq!(
             &got, want,
             "state-history read at V={v}: want={want:?}, got={got:?}"

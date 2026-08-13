@@ -1008,8 +1008,6 @@ pub enum Action {
     ExecuteTransactions {
         /// Tick identifier: the committing block's height.
         tick: BlockHeight,
-        /// The committing block, reported as the batch context.
-        block_hash: BlockHash,
         /// The committing block's parent-QC weighted timestamp.
         tick_ts: WeightedTimestamp,
         /// The committing block's reveal chain.

@@ -36,12 +36,9 @@ pub mod genesis;
 /// Shard assignment and write filtering for `StateWrites`.
 pub mod sharding;
 
-pub use batch::{CrossShardTxInput, TickBatchContext, TickTxInput};
+pub use batch::{TickBatchContext, TickTxInput};
 pub use executor::Executor;
 pub use genesis::{GenesisConfig, World, XRD, genesis_world, genesis_writes};
-// Re-export the fan-out strategy `TickBatchContext` carries, so callers
-// and their tests need no separate dispatch dependency.
-pub use hyperscale_dispatch::Parallelism;
 pub use hyperscale_effects_bridge::account_address;
 pub use hyperscale_vm_kernel::ExecutionMode;
 pub use output::ExecutedTx;

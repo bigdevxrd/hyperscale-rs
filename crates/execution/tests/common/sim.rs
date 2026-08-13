@@ -35,8 +35,8 @@ use hyperscale_execution::action_handlers::{
 };
 use hyperscale_execution::{ExecCertStore, ExecutionCoordinator, FinalizationStore};
 use hyperscale_storage::{
-    RecoveredState, ReplayWindow, SubstateDatabase, SubstateStore, TickChain, TickOutput,
-    VersionedStore, merge_writes_from_receipts,
+    RecoveredState, ReplayWindow, SubstateStore, Substates, TickChain, TickOutput, VersionedStore,
+    merge_writes_from_receipts,
 };
 use hyperscale_types::test_utils::{TestCommittee, certify, make_live_block};
 use hyperscale_types::{
@@ -48,6 +48,7 @@ use hyperscale_types::{
     Transaction, TxHash, TxOutcome, ValidatorId, Verifiable, Verified, WeightedTimestamp,
     compute_global_receipt_root, read_amount,
 };
+use hyperscale_vm_effects::CollectionId;
 
 /// The shard a single-shard fixture runs on.
 pub const SHARD: ShardId = ShardId::ROOT;
@@ -121,15 +122,37 @@ impl StubBase {
 /// A snapshot of [`StubBase`] — cloned, so a fold cannot mutate through it.
 struct StubSnapshot(HashMap<SubstateKey, Vec<u8>>);
 
-impl SubstateDatabase for StubSnapshot {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for StubSnapshot {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         self.0.get(&key).cloned()
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
-impl SubstateDatabase for StubBase {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for StubBase {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         self.cells_at(BlockHeight::new(u64::MAX)).get(&key).cloned()
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -252,9 +275,8 @@ impl ExecutionSim {
         for fw in &certificates {
             // Movements resolve against the state they land on, which is
             // whatever the certificates before this one already settled.
-            let resolved = merge_writes_from_receipts(&fw.settling_receipts(), &mut |key| {
-                self.base.substate(key)
-            });
+            let resolved =
+                merge_writes_from_receipts(&fw.settling_receipts(), &mut |key| self.base.cell(key));
             self.base.apply(self.height, &resolved);
         }
         let block = make_live_block(
@@ -457,14 +479,14 @@ impl ExecutionSim {
     /// execute against.
     #[must_use]
     pub fn read(&self, key: SubstateKey) -> Option<Vec<u8>> {
-        self.chain.view_at(self.height).snapshot().substate(key)
+        self.chain.view_at(self.height).snapshot().cell(key)
     }
 
     /// The settled value of `key` — what committed certificates have put
     /// into state, with no unresolved fold over it.
     #[must_use]
     pub fn settled(&self, key: SubstateKey) -> Option<Vec<u8>> {
-        self.base.substate(key)
+        self.base.cell(key)
     }
 
     /// Restart this replica: the settled base survives, and everything
@@ -613,7 +635,7 @@ pub fn amount(bytes: Option<Vec<u8>>) -> u128 {
 /// drops it or applies it twice shows up as a vault that disagrees with
 /// the counter beside it.
 fn stub_execute(
-    snapshot: &impl SubstateDatabase,
+    snapshot: &impl Substates,
     trie: &ShardTrie,
     local_shard: ShardId,
     tx_hash: TxHash,
@@ -631,7 +653,7 @@ fn stub_execute(
             continue;
         }
         let cell = cell_of(key.owner());
-        let next = counter(snapshot.substate(cell)) + 1;
+        let next = counter(snapshot.cell(cell)) + 1;
         cells.insert(cell, Some(next.to_le_bytes().to_vec()));
         charged.get_or_insert_with(|| key.owner());
         let credit = movements.entry(vault_of(key.owner())).or_default();

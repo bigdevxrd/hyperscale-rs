@@ -6,8 +6,9 @@
 //! value is the value at V. If no such entry exists, `StateCf[K]` was
 //! stable since V and is the answer.
 
-use hyperscale_storage::SubstateDatabase;
+use hyperscale_storage::Substates;
 use hyperscale_types::SubstateKey;
+use hyperscale_vm_effects::{Address, CollectionId};
 use rocksdb::{DB, ReadOptions, Snapshot};
 
 use super::column_families::{CfHandles, StateCf, StateHistoryCf};
@@ -40,8 +41,8 @@ impl RocksDbSnapshot<'_> {
     }
 }
 
-impl SubstateDatabase for RocksDbSnapshot<'_> {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for RocksDbSnapshot<'_> {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         let cf = CfHandles::resolve(self.db);
         let state_cf = StateCf::handle(&cf);
 
@@ -85,5 +86,16 @@ impl SubstateDatabase for RocksDbSnapshot<'_> {
         // is authoritative. This is the only path that pays for both a
         // history seek and a StateCf read.
         get::<StateCf>(&self.snapshot, state_cf, &key)
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }

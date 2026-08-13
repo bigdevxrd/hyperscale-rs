@@ -20,8 +20,7 @@
 //!
 //! ## Phase 2: Tick-Atomic Execution
 //! Once every tx in a tick is provisioned (or at block commit for single-shard
-//! ticks), the whole tick dispatches atomically via
-//! `ExecuteTransactions` / `ExecuteCrossShardTransactions`.
+//! ticks), the whole tick dispatches atomically via `ExecuteTransactions`.
 //!
 //! ## Phase 3: Vote Aggregation
 //! Validators send execution votes to the tick leader. When the leader collects
@@ -107,7 +106,6 @@ struct TickedBatch {
 /// the members that joined at its commit.
 struct PendingTick {
     tick: BlockHeight,
-    block_hash: BlockHash,
     tick_ts: WeightedTimestamp,
     tick_reveal: RevealChain,
     requests: Vec<CrossShardExecutionRequest>,
@@ -554,7 +552,7 @@ impl ExecutionCoordinator {
     /// assignments, and pre-populates provisions that arrived before the
     /// block.
     ///
-    /// Emits `ExecuteTransactions` / `ExecuteCrossShardTransactions` actions
+    /// Emits `ExecuteTransactions` actions
     /// for ticks that are fully provisioned at creation time: single-shard
     /// ticks always qualify; cross-shard ticks do when all required provisions
     /// arrived before block commit.
@@ -866,7 +864,6 @@ impl ExecutionCoordinator {
 
         let pending = (!requests.is_empty()).then(|| PendingTick {
             tick: block.height,
-            block_hash: block.hash,
             tick_ts: block.ts,
             tick_reveal: block.reveal,
             requests,
@@ -2579,7 +2576,6 @@ impl ExecutionCoordinator {
         self.tick_in_flight = true;
         vec![Action::ExecuteTransactions {
             tick: tick.tick,
-            block_hash: tick.block_hash,
             tick_ts: tick.tick_ts,
             tick_reveal: tick.tick_reveal,
             requests: tick.requests,

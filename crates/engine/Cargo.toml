@@ -6,7 +6,6 @@ license.workspace = true
 description = "Engine integration: the tick-batch execution seam, the executor behind it, and genesis seeding"
 
 [dependencies]
-hyperscale-dispatch.workspace = true
 hyperscale-effects-bridge.workspace = true
 hyperscale-metrics.workspace = true
 hyperscale-storage.workspace = true

@@ -18,12 +18,13 @@ use std::sync::Arc;
 use hyperscale_jmt::{KEY_BYTES, NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::tree::{import_leaf_updates, jmt_parent_height, put_at_version};
 use hyperscale_storage::{
-    AdoptSource, BoundaryStore, ImportProgress, JmtSnapshot, SubstateDatabase, WitnessSeed,
+    AdoptSource, BoundaryStore, ImportProgress, JmtSnapshot, Substates, WitnessSeed,
     filter_writes_to_prefix, merge_writes_from_receipts,
 };
 use hyperscale_types::{
     Block, BlockHeight, ChainOrigin, StateRoot, StoredReceipt, SubstateKey, SubstateLeaf,
 };
+use hyperscale_vm_effects::{Address, CollectionId};
 use rocksdb::checkpoint::Checkpoint;
 use rocksdb::{ColumnFamily, DB, Options, WriteBatch};
 use tracing::warn;
@@ -446,10 +447,21 @@ impl TreeReader for CheckpointStore {
     }
 }
 
-impl SubstateDatabase for CheckpointStore {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl Substates for CheckpointStore {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         let cf = CfHandles::resolve(&self.db);
         get::<StateCf>(&self.db, StateCf::handle(&cf), &key)
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -546,7 +558,7 @@ impl BoundaryStore for RocksDbShardStorage {
             ));
         }
 
-        let merged = merge_writes_from_receipts(receipts, &mut |key| self.substate(key));
+        let merged = merge_writes_from_receipts(receipts, &mut |key| self.cell(key));
         let filtered = filter_writes_to_prefix(&merged, &self.root_path);
         if filtered.is_empty() {
             return Ok(base_root);

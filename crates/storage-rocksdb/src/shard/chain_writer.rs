@@ -7,7 +7,7 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, JmtSnapshot, ParentAnchor, ShardChainWriter, SubstateDatabase,
+    BaseReadCache, JmtSnapshot, ParentAnchor, ShardChainWriter, Substates,
     merge_writes_from_receipts,
 };
 use hyperscale_types::{
@@ -16,7 +16,7 @@ use hyperscale_types::{
 };
 use rocksdb::{WriteBatch, WriteOptions};
 
-use super::column_families::{ALL_COLUMN_FAMILIES, ConsensusReceiptsCf, ExecutionMetadataCf};
+use super::column_families::{ConsensusReceiptsCf, ExecutionMetadataCf};
 use super::core::RocksDbShardStorage;
 use super::execution_certs::append_block_certs_to_batch;
 use super::jmt_snapshot_store::SnapshotTreeStore;
@@ -82,7 +82,7 @@ impl ShardChainWriter for RocksDbShardStorage {
         // they commit the same values or they disagree about state. A
         // receipt says what it moved, and two receipts moving one cell
         // compose only once something has said what they moved from.
-        let settled = merge_writes_from_receipts(&settling, &mut |key| parent.state.substate(key));
+        let settled = merge_writes_from_receipts(&settling, &mut |key| parent.state.cell(key));
 
         let (computed_root, collected) = if pending_snapshots.is_empty() {
             put_at_version(
@@ -144,35 +144,9 @@ impl ShardChainWriter for RocksDbShardStorage {
             .iter()
             .flat_map(|fw| fw.settling_receipts())
             .collect();
-        let merged_writes = merge_writes_from_receipts(&settling, &mut |key| self.substate(key));
+        let merged_writes = merge_writes_from_receipts(&settling, &mut |key| self.cell(key));
         let _commit_guard = self.commit_lock.lock().unwrap();
         self.commit_block_inner_locked(&merged_writes, block, qc, &receipts, witness)
-    }
-
-    fn memory_usage_bytes(&self) -> (u64, u64) {
-        let mut block_cache_usage = 0u64;
-        let mut memtable_usage = 0u64;
-
-        for cf_name in ALL_COLUMN_FAMILIES {
-            if let Some(cf) = self.db.cf_handle(cf_name) {
-                // Block cache is shared — reading from any CF gives the total.
-                // We read it once from the first CF we find.
-                if block_cache_usage == 0
-                    && let Ok(Some(val)) = self
-                        .db
-                        .property_int_value_cf(&cf, "rocksdb.block-cache-usage")
-                {
-                    block_cache_usage = val;
-                }
-                if let Ok(Some(val)) = self
-                    .db
-                    .property_int_value_cf(&cf, "rocksdb.cur-size-all-mem-tables")
-                {
-                    memtable_usage += val;
-                }
-            }
-        }
-        (block_cache_usage, memtable_usage)
     }
 }
 
@@ -254,8 +228,7 @@ fn build_prepared_commit(
                 .iter()
                 .flat_map(|fw| fw.settling_receipts())
                 .collect();
-            let merged_writes =
-                merge_writes_from_receipts(&settling, &mut |key| storage.substate(key));
+            let merged_writes = merge_writes_from_receipts(&settling, &mut |key| storage.cell(key));
             storage.commit_block_inner_locked(&merged_writes, block, qc, &receipts, witness)
         },
     )

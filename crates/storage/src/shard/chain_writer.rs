@@ -12,7 +12,7 @@ use hyperscale_types::{
     Verifiable, Verified,
 };
 
-use crate::{BaseReadCache, JmtSnapshot, SubstateDatabase};
+use crate::{BaseReadCache, JmtSnapshot, Substates};
 
 /// The block a new one builds on: what it committed, and the state it
 /// left behind.
@@ -31,7 +31,7 @@ pub struct ParentAnchor<'a> {
     /// The state as the parent left it — what this block's writes land
     /// on. Anchored at the parent, which is not always the committed
     /// tip: a proposer builds on blocks that have not persisted yet.
-    pub state: &'a dyn SubstateDatabase,
+    pub state: &'a dyn Substates,
 }
 
 /// Abstracts state commitment for both simulation and production storage.
@@ -99,11 +99,4 @@ pub trait ShardChainWriter: Send + Sync + 'static {
         certified: &Arc<Verified<CertifiedBlock>>,
         witness: &BeaconWitnessCommit,
     ) -> StateRoot;
-
-    /// Memory usage of storage caches in bytes: `(block_cache, memtable)`.
-    ///
-    /// Returns `(0, 0)` by default. Overridden by `RocksDB` to report actual usage.
-    fn memory_usage_bytes(&self) -> (u64, u64) {
-        (0, 0)
-    }
 }

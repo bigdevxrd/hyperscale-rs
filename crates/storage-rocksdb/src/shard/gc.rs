@@ -245,7 +245,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use hyperscale_jmt::NibblePath;
-    use hyperscale_storage::SubstateDatabase;
+    use hyperscale_storage::Substates;
     use hyperscale_storage::test_helpers::state_key;
     use hyperscale_types::SettledWrites;
     use tempfile::TempDir;
@@ -288,12 +288,12 @@ mod tests {
         // Current-tip reads are served from StateCf — history GC
         // cannot affect them regardless of how aggressive the retention is.
         assert_eq!(
-            storage.substate(key_a),
+            storage.cell(key_a),
             Some(vec![0xAA]),
             "StateCf entry for key A survives state-history GC"
         );
         assert_eq!(
-            storage.substate(key_b),
+            storage.cell(key_b),
             Some(vec![0xBB]),
             "StateCf entry for key B survives state-history GC"
         );

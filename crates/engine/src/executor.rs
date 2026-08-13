@@ -25,7 +25,6 @@ use hyperscale_effects_bridge::{
     witness_from_event,
 };
 use hyperscale_metrics::record_transaction_executed;
-use hyperscale_storage::SubstateDatabase;
 use hyperscale_types::{
     BeaconWitnessEvent, BeaconWitnessRoot, ConsensusReceipt, Event, EventExt, EventRoot,
     ExecutionMetadata, FeeSummary, GlobalReceipt, Hash, Movement, PrincipalAddr, ProvisionalHolds,
@@ -37,16 +36,14 @@ use hyperscale_vm_effects::{
     PrefixShardResolver, SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
-    Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
-    execute_batch,
+    Baseline, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
+    Substates, execute_batch,
 };
 
 use crate::backend::EngineBackend;
 use crate::genesis::{World, genesis_world_with_pools};
 use crate::sharding::writes_root;
-use crate::{
-    CachedOutput, CrossShardTxInput, ExecutedTx, TickBatchContext, TickTxInput, project_to_shard,
-};
+use crate::{CachedOutput, ExecutedTx, TickBatchContext, TickTxInput, project_to_shard};
 
 /// Whether a derivation holds a gated node to its target's authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,10 +109,9 @@ pub fn tx_randomness(anchor: RevealChain, tx: TxHash) -> [u8; 32] {
 /// tick's JMT-backed snapshot at materialize time.
 ///
 /// Cells only — ordered collections and locks are absent from the
-/// current stdlib surface, and reservations never persist across
-/// batches, so `holds` is empty by construction. Every kernel read flows
-/// through a capability for a declared effect, so pre-reading exactly
-/// the declared point targets is complete.
+/// current stdlib surface. Every kernel read flows through a capability
+/// for a declared effect, so pre-reading exactly the declared point
+/// targets is complete.
 #[derive(Debug, Default)]
 pub struct VmBase {
     pub cells: BTreeMap<SubstateKey, Vec<u8>>,
@@ -125,7 +121,7 @@ pub struct VmBase {
     pub holds: ProvisionalHolds,
 }
 
-impl Base for VmBase {
+impl Substates for VmBase {
     fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         self.cells.get(&key).cloned()
     }
@@ -140,17 +136,15 @@ impl Base for VmBase {
     ) -> Vec<(u128, Vec<u8>)> {
         Vec::new()
     }
+}
 
+impl Baseline for VmBase {
     fn is_locked(&self, _key: SubstateKey) -> bool {
         false
     }
 
     fn holds(&self, key: SubstateKey) -> BTreeMap<TxHash, u128> {
         self.holds.get(&key).cloned().unwrap_or_default()
-    }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
     }
 }
 
@@ -685,7 +679,7 @@ impl Executor {
     fn run_batch(
         &self,
         ctx: &TickBatchContext<'_>,
-        snapshot: &(dyn SubstateDatabase + Sync),
+        snapshot: &(dyn Substates + Sync),
         transactions: &[Arc<Verified<Transaction>>],
         provisions_by_tx: &BTreeMap<TxHash, Vec<Arc<Vec<SubstateEntry>>>>,
         env_by_tx: &BTreeMap<TxHash, EnvInputs>,
@@ -757,7 +751,7 @@ impl Executor {
             for effect in entry.declaration.set.iter() {
                 if let EffectTarget::Point(key) = effect.target
                     && locality.is_local(key.owner)
-                    && let Some(value) = snapshot.substate(key)
+                    && let Some(value) = snapshot.cell(key)
                 {
                     cells.insert(key, value);
                 }
@@ -779,7 +773,7 @@ impl Executor {
         for tx in transactions {
             let key = tx.fee_vault();
             if ctx.shard_trie.shard_for_prefix(key.owner) == ctx.local_shard
-                && let Some(value) = snapshot.substate(key)
+                && let Some(value) = snapshot.cell(key)
             {
                 cells.insert(key, value);
             }
@@ -823,7 +817,7 @@ impl Executor {
             backend: &self.backend,
         };
         let outcome = execute_batch(
-            Arc::clone(&base) as Arc<dyn Base>,
+            Arc::clone(&base) as Arc<dyn Baseline>,
             &batch,
             &walk,
             protocol_hash,
@@ -910,7 +904,7 @@ impl Executor {
         // kernel's applied store. A mismatch is a fold defect — receipts
         // silently diverging from kernel semantics — and must never ship.
         for (key, change) in &fold.running {
-            let applied = Base::cell(&outcome.store, *key);
+            let applied = Substates::cell(&outcome.store, *key);
             assert_eq!(
                 change.as_ref(),
                 applied.as_ref(),
@@ -950,7 +944,7 @@ impl Executor {
     pub fn execute_batch(
         &self,
         ctx: &TickBatchContext<'_>,
-        snapshot: &(dyn SubstateDatabase + Sync),
+        snapshot: &(dyn Substates + Sync),
         transactions: &[Arc<Verified<Transaction>>],
     ) -> Vec<ExecutedTx> {
         // Every member reads the context's own clock and randomness:
@@ -977,48 +971,6 @@ impl Executor {
         )
     }
 
-    /// Execute a cross-shard sub-batch: `snapshot` carries local state,
-    /// each request its remote provisions. One [`ExecutedTx`] per input,
-    /// in input order, projected to the context's local shard.
-    #[must_use]
-    pub fn execute_cross_shard_batch(
-        &self,
-        ctx: &TickBatchContext<'_>,
-        snapshot: &(dyn SubstateDatabase + Sync),
-        requests: &[CrossShardTxInput<'_>],
-    ) -> Vec<ExecutedTx> {
-        let transactions: Vec<Arc<Verified<Transaction>>> =
-            requests.iter().map(|r| Arc::clone(r.transaction)).collect();
-        let provisions_by_tx: BTreeMap<TxHash, Vec<Arc<Vec<SubstateEntry>>>> = requests
-            .iter()
-            .map(|r| (r.transaction.hash(), r.provisions.to_vec()))
-            .collect();
-        // Each request carries the environment its payer block fixed:
-        // remote-payer legs the anchors off the payer's bundle, everything
-        // else the tick block's own.
-        let env_by_tx: BTreeMap<TxHash, EnvInputs> = requests
-            .iter()
-            .map(|r| {
-                (
-                    r.transaction.hash(),
-                    EnvInputs {
-                        clock_ms: r.clock.as_millis(),
-                        randomness: tx_randomness(r.randomness, r.transaction.hash()),
-                    },
-                )
-            })
-            .collect();
-        let abortable: BTreeSet<TxHash> = transactions.iter().map(|tx| tx.hash()).collect();
-        self.run_batch(
-            ctx,
-            snapshot,
-            &transactions,
-            &provisions_by_tx,
-            &env_by_tx,
-            &abortable,
-        )
-    }
-
     /// Execute one tick's whole batch — single-shard members beside
     /// cross-shard legs — against `snapshot`. One [`ExecutedTx`] per
     /// input, in input order, projected to the context's local shard.
@@ -1030,7 +982,7 @@ impl Executor {
     pub fn execute_tick_batch(
         &self,
         ctx: &TickBatchContext<'_>,
-        snapshot: &(dyn SubstateDatabase + Sync),
+        snapshot: &(dyn Substates + Sync),
         inputs: &[TickTxInput<'_>],
     ) -> Vec<ExecutedTx> {
         let transactions: Vec<Arc<Verified<Transaction>>> =

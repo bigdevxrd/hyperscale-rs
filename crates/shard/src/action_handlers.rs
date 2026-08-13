@@ -10,7 +10,7 @@ use hyperscale_core::{Action, ActionContext, PreparedBlock, ProtocolEvent};
 use hyperscale_metrics::record_signature_verification_latency;
 use hyperscale_network::Network;
 use hyperscale_storage::{
-    JmtSnapshot, ParentAnchor, ShardChainWriter, ShardStorage, SubstateDatabase, SubstateStore,
+    JmtSnapshot, ParentAnchor, ShardChainWriter, ShardStorage, SubstateStore, Substates,
     TerminalWindow,
 };
 use hyperscale_types::network::gossip::{CertifiedBlockHeaderGossip, ShardForkProofGossip};
@@ -195,7 +195,7 @@ pub struct ProposalResult {
 /// 4. Return block, hash, prepared commit handle
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)] // one linear block-assembly pipeline
-pub fn build_proposal<S: ShardChainWriter + SubstateDatabase>(
+pub fn build_proposal<S: ShardChainWriter + Substates>(
     storage: &Arc<S>,
     proposer: ValidatorId,
     height: BlockHeight,

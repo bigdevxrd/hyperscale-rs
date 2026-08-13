@@ -9,8 +9,8 @@ use hyperscale_storage::tree::{
     resolve_materialized_root,
 };
 use hyperscale_storage::{
-    BaseReadCache, JmtSnapshot, ParentAnchor, ShardChainWriter, SubstateDatabase,
-    covers_strictly_more, merge_writes_from_receipts, widest_tick_copies,
+    BaseReadCache, JmtSnapshot, ParentAnchor, ShardChainWriter, Substates, covers_strictly_more,
+    merge_writes_from_receipts, widest_tick_copies,
 };
 use hyperscale_types::{
     BeaconWitnessCommit, Block, BlockHeight, CertifiedBlock, Finalization, PreparedCommit,
@@ -83,7 +83,7 @@ impl ShardChainWriter for SimShardStorage {
         // happens here rather than per receipt because a receipt says
         // what it moved, and two receipts moving one cell compose only
         // once something has said what they moved from.
-        let settled = merge_writes_from_receipts(&settling, &mut |key| parent.state.substate(key));
+        let settled = merge_writes_from_receipts(&settling, &mut |key| parent.state.cell(key));
 
         let (result_root, collected) = if pending_snapshots.is_empty() {
             put_at_version(
@@ -132,7 +132,7 @@ impl ShardChainWriter for SimShardStorage {
                 .iter()
                 .flat_map(|fw| fw.settling_receipts())
                 .collect::<Vec<_>>(),
-            &mut |key| self.substate(key),
+            &mut |key| self.cell(key),
         );
         self.append_beacon_witnesses(witness);
         self.commit_block_inner(&merged_writes, block, qc, &receipts)

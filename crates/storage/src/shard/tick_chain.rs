@@ -43,10 +43,11 @@ use hyperscale_types::{
     BlockHeight, ProvisionalHolds, StateWrites, SubstateKey, TickId, TxHash, amount_cell,
     read_amount,
 };
+use hyperscale_vm_effects::{Address, CollectionId};
 
 use crate::lock_recover::{read_or_recover, write_or_recover};
 use crate::shard::writes::fold_state_writes;
-use crate::{SubstateDatabase, VersionedStore};
+use crate::{Substates, VersionedStore};
 
 /// One cross-shard transaction's provisional contribution to a tick.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -478,22 +479,33 @@ pub struct TickViewSnapshot<Snap> {
     overlay: Arc<StateWrites>,
 }
 
-impl<Snap: SubstateDatabase> SubstateDatabase for TickViewSnapshot<Snap> {
-    fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+impl<Snap: Substates> Substates for TickViewSnapshot<Snap> {
+    fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         let written = self.overlay.cells.get(&key);
         let Some(movement) = self.overlay.movements.get(&key) else {
-            return written.map_or_else(|| self.base_snapshot.substate(key), Clone::clone);
+            return written.map_or_else(|| self.base_snapshot.cell(key), Clone::clone);
         };
         // A cell the folds only moved resolves here, where the base it
         // moved from is finally in reach; one an exclusive write also
         // reached moves from that write instead.
         let before = written
             .cloned()
-            .unwrap_or_else(|| self.base_snapshot.substate(key))
+            .unwrap_or_else(|| self.base_snapshot.cell(key))
             .as_deref()
             .and_then(read_amount)
             .unwrap_or(0);
         amount_cell(movement.apply(before).unwrap_or(0)).map(|cell| cell.to_vec())
+    }
+
+    fn entries_in_range(
+        &self,
+        _owner: Address,
+        _collection: CollectionId,
+        _lo: u128,
+        _hi: u128,
+        _limit: usize,
+    ) -> Vec<(u128, Vec<u8>)> {
+        Vec::new()
     }
 }
 
@@ -553,16 +565,38 @@ mod tests {
         }
     }
 
-    impl SubstateDatabase for StubStore {
-        fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+    impl Substates for StubStore {
+        fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
             self.cells_at(self.tip).get(&key).cloned()
+        }
+
+        fn entries_in_range(
+            &self,
+            _owner: Address,
+            _collection: CollectionId,
+            _lo: u128,
+            _hi: u128,
+            _limit: usize,
+        ) -> Vec<(u128, Vec<u8>)> {
+            Vec::new()
         }
     }
 
     struct StubSnapshot(HashMap<SubstateKey, Vec<u8>>);
-    impl SubstateDatabase for StubSnapshot {
-        fn substate(&self, key: SubstateKey) -> Option<Vec<u8>> {
+    impl Substates for StubSnapshot {
+        fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
             self.0.get(&key).cloned()
+        }
+
+        fn entries_in_range(
+            &self,
+            _owner: Address,
+            _collection: CollectionId,
+            _lo: u128,
+            _hi: u128,
+            _limit: usize,
+        ) -> Vec<(u128, Vec<u8>)> {
+            Vec::new()
         }
     }
 
@@ -669,13 +703,13 @@ mod tests {
 
         // Anchored below tick 2: tick 1's write shadows base.
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(view.snapshot().substate(key(1)), Some(b"one".to_vec()));
-        assert_eq!(view.snapshot().substate(key(2)), Some(b"two".to_vec()));
+        assert_eq!(view.snapshot().cell(key(1)), Some(b"one".to_vec()));
+        assert_eq!(view.snapshot().cell(key(2)), Some(b"two".to_vec()));
 
         // Anchored at tick 2: the removal wins; untouched key falls through.
         let view = chain.view_at(BlockHeight::new(2));
-        assert_eq!(view.snapshot().substate(key(1)), None);
-        assert_eq!(view.snapshot().substate(key(2)), Some(b"two".to_vec()));
+        assert_eq!(view.snapshot().cell(key(1)), None);
+        assert_eq!(view.snapshot().cell(key(2)), Some(b"two".to_vec()));
     }
 
     /// A determined fold carries what its receipts carry, movements
@@ -696,7 +730,7 @@ mod tests {
         );
 
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(amount(&view.snapshot().substate(key(1)).unwrap()), 700);
+        assert_eq!(amount(&view.snapshot().cell(key(1)).unwrap()), 700);
     }
 
     /// A tick reads the base no later than its own height, and no later
@@ -745,7 +779,7 @@ mod tests {
         );
 
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(view.snapshot().substate(key(1)), Some(b"base".to_vec()));
+        assert_eq!(view.snapshot().cell(key(1)), Some(b"base".to_vec()));
 
         chain.resolve(
             &w,
@@ -756,10 +790,7 @@ mod tests {
             },
         );
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(
-            view.snapshot().substate(key(1)),
-            Some(b"provisional".to_vec())
-        );
+        assert_eq!(view.snapshot().cell(key(1)), Some(b"provisional".to_vec()));
     }
 
     /// A tick's output lives at its own height and nowhere else, because
@@ -794,9 +825,9 @@ mod tests {
         );
 
         let view = chain.view_at(BlockHeight::new(6));
-        assert_eq!(view.snapshot().substate(key(1)), Some(b"promoted".to_vec()));
+        assert_eq!(view.snapshot().cell(key(1)), Some(b"promoted".to_vec()));
         assert_eq!(
-            view.snapshot().substate(key(2)),
+            view.snapshot().cell(key(2)),
             None,
             "the tick at 6 is unresolved, so nothing of it is readable"
         );
@@ -831,8 +862,8 @@ mod tests {
             },
         );
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(view.snapshot().substate(key(1)), Some(b"base".to_vec()));
-        assert_eq!(view.snapshot().substate(key(9)), Some(b"floor".to_vec()));
+        assert_eq!(view.snapshot().cell(key(1)), Some(b"base".to_vec()));
+        assert_eq!(view.snapshot().cell(key(9)), Some(b"floor".to_vec()));
     }
 
     #[test]
@@ -859,8 +890,8 @@ mod tests {
             },
         );
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(view.snapshot().substate(key(1)), Some(b"base".to_vec()));
-        assert_eq!(view.snapshot().substate(key(9)), None);
+        assert_eq!(view.snapshot().cell(key(1)), Some(b"base".to_vec()));
+        assert_eq!(view.snapshot().cell(key(9)), None);
     }
 
     /// A tick that mixes a determined member with a leg is the shape the
@@ -899,11 +930,8 @@ mod tests {
             },
         );
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(
-            view.snapshot().substate(key(1)),
-            Some(b"determined".to_vec()),
-        );
-        assert_eq!(view.snapshot().substate(key(2)), None, "the leg is unread");
+        assert_eq!(view.snapshot().cell(key(1)), Some(b"determined".to_vec()),);
+        assert_eq!(view.snapshot().cell(key(2)), None, "the leg is unread");
 
         // The counterpart never certifies, so the leg is abandoned.
         chain.resolve(
@@ -914,12 +942,12 @@ mod tests {
         );
         let view = chain.view_at(BlockHeight::new(1));
         assert_eq!(
-            view.snapshot().substate(key(1)),
+            view.snapshot().cell(key(1)),
             Some(b"determined".to_vec()),
             "the settled tick-mate is untouched by its leg's abandonment",
         );
-        assert_eq!(view.snapshot().substate(key(2)), None);
-        assert_eq!(view.snapshot().substate(key(9)), None);
+        assert_eq!(view.snapshot().cell(key(2)), None);
+        assert_eq!(view.snapshot().cell(key(9)), None);
 
         // And the entry can now evict rather than pin: nothing pends and
         // the fold is stamped, so the base carries everything it held.
@@ -943,7 +971,7 @@ mod tests {
         chain.append(BlockHeight::new(1), output());
 
         let view = chain.view_at(BlockHeight::new(1));
-        assert_eq!(amount(&view.snapshot().substate(key(1)).unwrap()), 900);
+        assert_eq!(amount(&view.snapshot().cell(key(1)).unwrap()), 900);
     }
 
     /// A fold and the base must never both carry one contribution. The
@@ -991,12 +1019,12 @@ mod tests {
 
         // A queued tick anchored below the settlement needs the fold.
         let view = chain.view_at(BlockHeight::new(5));
-        assert_eq!(amount(&view.snapshot().substate(key(1)).unwrap()), 900);
+        assert_eq!(amount(&view.snapshot().cell(key(1)).unwrap()), 900);
 
         // A later tick reads a base that already holds it, and must not
         // apply the debit again.
         let view = chain.view_at(BlockHeight::new(11));
-        assert_eq!(amount(&view.snapshot().substate(key(1)).unwrap()), 900);
+        assert_eq!(amount(&view.snapshot().cell(key(1)).unwrap()), 900);
     }
 
     /// A fold survives until nothing can still need it: every tick in it
