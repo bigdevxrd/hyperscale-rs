@@ -42,6 +42,7 @@ hyperscale-vm-runtime.workspace = true
 # first thing to notice would be the browser build.
 [dev-dependencies]
 hyperscale-transactions.workspace = true
+hyperscale-types = { workspace = true, features = ["test-utils"] }
 hyperscale-vm-manifest-builder.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
