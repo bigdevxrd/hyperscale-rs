@@ -16,17 +16,18 @@
 use std::sync::Arc;
 
 use hyperscale_types::{
-    ComponentAddr, ConsensusPublicKey, MIN_STAKE_FLOOR, NetworkDefinition, Stake, StakePoolId,
-    Transaction, TransactionDecision, TransactionStatus, UNBONDING_WINDOW_EPOCHS, ValidatorId,
-    ValidatorStatus, validator_possession_proof_sign,
+    ComponentAddr, ConsensusPublicKey, Epoch, MIN_STAKE_FLOOR, NetworkDefinition, ShardId, Stake,
+    StakePoolId, Transaction, TransactionDecision, TransactionStatus, UNBONDING_WINDOW_EPOCHS,
+    ValidatorId, ValidatorStatus, validator_possession_proof_sign,
 };
 
 use crate::support::query::{
     pool_effective_stake, pool_total_stake, validator_pubkey, validator_status,
 };
 use crate::support::tx::{
-    GENESIS_POOL_ID, SECOND_POOL_ID, STAKE_POOL_ID, build_deactivate_tx, build_register_tx,
-    build_stake_tx, build_unstake_tx, delegator, pool_at, pool_operator, validity_around,
+    GENESIS_POOL_ID, SECOND_POOL_ID, STAKE_POOL_ID, badge_buyer, build_badge_sale_tx,
+    build_deactivate_tx, build_register_tx, build_reshape_threshold_vote_tx, build_stake_tx,
+    build_unstake_tx, delegator, pool_at, pool_operator, validity_around,
 };
 use crate::support::wait::{await_beacon_epoch, await_tx_terminal};
 use crate::support::{Cluster, epochs};
@@ -365,6 +366,70 @@ pub fn withdrawal_ejects_a_validator_that_a_deposit_reactivates(c: &mut impl Clu
 /// A witness only exists if its transaction settled, so a scenario that
 /// waited on the fold alone would report "the beacon never folded it"
 /// for a transaction that never ran.
+/// Selling a pool is transferring its owner badge, and the sale itself is
+/// the custody handover: the buyer's presentation operates from then on,
+/// and the seller's key stops.
+///
+/// The buyer's account is funded on the shard the pool does not live on,
+/// so the buyer's vote is a cross-shard custody transaction — the badge
+/// holdings provisioned as a declared interval from the buyer's shard,
+/// the vote leaf written on the pool's — and both legs' chains must
+/// carry it.
+///
+/// # Panics
+///
+/// Panics if the sale or the buyer's vote misses its budget, if either
+/// shard's chain never carries the vote, or if the seller's post-sale
+/// vote is not refused.
+pub fn pool_transfer_moves_operatorship(c: &mut impl Cluster) {
+    warm_up(c);
+    let (seller, _) = pool_operator();
+    let (buyer_key, _) = badge_buyer();
+
+    // The sale: an ordinary NF transfer of the badge.
+    submit_committed(
+        c,
+        build_badge_sale_tx(&seller, badge_buyer().1, validity_around(c.now())),
+    );
+
+    // The buyer operates, across shards, and both chains carry it. An
+    // inert ballot: the disarmed threshold it votes for is the one the
+    // cluster already runs under, so the vote proves custody and moves
+    // no parameter.
+    let vote = build_reshape_threshold_vote_tx(
+        &buyer_key,
+        u64::MAX,
+        Epoch::new(u64::MAX),
+        validity_around(c.now()),
+    );
+    let vote_hash = vote.hash();
+    submit_committed(c, vote);
+    let (left, _) = c.chain_fate(ShardId::leaf(1, 0), vote_hash);
+    let (right, _) = c.chain_fate(ShardId::leaf(1, 1), vote_hash);
+    assert!(
+        left.is_some() && right.is_some(),
+        "a cross-shard custody vote must commit on both legs",
+    );
+
+    // The seller no longer holds the badge, and the gate says so.
+    let stale = build_reshape_threshold_vote_tx(
+        &seller,
+        u64::MAX,
+        Epoch::new(u64::MAX),
+        validity_around(c.now()),
+    );
+    let stale_hash = stale.hash();
+    c.submit(Arc::new(stale));
+    let status = await_tx_terminal(c, stale_hash, epochs(8));
+    assert!(
+        matches!(
+            status,
+            Some(TransactionStatus::Completed(TransactionDecision::Reject))
+        ),
+        "the seller's key must stop operating after the sale; status = {status:?}",
+    );
+}
+
 fn submit_committed<C: Cluster>(c: &mut C, tx: Transaction) {
     let hash = tx.hash();
     c.submit(Arc::new(tx));

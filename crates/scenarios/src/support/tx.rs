@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use hyperscale_effects_bridge::genesis::genesis_world_with_pools;
 use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata};
-use hyperscale_engine::genesis::{pool_address, pool_owner_badge, stake_unit, staking_artifact};
+use hyperscale_engine::genesis::{
+    owner_badge_id, pool_address, pool_owner_badge, stake_unit, staking_artifact,
+};
 use hyperscale_engine::{XRD, account_address};
 use hyperscale_transactions::{Client, DEFAULT_GAS_LIMIT, Terms};
 use hyperscale_types::{
@@ -1215,6 +1217,44 @@ pub fn build_securify_tx(
 #[must_use]
 pub fn world_pools() -> Vec<StakePoolSeat> {
     staking_pools()
+}
+
+/// The badge sale's buyer.
+///
+/// An account funded on the shard the genesis pool does not live on, so
+/// operating after the sale is a cross-shard custody transaction — the
+/// holdings provisioned from the buyer's shard, the vote leaf written
+/// on the pool's.
+#[must_use]
+pub fn badge_buyer() -> (Ed25519PrivateKey, PrincipalAddr) {
+    let trie = ShardTrie::uniform_from_count(2);
+    let pool_shard = trie.shard_for_prefix(pool_at(GENESIS_POOL_ID));
+    let buyer_shard = if pool_shard == ShardId::leaf(1, 0) {
+        ShardId::leaf(1, 1)
+    } else {
+        ShardId::leaf(1, 0)
+    };
+    let mut taken = Vec::new();
+    account_routing_to(buyer_shard, &mut taken)
+}
+
+/// Sell the genesis pool: withdraw its owner badge from the seller's
+/// holdings and deposit it into `buyer`'s. An ordinary NF transfer —
+/// which is the point.
+#[must_use]
+pub fn build_badge_sale_tx(
+    seller: &Ed25519PrivateKey,
+    buyer: PrincipalAddr,
+    validity: TimestampRange,
+) -> Transaction {
+    let pool = pool_at(GENESIS_POOL_ID);
+    let graph = graph(|b| {
+        let proof = account::authorize(b, account_address(&seller.public_key().0))?;
+        let funds =
+            account::withdraw_nf(b, proof, pool_owner_badge(pool), &[owner_badge_id(pool)])?;
+        account::deposit_nf(b, buyer, funds)
+    });
+    Transaction::new(envelope(graph, seller, validity))
 }
 
 /// The publishers a deploy storm spams from: one per depth-1 shard, so

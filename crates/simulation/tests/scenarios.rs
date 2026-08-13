@@ -11,14 +11,14 @@ use std::time::Duration;
 use hyperscale_core::ProtocolEvent;
 use hyperscale_node::shard::{HostEvent, ShardScopedInput};
 use hyperscale_scenarios::tx::{
-    CROSS_FRACTION_SENDERS, cross_fraction_genesis_accounts, cross_shard_fault_genesis_accounts,
-    cross_shard_genesis_accounts, genesis_accounts, halt_straddler_setup,
-    insolvent_genesis_accounts, livelock_genesis_accounts, merge_straddler_setup,
-    nullifier_race_genesis_accounts, overdraw_genesis_accounts, participant_sweep_genesis_accounts,
-    probe_train_genesis_accounts, reshape_lifecycle_accounts, securify_genesis_accounts,
-    shared_recipient_genesis_accounts, split_straddler_setup, staking_genesis_accounts,
-    storm_genesis_accounts, unbound_genesis_accounts, unbound_remote_genesis_accounts,
-    withdrawal_burst_genesis_accounts,
+    CROSS_FRACTION_SENDERS, badge_buyer, cross_fraction_genesis_accounts,
+    cross_shard_fault_genesis_accounts, cross_shard_genesis_accounts, genesis_accounts,
+    halt_straddler_setup, insolvent_genesis_accounts, livelock_genesis_accounts,
+    merge_straddler_setup, nullifier_race_genesis_accounts, overdraw_genesis_accounts,
+    participant_sweep_genesis_accounts, probe_train_genesis_accounts, reshape_lifecycle_accounts,
+    securify_genesis_accounts, shared_recipient_genesis_accounts, split_straddler_setup,
+    staking_genesis_accounts, storm_genesis_accounts, unbound_genesis_accounts,
+    unbound_remote_genesis_accounts, withdrawal_burst_genesis_accounts,
 };
 use hyperscale_scenarios::{
     Cluster, FaultableCluster, MAX_REPLAY_PROBES, ScenarioConfig,
@@ -42,11 +42,12 @@ use hyperscale_scenarios::{
     minority_fragment_rejoins_after_partition, multi_vnode_progress,
     nullifier_race_admits_exactly_one, participant_count_sweep, partition_halts_and_heals,
     partition_heals_at_exact_quorum, pool_capacity_caps_registrations,
-    preview_reports_resource_changes, randomness_draw_agrees_across_shards,
-    re_registration_of_a_live_validator_is_a_no_op, reads_the_committed_baseline,
-    register_validator_pools_a_node, register_without_capacity_is_rejected,
-    registered_validator_activates_onto_a_shard, securify_retires_the_key_at_the_payer_shard,
-    single_transfer, split_boundary_admits_an_uncommitted_precut_tx,
+    pool_transfer_moves_operatorship, preview_reports_resource_changes,
+    randomness_draw_agrees_across_shards, re_registration_of_a_live_validator_is_a_no_op,
+    reads_the_committed_baseline, register_validator_pools_a_node,
+    register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
+    securify_retires_the_key_at_the_payer_shard, single_transfer,
+    split_boundary_admits_an_uncommitted_precut_tx,
     split_boundary_hands_back_what_it_never_included, split_boundary_refuses_a_replay,
     split_lifecycle, split_straddler_atomic, split_straddler_ec_partition_atomic,
     split_surviving_counterpart_releases_its_reservation,
@@ -1111,6 +1112,16 @@ fn delegation_folds_into_beacon_state_sim() {
     let mut cluster =
         SimCluster::with_accounts(&witness_config(4), 0x57AC, &staking_genesis_accounts());
     delegation_folds_into_beacon_state(&mut cluster);
+}
+
+#[test]
+fn pool_transfer_moves_operatorship_sim() {
+    let mut cluster = SimCluster::with_grown_accounts(
+        &cross_shard_config(),
+        0xBAD9E,
+        &[(badge_buyer().1, 1_000_000)],
+    );
+    pool_transfer_moves_operatorship(&mut cluster);
 }
 
 #[test]

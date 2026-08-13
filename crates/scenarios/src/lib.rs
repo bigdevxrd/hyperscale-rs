@@ -75,7 +75,8 @@ pub use support::{
 pub use transactions::livelock_resolves_promptly;
 pub use witnesses::{
     delegation_folds_into_beacon_state, pool_capacity_caps_registrations,
-    re_registration_of_a_live_validator_is_a_no_op, register_validator_pools_a_node,
-    register_without_capacity_is_rejected, registered_validator_activates_onto_a_shard,
-    stake_withdraw_drops_effective_stake, withdrawal_ejects_a_validator_that_a_deposit_reactivates,
+    pool_transfer_moves_operatorship, re_registration_of_a_live_validator_is_a_no_op,
+    register_validator_pools_a_node, register_without_capacity_is_rejected,
+    registered_validator_activates_onto_a_shard, stake_withdraw_drops_effective_stake,
+    withdrawal_ejects_a_validator_that_a_deposit_reactivates,
 };
