@@ -57,8 +57,9 @@ pub use shard::tick_chain::{
 pub use shard::unresolved::{ReplayWindow, replay_window, unresolved_replay_floor};
 pub use shard::vote_registers::SafeVoteRegisterStore;
 pub use shard::writes::{
-    entry_from_leaf, entry_leaf_rows, entry_overlay_range, filter_writes_to_prefix,
-    fold_state_writes, merge_entry_overlay, merge_state_writes, merge_writes_from_receipts,
+    entry_from_leaf, entry_leaf_rows, entry_leaf_value, entry_overlay_range,
+    filter_writes_to_prefix, fold_state_writes, merge_entry_overlay, merge_state_writes,
+    merge_writes_from_receipts,
 };
 pub use tree::{CollectedWrites, JmtSnapshot};
 

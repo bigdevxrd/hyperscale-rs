@@ -599,6 +599,7 @@ impl BoundaryStore for RocksDbShardStorage {
             height.inner(),
             /* write_history */ true,
             /* base_reads */ None,
+            /* pending */ &[],
         );
         let parent_version =
             jmt_parent_height(BlockHeight::new(base_version), base_root).map(BlockHeight::inner);

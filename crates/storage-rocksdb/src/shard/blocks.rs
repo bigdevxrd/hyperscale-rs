@@ -715,8 +715,12 @@ mod test_helpers {
             // production commit path.
             let version = self.read_jmt_metadata().0;
             self.append_substate_writes_to_batch(
-                &mut batch, writes, version, /* write_history */ true,
+                &mut batch,
+                writes,
+                version,
+                /* write_history */ true,
                 /* base_reads */ None,
+                /* pending */ &[],
             );
             write_count += writes.cells().len();
 

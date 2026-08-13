@@ -25,9 +25,9 @@ use hyperscale_types::{
     BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, EntryLeaf,
     ExecutionCertificate, Finalization, FinalizationHash, GlobalReceiptHash, GlobalReceiptRoot,
     Hash, LocalKey, ProposerTimestamp, ProtocolHasher, QuorumCertificate, Round, SafeVoteRegisters,
-    SettledWrites, ShardId, SignerBitfield, StateRoot, StoredReceipt, SubstateKey, SyncHint,
-    TickHalf, TickId, TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp, WitnessSources,
-    entry_leaf_key,
+    SettledWrites, ShardId, SignerBitfield, StateRoot, StateWrites, StoredReceipt, SubstateKey,
+    SyncHint, TickHalf, TickId, TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp,
+    WitnessSources, entry_leaf_key,
 };
 
 fn no_witness() -> BeaconWitnessCommit {
@@ -737,6 +737,129 @@ fn test_prepare_then_commit_matches_direct() {
 
     assert_eq!(result_prepared, result_direct);
     assert_eq!(spec_root, result_prepared);
+}
+
+/// A finalization whose single receipt carries `writes`. Its placeholder
+/// EC refuses nothing, so the whole set settles.
+fn finalization_with_writes(
+    height: BlockHeight,
+    writes: StateWrites,
+) -> Arc<Verifiable<Finalization>> {
+    let tick_id = TickId::new(ShardId::ROOT, height);
+    let receipt = StoredReceipt {
+        tx_hash: TxHash::from(Hash::from_bytes(&height.inner().to_le_bytes())),
+        consensus: Arc::new(ConsensusReceipt::Succeeded {
+            receipt_hash: GlobalReceiptHash::ZERO,
+            writes,
+            beacon_witness_events: Vec::new(),
+            events: Vec::new(),
+        }),
+        metadata: None,
+    };
+    Arc::new(Verifiable::from(Finalization::new(
+        tick_id,
+        TickHalf::Determined,
+        vec![placeholder_local_ec(ShardId::ROOT, height)],
+        vec![receipt],
+    )))
+}
+
+/// A prepared block's priors come from the pending chain it was prepared
+/// over, not the persisted store. A rewrite of a value a pending ancestor
+/// tombstoned is a real write — judging it against the persisted state
+/// would call it a no-op, skip the substate puts, and fork the state CFs
+/// from the attested root once the tombstone lands.
+#[test]
+fn a_rewrite_over_a_pending_tombstone_is_not_a_noop() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage =
+        Arc::new(RocksDbShardStorage::open(temp_dir.path(), NibblePath::empty()).unwrap());
+
+    let cell = state_key(9, 1);
+    let entry = entry_key(9, 7);
+    let mut writes = StateWrites::default();
+    writes.cells.insert(cell, Some(vec![4, 5]));
+    writes.entries.insert(entry, Some(vec![1, 2, 3]));
+
+    // Block 1 writes both values and persists.
+    let (root1, _snap1, prepared1) = storage.prepare_block_commit(
+        ParentAnchor {
+            state_root: storage.state_root(),
+            height: BlockHeight::GENESIS,
+            state: &*storage,
+        },
+        &[finalization_with_writes(
+            BlockHeight::new(1),
+            writes.clone(),
+        )],
+        BlockHeight::new(1),
+        &[],
+        None,
+    );
+    prepared1(
+        SyncHint::FlushNow,
+        &make_test_certified(make_test_block(BlockHeight::new(1))),
+        &no_witness(),
+    );
+
+    // Block 2 tombstones both; block 3 rewrites the block-1 values and
+    // is prepared while block 2 is certified but unpersisted.
+    let mut tombstones = StateWrites::default();
+    tombstones.cells.insert(cell, None);
+    tombstones.entries.insert(entry, None);
+    let (root2, snap2, prepared2) = storage.prepare_block_commit(
+        ParentAnchor {
+            state_root: root1,
+            height: BlockHeight::new(1),
+            state: &*storage,
+        },
+        &[finalization_with_writes(BlockHeight::new(2), tombstones)],
+        BlockHeight::new(2),
+        &[],
+        None,
+    );
+    let (_root3, _snap3, prepared3) = storage.prepare_block_commit(
+        ParentAnchor {
+            state_root: root2,
+            height: BlockHeight::new(2),
+            state: &*storage,
+        },
+        &[finalization_with_writes(BlockHeight::new(3), writes)],
+        BlockHeight::new(3),
+        std::slice::from_ref(&snap2),
+        None,
+    );
+    prepared2(
+        SyncHint::FlushNow,
+        &make_test_certified(make_test_block(BlockHeight::new(2))),
+        &no_witness(),
+    );
+    prepared3(
+        SyncHint::FlushNow,
+        &make_test_certified(make_test_block(BlockHeight::new(3))),
+        &no_witness(),
+    );
+
+    // The rewrites reached the substate CFs beside the attested root.
+    assert_eq!(storage.cell(cell), Some(vec![4, 5]));
+    assert_eq!(
+        storage.entries_in_range(entry.owner, entry.collection, 0, u128::MAX, 16),
+        vec![(7, vec![1, 2, 3])]
+    );
+    // And history holds the pending-chain priors: at block 2 both are
+    // tombstoned, at block 1 both hold their first values.
+    let at_2 = storage.snapshot_at(BlockHeight::new(2));
+    assert_eq!(at_2.cell(cell), None);
+    assert!(
+        at_2.entries_in_range(entry.owner, entry.collection, 0, u128::MAX, 16)
+            .is_empty()
+    );
+    let at_1 = storage.snapshot_at(BlockHeight::new(1));
+    assert_eq!(at_1.cell(cell), Some(vec![4, 5]));
+    assert_eq!(
+        at_1.entries_in_range(entry.owner, entry.collection, 0, u128::MAX, 16),
+        vec![(7, vec![1, 2, 3])]
+    );
 }
 
 #[test]

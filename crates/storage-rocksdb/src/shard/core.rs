@@ -22,10 +22,10 @@ use hyperscale_hbor::from_slice;
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_metrics::record_storage_read;
 use hyperscale_storage::{
-    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateStore, Substates, entry_leaf_rows, tree,
+    BaseReadCache, GenesisCommit, JmtSnapshot, SubstateStore, Substates, entry_leaf_value, tree,
 };
 use hyperscale_types::{
-    Block, BlockHeight, ChainOrigin, EntryKey, EntryLeaf, ProtocolHasher, QuorumCertificate,
+    Block, BlockHeight, ChainOrigin, EntryLeaf, ProtocolHasher, QuorumCertificate,
     SafeVoteRegisters, SettledWrites, StateRoot, SubstateKey, ValidatorId, Verified,
     entry_leaf_key,
 };
@@ -95,6 +95,30 @@ pub struct RocksDbShardStorage {
     /// and letting a write that raises nothing (e.g. a timeout
     /// retransmit) skip the fsync entirely.
     pub(crate) vote_registers: Mutex<HashMap<ValidatorId, (ChainOrigin, SafeVoteRegisters)>>,
+}
+
+/// The latest pending write of `key` across the unpersisted ancestor
+/// chain, or `None` when no pending block touched it and the persisted
+/// store owns the answer. The outer `Some` distinguishes a pending
+/// tombstone (`Some(None)`) from no pending write at all.
+///
+/// Latest by snapshot height rather than slice position, so the answer
+/// does not depend on how a caller happened to order the chain.
+#[allow(clippy::option_option)] // outer = "a pending block wrote it", inner = that write
+fn pending_prior<K: Ord>(
+    pending: &[Arc<JmtSnapshot>],
+    writes_of: impl Fn(&SettledWrites) -> &BTreeMap<K, Option<Vec<u8>>>,
+    key: &K,
+) -> Option<Option<Vec<u8>>> {
+    pending
+        .iter()
+        .filter_map(|snapshot| {
+            writes_of(&snapshot.settled)
+                .get(key)
+                .map(|prior| (snapshot.new_height, prior))
+        })
+        .max_by_key(|(height, _)| *height)
+        .map(|(_, prior)| prior.clone())
 }
 
 impl RocksDbShardStorage {
@@ -438,12 +462,20 @@ impl RocksDbShardStorage {
     /// `StateHistoryCf` at `(key, version)` before mutating `StateCf`.
     /// The `write_history` flag lets the genesis / bootstrap path skip
     /// history writes (no pre-state to preserve).
+    ///
+    /// `pending` is the unpersisted ancestor chain the block was prepared
+    /// over. Priors MUST come from it before the persisted store: a batch
+    /// built at prepare time applies only after those ancestors have, and
+    /// a prior read past them would judge the no-op skip — and record
+    /// history — against state older than the parent's. A caller building
+    /// at the committed tip passes `&[]`.
     pub(crate) fn build_substate_write_batch(
         &self,
         writes: &SettledWrites,
         version: u64,
         write_history: bool,
         base_reads: Option<&BaseReadCache>,
+        pending: &[Arc<JmtSnapshot>],
     ) -> WriteBatch {
         let mut batch = WriteBatch::default();
         self.append_substate_writes_to_batch(
@@ -452,6 +484,7 @@ impl RocksDbShardStorage {
             version,
             write_history,
             base_reads,
+            pending,
         );
         batch
     }
@@ -473,6 +506,7 @@ impl RocksDbShardStorage {
         version: u64,
         write_history: bool,
         base_reads: Option<&BaseReadCache>,
+        pending: &[Arc<JmtSnapshot>],
     ) {
         let cf = self.cf();
         let state_cf = StateCf::handle(&cf);
@@ -480,15 +514,20 @@ impl RocksDbShardStorage {
         let stale_history_cf = StaleStateHistoryCf::handle(&cf);
 
         // Each write needs its prior value for the state-history entry.
-        // Fast path: the view-cache (`base_reads`) already has it from
-        // execution — zero extra reads. Slow path: collect keys with no
-        // cache entry, batch-`multi_get_cf` them in one FFI call.
-        // Priors aligned 1:1 with `writes.cells` iteration order;
-        // `None` entry = cache miss, needs multi_get fallback.
+        // The pending overlay answers first — an unpersisted ancestor's
+        // write IS the parent state, whatever the store still says. Then
+        // the view-cache (`base_reads`), holding what execution read from
+        // the persisted base. The rest batch-`multi_get_cf` in one FFI
+        // call. Priors aligned 1:1 with `writes.cells` iteration order;
+        // `None` entry = miss, needs the multi_get fallback.
         let mut priors: Vec<Option<Option<Vec<u8>>>> = Vec::with_capacity(writes.cells().len());
         let mut miss_keys: Vec<SubstateKey> = Vec::new();
         let mut miss_indices: Vec<usize> = Vec::new();
         for (index, key) in writes.cells().keys().enumerate() {
+            if let Some(prior) = pending_prior(pending, |settled| settled.cells(), key) {
+                priors.push(Some(prior));
+                continue;
+            }
             if let Some(cache) = base_reads
                 && let Some(cached) = cache.get(key)
             {
@@ -557,6 +596,7 @@ impl RocksDbShardStorage {
             version,
             write_history,
             &mut stale_history_keys,
+            pending,
         );
 
         // Index the history keys by version so GC can delete them without
@@ -576,10 +616,12 @@ impl RocksDbShardStorage {
     /// rides the same state/history pipeline a cell does, and the
     /// order-keyed index row beside it keeps range scans native.
     ///
-    /// The index's history prior is decoded from the leaf's prior — one
-    /// read serves both logs, and the two cannot disagree. Leaf history
-    /// keys accumulate into the caller's `stale_history_keys`, which owns
-    /// the version's stale-set row.
+    /// Priors are entry values, resolved like the cells': the pending
+    /// overlay first, then one batched leaf read for the rest. Each
+    /// prior serves both logs — the leaf history re-encodes it, the
+    /// index history takes it as it stands — so the two cannot disagree.
+    /// Leaf history keys accumulate into the caller's
+    /// `stale_history_keys`, which owns the version's stale-set row.
     fn append_entry_writes_to_batch(
         &self,
         batch: &mut WriteBatch,
@@ -587,6 +629,7 @@ impl RocksDbShardStorage {
         version: u64,
         write_history: bool,
         stale_history_keys: &mut Vec<Vec<u8>>,
+        pending: &[Arc<JmtSnapshot>],
     ) {
         if writes.entries().is_empty() {
             return;
@@ -598,62 +641,67 @@ impl RocksDbShardStorage {
         let entries_history_cf = EntriesHistoryCf::handle(&cf);
         let stale_entries_history_cf = StaleEntriesHistoryCf::handle(&cf);
 
-        let leaf_rows = entry_leaf_rows(writes.entries());
-        let leaf_keys: Vec<SubstateKey> = leaf_rows.keys().copied().collect();
-        let leaf_priors: Vec<Option<Vec<u8>>> =
-            multi_get::<StateCf>(&*self.db, state_cf, &leaf_keys);
+        let mut priors: Vec<Option<Option<Vec<u8>>>> = Vec::with_capacity(writes.entries().len());
+        let mut miss_keys: Vec<SubstateKey> = Vec::new();
+        let mut miss_indices: Vec<usize> = Vec::new();
+        for (index, entry) in writes.entries().keys().enumerate() {
+            if let Some(prior) = pending_prior(pending, |settled| settled.entries(), entry) {
+                priors.push(Some(prior));
+                continue;
+            }
+            priors.push(None);
+            miss_keys.push(entry_leaf_key(&ProtocolHasher, *entry));
+            miss_indices.push(index);
+        }
+        if !miss_keys.is_empty() {
+            let fetched: Vec<Option<Vec<u8>>> =
+                multi_get::<StateCf>(&*self.db, state_cf, &miss_keys);
+            debug_assert_eq!(fetched.len(), miss_indices.len(), "one fetched per miss");
+            for (idx, leaf) in miss_indices.into_iter().zip(fetched) {
+                priors[idx] = Some(leaf.as_deref().map(|bytes| {
+                    from_slice::<EntryLeaf>(bytes)
+                        .expect("a committed entry leaf decodes")
+                        .value
+                }));
+            }
+        }
 
         let history_key_codec = VersionedSubstateKeyCodec;
         let entries_history_key_codec = VersionedEntryKeyCodec;
         let mut stale_entries_history_keys: Vec<Vec<u8>> = Vec::new();
-        // `entry_leaf_rows` is keyed by the derived leaf key; pair each
-        // row back to its entry by deriving the same key from the map.
-        let mut by_leaf: BTreeMap<SubstateKey, EntryKey> = BTreeMap::new();
-        for entry_key in writes.entries().keys() {
-            by_leaf.insert(entry_leaf_key(&ProtocolHasher, *entry_key), *entry_key);
-        }
-
-        for ((leaf_key, change), prior) in leaf_rows.iter().zip(leaf_priors) {
-            // Setting a leaf to the value it already holds — the same
-            // entry value written again — changes nothing anywhere; so
-            // does removing an absent one.
-            let is_noop = change.as_ref().map_or_else(
-                || prior.is_none(),
-                |new| matches!(&prior, Some(p) if p == new),
-            );
+        for ((entry, change), prior_slot) in writes.entries().iter().zip(priors) {
+            let prior =
+                prior_slot.expect("every write must have a resolved prior (overlay or fetched)");
+            // Setting an entry to the value it already holds changes
+            // nothing anywhere; neither does removing an absent one.
+            let is_noop = change
+                .as_ref()
+                .map_or_else(|| prior.is_none(), |new| prior.as_ref() == Some(new));
             if is_noop {
                 continue;
             }
-            let entry_key = by_leaf[leaf_key];
-            // The index's prior is inside the leaf's prior.
-            let index_prior: Option<Vec<u8>> = prior.as_deref().map(|bytes| {
-                from_slice::<EntryLeaf>(bytes)
-                    .expect("a committed entry leaf decodes")
-                    .value
-            });
+            let leaf_key = entry_leaf_key(&ProtocolHasher, *entry);
             if write_history {
-                let history_key = (*leaf_key, version);
+                let leaf_prior = prior.as_deref().map(|value| entry_leaf_value(entry, value));
+                let history_key = (leaf_key, version);
                 stale_history_keys.push(history_key_codec.encode(&history_key));
-                batch_put::<StateHistoryCf>(batch, history_cf, &history_key, &prior);
-                let entries_history_key = (entry_key, version);
+                batch_put::<StateHistoryCf>(batch, history_cf, &history_key, &leaf_prior);
+                let entries_history_key = (*entry, version);
                 stale_entries_history_keys
                     .push(entries_history_key_codec.encode(&entries_history_key));
                 batch_put::<EntriesHistoryCf>(
                     batch,
                     entries_history_cf,
                     &entries_history_key,
-                    &index_prior,
+                    &prior,
                 );
             }
-            if let Some(leaf_value) = change {
-                batch_put::<StateCf>(batch, state_cf, leaf_key, leaf_value);
-                let value = writes.entries()[&entry_key]
-                    .clone()
-                    .expect("a leaf value exists exactly where the entry value does");
-                batch_put::<EntriesCf>(batch, entries_cf, &entry_key, &value);
+            if let Some(value) = change {
+                batch_put::<StateCf>(batch, state_cf, &leaf_key, &entry_leaf_value(entry, value));
+                batch_put::<EntriesCf>(batch, entries_cf, entry, value);
             } else {
-                batch_delete::<StateCf>(batch, state_cf, leaf_key);
-                batch_delete::<EntriesCf>(batch, entries_cf, &entry_key);
+                batch_delete::<StateCf>(batch, state_cf, &leaf_key);
+                batch_delete::<EntriesCf>(batch, entries_cf, entry);
             }
         }
 
@@ -683,7 +731,11 @@ impl RocksDbShardStorage {
         // overwrite — idempotent by RocksDB write semantics. No history
         // entries: genesis has no pre-state to preserve.
         let batch = self.build_substate_write_batch(
-            writes, 0, /* write_history */ false, /* base_reads */ None,
+            writes,
+            0,
+            /* write_history */ false,
+            /* base_reads */ None,
+            /* pending */ &[],
         );
 
         // Substates only — no JMT, no sync (genesis isn't durability-critical).
@@ -849,6 +901,7 @@ mod test_helpers {
                 new_version,
                 /* write_history */ true,
                 /* base_reads */ None,
+                /* pending */ &[],
             );
 
             let (new_root, collected) =

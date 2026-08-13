@@ -112,6 +112,7 @@ impl ShardChainWriter for RocksDbShardStorage {
             block_height.inner(),
             /* write_history */ true,
             base_reads,
+            pending_snapshots,
         );
 
         let cf = self.cf();
@@ -264,13 +265,15 @@ impl RocksDbShardStorage {
             "commit_block: block_height ({block_height}) must be exactly current_version + 1 ({base_version})"
         );
 
-        // Sync path has no view → no base-read cache → fall through to
-        // multi_get_cf for all priors.
+        // Sync path commits at the persisted tip under `commit_lock`: no
+        // view, no base-read cache, no pending ancestors — every prior
+        // comes from one multi_get_cf.
         let mut batch = self.build_substate_write_batch(
             merged_writes,
             block_height,
             /* write_history */ true,
             /* base_reads */ None,
+            /* pending */ &[],
         );
 
         self.append_block_to_batch(&mut batch, block, qc, witness.leaf_count_at_block_end);

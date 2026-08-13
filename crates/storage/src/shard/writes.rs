@@ -142,17 +142,27 @@ pub fn entry_leaf_rows(entries: &SettledEntries) -> BTreeMap<SubstateKey, Option
         .iter()
         .map(|(key, change)| {
             let leaf_key = entry_leaf_key(&ProtocolHasher, *key);
-            let leaf_value = change.as_ref().map(|value| {
-                to_vec(&EntryLeaf {
-                    collection: key.collection,
-                    order: key.order,
-                    value: value.clone(),
-                })
-                .expect("an entry leaf within the cell cap stays within the encoder's bounds")
-            });
+            let leaf_value = change.as_ref().map(|value| entry_leaf_value(key, value));
             (leaf_key, leaf_value)
         })
         .collect()
+}
+
+/// One entry's self-describing leaf encoding: the bytes its leaf row
+/// holds wherever it commits.
+///
+/// # Panics
+///
+/// Panics if the entry value exceeds the encoder's bounds, which none
+/// within the cell cap can.
+#[must_use]
+pub fn entry_leaf_value(key: &EntryKey, value: &[u8]) -> Vec<u8> {
+    to_vec(&EntryLeaf {
+        collection: key.collection,
+        order: key.order,
+        value: value.to_vec(),
+    })
+    .expect("an entry leaf within the cell cap stays within the encoder's bounds")
 }
 
 /// The slice of an entry-keyed overlay covering one collection's
