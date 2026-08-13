@@ -186,55 +186,42 @@ pub fn materialize_declared(
     base: &mut TickBaseline,
 ) {
     for effect in declared.iter() {
-        match effect.target {
+        // An entry is its width-one interval — the same normalization
+        // `admission_key` applies, so the two vocabulary walks stay
+        // parallel.
+        let (owner, collection, lo, hi, cap) = match effect.target {
             EffectTarget::Point(key) => {
                 if locality.is_local(key.owner)
                     && let Some(value) = snapshot.cell(key)
                 {
                     base.cells.insert(key, value);
                 }
+                continue;
             }
             EffectTarget::Entry {
                 owner,
                 collection,
                 order,
-            } => {
-                if locality.is_local(owner) {
-                    for (order, value) in
-                        snapshot.entries_in_range(owner, collection, order, order, 1)
-                    {
-                        base.entries.insert(
-                            EntryKey {
-                                owner,
-                                collection,
-                                order,
-                            },
-                            value,
-                        );
-                    }
-                }
-            }
+            } => (owner, collection, order, order, 1),
             EffectTarget::Range {
                 owner,
                 collection,
                 lo,
                 hi,
                 cap,
-            } => {
-                if locality.is_local(owner) {
-                    for (order, value) in
-                        snapshot.entries_in_range(owner, collection, lo, hi, cap as usize)
-                    {
-                        base.entries.insert(
-                            EntryKey {
-                                owner,
-                                collection,
-                                order,
-                            },
-                            value,
-                        );
-                    }
-                }
+            } => (owner, collection, lo, hi, cap),
+        };
+        if locality.is_local(owner) {
+            for (order, value) in snapshot.entries_in_range(owner, collection, lo, hi, cap as usize)
+            {
+                base.entries.insert(
+                    EntryKey {
+                        owner,
+                        collection,
+                        order,
+                    },
+                    value,
+                );
             }
         }
     }

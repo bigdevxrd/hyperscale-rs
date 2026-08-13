@@ -56,22 +56,22 @@ pub fn fetch_keys_covered(ec: &ExecutionCertificate) -> Vec<(ShardId, TxHash)> {
 /// since cross-shard ECs are signed by remote committees.
 #[must_use]
 pub fn ec_has_shard_quorum_power(
-    topology_sbapshot: &TopologySnapshot,
+    topology_snapshot: &TopologySnapshot,
     ec: &ExecutionCertificate,
 ) -> bool {
     let shard = ec.shard_id();
-    let committee = topology_sbapshot.consensus_committee_for_shard(shard);
+    let committee = topology_snapshot.consensus_committee_for_shard(shard);
     let signers_power: VoteCount = ec
         .signers()
         .set_indices()
         .filter_map(|i| committee.get(i))
         .map(|&vid| {
-            topology_sbapshot
+            topology_snapshot
                 .vote_of(vid)
                 .expect("committee member has voting power (TopologySnapshot invariant)")
         })
         .sum();
-    VoteCount::has_quorum(signers_power, topology_sbapshot.committee_votes(shard))
+    VoteCount::has_quorum(signers_power, topology_snapshot.committee_votes(shard))
 }
 
 /// Public keys for a shard's consensus committee, in canonical order —

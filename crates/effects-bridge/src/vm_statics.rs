@@ -6,12 +6,11 @@
 //! this module owns it. Derivation is `decode → admit → route` over the
 //! process's genesis-static metadata, rooted at the envelope's signing
 //! hash, projected into the workspace's admission vocabulary:
-//! substate-granular keys for point effects, owner-granular keys for
-//! collection effects (entries and ranges conflict at their owner —
-//! conservative, never unsound), reads and snapshots in the shared
-//! class, every other mode exclusive. Subintent nullifier creation
-//! writes ride the routed sets, so admission conflicts on them like any
-//! other exclusive key.
+//! substate-granular keys for point effects, interval-granular keys for
+//! collection effects (an entry is its width-one interval), reads and
+//! snapshots in the shared class, every other mode exclusive. Subintent
+//! nullifier creation writes ride the routed sets, so admission
+//! conflicts on them like any other exclusive key.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};

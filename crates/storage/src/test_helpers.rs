@@ -8,22 +8,23 @@ use std::collections::{BTreeMap, HashSet};
 use std::slice::from_ref;
 use std::sync::Arc;
 
+use hyperscale_hbor::from_slice;
 use hyperscale_jmt::{KEY_BYTES, TreeReader};
 use hyperscale_types::test_utils::{make_finalization, test_transaction};
 use hyperscale_types::{
     Address, AddressClass, AggregateSignature, BeaconBlock, BeaconBlockHash, BeaconCert,
     BeaconChainConfig, BeaconState, BeaconWitnessCommit, BeaconWitnessLeafCount, BeaconWitnessRoot,
     Block, BlockHash, BlockHeader, BlockHeaderParts, BlockHeight, CertifiedBeaconBlock,
-    CertifiedBlock, ChainOrigin, CollectionId, ConsensusReceipt, EntryKey, Epoch, Event,
+    CertifiedBlock, ChainOrigin, CollectionId, ConsensusReceipt, EntryKey, EntryLeaf, Epoch, Event,
     ExecutionCertificate, ExecutionMetadata, ExecutionOutcome, FeeSummary, Finalization,
     GlobalReceiptHash, GlobalReceiptRoot, Hash, LocalKey, LogLevel, MerkleInclusionProof, PcQc2,
-    PcQc3, PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp, ProvisionEntry, ProvisionHash,
-    Provisions, QuorumCertificate, Randomness, RatifyCert, RatifyRound, RevealChain, Round,
-    SafeVoteRegisters, SettledWrites, ShardAnchor, ShardId, ShardWitnessPayload, SignerBitfield,
-    SpcCert, SpcView, Stake, StakePoolId, StateRoot, StateWrites, StoredReceipt, SubstateKey,
-    SubstateLeaf, TerminalVerdict, TickHalf, TickId, Transaction, TransactionDecision, TxHash,
-    TxOutcome, UnsettledTx, ValidatorId, Verifiable, Verified, WeightedTimestamp, WitnessSources,
-    WorkInFlight, compute_global_receipt_root, compute_merkle_root,
+    PcQc3, PcSignerLengths, PcVector, PcXpProof, ProposerTimestamp, ProtocolHasher, ProvisionEntry,
+    ProvisionHash, Provisions, QuorumCertificate, Randomness, RatifyCert, RatifyRound, RevealChain,
+    Round, SafeVoteRegisters, SettledWrites, ShardAnchor, ShardId, ShardWitnessPayload,
+    SignerBitfield, SpcCert, SpcView, Stake, StakePoolId, StateRoot, StateWrites, StoredReceipt,
+    SubstateKey, SubstateLeaf, TerminalVerdict, TickHalf, TickId, Transaction, TransactionDecision,
+    TxHash, TxOutcome, UnsettledTx, ValidatorId, Verifiable, Verified, WeightedTimestamp,
+    WitnessSources, WorkInFlight, compute_global_receipt_root, compute_merkle_root, entry_leaf_key,
 };
 
 use crate::shard::unresolved::{replay_window, unresolved_replay_floor};
@@ -31,7 +32,7 @@ use crate::tree::Jmt;
 use crate::{
     BOUNDARY_RETAIN, BoundaryStore, ImportCursor, ImportProgress, RecoveredState,
     SafeVoteRegisterStore, ShardChainReader, ShardChainWriter, SubstateStore, Substates,
-    WitnessSeed,
+    VersionedStore, WitnessSeed,
 };
 
 /// A completed [`ImportProgress`] covering the whole key span as one
@@ -803,6 +804,77 @@ pub fn test_boundary_unpinned_height_not_served<S: BoundaryStore>(
 ) {
     commit_one(1);
     assert!(storage.open_boundary(BlockHeight::new(1)).is_none());
+}
+
+/// The entry pipeline both backends serve identically: two commits over
+/// one collection — create, overwrite, remove, add — with range scans,
+/// the cap, the self-describing leaf, and the historical scan at the
+/// first version asserted between them. Backend-specific tails (GC,
+/// retention) stay with their backend.
+///
+/// # Panics
+///
+/// Panics if any assertion fails (this is a test helper).
+pub fn test_entries_commit_serve_and_history<S: VersionedStore>(
+    storage: &S,
+    commit: impl Fn(&SettledWrites),
+) {
+    commit(&make_settled_entries(
+        7,
+        &[
+            (5, Some(vec![5])),
+            (10, Some(vec![10])),
+            (20, Some(vec![20])),
+        ],
+    ));
+    let root_v1 = storage.state_root();
+    assert_ne!(root_v1, StateRoot::ZERO, "entries move the root");
+
+    let key = entry_key(7, 5);
+    assert_eq!(
+        storage.entries_in_range(key.owner, key.collection, 0, u128::MAX, 10),
+        vec![(5, vec![5]), (10, vec![10]), (20, vec![20])],
+    );
+    // Bounds and the cap hold.
+    assert_eq!(
+        storage.entries_in_range(key.owner, key.collection, 6, 20, 1),
+        vec![(10, vec![10])],
+    );
+    // The leaf form is readable by its derived key and self-describes.
+    let leaf = storage
+        .cell(entry_leaf_key(&ProtocolHasher, key))
+        .expect("the entry commits a leaf");
+    let decoded = from_slice::<EntryLeaf>(&leaf).unwrap();
+    assert_eq!((decoded.order, decoded.value), (5, vec![5]));
+
+    // Version 2: overwrite one, remove one, add one.
+    commit(&make_settled_entries(
+        7,
+        &[(10, Some(vec![99])), (20, None), (30, Some(vec![30]))],
+    ));
+    assert_ne!(storage.state_root(), root_v1);
+    assert_eq!(
+        storage.entries_in_range(key.owner, key.collection, 0, u128::MAX, 10),
+        vec![(5, vec![5]), (10, vec![99]), (30, vec![30])],
+    );
+
+    // The historical scan at version 1 answers the old interval.
+    assert_eq!(
+        storage.snapshot_at(BlockHeight::new(1)).entries_in_range(
+            key.owner,
+            key.collection,
+            0,
+            u128::MAX,
+            10
+        ),
+        vec![(5, vec![5]), (10, vec![10]), (20, vec![20])],
+    );
+    // And another collection's interval stays empty.
+    assert!(
+        storage
+            .entries_in_range(state_key(9, 0).owner, key.collection, 0, u128::MAX, 10)
+            .is_empty()
+    );
 }
 
 /// Shared serve → import round trip: leaves enumerated and resolved

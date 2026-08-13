@@ -1,16 +1,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hyperscale_hbor::from_slice;
 use hyperscale_jmt::NibblePath;
 use hyperscale_storage::test_helpers::{
-    entry_key, make_settled_entries, make_settled_writes, make_test_block,
-    make_test_block_with_anchor_wt, make_test_certified, make_test_execution_certificate,
-    make_test_finalization, make_test_qc, make_test_receipt, state_key,
-    test_committed_bundle_outlives_sealing, test_ec_storage_batch as helpers_test_ec_storage_batch,
+    entry_key, make_settled_writes, make_test_block, make_test_block_with_anchor_wt,
+    make_test_certified, make_test_execution_certificate, make_test_finalization, make_test_qc,
+    make_test_receipt, state_key, test_committed_bundle_outlives_sealing,
+    test_ec_storage_batch as helpers_test_ec_storage_batch,
     test_ec_storage_roundtrip as helpers_test_ec_storage_roundtrip,
-    test_recovery_carries_the_tip_drain_total, test_registers_recover_their_justification,
-    test_retained_bundle_drops_below_the_history_floor,
+    test_entries_commit_serve_and_history, test_recovery_carries_the_tip_drain_total,
+    test_registers_recover_their_justification, test_retained_bundle_drops_below_the_history_floor,
     test_tx_index_answers_with_the_local_shards_certificate,
     test_undischarged_record_holds_the_floor, test_unresolved_fold,
     test_widest_tick_copy_holds_the_slot,
@@ -22,12 +21,11 @@ use hyperscale_storage::{
 };
 use hyperscale_types::{
     Address, AddressClass, AggregateSignature, BeaconWitnessCommit, BeaconWitnessLeafCount, Block,
-    BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, EntryLeaf,
-    ExecutionCertificate, Finalization, FinalizationHash, GlobalReceiptHash, GlobalReceiptRoot,
-    Hash, LocalKey, ProposerTimestamp, ProtocolHasher, QuorumCertificate, Round, SafeVoteRegisters,
-    SettledWrites, ShardId, SignerBitfield, StateRoot, StateWrites, StoredReceipt, SubstateKey,
-    SyncHint, TickHalf, TickId, TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp,
-    WitnessSources, entry_leaf_key,
+    BlockHash, BlockHeight, CertifiedBlock, ChainOrigin, ConsensusReceipt, ExecutionCertificate,
+    Finalization, FinalizationHash, GlobalReceiptHash, GlobalReceiptRoot, Hash, LocalKey,
+    ProposerTimestamp, QuorumCertificate, Round, SafeVoteRegisters, SettledWrites, ShardId,
+    SignerBitfield, StateRoot, StateWrites, StoredReceipt, SubstateKey, SyncHint, TickHalf, TickId,
+    TxHash, ValidatorId, Verifiable, Verified, WeightedTimestamp, WitnessSources,
 };
 
 fn no_witness() -> BeaconWitnessCommit {
@@ -113,58 +111,13 @@ fn entries_commit_serve_ranges_and_gc_history() {
         RocksDbShardStorage::open_with_config(temp_dir.path(), &config, NibblePath::empty())
             .unwrap();
 
-    storage
-        .commit(&make_settled_entries(
-            7,
-            &[
-                (5, Some(vec![5])),
-                (10, Some(vec![10])),
-                (20, Some(vec![20])),
-            ],
-        ))
-        .unwrap();
-    let root_v1 = storage.state_root();
-    assert_ne!(root_v1, StateRoot::ZERO, "entries move the root");
-
-    let key = entry_key(7, 5);
-    assert_eq!(
-        storage.entries_in_range(key.owner, key.collection, 0, u128::MAX, 10),
-        vec![(5, vec![5]), (10, vec![10]), (20, vec![20])],
-    );
-    assert_eq!(
-        storage.entries_in_range(key.owner, key.collection, 6, 20, 1),
-        vec![(10, vec![10])],
-    );
-    let leaf = storage
-        .cell(entry_leaf_key(&ProtocolHasher, key))
-        .expect("the entry commits a leaf");
-    let decoded = from_slice::<EntryLeaf>(&leaf).unwrap();
-    assert_eq!((decoded.order, decoded.value), (5, vec![5]));
-
-    storage
-        .commit(&make_settled_entries(
-            7,
-            &[(10, Some(vec![99])), (20, None), (30, Some(vec![30]))],
-        ))
-        .unwrap();
-    assert_ne!(storage.state_root(), root_v1);
-    assert_eq!(
-        storage.entries_in_range(key.owner, key.collection, 0, u128::MAX, 10),
-        vec![(5, vec![5]), (10, vec![99]), (30, vec![30])],
-    );
-    assert_eq!(
-        storage.snapshot_at(BlockHeight::new(1)).entries_in_range(
-            key.owner,
-            key.collection,
-            0,
-            u128::MAX,
-            10
-        ),
-        vec![(5, vec![5]), (10, vec![10]), (20, vec![20])],
-    );
+    test_entries_commit_serve_and_history(&storage, |writes| {
+        storage.commit(writes).unwrap();
+    });
 
     // Push the tip past retention and GC: the superseded history rows
     // go, the current index and a scan at the floor survive.
+    let key = entry_key(7, 5);
     for version in 3..=6u8 {
         storage
             .commit(&make_settled_writes(9, version, vec![version]))

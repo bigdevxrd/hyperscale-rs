@@ -361,11 +361,6 @@ pub fn withdrawal_ejects_a_validator_that_a_deposit_reactivates(c: &mut impl Clu
     );
 }
 
-/// Submit `tx` and wait for it to commit, failing on any other outcome.
-///
-/// A witness only exists if its transaction settled, so a scenario that
-/// waited on the fold alone would report "the beacon never folded it"
-/// for a transaction that never ran.
 /// Selling a pool is transferring its owner badge, and the sale itself is
 /// the custody handover: the buyer's presentation operates from then on,
 /// and the seller's key stops.
@@ -384,12 +379,12 @@ pub fn withdrawal_ejects_a_validator_that_a_deposit_reactivates(c: &mut impl Clu
 pub fn pool_transfer_moves_operatorship(c: &mut impl Cluster) {
     warm_up(c);
     let (seller, _) = pool_operator();
-    let (buyer_key, _) = badge_buyer();
+    let (buyer_key, buyer) = badge_buyer();
 
     // The sale: an ordinary NF transfer of the badge.
     submit_committed(
         c,
-        build_badge_sale_tx(&seller, badge_buyer().1, validity_around(c.now())),
+        build_badge_sale_tx(&seller, buyer, validity_around(c.now())),
     );
 
     // The buyer operates, across shards, and both chains carry it. An
@@ -430,6 +425,11 @@ pub fn pool_transfer_moves_operatorship(c: &mut impl Cluster) {
     );
 }
 
+/// Submit `tx` and wait for it to commit, failing on any other outcome.
+///
+/// A witness only exists if its transaction settled, so a scenario that
+/// waited on the fold alone would report "the beacon never folded it"
+/// for a transaction that never ran.
 fn submit_committed<C: Cluster>(c: &mut C, tx: Transaction) {
     let hash = tx.hash();
     c.submit(Arc::new(tx));

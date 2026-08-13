@@ -103,7 +103,8 @@ fn delegator() -> PrincipalAddr {
     account_of(DELEGATOR)
 }
 
-/// A pool seat and the principal its operator surface admits.
+/// A pool seat; genesis deposits the pool's owner badge into the named
+/// account, and presenting that badge is what operates the pool.
 fn seat(id: u32) -> StakePoolSeat {
     StakePoolSeat {
         id: StakePoolId::new(id),
