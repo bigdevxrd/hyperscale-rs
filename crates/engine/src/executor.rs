@@ -33,8 +33,8 @@ use hyperscale_types::{
     compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, Declaration, EffectTarget, InstanceRegistry, NodeCall, PackageHash,
-    PrefixShardResolver, RoleId, SubstateKey, admit_tree, package_hash, route_tree,
+    Address, CollectionId, Declaration, EffectTarget, InstanceRegistry, NodeCall, PackageHash,
+    PrefixShardResolver, SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
     Base, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
@@ -133,7 +133,7 @@ impl Base for VmBase {
     fn entries_in_range(
         &self,
         _owner: Address,
-        _collection: RoleId,
+        _collection: CollectionId,
         _lo: u128,
         _hi: u128,
         _limit: usize,

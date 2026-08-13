@@ -141,12 +141,29 @@ fn check_clauses(
 fn check_target(target: &TargetExpr) -> Result<(), VmStaticsError> {
     match target {
         TargetExpr::Point(key) => check_expr(key, 0),
-        TargetExpr::Entry { owner, order, .. } => {
+        TargetExpr::Entry {
+            owner,
+            material,
+            order,
+            ..
+        } => {
             check_expr(owner, 0)?;
+            for part in material {
+                check_expr(part, 0)?;
+            }
             check_expr(order, 0)
         }
-        TargetExpr::Range { owner, lo, hi, .. } => {
+        TargetExpr::Range {
+            owner,
+            material,
+            lo,
+            hi,
+            ..
+        } => {
             check_expr(owner, 0)?;
+            for part in material {
+                check_expr(part, 0)?;
+            }
             check_expr(lo, 0)?;
             check_expr(hi, 0)
         }
@@ -201,6 +218,9 @@ fn check_expr(expr: &Expr, depth: usize) -> Result<(), VmStaticsError> {
             Ok(())
         }
         Expr::ChildKey {
+            owner, material, ..
+        }
+        | Expr::OrderKey {
             owner, material, ..
         } => {
             check_expr(owner, deeper)?;
@@ -359,6 +379,7 @@ mod tests {
                     target: TargetExpr::Entry {
                         owner: Expr::Field(Box::new(Expr::Config(0)), 2),
                         collection: RoleId(9),
+                        material: vec![],
                         order: Expr::Pack {
                             hi: Box::new(Expr::Arg(0)),
                             lo: Box::new(Expr::FreshId { slot: 3 }),
@@ -370,6 +391,7 @@ mod tests {
                     target: TargetExpr::Range {
                         owner: Expr::SelfAddr,
                         collection: RoleId(4),
+                        material: vec![],
                         lo: Expr::Literal(Value::U128(0)),
                         hi: Expr::Literal(Value::U128(u128::MAX)),
                         cap: 64,
@@ -511,6 +533,7 @@ mod tests {
             target: TargetExpr::Range {
                 owner: Expr::SelfAddr,
                 collection: RoleId(4),
+                material: vec![],
                 lo: deepest.clone(),
                 hi: deepest,
                 cap: 1,
