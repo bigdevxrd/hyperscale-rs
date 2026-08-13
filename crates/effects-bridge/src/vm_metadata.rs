@@ -1,19 +1,16 @@
-//! The package-metadata section codec's caps and semantic checks.
+//! The package-metadata section codec's chain-policy caps.
 //!
 //! The encoding itself is the vocabulary's own — canonical HBOR of
-//! [`PackageMetadata`], the same bytes the artifact section carries. What
-//! belongs here is what the vocabulary deliberately does not fix: the
-//! byte budget a section may claim of a transaction, the nesting cap that
-//! budget implies, and the semantic bounds — an event table no emitted
-//! index could reach past, clause and expression depths evaluation would
-//! refuse — that make a decoded section one the rest of admission will
-//! accept.
+//! [`PackageMetadata`], the same bytes the artifact section carries — and
+//! so are the semantic bounds, which [`check_metadata`] enforces beside
+//! the vocabulary it validates. What belongs here is what the vocabulary
+//! deliberately does not fix: the byte budget a section may claim of a
+//! transaction, and the nesting cap that budget implies.
 
 use hyperscale_hbor::{from_slice_with_depth, to_vec_with_depth};
-use hyperscale_types::{MAX_EVENT_TYPES, MAX_TX_BYTES_LEN, VmStaticsError};
+use hyperscale_types::{MAX_TX_BYTES_LEN, VmStaticsError};
 use hyperscale_vm_effects::{
-    Accessibility, Clause, Expr, MAX_CLAUSE_DEPTH, MAX_EFFECTS_PER_SIGNATURE, MAX_EXPR_DEPTH,
-    MAX_VALUE_DEPTH, MethodSignature, ModeExpr, PackageMetadata, TargetExpr,
+    MAX_CLAUSE_DEPTH, MAX_EXPR_DEPTH, MAX_VALUE_DEPTH, PackageMetadata, check_metadata,
 };
 
 /// The bound on an encoded metadata section.
@@ -43,7 +40,7 @@ const METADATA_WIRE_DEPTH: usize = 16 + 2 * (MAX_CLAUSE_DEPTH + MAX_EXPR_DEPTH +
 /// [`VmStaticsError`] if the metadata is past a bound decode enforces, so
 /// that whatever this returns decodes back to an equal value.
 pub fn encode_metadata(metadata: &PackageMetadata) -> Result<Vec<u8>, VmStaticsError> {
-    check_metadata(metadata)?;
+    check_metadata(metadata).map_err(|error| VmStaticsError(error.0))?;
     let bytes = to_vec_with_depth(metadata, METADATA_WIRE_DEPTH)
         .map_err(|error| VmStaticsError(format!("metadata encode: {error}")))?;
     if bytes.len() > MAX_PACKAGE_METADATA_BYTES {
@@ -70,196 +67,22 @@ pub fn decode_metadata(bytes: &[u8]) -> Result<PackageMetadata, VmStaticsError> 
     }
     let metadata: PackageMetadata = from_slice_with_depth(bytes, METADATA_WIRE_DEPTH)
         .map_err(|error| VmStaticsError(format!("metadata decode: {error}")))?;
-    check_metadata(&metadata)?;
+    check_metadata(&metadata).map_err(|error| VmStaticsError(error.0))?;
     Ok(metadata)
-}
-
-/// Reject metadata past a bound the vocabulary fixes.
-///
-/// The depth walks mirror the evaluator's own recursion — same starting
-/// depth, same comparison — so a signature this accepts is one evaluation
-/// will not refuse on structure alone.
-fn check_metadata(metadata: &PackageMetadata) -> Result<(), VmStaticsError> {
-    if metadata.events.len() > MAX_EVENT_TYPES as usize {
-        return Err(VmStaticsError(format!(
-            "event table names {} types, past the {MAX_EVENT_TYPES} an event index can reach",
-            metadata.events.len()
-        )));
-    }
-    for (name, signature) in &metadata.methods {
-        check_signature(signature)
-            .map_err(|error| VmStaticsError(format!("method {name:?}: {}", error.0)))?;
-    }
-    Ok(())
-}
-
-fn check_signature(signature: &MethodSignature) -> Result<(), VmStaticsError> {
-    if let Accessibility::Guarded(identity) = &signature.accessibility {
-        check_expr(identity, 0)?;
-    }
-    if let Some(minted) = &signature.mints {
-        check_expr(minted, 0)?;
-    }
-    for output in &signature.outputs {
-        check_expr(output, 0)?;
-    }
-    for call in &signature.calls {
-        check_expr(&call.target, 0)?;
-        for arg in &call.args {
-            check_expr(arg, 0)?;
-        }
-    }
-    let mut declared = 0usize;
-    check_clauses(&signature.effects, 0, &mut declared)
-}
-
-fn check_clauses(
-    clauses: &[Clause],
-    depth: usize,
-    declared: &mut usize,
-) -> Result<(), VmStaticsError> {
-    if depth > MAX_CLAUSE_DEPTH {
-        return Err(VmStaticsError(format!(
-            "for-each clauses nest deeper than {MAX_CLAUSE_DEPTH}"
-        )));
-    }
-    for clause in clauses {
-        match clause {
-            Clause::Effect { target, mode } => {
-                *declared += 1;
-                if *declared > MAX_EFFECTS_PER_SIGNATURE {
-                    return Err(VmStaticsError(format!(
-                        "signature declares more than {MAX_EFFECTS_PER_SIGNATURE} effects"
-                    )));
-                }
-                check_target(target)?;
-                check_mode(mode)?;
-            }
-            Clause::ForEach { list, body } => {
-                check_expr(list, 0)?;
-                check_clauses(body, depth + 1, declared)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn check_target(target: &TargetExpr) -> Result<(), VmStaticsError> {
-    match target {
-        TargetExpr::Point(key) => check_expr(key, 0),
-        TargetExpr::Entry {
-            owner,
-            material,
-            order,
-            ..
-        } => {
-            check_expr(owner, 0)?;
-            for part in material {
-                check_expr(part, 0)?;
-            }
-            check_expr(order, 0)
-        }
-        TargetExpr::Range {
-            owner,
-            material,
-            lo,
-            hi,
-            ..
-        } => {
-            check_expr(owner, 0)?;
-            for part in material {
-                check_expr(part, 0)?;
-            }
-            check_expr(lo, 0)?;
-            check_expr(hi, 0)
-        }
-    }
-}
-
-fn check_mode(mode: &ModeExpr) -> Result<(), VmStaticsError> {
-    match mode {
-        ModeExpr::Read | ModeExpr::Delta | ModeExpr::Write | ModeExpr::Locked => Ok(()),
-        ModeExpr::Reserve(amount) => check_expr(amount, 0),
-    }
-}
-
-fn check_expr(expr: &Expr, depth: usize) -> Result<(), VmStaticsError> {
-    if depth > MAX_EXPR_DEPTH {
-        return Err(VmStaticsError(format!(
-            "expression nests deeper than {MAX_EXPR_DEPTH}"
-        )));
-    }
-    let deeper = depth + 1;
-    match expr {
-        Expr::Literal(literal) => {
-            if literal.depth() > MAX_VALUE_DEPTH {
-                return Err(VmStaticsError(format!(
-                    "literal nests deeper than {MAX_VALUE_DEPTH}"
-                )));
-            }
-            Ok(())
-        }
-        Expr::Arg(_)
-        | Expr::Config(_)
-        | Expr::Binding(_)
-        | Expr::SelfAddr
-        | Expr::FreshId { .. }
-        | Expr::FreshKey { .. } => Ok(()),
-        Expr::Field(inner, _) | Expr::ResourceOf(inner) | Expr::IdsOf(inner) => {
-            check_expr(inner, deeper)
-        }
-        Expr::Lookup {
-            map: first,
-            key: second,
-        }
-        | Expr::Pack {
-            hi: first,
-            lo: second,
-        }
-        | Expr::NfBucket {
-            resource: first,
-            ids: second,
-        } => {
-            check_expr(first, deeper)?;
-            check_expr(second, deeper)
-        }
-        Expr::List(elements) => {
-            for element in elements {
-                check_expr(element, deeper)?;
-            }
-            Ok(())
-        }
-        Expr::SelfResource { material } => {
-            for part in material {
-                check_expr(part, deeper)?;
-            }
-            Ok(())
-        }
-        Expr::ChildKey {
-            owner, material, ..
-        }
-        | Expr::OrderKey {
-            owner, material, ..
-        } => {
-            check_expr(owner, deeper)?;
-            for part in material {
-                check_expr(part, deeper)?;
-            }
-            Ok(())
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
+    use hyperscale_types::MAX_EVENT_TYPES;
     use hyperscale_vm_effects::stdlib::{
         VAULT, account_metadata, amm_metadata, book_metadata, splitter_metadata,
     };
     use hyperscale_vm_effects::{
-        Accessibility, Address, AddressClass, CallSite, EdgeContent, LocalKey, ParamType, RoleId,
-        SubstateKey, Value,
+        Accessibility, Address, AddressClass, CallSite, Clause, EdgeContent, Expr, LocalKey,
+        MAX_EFFECTS_PER_SIGNATURE, MethodSignature, ModeExpr, ParamType, RoleId, SubstateKey,
+        TargetExpr, Value,
     };
 
     use super::*;
