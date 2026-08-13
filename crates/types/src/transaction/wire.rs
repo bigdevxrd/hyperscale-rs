@@ -511,14 +511,17 @@ mod tests {
                 fee_vault_local: [0xEE; 16],
                 auth_cell_local: [0xAE; 16],
                 routing: Routing {
-                    read_keys: vec![DeclaredKey::prefix(test_prefix(0x11))],
+                    read_keys: vec![DeclaredKey::substate(test_prefix(0x11), [0u8; 16])],
                     write_keys: vec![DeclaredKey::substate(test_prefix(0x22), [0x01; 16])],
                     read_prefixes: vec![Address::new([0x11; 31], AddressClass::Component)],
                     write_prefixes: vec![Address::new([0x22; 31], AddressClass::Component)],
-                    provision_keys: vec![DeclaredKey::prefix(test_prefix(0x11))],
+                    provision_keys: vec![DeclaredKey::substate(test_prefix(0x11), [0u8; 16])],
                     provision_prefixes: vec![Address::new([0x11; 31], AddressClass::Component)],
                     declared_modes: vec![
-                        (DeclaredKey::prefix(test_prefix(0x11)), Mode::Read),
+                        (
+                            DeclaredKey::substate(test_prefix(0x11), [0u8; 16]),
+                            Mode::Read,
+                        ),
                         (
                             DeclaredKey::substate(test_prefix(0x22), [0x01; 16]),
                             Mode::Write,
@@ -575,7 +578,7 @@ mod tests {
         let tx = fixture(b"graph bytes");
         assert_eq!(
             tx.admission_read_keys(),
-            vec![DeclaredKey::prefix(test_prefix(0x11))]
+            vec![DeclaredKey::substate(test_prefix(0x11), [0u8; 16])]
         );
         assert_eq!(
             tx.admission_write_keys(),

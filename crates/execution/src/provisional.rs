@@ -27,9 +27,8 @@ use hyperscale_types::{
 
 /// How unresolved legs are reaching the cells they claimed.
 ///
-/// Claims and candidates are both [`DeclaredKey`]s, which name one cell,
-/// a whole owner prefix, or one collection interval. A prefix covers the
-/// points and collections inside it; a collection interval covers other
+/// Claims and candidates are both [`DeclaredKey`]s, which name one cell
+/// or one collection interval. A collection interval covers other
 /// intervals of the same collection and nothing else — an interval is
 /// over entries, and no point cell is an entry. Overlap alone decides
 /// nothing; what decides is whether the modes on the two sides can be in
@@ -37,14 +36,10 @@ use hyperscale_types::{
 #[derive(Debug, Default)]
 pub struct ProvisionalCells {
     cells: BTreeMap<SubstateKey, BTreeSet<ModeKind>>,
-    prefixes: BTreeMap<Address, BTreeSet<ModeKind>>,
     /// Modes held per collection, interval-insensitive: two intervals of
     /// one collection contend by mode alone, the conservative half of
     /// the kernel's overlap arithmetic.
     collections: BTreeMap<(Address, CollectionId), BTreeSet<ModeKind>>,
-    /// Every mode held anywhere under an owner, for the case where the
-    /// *candidate* names the prefix and the claims sit inside it.
-    owners: BTreeMap<Address, BTreeSet<ModeKind>>,
 }
 
 impl ProvisionalCells {
@@ -52,13 +47,9 @@ impl ProvisionalCells {
     pub fn claim(&mut self, declared: &[(DeclaredKey, Mode)]) {
         for (key, mode) in declared {
             let kind = mode.kind();
-            self.owners.entry(key.owner()).or_default().insert(kind);
             match key {
                 DeclaredKey::Cell(cell) => {
                     self.cells.entry(*cell).or_default().insert(kind);
-                }
-                DeclaredKey::Prefix(owner) => {
-                    self.prefixes.entry(*owner).or_default().insert(kind);
                 }
                 DeclaredKey::Range(range) => {
                     self.collections
@@ -74,7 +65,7 @@ impl ProvisionalCells {
     /// short-circuiting on since it spares every candidate the walk.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.owners.is_empty()
+        self.cells.is_empty() && self.collections.is_empty()
     }
 
     /// Whether a candidate's declared access cannot be in flight beside
@@ -86,27 +77,15 @@ impl ProvisionalCells {
     pub fn blocks(&self, declared: &[(DeclaredKey, Mode)]) -> bool {
         declared.iter().any(|(key, mode)| {
             let candidate = mode.kind();
-            let held: &[&BTreeSet<ModeKind>] = &match key {
-                // A claimed prefix covers every cell under it, so both
-                // the point's own claims and its owner's prefix claims
-                // are in the way.
-                DeclaredKey::Cell(cell) => [self.cells.get(cell), self.prefixes.get(&cell.owner)],
-                // A candidate prefix covers every claim under its owner.
-                DeclaredKey::Prefix(owner) => [self.owners.get(owner), None],
+            let held = match key {
+                DeclaredKey::Cell(cell) => self.cells.get(cell),
                 // A candidate interval contends with claims on its own
-                // collection and with a prefix claim over its owner —
-                // never with point cells, which no interval contains.
-                DeclaredKey::Range(range) => [
-                    self.collections.get(&(range.owner, range.collection)),
-                    self.prefixes.get(&range.owner),
-                ],
-            }
-            .map(Option::into_iter)
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-            held.iter()
-                .flat_map(|modes| modes.iter())
+                // collection — never with point cells, which no interval
+                // contains.
+                DeclaredKey::Range(range) => self.collections.get(&(range.owner, range.collection)),
+            };
+            held.into_iter()
+                .flat_map(BTreeSet::iter)
                 .any(|held| !compatible(*held, candidate))
         })
     }
@@ -114,7 +93,7 @@ impl ProvisionalCells {
 
 #[cfg(test)]
 mod tests {
-    use hyperscale_types::{AddressClass, LocalKey};
+    use hyperscale_types::{AddressClass, DeclaredRange, LocalKey};
 
     use super::*;
 
@@ -125,8 +104,14 @@ mod tests {
         })
     }
 
-    fn prefix(owner: u8) -> DeclaredKey {
-        DeclaredKey::Prefix(Address::new([owner; 31], AddressClass::Component))
+    fn interval(owner: u8, lo: u128, hi: u128) -> DeclaredKey {
+        DeclaredKey::Range(DeclaredRange {
+            owner: Address::new([owner; 31], AddressClass::Component),
+            collection: CollectionId([7; 16]),
+            lo,
+            hi,
+            cap: 8,
+        })
     }
 
     const RESERVE: Mode = Mode::Reserve { amount: 5 };
@@ -186,17 +171,20 @@ mod tests {
         assert!(!claims.blocks(&[(cell(2, 1), Mode::Write)]), "other owner");
     }
 
-    /// Granularity cuts both ways: a range claim covers the points inside
-    /// it, and a range candidate covers the points already claimed.
+    /// Two intervals of one collection contend by mode alone — the
+    /// interval-insensitive half of the kernel's overlap arithmetic —
+    /// and an interval never contends with a point cell, which no
+    /// interval contains.
     #[test]
-    fn prefixes_and_cells_overlap_in_both_directions() {
-        let mut over_range = ProvisionalCells::default();
-        over_range.claim(&[(prefix(1), Mode::Write)]);
-        assert!(over_range.blocks(&[(cell(1, 9), Mode::Write)]));
+    fn intervals_contend_by_collection_and_leave_points_alone() {
+        let mut claims = ProvisionalCells::default();
+        claims.claim(&[(interval(1, 0, 10), Mode::Write)]);
+        assert!(claims.blocks(&[(interval(1, 20, 30), Mode::Read)]));
+        assert!(!claims.blocks(&[(cell(1, 1), Mode::Write)]));
 
         let mut over_cell = ProvisionalCells::default();
-        over_cell.claim(&[(cell(1, 9), Mode::Write)]);
-        assert!(over_cell.blocks(&[(prefix(1), Mode::Write)]));
+        over_cell.claim(&[(cell(1, 1), Mode::Write)]);
+        assert!(!over_cell.blocks(&[(interval(1, 0, 10), Mode::Write)]));
     }
 
     /// A locked read declares nothing anywhere, so it neither claims nor

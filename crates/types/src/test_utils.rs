@@ -843,6 +843,14 @@ pub fn make_finalization(
     Finalization::new(tick_id, TickHalf::Determined, vec![Arc::new(ec)], vec![])
 }
 
+/// The one synthetic cell the stub declares per owner. All of an
+/// owner's stubbed accesses collapse to this cell, so two stubbed
+/// transactions conflict exactly when they share an owner — the
+/// owner-granular contention the fixtures are written against.
+const fn stub_cell(owner: Address) -> DeclaredKey {
+    DeclaredKey::substate(owner, [0u8; 16])
+}
+
 /// A deterministic [`VmStatics`](crate::VmStatics) stub for consensus-crate
 /// tests.
 ///
@@ -882,21 +890,9 @@ impl VmStatics for StubVmStatics {
         let write_prefixes = canonical(writes)?;
         Ok(Derived {
             routing: Routing {
-                read_keys: read_prefixes
-                    .iter()
-                    .copied()
-                    .map(DeclaredKey::prefix)
-                    .collect(),
-                write_keys: write_prefixes
-                    .iter()
-                    .copied()
-                    .map(DeclaredKey::prefix)
-                    .collect(),
-                provision_keys: read_prefixes
-                    .iter()
-                    .copied()
-                    .map(DeclaredKey::prefix)
-                    .collect(),
+                read_keys: read_prefixes.iter().copied().map(stub_cell).collect(),
+                write_keys: write_prefixes.iter().copied().map(stub_cell).collect(),
+                provision_keys: read_prefixes.iter().copied().map(stub_cell).collect(),
                 provision_prefixes: read_prefixes.clone(),
                 read_prefixes: read_prefixes.clone(),
                 write_prefixes: write_prefixes.clone(),
@@ -908,12 +904,12 @@ impl VmStatics for StubVmStatics {
                 declared_modes: read_prefixes
                     .iter()
                     .copied()
-                    .map(|owner| (DeclaredKey::prefix(owner), Mode::Read))
+                    .map(|owner| (stub_cell(owner), Mode::Read))
                     .chain(
                         write_prefixes
                             .iter()
                             .copied()
-                            .map(|owner| (DeclaredKey::prefix(owner), Mode::Write)),
+                            .map(|owner| (stub_cell(owner), Mode::Write)),
                     )
                     .collect(),
             },

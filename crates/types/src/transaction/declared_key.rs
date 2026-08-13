@@ -10,17 +10,10 @@ use hyperscale_hbor::Hbor;
 
 use crate::{Address, CollectionId, LocalKey, SubstateKey};
 
-/// One declared access target: an owner prefix, one substate cell — the
-/// cell variant is exactly the state leaf key — or one ordered-collection
-/// interval.
-///
-/// Two keys conflict only when equal — an owner-granular key and a cell
-/// under the same owner are distinct keys, so a producer narrowing its
-/// declarations must narrow them consistently.
+/// One declared access target: one substate cell — the cell variant is
+/// exactly the state leaf key — or one ordered-collection interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Hbor)]
 pub enum DeclaredKey {
-    /// Owner-granular: every cell under the owner's prefix.
-    Prefix(Address),
     /// One substate cell.
     Cell(SubstateKey),
     /// One ordered-collection interval.
@@ -56,17 +49,10 @@ impl DeclaredKey {
         })
     }
 
-    /// The owner-granular key for a prefix.
-    #[must_use]
-    pub const fn prefix(owner: Address) -> Self {
-        Self::Prefix(owner)
-    }
-
-    /// The owning address — the routing half every variant carries.
+    /// The owning address — the routing half both variants carry.
     #[must_use]
     pub const fn owner(&self) -> Address {
         match self {
-            Self::Prefix(owner) => *owner,
             Self::Cell(key) => key.owner,
             Self::Range(range) => range.owner,
         }
@@ -76,7 +62,7 @@ impl DeclaredKey {
     #[must_use]
     pub const fn cell(&self) -> Option<SubstateKey> {
         match self {
-            Self::Prefix(_) | Self::Range(_) => None,
+            Self::Range(_) => None,
             Self::Cell(key) => Some(*key),
         }
     }
@@ -85,7 +71,7 @@ impl DeclaredKey {
     #[must_use]
     pub const fn range(&self) -> Option<DeclaredRange> {
         match self {
-            Self::Prefix(_) | Self::Cell(_) => None,
+            Self::Cell(_) => None,
             Self::Range(range) => Some(*range),
         }
     }
