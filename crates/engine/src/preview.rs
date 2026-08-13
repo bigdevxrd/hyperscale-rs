@@ -23,15 +23,15 @@ use std::sync::Arc;
 
 use hyperscale_effects_bridge::admit_package;
 use hyperscale_storage::Substates;
-use hyperscale_types::{Event, ProvisionalHolds, RevealChain, Transaction, WeightedTimestamp};
-use hyperscale_vm_effects::{EffectTarget, SubstateKey};
+use hyperscale_types::{Event, RevealChain, Transaction, WeightedTimestamp};
+use hyperscale_vm_effects::SubstateKey;
 use hyperscale_vm_kernel::{
     Baseline, BatchTx, Locality, ManifestWalk, Outcome, Receipt, decode_amount, execute_batch,
 };
 
 use crate::executor::{
-    PayerFee, TargetAuthority, VmBase, abort_reason, charge_for, protocol_hash, publish_work,
-    tx_randomness,
+    PayerFee, TargetAuthority, TickBaseline, abort_reason, charge_for, materialize_declared,
+    protocol_hash, publish_work, tx_randomness,
 };
 use crate::genesis::vault_key;
 use crate::{Executor, XRD};
@@ -158,7 +158,7 @@ impl PreviewReport {
 
 /// The committed amount a cell holds in `base`, absent reading as zero —
 /// the same reading the fold gives an absent cell.
-fn amount_at(base: &VmBase, key: SubstateKey) -> u128 {
+fn amount_at(base: &TickBaseline, key: SubstateKey) -> u128 {
     base.cells
         .get(&key)
         .map_or(0, |bytes| decode_amount(bytes).unwrap_or(0))
@@ -171,7 +171,7 @@ fn amount_at(base: &VmBase, key: SubstateKey) -> u128 {
 /// transaction does, and which shard applies which part of it is a
 /// question about commitment, not about resources.
 fn resource_changes(
-    base: &VmBase,
+    base: &TickBaseline,
     receipt: Option<&Receipt>,
     fee: u128,
     payer: SubstateKey,
@@ -271,26 +271,23 @@ impl Executor {
             Ok(derived) => derived,
             Err(reason) => return PreviewReport::refused(reason),
         };
-        let mut cells: BTreeMap<SubstateKey, Vec<u8>> = BTreeMap::new();
-        for effect in prepared.declaration.set.iter() {
-            if let EffectTarget::Point(key) = effect.target
-                && let Some(value) = snapshot.cell(key)
-            {
-                cells.insert(key, value);
-            }
-        }
+        // A preview judges against committed state alone: it is not in
+        // a tick, so no tick's reservation is in flight over the
+        // baseline it reads, and total locality covers every cell the
+        // envelope touches.
+        let mut base = TickBaseline::default();
+        materialize_declared(
+            snapshot,
+            &prepared.declaration.set,
+            &Locality::All,
+            &mut base,
+        );
         // The fee vault is not a declared effect, and the report needs
         // its committed amount to say what the charge would leave.
         if let Some(value) = snapshot.cell(payer.vault) {
-            cells.insert(payer.vault, value);
+            base.cells.insert(payer.vault, value);
         }
-        let base = Arc::new(VmBase {
-            cells,
-            // A preview judges against committed state alone: it is
-            // not in a tick, so no tick's reservation is in flight
-            // over the baseline it reads.
-            holds: ProvisionalHolds::new(),
-        });
+        let base = Arc::new(base);
 
         let vm_tx = tx.hash();
         let batch = [BatchTx::new(
@@ -351,7 +348,7 @@ fn preview_publish(
         return PreviewReport::refused(error.0);
     }
     let work = publish_work(artifact);
-    let mut base = VmBase::default();
+    let mut base = TickBaseline::default();
     if let Some(value) = snapshot.cell(payer.vault) {
         base.cells.insert(payer.vault, value);
     }

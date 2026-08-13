@@ -32,8 +32,8 @@ use hyperscale_types::{
     compute_merkle_root, install_vm_statics,
 };
 use hyperscale_vm_effects::{
-    Address, CollectionId, Declaration, EffectTarget, InstanceRegistry, NodeCall, PackageHash,
-    PrefixShardResolver, SubstateKey, admit_tree, package_hash, route_tree,
+    Address, CollectionId, Declaration, EffectSet, EffectTarget, EntryKey, InstanceRegistry,
+    NodeCall, PackageHash, PrefixShardResolver, SubstateKey, admit_tree, package_hash, route_tree,
 };
 use hyperscale_vm_kernel::{
     Baseline, BatchTx, EnvInputs, ExecutionMode, Locality, ManifestWalk, Outcome, Receipt,
@@ -105,46 +105,137 @@ pub fn tx_randomness(anchor: RevealChain, tx: TxHash) -> [u8; 32] {
     .as_bytes()
 }
 
-/// The batch's committed baseline: the declared cells pre-read from the
-/// tick's JMT-backed snapshot at materialize time.
+/// The batch's committed baseline: the declared content pre-read from
+/// the tick's JMT-backed snapshot at materialize time — point cells and
+/// the entries of declared collection intervals.
 ///
-/// Cells only — ordered collections and locks are absent from the
-/// current stdlib surface. Every kernel read flows through a capability
-/// for a declared effect, so pre-reading exactly the declared point
-/// targets is complete.
+/// Locks are absent from the current stdlib surface. Every kernel read
+/// flows through a capability for a declared effect, so pre-reading
+/// exactly the declared targets is complete.
 #[derive(Debug, Default)]
-pub struct VmBase {
+pub struct TickBaseline {
     pub cells: BTreeMap<SubstateKey, Vec<u8>>,
+    /// The committed entries of every declared collection interval,
+    /// keyed by entry identity — [`materialize_declared`] fills it, and
+    /// the kernel's range capabilities read through it.
+    pub entries: BTreeMap<EntryKey, Vec<u8>>,
     /// What legs of unresolved ticks hold against these cells. Empty for
     /// a baseline with nothing in flight over it — a preview, or a shard
     /// with no cross-shard leg outstanding.
     pub holds: ProvisionalHolds,
 }
 
-impl Substates for VmBase {
+impl Substates for TickBaseline {
     fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
         self.cells.get(&key).cloned()
     }
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        if lo > hi {
+            return Vec::new();
+        }
+        let lo_key = EntryKey {
+            owner,
+            collection,
+            order: lo,
+        };
+        let hi_key = EntryKey {
+            owner,
+            collection,
+            order: hi,
+        };
+        self.entries
+            .range(lo_key..=hi_key)
+            .take(limit)
+            .map(|(key, value)| (key.order, value.clone()))
+            .collect()
     }
 }
 
-impl Baseline for VmBase {
+impl Baseline for TickBaseline {
     fn is_locked(&self, _key: SubstateKey) -> bool {
         false
     }
 
     fn holds(&self, key: SubstateKey) -> BTreeMap<TxHash, u128> {
         self.holds.get(&key).cloned().unwrap_or_default()
+    }
+}
+
+/// Materialize one declaration's baseline from the tick snapshot: for
+/// every declared effect this shard owns, the committed content it
+/// reads — the point cell, or the entries of the collection interval.
+///
+/// The one pre-read: `run_batch` and `preview` both fill their baselines
+/// here, so ordered-collection support exists in exactly one place and
+/// the preview cannot drift from execution. The match is exhaustive over
+/// the target vocabulary — a new target form fails here at compile time
+/// rather than executing against a silently empty baseline.
+pub fn materialize_declared(
+    snapshot: &(dyn Substates + Sync),
+    declared: &EffectSet,
+    locality: &Locality,
+    base: &mut TickBaseline,
+) {
+    for effect in declared.iter() {
+        match effect.target {
+            EffectTarget::Point(key) => {
+                if locality.is_local(key.owner)
+                    && let Some(value) = snapshot.cell(key)
+                {
+                    base.cells.insert(key, value);
+                }
+            }
+            EffectTarget::Entry {
+                owner,
+                collection,
+                order,
+            } => {
+                if locality.is_local(owner) {
+                    for (order, value) in
+                        snapshot.entries_in_range(owner, collection, order, order, 1)
+                    {
+                        base.entries.insert(
+                            EntryKey {
+                                owner,
+                                collection,
+                                order,
+                            },
+                            value,
+                        );
+                    }
+                }
+            }
+            EffectTarget::Range {
+                owner,
+                collection,
+                lo,
+                hi,
+                cap,
+            } => {
+                if locality.is_local(owner) {
+                    for (order, value) in
+                        snapshot.entries_in_range(owner, collection, lo, hi, cap as usize)
+                    {
+                        base.entries.insert(
+                            EntryKey {
+                                owner,
+                                collection,
+                                order,
+                            },
+                            value,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -428,6 +519,10 @@ pub const fn charge_for(outcome: &Outcome, payer: PayerFee) -> Option<u128> {
 /// reverting it.
 struct FoldState {
     running: BTreeMap<SubstateKey, Option<Vec<u8>>>,
+    /// The entry mirror beside the cells: exclusive writes with no
+    /// movement form, folded only so the differential can hold over
+    /// them too.
+    running_entries: BTreeMap<EntryKey, Option<Vec<u8>>>,
 }
 
 /// Build the receipt an abort of this transaction settles: the payer's
@@ -573,7 +668,7 @@ struct KernelOutput<'a> {
 /// each instance runs, and the code a pool must be running.
 #[derive(Clone, Copy)]
 struct BatchInputs<'a> {
-    base: &'a VmBase,
+    base: &'a TickBaseline,
     locality: &'a Locality,
     pools: &'a PoolRegistry,
     instances: &'a InstanceRegistry,
@@ -616,6 +711,9 @@ fn assemble_executed_tx(
         });
         for (key, change) in resolved.cells() {
             fold.running.insert(*key, change.clone());
+        }
+        for (key, change) in resolved.entries() {
+            fold.running_entries.insert(*key, change.clone());
         }
         apply_fee_burn(&mut writes, fee, receipt.fuel);
         // Every participant derives the same events from the same
@@ -736,27 +834,20 @@ impl Executor {
 
         // The committed baseline: provisioned remote cells first — a
         // key's owner prefix routes it to exactly one source, so nothing
-        // arbitrates — then the locally owned declared cells from the
+        // arbitrates — then the locally owned declared content from the
         // tick snapshot.
-        let mut cells: BTreeMap<SubstateKey, Vec<u8>> = BTreeMap::new();
+        let mut base = TickBaseline::default();
         for lists in provisions_by_tx.values() {
             for entries in lists {
                 for entry in entries.iter() {
                     if let Some(value) = entry.value.as_ref() {
-                        cells.insert(entry.key, value.clone());
+                        base.cells.insert(entry.key, value.clone());
                     }
                 }
             }
         }
         for entry in prepared.values() {
-            for effect in entry.declaration.set.iter() {
-                if let EffectTarget::Point(key) = effect.target
-                    && locality.is_local(key.owner)
-                    && let Some(value) = snapshot.cell(key)
-                {
-                    cells.insert(key, value);
-                }
-            }
+            materialize_declared(snapshot, &entry.declaration.set, &locality, &mut base);
         }
         // A manifest needn't touch its payer's own vault — a publish
         // declares no effects at all, and a call can spend entirely from
@@ -776,7 +867,7 @@ impl Executor {
             if ctx.shard_trie.shard_for_prefix(key.owner) == ctx.local_shard
                 && let Some(value) = snapshot.cell(key)
             {
-                cells.insert(key, value);
+                base.cells.insert(key, value);
             }
         }
         // Trie-routed like the pre-read above, and for the same reason:
@@ -785,13 +876,13 @@ impl Executor {
         // holds none of would judge a reservation as exceeding a balance
         // it cannot see. A tick's own locality cannot decide this — the
         // single-shard arm's `Locality::All` claims every owner.
-        let holds = ctx
+        base.holds = ctx
             .holds
             .iter()
             .filter(|(key, _)| ctx.shard_trie.shard_for_prefix(key.owner) == ctx.local_shard)
             .map(|(key, held)| (*key, held.clone()))
             .collect();
-        let base = Arc::new(VmBase { cells, holds });
+        let base = Arc::new(base);
 
         let batch: Vec<BatchTx> = prepared
             .iter()
@@ -859,6 +950,7 @@ impl Executor {
 
         let mut fold = FoldState {
             running: BTreeMap::new(),
+            running_entries: BTreeMap::new(),
         };
         let mut folded: BTreeMap<TxHash, ExecutedTx> = BTreeMap::new();
         for (vm_tx, receipt) in &outcome.receipts {
@@ -910,6 +1002,24 @@ impl Executor {
                 change.as_ref(),
                 applied.as_ref(),
                 "BFT CRITICAL: VM fold diverged from the kernel apply at {key:?}"
+            );
+        }
+        for (key, change) in &fold.running_entries {
+            let applied = Substates::entries_in_range(
+                &outcome.store,
+                key.owner,
+                key.collection,
+                key.order,
+                key.order,
+                1,
+            )
+            .into_iter()
+            .next()
+            .map(|(_, value)| value);
+            assert_eq!(
+                change.as_ref(),
+                applied.as_ref(),
+                "BFT CRITICAL: VM fold diverged from the kernel apply at entry {key:?}"
             );
         }
 
