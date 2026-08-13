@@ -293,9 +293,18 @@ impl SimShardStorage {
 /// the widest copy of each tick and indexing the transactions that copy
 /// attests.
 ///
-/// Only an accepted copy is indexed: a transaction the map cannot answer
-/// for with the certificate it kept is served from its own shard instead.
+/// Only an accepted copy of this shard's own certificate is indexed. A
+/// settled cross-shard transaction lands here under both sides'
+/// certificates, and the index answers "what did THIS shard attest for
+/// the transaction" — the question a counterpart's fallback fetch asks
+/// this shard. Letting a remote copy win the single slot serves the
+/// requester its own certificate back, which it rightly refuses as
+/// unsolicited, and the fetch loops forever.
 fn record_execution_certs(consensus: &mut ConsensusState, block: &Block) {
+    let local_shard = block
+        .certificates()
+        .first()
+        .map(|finalization| finalization.tick_id().shard_id());
     for cert in widest_tick_copies(block).into_values() {
         match consensus.execution_certs.entry(*cert.tick_id()) {
             Entry::Occupied(mut held) => {
@@ -307,6 +316,9 @@ fn record_execution_certs(consensus: &mut ConsensusState, block: &Block) {
             Entry::Vacant(slot) => {
                 slot.insert(cert.clone());
             }
+        }
+        if Some(cert.tick_id().shard_id()) != local_shard {
+            continue;
         }
         for outcome in cert.tx_outcomes() {
             consensus

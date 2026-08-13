@@ -934,6 +934,61 @@ pub fn test_widest_tick_copy_holds_the_slot(storage: &(impl ShardChainReader + S
     );
 }
 
+/// Shared index test: the by-transaction certificate lookup answers with
+/// this shard's own certificate.
+///
+/// A settled cross-shard transaction lands under both sides' certificates
+/// in one finalization, and the lookup serves the question a
+/// counterpart's fallback fetch asks this shard. The remote copy sorts
+/// after the local one in the write walk, so an unfiltered single-slot
+/// index would leave it the winner and serve the requester its own
+/// certificate back.
+///
+/// # Panics
+///
+/// Panics if any assertion fails (this is a test helper).
+pub fn test_tx_index_answers_with_the_local_shards_certificate(
+    storage: &(impl ShardChainReader + ShardChainWriter),
+) {
+    let tx = TxHash::from(Hash::from_bytes(&[7u8; 32]));
+    let local = execution_certificate_over(BlockHeight::new(1), from_ref(&tx));
+    let remote_outcomes = vec![TxOutcome::new(
+        tx,
+        ExecutionOutcome::Succeeded {
+            receipt_hash: GlobalReceiptHash::from_raw(Hash::from_bytes(&[99u8; 32])),
+        },
+    )];
+    let remote = ExecutionCertificate::new(
+        TickId::new(ShardId::leaf(1, 1), BlockHeight::new(4)),
+        WeightedTimestamp::from_millis(5),
+        compute_global_receipt_root(&remote_outcomes),
+        remote_outcomes,
+        AggregateSignature::new([0u8; 96]),
+        SignerBitfield::new(4),
+    );
+
+    commit_empty_blocks_up_to(storage, BlockHeight::new(1));
+    let certificate = Finalization::new(
+        *local.tick_id(),
+        TickHalf::Legs,
+        vec![Arc::new(local.clone()), Arc::new(remote)],
+        vec![],
+    );
+    let block = push_certificate(
+        make_test_block(BlockHeight::new(1)),
+        Arc::new(certificate.into()),
+    );
+    storage.commit_block(&make_test_certified(block), &empty_witness());
+
+    let served = storage.get_execution_certificates_for_txs(from_ref(&tx));
+    assert_eq!(served.len(), 1, "one certificate answers for the tx");
+    assert_eq!(
+        served[0].tick_id(),
+        local.tick_id(),
+        "and it is this shard's own, not the counterpart copy riding beside it",
+    );
+}
+
 /// Attach a provisions bundle for `tx_hash` to a live block, preserving
 /// everything else.
 #[must_use]

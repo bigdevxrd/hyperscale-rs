@@ -5,8 +5,8 @@
 //! carrying its outcome — the key a counterpart shard actually asks by.
 
 use hyperscale_storage::{covers_strictly_more, widest_tick_copies};
-use hyperscale_types::{Block, ExecutionCertificate, Hash};
-use rocksdb::{ColumnFamily, WriteBatch};
+use hyperscale_types::{Block, Hash};
+use rocksdb::WriteBatch;
 
 use super::column_families::{ExecutionCertsCf, TxCertIndexCf};
 use super::core::RocksDbShardStorage;
@@ -33,6 +33,12 @@ pub fn append_block_certs_to_batch(
     let cf = storage.cf();
     let primary_cf = ExecutionCertsCf::handle(&cf);
     let index_cf = TxCertIndexCf::handle(&cf);
+    // Every finalization in a block is this shard's own, so its tick names
+    // the local shard — the index below must only ever point there.
+    let local_shard = block
+        .certificates()
+        .first()
+        .map(|finalization| finalization.tick_id().shard_id());
     // The block's own copies resolve against each other, then against
     // what is stored. A remote tick reaches this shard through whichever
     // of its own finalizations needed it, so two blocks can each carry a
@@ -45,29 +51,30 @@ pub fn append_block_certs_to_batch(
         if stored.is_some_and(|held| !covers_strictly_more(cert, &held)) {
             continue;
         }
-        append_ec_to_batch(batch, primary_cf, index_cf, cert);
-    }
-}
-
-fn append_ec_to_batch(
-    batch: &mut WriteBatch,
-    primary_cf: &ColumnFamily,
-    index_cf: &ColumnFamily,
-    cert: &ExecutionCertificate,
-) {
-    batch_put_raw::<ExecutionCertsCf>(
-        batch,
-        primary_cf,
-        cert.tick_id(),
-        cert,
-        cert.cached_wire_bytes(),
-    );
-    for outcome in cert.tx_outcomes() {
-        batch_put::<TxCertIndexCf>(
+        batch_put_raw::<ExecutionCertsCf>(
             batch,
-            index_cf,
-            &Hash::from(outcome.tx_hash()),
+            primary_cf,
             cert.tick_id(),
+            cert,
+            cert.cached_wire_bytes(),
         );
+        // Index only this shard's own certificates. A settled cross-shard
+        // transaction lands here under both sides' certificates, and the
+        // index answers "what did THIS shard attest for the transaction" —
+        // the question a counterpart's fallback fetch asks this shard.
+        // Letting a remote copy win the single slot serves the requester
+        // its own certificate back, which it rightly refuses as
+        // unsolicited, and the fetch loops forever.
+        if Some(cert.tick_id().shard_id()) != local_shard {
+            continue;
+        }
+        for outcome in cert.tx_outcomes() {
+            batch_put::<TxCertIndexCf>(
+                batch,
+                index_cf,
+                &Hash::from(outcome.tx_hash()),
+                cert.tick_id(),
+            );
+        }
     }
 }

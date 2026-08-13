@@ -716,6 +716,12 @@ fn the_widest_copy_of_a_tick_holds_the_slot() {
 }
 
 #[test]
+fn the_tx_index_answers_with_the_local_shards_certificate() {
+    let storage = SimShardStorage::default();
+    test_helpers::test_tx_index_answers_with_the_local_shards_certificate(&storage);
+}
+
+#[test]
 fn test_ec_storage_roundtrip() {
     let storage = SimShardStorage::default();
     test_helpers::test_ec_storage_roundtrip(&storage);
