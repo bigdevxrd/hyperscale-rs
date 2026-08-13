@@ -560,6 +560,7 @@ struct TerminalMarks {
     terminal_epoch: Option<Epoch>,
     reshape_admitted_epoch: Option<Epoch>,
     terminal_delivered: bool,
+    handoff_complete: Option<Epoch>,
 }
 
 /// The marks for a shard's rebuilt boundary record, plus whether this
@@ -584,9 +585,15 @@ fn carried_terminal_marks(
     qc: &QuorumCertificate,
     windows: EpochWindows,
 ) -> (TerminalMarks, bool) {
-    let (terminal_epoch, reshape_admitted_epoch) =
-        state.boundaries.get(&shard).map_or((None, None), |b| {
-            (b.terminal_epoch, b.reshape_admitted_epoch)
+    let (terminal_epoch, reshape_admitted_epoch, handoff_complete) = state
+        .boundaries
+        .get(&shard)
+        .map_or((None, None, None), |b| {
+            (
+                b.terminal_epoch,
+                b.reshape_admitted_epoch,
+                b.handoff_complete,
+            )
         });
     let is_terminal = terminal_epoch.is_some_and(|t| {
         windows
@@ -602,6 +609,7 @@ fn carried_terminal_marks(
             terminal_epoch,
             reshape_admitted_epoch,
             terminal_delivered,
+            handoff_complete,
         },
         is_terminal,
     )
@@ -913,6 +921,7 @@ fn record_boundaries(
                 last_live_epoch: epoch,
                 consecutive_misses: 0,
                 terminal_epoch: marks.terminal_epoch,
+                handoff_complete: marks.handoff_complete,
                 terminal_delivered: marks.terminal_delivered,
                 terminal_roots: header.terminal_roots(),
                 reshape_admitted_epoch: marks.reshape_admitted_epoch,
@@ -982,38 +991,60 @@ fn record_boundaries(
     (outcome, reveals)
 }
 
-/// Drop terminal records past their evidence window. A terminated shard's
-/// record lingers only to project its `settled_txs_root` to surviving
-/// counterparts; past its
+/// Stamp handoff completion and drop terminal records past their evidence
+/// window. A terminated shard's record lingers only to project its
+/// `settled_txs_root` to surviving counterparts; past its
 /// [terminal-evidence expiry](EpochWindows::terminal_evidence_expiry) the
 /// split-boundary fence rejects any tick naming it regardless, so the
 /// record is dead weight. The window is the same one the fence and the
-/// acquisition read, and it spans the two folds a terminal contribution
-/// takes to reach a record at all — a record dropped before then would
-/// never once have carried the roots it exists to project. Bounded so a
-/// terminated shard can't accumulate forever.
+/// acquisition read, and it counts from the epoch the handoff completed —
+/// the successors produced past genesis — because that is the earliest
+/// milestone by which every survivor could have both read the boundary
+/// (folded two epochs after the cut at best) and reached the terminal
+/// committee to acquire the set. A window counted from the cut closes
+/// while a slow seeding or a partition is still in the way, killing the
+/// very recovery the evidence exists for. Bounded so a terminated shard
+/// can't accumulate forever.
 ///
-/// A terminal record whose reshape successors aren't live yet is exempt: it
-/// is what `seed_split_children` folds the children from (or what a merge
-/// parent composes from), and that fold can only land on an epoch the beacon
-/// commits a proposal carrying the terminal QC. The beacon can commit empty
-/// for several epochs across the reshape's committee transition, so the
-/// window alone would drop the record first — stranding the children on
-/// their placeholders, or the merge parent uncomposed. It is also the anchor
-/// a coasting predecessor's observers snap-sync against while they finish
-/// adopting; under make-before-break the predecessor keeps coasting until its
-/// successors are live, so the record must outlive the window until then,
-/// not merely until they seed. Holding it until the successors have produced
-/// past genesis (`BeaconState.advanced`) covers both, and frees the record
-/// for the next sweep once the handoff has demonstrably completed.
+/// A terminal record whose handoff is still pending carries no stamp and
+/// is never dropped: it is what `seed_split_children` folds the children
+/// from (or what a merge parent composes from), and that fold can only
+/// land on an epoch the beacon commits a proposal carrying the terminal
+/// QC. The beacon can commit empty for several epochs across the
+/// reshape's committee transition, so a bare window would drop the record
+/// first — stranding the children on their placeholders, or the merge
+/// parent uncomposed. It is also the anchor a coasting predecessor's
+/// observers snap-sync against while they finish adopting; under
+/// make-before-break the predecessor keeps coasting until its successors
+/// are live, so the record must outlive that moment regardless.
 fn gc_terminal_boundaries(state: &mut BeaconState, epoch: Epoch, windows: EpochWindows) {
     let now = windows.window_of(epoch).start;
+    // Stamp the epoch a terminal's successors first read live. The
+    // terminal-evidence window counts from this stamp, not from the cut:
+    // evidence is only acquirable once the boundary has folded and the
+    // network has delivered, and the handoff's completion is the one
+    // deterministic milestone that bounds both.
+    let newly_complete: Vec<ShardId> = state
+        .boundaries
+        .iter()
+        .filter(|(shard, b)| {
+            b.terminal_epoch.is_some()
+                && b.handoff_complete.is_none()
+                && successors_live_for_terminal(state, **shard)
+        })
+        .map(|(shard, _)| *shard)
+        .collect();
+    for shard in newly_complete {
+        if let Some(b) = state.boundaries.get_mut(&shard) {
+            b.handoff_complete = Some(epoch);
+        }
+    }
     let pending_fold: BTreeMap<ShardId, Epoch> = state
         .boundaries
         .iter()
         .filter_map(|(shard, b)| {
             let terminal = b.terminal_epoch?;
-            (!successors_live_for_terminal(state, *shard)).then_some((*shard, terminal))
+            b.handoff_complete.is_none().then_some((*shard, terminal))
         })
         .collect();
     // A handoff still pending RESHAPE_HANDOFF_TTL_EPOCHS after its execution
@@ -1030,11 +1061,10 @@ fn gc_terminal_boundaries(state: &mut BeaconState, epoch: Epoch, windows: EpochW
             "reshape handoff stalled: successors not live within the TTL after the cut"
         );
     }
-    state.boundaries.retain(|shard, b| {
-        b.terminal_epoch.is_none_or(|t| {
-            pending_fold.contains_key(shard)
-                || now <= windows.terminal_evidence_expiry(windows.window_of(t).end)
-        })
+    state.boundaries.retain(|_, b| {
+        b.terminal_epoch.is_none()
+            || b.handoff_complete
+                .is_none_or(|done| now <= windows.handoff_evidence_expiry(done))
     });
     // A shard that left `boundaries` is gone; drop its produced mark and
     // any in-flight recovery record too.
@@ -1141,6 +1171,7 @@ fn seed_split_children(
                 last_live_epoch: epoch,
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -1251,6 +1282,7 @@ fn compose_merge_parent(
             last_live_epoch: epoch,
             consecutive_misses: 0,
             terminal_epoch: None,
+            handoff_complete: None,
             terminal_delivered: false,
             terminal_roots: None,
             reshape_admitted_epoch: None,
@@ -1824,6 +1856,7 @@ mod tests {
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -1881,6 +1914,7 @@ mod tests {
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -2275,6 +2309,7 @@ mod tests {
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -2371,6 +2406,7 @@ mod tests {
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -2446,6 +2482,7 @@ mod tests {
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -3042,6 +3079,7 @@ mod tests {
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: Some(Epoch::new(1)),
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -3062,6 +3100,7 @@ mod tests {
                     last_live_epoch: Epoch::new(1),
                     consecutive_misses: 0,
                     terminal_epoch: None,
+                    handoff_complete: None,
                     terminal_delivered: false,
                     terminal_roots: None,
                     reshape_admitted_epoch: None,
@@ -3329,14 +3368,29 @@ mod tests {
         );
 
         // The children seat and produce past their genesis — the handoff is
-        // done, so the parent's record is dead weight, free to drop on the next
-        // sweep.
+        // done, and the sweep that observes it stamps the completion epoch.
+        // The evidence window counts from that stamp, so the record is
+        // retained on this very sweep however far past the cut it runs.
         for child in <[ShardId; 2]>::from(parent.children()) {
             state.advanced.insert(child);
         }
-        // Advance to an epoch whose window opens past the terminal cut
-        // (2000ms at epoch_duration 1000) plus the evidence window.
-        let past = Epoch::new(TERMINAL_EVIDENCE_EPOCHS + 5);
+        let stamp = Epoch::new(TERMINAL_EVIDENCE_EPOCHS + 5);
+        record_boundaries(
+            &BlsVerifier,
+            &mut state,
+            &net(),
+            stamp,
+            &[],
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+        assert!(
+            state.boundaries.contains_key(&parent),
+            "the window counts from the handoff's completion, not the cut",
+        );
+
+        // One window past the stamp the record is dead weight and drops.
+        let past = Epoch::new(stamp.inner() + TERMINAL_EVIDENCE_EPOCHS + 2);
         record_boundaries(
             &BlsVerifier,
             &mut state,
@@ -3348,7 +3402,7 @@ mod tests {
         );
         assert!(
             !state.boundaries.contains_key(&parent),
-            "terminal record drops past the evidence window once its children are live",
+            "terminal record drops once the evidence window past the handoff closes",
         );
     }
 
@@ -3493,8 +3547,8 @@ mod tests {
             "a seeded-but-not-live parent is still held",
         );
 
-        // The children produce past their genesis — the handoff is complete, so
-        // the parent drops on the next sweep.
+        // The children produce past their genesis — the handoff completes and
+        // the sweep stamps it, which is what opens the evidence window.
         for child in <[ShardId; 2]>::from(parent.children()) {
             state.advanced.insert(child);
         }
@@ -3509,8 +3563,24 @@ mod tests {
             &BTreeSet::new(),
         );
         assert!(
+            state.boundaries.contains_key(&parent),
+            "the parent is held through the evidence window past the handoff",
+        );
+
+        // And drops once that window closes.
+        let closed = Epoch::new(even_later.inner() + TERMINAL_EVIDENCE_EPOCHS + 2);
+        record_boundaries(
+            &BlsVerifier,
+            &mut state,
+            &net(),
+            closed,
+            &[],
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+        assert!(
             !state.boundaries.contains_key(&parent),
-            "the parent drops once its children are live",
+            "the parent drops once the evidence window past the handoff closes",
         );
     }
 
@@ -3543,6 +3613,7 @@ mod tests {
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -3565,6 +3636,7 @@ mod tests {
                     last_live_epoch: Epoch::new(1),
                     consecutive_misses: 0,
                     terminal_epoch: Some(Epoch::new(1)),
+                    handoff_complete: None,
                     terminal_delivered: true,
                     terminal_roots: None,
                     reshape_admitted_epoch: None,
@@ -3625,8 +3697,8 @@ mod tests {
             );
         }
 
-        // The reformed parent produces past its genesis — the handoff completes,
-        // so the children drop on the next sweep.
+        // The reformed parent produces past its genesis — the handoff
+        // completes, the sweep stamps it, and the evidence window opens.
         state.advanced.insert(parent);
         let even_later = Epoch::new(TERMINAL_EVIDENCE_EPOCHS + 7);
         record_boundaries(
@@ -3640,8 +3712,26 @@ mod tests {
         );
         for child in [left, right] {
             assert!(
+                state.boundaries.contains_key(&child),
+                "a merge child is held through the evidence window past the handoff",
+            );
+        }
+
+        // And they drop once that window closes.
+        let closed = Epoch::new(even_later.inner() + TERMINAL_EVIDENCE_EPOCHS + 2);
+        record_boundaries(
+            &BlsVerifier,
+            &mut state,
+            &net(),
+            closed,
+            &[],
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+        for child in [left, right] {
+            assert!(
                 !state.boundaries.contains_key(&child),
-                "a merge child drops once its reformed parent is live",
+                "a merge child drops once the evidence window past the handoff closes",
             );
         }
     }
@@ -3716,6 +3806,7 @@ mod tests {
                     last_live_epoch: Epoch::new(1),
                     consecutive_misses: 0,
                     terminal_epoch: Some(Epoch::new(1)),
+                    handoff_complete: None,
                     terminal_delivered: false,
                     terminal_roots: None,
                     reshape_admitted_epoch: None,
@@ -3736,6 +3827,7 @@ mod tests {
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -4131,6 +4223,7 @@ mod tests {
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
@@ -4354,6 +4447,7 @@ mod tests {
                     last_live_epoch: Epoch::GENESIS,
                     consecutive_misses: 0,
                     terminal_epoch: None,
+                    handoff_complete: None,
                     terminal_delivered: false,
                     terminal_roots: None,
                     reshape_admitted_epoch: None,

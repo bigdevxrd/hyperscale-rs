@@ -82,12 +82,15 @@ struct Departure {
     /// The terminal cut — what dates the departure against a
     /// transaction's own commit frontier.
     cut: WeightedTimestamp,
-    /// The cut's terminal-evidence expiry. The entries this shard holds
-    /// against the departed shard live to exactly here, because this is
-    /// when its settled set stops answering: a shorter life would strand
-    /// them before the evidence that decides them is even attested, and a
-    /// longer one would hold them past any answer.
-    readable_until: WeightedTimestamp,
+    /// The handoff-anchored terminal-evidence expiry, `None` while the
+    /// beacon has not stamped the handoff complete. The entries this
+    /// shard holds against the departed shard live to exactly here,
+    /// because this is when its settled set stops answering: a shorter
+    /// life would strand them before the evidence that decides them is
+    /// even attested, and a longer one would hold them past any answer.
+    /// An open window holds them — the coordinator re-stamps on every
+    /// commit, so the expiry lands within a commit of the beacon's stamp.
+    readable_until: Option<WeightedTimestamp>,
 }
 
 /// A transaction the ledger let go of without an outcome, because no
@@ -273,24 +276,23 @@ impl UnresolvedTxs {
     /// Record where a departed participant's chain ended, and when what it
     /// left stops being readable.
     ///
-    /// Idempotent on both figures, which are properties of the schedule
-    /// rather than of when this shard got around to reading it.
+    /// Idempotent on the cut, which is a property of the schedule rather
+    /// than of when this shard got around to reading it. The expiry fills
+    /// in when the caller learns it — the beacon stamps the handoff
+    /// complete some epochs after the cut — and never moves once set.
     pub fn record_terminal(
         &mut self,
         shard: ShardId,
         cut: WeightedTimestamp,
-        readable_until: WeightedTimestamp,
+        readable_until: Option<WeightedTimestamp>,
     ) {
-        self.departed.entry(shard).or_insert(Departure {
+        let entry = self.departed.entry(shard).or_insert(Departure {
             cut,
             readable_until,
         });
-    }
-
-    /// Whether a terminal is already recorded for `shard`.
-    #[must_use]
-    pub fn knows_terminal(&self, shard: ShardId) -> bool {
-        self.departed.contains_key(&shard)
+        if entry.readable_until.is_none() {
+            entry.readable_until = readable_until;
+        }
     }
 
     /// When the shard that held `prefix` when the transaction committed
@@ -429,11 +431,9 @@ impl UnresolvedTxs {
             .into_iter()
             .filter(|(tx_hash, owed)| {
                 if let Some(shard) = owed.unsettled_by {
-                    if self
-                        .departed
-                        .get(&shard)
-                        .is_some_and(|departure| now <= departure.readable_until)
-                    {
+                    if self.departed.get(&shard).is_some_and(|departure| {
+                        departure.readable_until.is_none_or(|until| now <= until)
+                    }) {
                         return true;
                     }
                     unanswerable.push(Unanswerable {
@@ -443,8 +443,9 @@ impl UnresolvedTxs {
                     return false;
                 }
                 let answerable = owed.remote_prefixes.iter().any(|prefix| {
-                    self.departure_over(owed, *prefix)
-                        .is_none_or(|departure| now <= departure.readable_until)
+                    self.departure_over(owed, *prefix).is_none_or(|departure| {
+                        departure.readable_until.is_none_or(|until| now <= until)
+                    })
                 });
                 // Having counterparts at all is what makes silence mean
                 // something: a transaction that never left this shard has
@@ -722,7 +723,7 @@ mod tests {
         ledger.certify(tx.hash());
 
         let cut = ms(500_000);
-        ledger.record_terminal(PARTNER, cut, expiry(cut));
+        ledger.record_terminal(PARTNER, cut, Some(expiry(cut)));
 
         ledger.prune(expiry(cut));
         assert_eq!(ledger.len(), 1, "the set still reads at the expiry");
@@ -744,7 +745,7 @@ mod tests {
         ledger.certify(tx.hash());
 
         let cut = ms(500_000);
-        ledger.record_terminal(PARTNER, cut, expiry(cut));
+        ledger.record_terminal(PARTNER, cut, Some(expiry(cut)));
         assert!(
             ledger.prune(expiry(cut)).is_empty(),
             "while the set still reads, the strand is nobody's to release",
@@ -771,7 +772,7 @@ mod tests {
         ledger.certify(tx.hash());
 
         let cut = ms(500_000);
-        ledger.record_terminal(PARTNER, cut, expiry(cut));
+        ledger.record_terminal(PARTNER, cut, Some(expiry(cut)));
         assert_eq!(
             ledger.record_terminal_verdicts(&[TerminalVerdict::new(PARTNER, cut, [names(&tx)])]),
             0,
@@ -797,7 +798,7 @@ mod tests {
         let mut ledger = UnresolvedTxs::default();
         let (one, two) = (tx(19, 60_000), tx(20, 60_000));
         let cut = ms(500_000);
-        ledger.record_terminal(PARTNER, cut, expiry(cut));
+        ledger.record_terminal(PARTNER, cut, Some(expiry(cut)));
 
         assert_eq!(
             ledger.record_terminal_verdicts(&[TerminalVerdict::new(
@@ -832,7 +833,7 @@ mod tests {
         let mut ledger = UnresolvedTxs::default();
         let tx = tx(21, 60_000);
         let cut = ms(500_000);
-        ledger.record_terminal(PARTNER, cut, expiry(cut));
+        ledger.record_terminal(PARTNER, cut, Some(expiry(cut)));
         ledger.record_terminal_verdicts(&[TerminalVerdict::new(PARTNER, cut, [names(&tx)])]);
 
         assert!(
@@ -939,7 +940,7 @@ mod tests {
         ledger.certify(tx.hash());
 
         let cut = ms(500_000);
-        ledger.record_terminal(ShardId::leaf(2, 2), cut, expiry(cut));
+        ledger.record_terminal(ShardId::leaf(2, 2), cut, Some(expiry(cut)));
         ledger.prune(expiry(cut).plus(MAX_VALIDITY_RANGE));
         assert_eq!(ledger.len(), 1, "the other shard is still running");
     }
@@ -994,7 +995,7 @@ mod tests {
         // The partner splits. Its keyspace passes to a child, and both
         // answer for the transaction — the child owns it now, the parent
         // held it when our certificate went out.
-        ledger.record_terminal(PARTNER, ms(500_000), expiry(ms(500_000)));
+        ledger.record_terminal(PARTNER, ms(500_000), Some(expiry(ms(500_000))));
         let split = ShardTrie::from_leaves([LOCAL, ShardId::leaf(2, 2), ShardId::leaf(2, 3)]);
         let after = ledger.counterparts(tx.hash(), &split);
         assert!(after.contains(&PARTNER), "the shard that held it then");
@@ -1012,7 +1013,7 @@ mod tests {
         ledger.register_committed(LOCAL, ms(600_000), std::iter::once(&tx));
         ledger.certify(tx.hash());
         let stale = ms(500_000);
-        ledger.record_terminal(PARTNER, stale, expiry(stale));
+        ledger.record_terminal(PARTNER, stale, Some(expiry(stale)));
 
         assert!(
             ledger

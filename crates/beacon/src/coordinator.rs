@@ -3071,6 +3071,7 @@ mod tests {
             last_live_epoch: Epoch::new(1),
             consecutive_misses: 0,
             terminal_epoch: None,
+            handoff_complete: None,
             terminal_delivered: false,
             terminal_roots: None,
             reshape_admitted_epoch: None,
@@ -5585,6 +5586,7 @@ mod tests {
             last_live_epoch: Epoch::new(epoch),
             consecutive_misses: 0,
             terminal_epoch: None,
+            handoff_complete: None,
             terminal_delivered: false,
             terminal_roots: None,
             reshape_admitted_epoch: None,
@@ -5594,6 +5596,7 @@ mod tests {
     fn boundary_terminal_at(epoch: u64) -> ShardBoundary {
         ShardBoundary {
             terminal_epoch: Some(Epoch::new(epoch)),
+            handoff_complete: None,
             ..boundary_live_at(epoch)
         }
     }
@@ -5699,6 +5702,7 @@ mod tests {
             predecessor,
             ShardBoundary {
                 terminal_epoch: Some(Epoch::new(100)),
+                handoff_complete: None,
                 ..boundary_live_at(102)
             },
         );

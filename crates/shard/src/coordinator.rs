@@ -856,10 +856,10 @@ impl ShardCoordinator {
     /// committed chain advances beyond it, the fence rejects any tick
     /// naming the shard regardless of the set, so retaining it only leaks
     /// memory.
-    fn gc_settled_sets(&mut self) {
+    fn gc_settled_sets(&mut self, topology_schedule: &TopologySchedule) {
         let now = self.committed_block_anchor_wt;
         self.settled_sets
-            .retain(|_, settled| now <= settled.readable_until);
+            .retain(|shard, _| topology_schedule.terminal_evidence_readable(*shard, now));
     }
 
     /// The settled-transaction set this validator has acquired for a terminated
@@ -1957,11 +1957,8 @@ impl ShardCoordinator {
             &self.dedup_index,
             MAX_TXS_PER_BLOCK,
         );
-        let terminal_verdicts = select_terminal_verdicts(
-            terminal_verdicts,
-            topology_schedule.windows(),
-            validity_anchor,
-        );
+        let terminal_verdicts =
+            select_terminal_verdicts(terminal_verdicts, topology_schedule, validity_anchor);
         // Applied after provision selection: a cross-shard transaction
         // rides only beside (or after) its payer bundle, the engagement
         // evidence the voters' `validate_engagement` demands.
@@ -4899,7 +4896,7 @@ impl ShardCoordinator {
         self.committed_block_anchor_wt = block.header().parent_qc().weighted_timestamp();
         self.committed_state_root = block.header().state_root();
         self.committed_tip = Some(block.header().committed_tip());
-        self.gc_settled_sets();
+        self.gc_settled_sets(topology_schedule);
 
         // Retire the committed block's substate delta into the count
         // frontier. Sync commits carry no delta (QC-trusted, never
@@ -6706,10 +6703,6 @@ mod tests {
     };
 
     use super::*;
-
-    /// A window far enough out that these tests never trip it: what they
-    /// assert is how a set reads, not how long it stays readable.
-    const STILL_READABLE: WeightedTimestamp = WeightedTimestamp::from_millis(u64::MAX);
     use crate::validation::validate_no_duplicate_transactions;
 
     fn install_complete_block(state: &mut ShardCoordinator, block: &Block) {
@@ -6929,6 +6922,7 @@ mod tests {
                 settled_txs: SettledTxsRoot::ZERO,
                 committed_txs: committed,
             }),
+            handoff_complete: None,
         };
         let live = |shards: &[ShardId], boundaries: HashMap<ShardId, ShardAnchor>| {
             Arc::new(TopologySnapshot::from_explicit_committees(
@@ -10932,11 +10926,25 @@ mod tests {
             )
             .with_scheduled_terminals(BTreeMap::from([(ShardId::ROOT, Epoch::new(0))])),
         );
-        let post_split = Arc::new(TopologySnapshot::new(
-            NetworkDefinition::simulator(),
-            2,
-            ValidatorSet::new(validators),
-        ));
+        let post_split = Arc::new(
+            TopologySnapshot::new(
+                NetworkDefinition::simulator(),
+                2,
+                ValidatorSet::new(validators),
+            )
+            .with_boundaries(HashMap::from([(
+                ShardId::ROOT,
+                ShardAnchor {
+                    state_root: StateRoot::ZERO,
+                    block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal")),
+                    height: BlockHeight::new(9),
+                    weighted_timestamp: WeightedTimestamp::from_millis(1_000),
+                    witness_base: BeaconWitnessLeafCount::ZERO,
+                    terminal_roots: None,
+                    handoff_complete: None,
+                },
+            )])),
+        );
         let mut sched = TopologySchedule::new(1000, Epoch::new(0), final_window);
         sched.insert(Epoch::new(1), post_split);
         sched
@@ -11225,7 +11233,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"other"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(ROOT_CUT_MS),
-                readable_until: STILL_READABLE,
             },
         );
         let records = vec![record_naming(ShardId::ROOT, ROOT_CUT_MS, b"tx")];
@@ -11249,7 +11256,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"tx"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(ROOT_CUT_MS),
-                readable_until: STILL_READABLE,
             },
         );
         let records = vec![record_naming(ShardId::ROOT, ROOT_CUT_MS, b"tx")];
@@ -11310,7 +11316,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"tx"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let block = block_with_certs(vec![abandonment_tick(ShardId::leaf(1, 0), 1)]);
@@ -11333,7 +11338,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"other"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let block = block_with_certs(vec![abandonment_tick(ShardId::leaf(1, 0), 1)]);
@@ -11356,7 +11360,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"tx"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let block = block_with_certs(vec![cross_shard_tick(
@@ -11398,7 +11401,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"tx"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let block = block_with_certs(vec![cross_shard_tick(
@@ -11422,7 +11424,6 @@ mod tests {
             SettledTxSet {
                 txs: BTreeSet::new(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let block = block_with_certs(vec![cross_shard_tick(
@@ -11448,7 +11449,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"tx"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: WeightedTimestamp::from_millis(6_000),
             },
         );
         let block = block_with_certs(vec![cross_shard_tick(
@@ -11574,7 +11574,6 @@ mod tests {
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"tx"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let released = coord.redrive_pending_votes(&sched);

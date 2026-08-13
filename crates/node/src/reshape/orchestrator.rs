@@ -488,6 +488,7 @@ fn terminal_anchor(header: &BlockHeader) -> ShardAnchor {
         weighted_timestamp: header.parent_qc().weighted_timestamp(),
         witness_base: header.beacon_witness_base(),
         terminal_roots: header.terminal_roots(),
+        handoff_complete: None,
     }
 }
 
@@ -511,8 +512,9 @@ enum KeeperPhase {
         cut_wt: WeightedTimestamp,
         /// The beacon's composed parent anchor, when this duty reached
         /// `Building` by the fallback rather than the cut-over. Present
-        /// means the derivation is checked against it.
-        anchor: Option<ShardAnchor>,
+        /// means the derivation is checked against it. Boxed: the anchor
+        /// dwarfs every other variant of the phase.
+        anchor: Option<Box<ShardAnchor>>,
         left: Box<KeeperHalf>,
         right: Box<KeeperHalf>,
         derived: Option<(ChainOrigin, Box<Block>, Vec<PredecessorTerminal>)>,
@@ -1365,7 +1367,7 @@ impl ReshapeOrchestrator {
                         // derivation is checked against it. The cut-over path
                         // below has none yet — its guard is the pair of
                         // commitment proofs it built the terminals from.
-                        anchor: Some(parent_anchor),
+                        anchor: Some(Box::new(parent_anchor)),
                         left: Box::new(KeeperHalf::new(left, left_anchor)),
                         right: Box::new(KeeperHalf::new(right, right_anchor)),
                         derived: None,
@@ -1497,7 +1499,7 @@ impl ReshapeOrchestrator {
                     // agreement is free, and disagreement means the local
                     // child chains and the network disagree about a committed
                     // block.
-                    && anchor.is_none_or(|a| {
+                    && anchor.as_deref().is_none_or(|a| {
                         let matches = genesis.hash() == a.block_hash;
                         if !matches {
                             tracing::error!(
@@ -1922,6 +1924,7 @@ mod tests {
             weighted_timestamp: wt,
             witness_base: BeaconWitnessLeafCount::ZERO,
             terminal_roots: None,
+            handoff_complete: None,
         }
     }
 

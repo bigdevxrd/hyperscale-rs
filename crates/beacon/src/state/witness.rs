@@ -2175,6 +2175,7 @@ mod tests {
                 last_live_epoch: Epoch::new(1),
                 consecutive_misses: u32::try_from(HALT_THRESHOLD_EPOCHS).expect("fits") + 1,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,

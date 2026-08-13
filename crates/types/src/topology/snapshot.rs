@@ -65,6 +65,11 @@ pub struct ShardAnchor {
     /// header directly — this is the durable copy a restart, or a
     /// validator seated after the flip, recovers them from.
     pub terminal_roots: Option<TerminalRoots>,
+    /// The epoch the beacon fold first observed this terminal shard's
+    /// reshape successors live. The terminal-evidence window counts from
+    /// here; `None` while the handoff is pending (an open window), and
+    /// always `None` for a live shard's anchor.
+    pub handoff_complete: Option<Epoch>,
 }
 
 /// One reshape cohort seat as the topology projects it.
@@ -503,6 +508,18 @@ impl TopologySnapshot {
         scheduled_terminals: BTreeMap<ShardId, Epoch>,
     ) -> Self {
         self.scheduled_terminals = scheduled_terminals;
+        self
+    }
+
+    /// Set the boundary-anchor map (see [`Self::boundary`]). Defaults
+    /// empty; the beacon projection carries every shard's latest crossing
+    /// anchor, and a terminal's record for exactly as long as the beacon
+    /// retains it — which is what the evidence-window readers key on.
+    /// Builder-set under the [`Self::with_settled_window_floors`]
+    /// rationale.
+    #[must_use]
+    pub fn with_boundaries(mut self, boundaries: HashMap<ShardId, ShardAnchor>) -> Self {
+        self.boundaries = boundaries;
         self
     }
 }
@@ -1442,6 +1459,7 @@ mod tests {
             weighted_timestamp: WeightedTimestamp::from_millis(42),
             witness_base: BeaconWitnessLeafCount::ZERO,
             terminal_roots: None,
+            handoff_complete: None,
         };
         let mut boundaries = HashMap::new();
         boundaries.insert(ShardId::leaf(1, 0), anchor);

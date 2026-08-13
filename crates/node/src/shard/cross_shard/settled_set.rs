@@ -193,7 +193,8 @@ impl SettledTxsAcquisition {
         now_wt: Option<WeightedTimestamp>,
     ) -> Vec<SettledTxsAcquisitionOutput> {
         if let Some(now) = now_wt {
-            self.drivers.retain(|_, d| now <= d.evidence.readable_until);
+            self.drivers
+                .retain(|_, d| d.evidence.expires.is_none_or(|expiry| now <= expiry));
         }
         let mut outputs = Vec::new();
         for (&shard, driver) in &mut self.drivers {
@@ -345,8 +346,8 @@ mod tests {
                 height: BlockHeight::new(3),
                 block_hash: terminal,
                 terminal_wt: WeightedTimestamp::from_millis(9_000),
-                readable_until: WeightedTimestamp::from_millis(19_000),
                 attested_root: root,
+                expires: None,
             },
             vec![ValidatorId::new(7)],
         );
@@ -395,8 +396,8 @@ mod tests {
                 height: BlockHeight::new(3),
                 block_hash: terminal,
                 terminal_wt: WeightedTimestamp::from_millis(9_000),
-                readable_until: WeightedTimestamp::from_millis(19_000),
                 attested_root: wrong_root,
+                expires: None,
             },
             vec![ValidatorId::new(0), ValidatorId::new(1)],
         );
@@ -414,7 +415,8 @@ mod tests {
         ));
     }
 
-    /// A driver whose evidence window has passed drops on tick.
+    /// A driver whose stamped evidence window has passed drops on tick;
+    /// one whose window is still open (no handoff stamp yet) is held.
     #[test]
     fn expires_past_the_evidence_window() {
         let mut host = SettledTxsAcquisition::new();
@@ -424,16 +426,39 @@ mod tests {
                 height: BlockHeight::new(2),
                 block_hash: BlockHash::ZERO,
                 terminal_wt: WeightedTimestamp::from_millis(1_000),
-                readable_until: WeightedTimestamp::from_millis(6_000),
                 attested_root: settled_txs_root_from_hashes(std::iter::empty()),
+                expires: Some(WeightedTimestamp::from_millis(6_000)),
             },
             vec![],
         );
         assert!(host.has_pending());
 
+        let _ = host.on_tick(Some(WeightedTimestamp::from_millis(6_000)));
+        assert!(host.has_pending(), "at the boundary the driver still runs");
+
         let outputs = host.on_tick(Some(WeightedTimestamp::from_millis(6_001)));
         assert!(outputs.is_empty());
         assert!(!host.has_pending(), "the expired driver drops");
+    }
+
+    /// A driver with no stamp yet never self-expires — the window is open
+    /// until the beacon stamps the handoff complete.
+    #[test]
+    fn an_open_window_never_expires() {
+        let mut host = SettledTxsAcquisition::new();
+        let _ = host.start(
+            SHARD,
+            TerminalEvidence {
+                height: BlockHeight::new(2),
+                block_hash: BlockHash::ZERO,
+                terminal_wt: WeightedTimestamp::from_millis(1_000),
+                attested_root: settled_txs_root_from_hashes(std::iter::empty()),
+                expires: None,
+            },
+            vec![],
+        );
+        let _ = host.on_tick(Some(WeightedTimestamp::from_millis(1_000_000)));
+        assert!(host.has_pending(), "an open window holds the driver");
     }
 
     /// A duplicate start for the same terminal while a fetch is in flight
@@ -448,8 +473,8 @@ mod tests {
                 height: BlockHeight::new(2),
                 block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal-a")),
                 terminal_wt: WeightedTimestamp::from_millis(1),
-                readable_until: WeightedTimestamp::from_millis(5_001),
                 attested_root: root,
+                expires: None,
             },
             vec![],
         );
@@ -459,8 +484,8 @@ mod tests {
                 height: BlockHeight::new(2),
                 block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal-a")),
                 terminal_wt: WeightedTimestamp::from_millis(1),
-                readable_until: WeightedTimestamp::from_millis(5_001),
                 attested_root: root,
+                expires: None,
             },
             vec![],
         );
@@ -472,8 +497,8 @@ mod tests {
                 height: BlockHeight::new(3),
                 block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal-b")),
                 terminal_wt: WeightedTimestamp::from_millis(1),
-                readable_until: WeightedTimestamp::from_millis(5_001),
                 attested_root: root,
+                expires: None,
             },
             vec![],
         );

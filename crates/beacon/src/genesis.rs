@@ -137,6 +137,7 @@ pub fn build_genesis_beacon_state(config: &BeaconGenesisConfig) -> BeaconState {
                     last_live_epoch: Epoch::GENESIS,
                     consecutive_misses: 0,
                     terminal_epoch: None,
+                    handoff_complete: None,
                     terminal_delivered: false,
                     terminal_roots: None,
                     reshape_admitted_epoch: None,

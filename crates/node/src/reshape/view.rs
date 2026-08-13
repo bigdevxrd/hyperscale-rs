@@ -245,6 +245,7 @@ mod tests {
             weighted_timestamp: WeightedTimestamp::ZERO,
             witness_base: BeaconWitnessLeafCount::ZERO,
             terminal_roots: None,
+            handoff_complete: None,
         }
     }
 

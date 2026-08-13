@@ -69,26 +69,36 @@ impl EpochWindows {
         WeightedTimestamp::from_millis(start)..WeightedTimestamp::from_millis(end)
     }
 
-    /// The instant a shard terminating at `terminal_cut` stops being
-    /// answerable: [`TERMINAL_EVIDENCE_EPOCHS`] windows past the cut.
+    /// The instant terminal evidence anchored at `anchor` stops being
+    /// answerable: [`TERMINAL_EVIDENCE_EPOCHS`] windows past it.
     ///
-    /// A cut always falls on a window boundary, so this is the close of the
-    /// window that many later. Every consumer of a departed shard's settled
-    /// set derives its bound here — the beacon retaining the terminal
-    /// boundary record, the acquisition driving the fetch, and the
-    /// split-boundary fence judging a claim — so none of them stops reading
-    /// while another still expects an answer.
+    /// The anchor always falls on a window boundary, so this is the close
+    /// of the window that many later.
     #[must_use]
-    pub const fn terminal_evidence_expiry(
-        self,
-        terminal_cut: WeightedTimestamp,
-    ) -> WeightedTimestamp {
+    pub const fn terminal_evidence_expiry(self, anchor: WeightedTimestamp) -> WeightedTimestamp {
         WeightedTimestamp::from_millis(
-            terminal_cut.as_millis().saturating_add(
+            anchor.as_millis().saturating_add(
                 self.epoch_duration_ms
                     .saturating_mul(TERMINAL_EVIDENCE_EPOCHS),
             ),
         )
+    }
+
+    /// The instant a departed shard's terminal evidence stops being
+    /// readable: [`TERMINAL_EVIDENCE_EPOCHS`] windows past the epoch the
+    /// beacon stamped its handoff complete (successors produced past
+    /// genesis). Every consumer of a departed shard's settled set derives
+    /// its bound here — the beacon retaining the terminal boundary
+    /// record, the acquisition driving the fetch, and the split-boundary
+    /// fence judging a claim — so none of them stops reading while
+    /// another still expects an answer. Counted from the handoff rather
+    /// than the cut, because evidence is only acquirable once the
+    /// boundary has folded and the network has delivered, and the
+    /// handoff's completion is the one deterministic milestone bounding
+    /// both.
+    #[must_use]
+    pub const fn handoff_evidence_expiry(self, handoff_complete: Epoch) -> WeightedTimestamp {
+        self.terminal_evidence_expiry(self.window_of(handoff_complete).end)
     }
 
     /// The largest epoch boundary strictly below `wt`, as `(epoch, cut)` where

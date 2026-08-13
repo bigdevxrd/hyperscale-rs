@@ -72,8 +72,9 @@ pub fn observer_ready_signal(
 
 enum Phase {
     /// Assembling the child span of the parent's committed state; every
-    /// verified chunk is staged by the driver as it arrives.
-    State(SnapSync),
+    /// verified chunk is staged by the driver as it arrives. Boxed: the
+    /// sync state dwarfs every other variant.
+    State(Box<SnapSync>),
     /// Every sub-range staged, waiting for the driver to take the
     /// finalize.
     FinalizeReady,
@@ -112,13 +113,13 @@ impl ObserverBootstrap {
         Self {
             anchor,
             child,
-            phase: Phase::State(SnapSync::spanning(
+            phase: Phase::State(Box::new(SnapSync::spanning(
                 anchor,
                 shard_prefix_path(parent),
                 &shard_prefix_path(child),
                 SPLIT_BITS,
                 STATE_CHUNK_LIMIT,
-            )),
+            ))),
             imported_substate_bytes: 0,
         }
     }
@@ -1024,6 +1025,7 @@ mod tests {
             weighted_timestamp: WeightedTimestamp::from_millis(4_000),
             witness_base: BeaconWitnessLeafCount::ZERO,
             terminal_roots: None,
+            handoff_complete: None,
         };
         // The terminal's own parent QC sits at the cut exactly — the
         // boundary instant counts as not yet crossed.

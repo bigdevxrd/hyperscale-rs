@@ -67,19 +67,17 @@ impl ShardParticipation {
                 txs,
                 terminal_wt,
             } => {
-                let set = SettledTxSet {
-                    txs,
-                    terminal_wt,
-                    readable_until: topology_schedule
-                        .windows()
-                        .terminal_evidence_expiry(terminal_wt),
-                };
-                self.execution_coordinator
-                    .record_settled_txs(shard, set.clone());
+                let set = SettledTxSet { txs, terminal_wt };
+                let mut actions = self.execution_coordinator.record_settled_txs(
+                    topology_schedule,
+                    shard,
+                    set.clone(),
+                );
                 self.shard_coordinator.record_settled_txs(shard, set);
-                let mut actions = self
-                    .shard_coordinator
-                    .redrive_pending_votes(topology_schedule);
+                actions.extend(
+                    self.shard_coordinator
+                        .redrive_pending_votes(topology_schedule),
+                );
                 actions.extend(
                     self.execution_coordinator
                         .redrive_gated_finalizations(topology_schedule),
@@ -167,8 +165,8 @@ impl ShardParticipation {
                     height: anchor.height,
                     block_hash: anchor.block_hash,
                     terminal_wt,
-                    readable_until: sched.windows().terminal_evidence_expiry(terminal_wt),
                     attested_root,
+                    expires: sched.handoff_evidence_expiry(shard),
                 },
                 peers,
             });

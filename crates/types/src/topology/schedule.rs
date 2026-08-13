@@ -376,6 +376,41 @@ impl TopologySchedule {
         }
     }
 
+    /// The evidence expiry for a departed `shard` at the head snapshot:
+    /// `Some` once the beacon has stamped its handoff complete, `None`
+    /// while the window is open or the boundary record is gone — pair
+    /// with boundary presence, which callers of the `None` case already
+    /// read.
+    #[must_use]
+    pub fn handoff_evidence_expiry(&self, shard: ShardId) -> Option<WeightedTimestamp> {
+        let done = self.head.boundary(shard)?.handoff_complete?;
+        Some(self.windows().handoff_evidence_expiry(done))
+    }
+
+    /// Whether a departed `shard`'s terminal evidence is still readable at
+    /// `wt`: its boundary record survives on the snapshot resolved there,
+    /// and the handoff-complete stamp — if the beacon has landed it — has
+    /// not aged past the evidence window. An unstamped window is open and
+    /// reads readable; so does a window whose snapshot hasn't folded yet,
+    /// because a transient lag must hold rather than drop.
+    ///
+    /// The local-bookkeeping companion of the fence's own inline
+    /// derivation in [`settled_set_verdict`](crate::settled_set_verdict):
+    /// caches, prunes, and acquisition drivers retain on this, so none of
+    /// them stops reading while the fence still expects an answer.
+    #[must_use]
+    pub fn terminal_evidence_readable(&self, shard: ShardId, wt: WeightedTimestamp) -> bool {
+        match self.lookup(wt) {
+            ScheduleLookup::Committee(snapshot) => snapshot.boundary(shard).is_some_and(|anchor| {
+                anchor
+                    .handoff_complete
+                    .is_none_or(|done| wt <= self.windows().handoff_evidence_expiry(done))
+            }),
+            ScheduleLookup::NotYetCommitted => true,
+            ScheduleLookup::Evicted => false,
+        }
+    }
+
     /// The first epoch whose committee bridges `shard`'s halt gap — the
     /// window after the head's pending recovery seated the fresh
     /// committee — or `None` when no recovery is in flight.
@@ -992,6 +1027,7 @@ mod tests {
                             settled_txs: SettledTxsRoot::ZERO,
                             committed_txs,
                         }),
+                        handoff_complete: None,
                     },
                 )
             })

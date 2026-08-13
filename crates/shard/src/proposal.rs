@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use hyperscale_core::{Action, FeeDemand};
 use hyperscale_types::{
-    BeaconWitnessLeafCount, BlockHash, BlockHeight, Epoch, EpochWindows, Finalization, Hash,
-    LocalTimestamp, ProposerTimestamp, ProvisionHash, Provisions, ReadySignal, ReshapeTrigger,
-    RevealChain, Round, ShardId, TerminalVerdict, TopologySnapshot, Transaction, TxHash,
-    ValidatorId, Verifiable, Verified, WeightedTimestamp,
+    BeaconWitnessLeafCount, BlockHash, BlockHeight, Epoch, Finalization, Hash, LocalTimestamp,
+    ProposerTimestamp, ProvisionHash, Provisions, ReadySignal, ReshapeTrigger, RevealChain, Round,
+    ShardId, TerminalVerdict, TopologySchedule, TopologySnapshot, Transaction, TxHash, ValidatorId,
+    Verifiable, Verified, WeightedTimestamp,
 };
 use tracing::debug;
 
@@ -315,12 +315,12 @@ pub fn select_finalizations(
 /// that would retire the set, the next proposal carries it again.
 pub fn select_terminal_verdicts(
     verdicts: Vec<TerminalVerdict>,
-    windows: EpochWindows,
+    topology_schedule: &TopologySchedule,
     anchor_wt: WeightedTimestamp,
 ) -> Vec<TerminalVerdict> {
     verdicts
         .into_iter()
-        .filter(|verdict| anchor_wt <= windows.terminal_evidence_expiry(verdict.terminal_wt()))
+        .filter(|verdict| topology_schedule.terminal_evidence_readable(verdict.shard(), anchor_wt))
         .collect()
 }
 
@@ -610,31 +610,80 @@ mod tests {
     /// A boundary record is offered only while the vote can still accept
     /// it. The vote reads the block's own anchor, which runs ahead of the
     /// committed frontier the composing side holds its evidence against,
-    /// so the anchor is what decides here too.
+    /// so the anchor is what decides here too — against the same
+    /// handoff-anchored evidence window the fence itself derives.
     #[test]
     fn select_terminal_verdicts_stops_at_the_evidence_expiry() {
-        let windows = EpochWindows::new(1_000);
-        let cut = WeightedTimestamp::from_millis(10_000);
-        let expiry = windows.terminal_evidence_expiry(cut);
+        use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+        use hyperscale_types::{
+            NetworkDefinition, ShardAnchor, StateRoot, TopologySchedule, ValidatorSet,
+        };
+
+        let departed = ShardId::leaf(1, 0);
+        let survivor = ShardId::leaf(1, 1);
+        let schedule = |handoff_complete: Option<Epoch>| {
+            let mut boundaries = HashMap::new();
+            boundaries.insert(
+                departed,
+                ShardAnchor {
+                    state_root: StateRoot::ZERO,
+                    block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal")),
+                    height: BlockHeight::new(9),
+                    weighted_timestamp: WeightedTimestamp::from_millis(2_000),
+                    witness_base: BeaconWitnessLeafCount::ZERO,
+                    terminal_roots: None,
+                    handoff_complete,
+                },
+            );
+            let snapshot = Arc::new(TopologySnapshot::from_explicit_committees(
+                NetworkDefinition::simulator(),
+                &ValidatorSet::new(Vec::new()),
+                std::iter::once((survivor, Vec::new())).collect(),
+                HashMap::new(),
+                boundaries,
+                HashMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeSet::new(),
+            ));
+            let mut sched = TopologySchedule::new(1_000, Epoch::new(0), Arc::clone(&snapshot));
+            for epoch in 1..=20u64 {
+                sched.insert(Epoch::new(epoch), Arc::clone(&snapshot));
+            }
+            sched.set_head(snapshot);
+            sched
+        };
+
         let record = TerminalVerdict::new(
-            ShardId::leaf(1, 0),
-            cut,
+            departed,
+            WeightedTimestamp::from_millis(2_000),
             [UnsettledTx {
                 tx_hash: TxHash::from(Hash::from_bytes(b"stranded")),
                 deadline: WeightedTimestamp::from_millis(5_000),
                 declared_work: 3,
             }],
         );
-        let offered = |anchor: WeightedTimestamp| {
-            select_terminal_verdicts(vec![record.clone()], windows, anchor).len()
+        let offered = |sched: &TopologySchedule, anchor: WeightedTimestamp| {
+            select_terminal_verdicts(vec![record.clone()], sched, anchor).len()
         };
 
-        assert_eq!(offered(cut), 1, "inside the window");
-        assert_eq!(offered(expiry), 1, "to the last instant of it");
+        let handoff = Epoch::new(4);
+        let stamped = schedule(Some(handoff));
+        let expiry = stamped.windows().handoff_evidence_expiry(handoff);
+        assert_eq!(offered(&stamped, expiry), 1, "to the last instant of it");
         assert_eq!(
-            offered(expiry.plus(Duration::from_millis(1))),
+            offered(&stamped, expiry.plus(Duration::from_millis(1))),
             0,
             "past it every voter refuses the claim, so it must not be offered",
+        );
+
+        let open = schedule(None);
+        assert_eq!(
+            offered(&open, expiry.plus(Duration::from_millis(1))),
+            1,
+            "an unstamped handoff holds the window open however late the anchor",
         );
     }
 

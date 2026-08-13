@@ -1616,11 +1616,15 @@ impl ExecutionCoordinator {
         // never commits and export ECs computed from it. Defer until the
         // remote-header coordinator holds the committing structure
         // (`RemoteHeaderCommitted` replays the buffer); the proof trails
-        // the source header by one child header at worst.
+        // the source header by one child header at worst. A departed
+        // shard's settled set answers instead where it can — see
+        // `settled_set_admits` — because a departed chain supplies no
+        // further commit proofs.
         if shard != self.local_shard
             && !self
                 .proven_remote
                 .contains_key(&(shard, cert.block_height()))
+            && !self.settled_set_admits(shard, &cert)
         {
             let height = cert.block_height();
             tracing::debug!(
@@ -2059,7 +2063,7 @@ impl ExecutionCoordinator {
             self.committed_ts = own_anchor;
         }
         self.provisioning.advance_clock(self.committed_ts);
-        self.gc_settled_sets();
+        self.gc_settled_sets(topology_schedule);
         // Every verdict this block carries resolves its transactions,
         // whichever way it went; what is left past every window that
         // could still carry one is nobody's to resolve.
@@ -2492,13 +2496,18 @@ impl ExecutionCoordinator {
     /// Read on every commit, while the schedule still carries the window
     /// that proves the terminal — the account outlives that window, and a
     /// departure it never recorded reads afterwards as a counterpart that
-    /// never left.
+    /// never left. Re-run rather than gated on first sight, because the
+    /// expiry is not knowable at the cut: the beacon stamps the handoff
+    /// complete some epochs later, and the ledger's entry fills in on the
+    /// first commit after the stamp lands.
     fn stamp_departures(&mut self, topology_schedule: &TopologySchedule) {
-        let windows = topology_schedule.windows();
         for (shard, cut) in topology_schedule.departures_at(self.committed_ts) {
-            if shard != self.local_shard && !self.unresolved.knows_terminal(shard) {
-                self.unresolved
-                    .record_terminal(shard, cut, windows.terminal_evidence_expiry(cut));
+            if shard != self.local_shard {
+                self.unresolved.record_terminal(
+                    shard,
+                    cut,
+                    topology_schedule.handoff_evidence_expiry(shard),
+                );
             }
         }
     }
@@ -2862,7 +2871,18 @@ impl ExecutionCoordinator {
     /// Also arms the fallback fetch: what the partner says it settled and
     /// we are still waiting on is exactly the certificates it owes us, and
     /// the header that first named them may never have reached us.
-    pub fn record_settled_txs(&mut self, shard: ShardId, settled: SettledTxSet) {
+    ///
+    /// Returns the actions of replaying the shard's commit-proof-deferred
+    /// certificates: the set stands in for the proof of everything it
+    /// names ([`Self::settled_set_admits`]), so a certificate parked on a
+    /// proof the departed chain can no longer supply goes back through
+    /// the gate now.
+    pub fn record_settled_txs(
+        &mut self,
+        topology_schedule: &TopologySchedule,
+        shard: ShardId,
+        settled: SettledTxSet,
+    ) -> Vec<Action> {
         let now_ts = self.committed_ts;
 
         let owed: Vec<TxHash> = self
@@ -2876,15 +2896,43 @@ impl ExecutionCoordinator {
         }
 
         self.settled_sets.insert(shard, settled);
+
+        let deferred = self.unproven_ecs.drain_shard(shard);
+        let mut actions = Vec::new();
+        for cert in deferred {
+            actions.extend(self.on_execution_certificate(topology_schedule, cert));
+        }
+        actions
+    }
+
+    /// Whether `shard`'s settled set stands in for a commit proof of this
+    /// certificate's source block.
+    ///
+    /// Membership means the transaction's certificate committed in the
+    /// departed chain at or before its terminal, and the set itself was
+    /// verified against the beacon-attested terminal root — a stronger
+    /// statement than a commit proof of one source block, which is
+    /// exactly what a departed chain can no longer supply. Every outcome
+    /// must be named: one outside the set is a verdict the departed
+    /// shard never settled, and a certificate naming nothing gives the
+    /// set nothing to vouch for.
+    fn settled_set_admits(&self, shard: ShardId, cert: &Verifiable<ExecutionCertificate>) -> bool {
+        self.settled_sets.get(&shard).is_some_and(|settled| {
+            let outcomes = cert.tx_outcomes();
+            !outcomes.is_empty()
+                && outcomes
+                    .iter()
+                    .all(|outcome| settled.txs.contains(&outcome.tx_hash()))
+        })
     }
 
     /// Drop settled sets past their evidence window. Past it the gate
     /// rejects any outcome naming the shard regardless of the set, so
     /// retaining it only leaks memory.
-    fn gc_settled_sets(&mut self) {
+    fn gc_settled_sets(&mut self, topology_schedule: &TopologySchedule) {
         let now = self.committed_ts;
         self.settled_sets
-            .retain(|_, settled| now <= settled.readable_until);
+            .retain(|shard, _| topology_schedule.terminal_evidence_readable(*shard, now));
     }
 
     /// Re-check every gate-held finalization against the current settled
@@ -3397,17 +3445,14 @@ mod tests {
         test_transaction, test_transaction_with_prefixes,
     };
     use hyperscale_types::{
-        AggregateSignature, ConsensusPublicKey, ConsensusReceipt, ConsensusSignature,
-        EPOCH_DURATION, Epoch, ExecutionOutcome, GlobalReceiptHash, Hash, MAX_FINALIZATION_DELAY,
-        NetworkDefinition, QuorumCertificate, RecoveryCause, ShardRecovery, Signer, SignerBitfield,
-        StoredReceipt, TickHalf, UnsettledTx, ValidatorInfo, ValidatorSet,
+        AggregateSignature, BeaconWitnessLeafCount, ConsensusPublicKey, ConsensusReceipt,
+        ConsensusSignature, EPOCH_DURATION, Epoch, ExecutionOutcome, GlobalReceiptHash, Hash,
+        MAX_FINALIZATION_DELAY, NetworkDefinition, QuorumCertificate, RecoveryCause, ShardAnchor,
+        ShardRecovery, Signer, SignerBitfield, StateRoot, StoredReceipt, TickHalf, UnsettledTx,
+        ValidatorInfo, ValidatorSet,
     };
 
     use super::*;
-
-    /// A window far enough out that these tests never trip it: what they
-    /// assert is how a set reads, not how long it stays readable.
-    const STILL_READABLE: WeightedTimestamp = WeightedTimestamp::from_millis(u64::MAX);
 
     fn make_test_topology() -> TopologySchedule {
         let keys: Vec<BlsSigner> = (0..4).map(|_| BlsSigner::generate()).collect();
@@ -4579,6 +4624,95 @@ mod tests {
         );
     }
 
+    /// A departed shard's settled set is a commit proof for everything it
+    /// names: an EC covered by the set dispatches without waiting on a
+    /// remote-header proof no departed chain will supply. An outcome the
+    /// set does not name is a verdict that shard never settled, and the
+    /// gate still defers it.
+    #[test]
+    fn settled_set_membership_stands_in_for_the_commit_proof() {
+        let topo = make_two_shard_topology();
+        let mut state = make_test_state_for_shard(ValidatorId::new(0), ShardId::leaf(1, 0));
+
+        let remote_shard = ShardId::leaf(1, 1);
+        let covered = TxHash::from(Hash::from_bytes(b"settled_tx"));
+        let make_cert = |tx_hash| {
+            ExecutionCertificate::new(
+                TickId::new(remote_shard, BlockHeight::new(5)),
+                WeightedTimestamp::ZERO,
+                GlobalReceiptRoot::ZERO,
+                vec![TxOutcome::new(tx_hash, ExecutionOutcome::Aborted)],
+                AggregateSignature::ZERO,
+                SignerBitfield::new(4),
+            )
+        };
+
+        state.record_settled_txs(
+            &topo,
+            remote_shard,
+            SettledTxSet {
+                txs: BTreeSet::from([covered]),
+                terminal_wt: WeightedTimestamp::from_millis(1_000),
+            },
+        );
+
+        let actions = state.on_execution_certificate(&topo, make_cert(covered).into());
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::VerifyExecutionCertificateSignature { .. })),
+            "a set-covered EC must dispatch without a commit proof, got {actions:?}"
+        );
+
+        let uncovered = TxHash::from(Hash::from_bytes(b"unsettled_tx"));
+        let actions = state.on_execution_certificate(&topo, make_cert(uncovered).into());
+        assert!(
+            actions.is_empty(),
+            "an uncovered EC must still defer, got {actions:?}"
+        );
+    }
+
+    /// The order the recovery actually runs in: the certificate arrives
+    /// first and parks on the missing proof, the settled set lands
+    /// afterwards and replays it through the gate.
+    #[test]
+    fn a_settled_set_replays_the_certificates_parked_on_its_proof() {
+        let topo = make_two_shard_topology();
+        let mut state = make_test_state_for_shard(ValidatorId::new(0), ShardId::leaf(1, 0));
+
+        let remote_shard = ShardId::leaf(1, 1);
+        let tx_hash = TxHash::from(Hash::from_bytes(b"parked_tx"));
+        let cert = ExecutionCertificate::new(
+            TickId::new(remote_shard, BlockHeight::new(5)),
+            WeightedTimestamp::ZERO,
+            GlobalReceiptRoot::ZERO,
+            vec![TxOutcome::new(tx_hash, ExecutionOutcome::Aborted)],
+            AggregateSignature::ZERO,
+            SignerBitfield::new(4),
+        );
+
+        let actions = state.on_execution_certificate(&topo, cert.into());
+        assert!(
+            actions.is_empty(),
+            "no proof and no set: the EC parks, got {actions:?}"
+        );
+
+        let actions = state.record_settled_txs(
+            &topo,
+            remote_shard,
+            SettledTxSet {
+                txs: BTreeSet::from([tx_hash]),
+                terminal_wt: WeightedTimestamp::from_millis(1_000),
+            },
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::VerifyExecutionCertificateSignature { .. })),
+            "the set must replay the parked EC into dispatch, got {actions:?}"
+        );
+    }
+
     /// An EC parked at or below the source shard's attested boundary sits
     /// under a joiner's remote-header sync anchor, where forward sync
     /// never delivers the committing structure — parking must request the
@@ -5043,6 +5177,7 @@ mod tests {
                 weighted_timestamp: WeightedTimestamp::from_millis(1),
                 witness_base: BeaconWitnessLeafCount::ZERO,
                 terminal_roots: None,
+                handoff_complete: None,
             },
         );
         TopologySchedule::single(Arc::new(TopologySnapshot::from_explicit_committees(
@@ -5507,11 +5642,25 @@ mod tests {
             )
             .with_scheduled_terminals(BTreeMap::from([(ShardId::ROOT, Epoch::new(0))])),
         );
-        let post_split = Arc::new(TopologySnapshot::new(
-            NetworkDefinition::simulator(),
-            2,
-            ValidatorSet::new(validators),
-        ));
+        let post_split = Arc::new(
+            TopologySnapshot::new(
+                NetworkDefinition::simulator(),
+                2,
+                ValidatorSet::new(validators),
+            )
+            .with_boundaries(HashMap::from([(
+                ShardId::ROOT,
+                ShardAnchor {
+                    state_root: StateRoot::ZERO,
+                    block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal")),
+                    height: BlockHeight::new(9),
+                    weighted_timestamp: WeightedTimestamp::from_millis(1_000),
+                    witness_base: BeaconWitnessLeafCount::ZERO,
+                    terminal_roots: None,
+                    handoff_complete: None,
+                },
+            )])),
+        );
         let mut sched = TopologySchedule::new(epoch_duration_ms, Epoch::new(0), final_window);
         sched.insert(Epoch::new(1), post_split);
         sched
@@ -5732,11 +5881,11 @@ mod tests {
         assert!(!state.finalized.contains(&tick_id));
 
         state.record_settled_txs(
+            &sched,
             ShardId::ROOT,
             SettledTxSet {
                 txs: std::iter::once(TxHash::from(Hash::from_bytes(b"tx"))).collect(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let released = state.redrive_gated_finalizations(&sched);
@@ -5763,11 +5912,11 @@ mod tests {
         state.committed_ts = WeightedTimestamp::from_millis(1500);
         let sched = terminating_schedule();
         state.record_settled_txs(
+            &sched,
             ShardId::ROOT,
             SettledTxSet {
                 txs: BTreeSet::new(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let transaction: Arc<Verifiable<Transaction>> = Arc::new(Verifiable::from(
@@ -5838,11 +5987,11 @@ mod tests {
         // ROOT terminated having settled nothing → the held tick rejects on
         // redrive, is never finalized, and its tx aborts (not wedged).
         state.record_settled_txs(
+            &sched,
             ShardId::ROOT,
             SettledTxSet {
                 txs: BTreeSet::new(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
         let released = state.redrive_gated_finalizations(&sched);
@@ -6311,13 +6460,42 @@ mod tests {
     /// A snapshot over an explicit leaf set, with `cut` naming the shards
     /// scheduled to terminate at the epochs given.
     fn leaves_snap(leaves: &[ShardId], cut: &[(ShardId, u64)]) -> Arc<TopologySnapshot> {
+        leaves_snap_departed(leaves, cut, &[])
+    }
+
+    /// [`leaves_snap`] carrying a terminal boundary record per departed
+    /// shard, as every projected snapshot does while the beacon retains
+    /// the record — which is exactly as long as the fence may still read
+    /// the evidence. `handoff_complete: None` is an open window.
+    fn leaves_snap_departed(
+        leaves: &[ShardId],
+        cut: &[(ShardId, u64)],
+        departed: &[(ShardId, Option<Epoch>)],
+    ) -> Arc<TopologySnapshot> {
+        let boundaries: HashMap<ShardId, ShardAnchor> = departed
+            .iter()
+            .map(|(shard, handoff_complete)| {
+                (
+                    *shard,
+                    ShardAnchor {
+                        state_root: StateRoot::ZERO,
+                        block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal")),
+                        height: BlockHeight::new(9),
+                        weighted_timestamp: WeightedTimestamp::from_millis(1_000),
+                        witness_base: BeaconWitnessLeafCount::ZERO,
+                        terminal_roots: None,
+                        handoff_complete: *handoff_complete,
+                    },
+                )
+            })
+            .collect();
         Arc::new(
             TopologySnapshot::from_explicit_committees(
                 NetworkDefinition::simulator(),
                 &ValidatorSet::new(Vec::new()),
                 leaves.iter().map(|s| (*s, Vec::new())).collect(),
                 HashMap::new(),
-                HashMap::new(),
+                boundaries,
                 HashMap::new(),
                 BTreeMap::new(),
                 BTreeMap::new(),
@@ -6360,13 +6538,28 @@ mod tests {
     /// fixture that used one would be asking about a settlement that
     /// could not have happened.
     fn peer_terminating_schedule(epoch_duration_ms: u64) -> TopologySchedule {
+        peer_terminating_schedule_stamped(epoch_duration_ms, None)
+    }
+
+    /// [`peer_terminating_schedule`] with the peer's handoff-complete
+    /// stamp under the caller's control: `None` holds the evidence window
+    /// open, `Some(epoch)` closes it `TERMINAL_EVIDENCE_EPOCHS` past that
+    /// epoch's window.
+    fn peer_terminating_schedule_stamped(
+        epoch_duration_ms: u64,
+        handoff_complete: Option<Epoch>,
+    ) -> TopologySchedule {
         let (left, right) = PEER.children();
         let mut sched = TopologySchedule::new(
             epoch_duration_ms,
             Epoch::new(0),
             leaves_snap(&[HOME, PEER], &[(PEER, 0)]),
         );
-        sched.insert(Epoch::new(1), leaves_snap(&[HOME, left, right], &[]));
+        let post = leaves_snap_departed(&[HOME, left, right], &[], &[(PEER, handoff_complete)]);
+        for epoch in 1..=12u64 {
+            sched.insert(Epoch::new(epoch), Arc::clone(&post));
+        }
+        sched.set_head(post);
         sched
     }
 
@@ -6484,11 +6677,11 @@ mod tests {
         // The peer's settled set arrives, naming nothing: it settled none
         // of what it was party to before it went.
         state.record_settled_txs(
+            &sched,
             PEER,
             SettledTxSet {
                 txs: BTreeSet::new(),
                 terminal_wt: WeightedTimestamp::from_millis(60_000),
-                readable_until: STILL_READABLE,
             },
         );
 
@@ -6542,10 +6735,9 @@ mod tests {
         let set = |cut_ms: u64| SettledTxSet {
             txs: BTreeSet::new(),
             terminal_wt: WeightedTimestamp::from_millis(cut_ms),
-            readable_until: STILL_READABLE,
         };
-        state.record_settled_txs(peer_left, set(120_000));
-        state.record_settled_txs(PEER, set(60_000));
+        state.record_settled_txs(&sched, peer_left, set(120_000));
+        state.record_settled_txs(&sched, PEER, set(60_000));
 
         let records = state.pending_terminal_verdicts();
         assert_eq!(
@@ -6796,11 +6988,11 @@ mod tests {
         let mut state = state_abandoning(&sched, local, &transaction);
 
         state.record_settled_txs(
+            &sched,
             partner,
             SettledTxSet {
                 txs: BTreeSet::new(),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
 
@@ -6828,11 +7020,11 @@ mod tests {
         let mut state = state_abandoning(&sched, local, &transaction);
 
         state.record_settled_txs(
+            &sched,
             partner,
             SettledTxSet {
                 txs: BTreeSet::from([tx_hash]),
                 terminal_wt: WeightedTimestamp::from_millis(1000),
-                readable_until: STILL_READABLE,
             },
         );
 
@@ -6868,16 +7060,19 @@ mod tests {
         let tx_hash = transaction.hash();
         let mut state = state_abandoning(&sched, local, &transaction);
 
-        // Terminated far enough back that the set has stopped answering.
+        // The handoff completed long enough ago that the set has stopped
+        // answering: expiry = the stamp's window end plus the evidence
+        // window, and the committed frontier sits past it.
+        let sched = peer_terminating_schedule_stamped(1_000, Some(Epoch::new(0)));
         state.record_settled_txs(
+            &sched,
             partner,
             SettledTxSet {
                 txs: BTreeSet::new(),
                 terminal_wt: WeightedTimestamp::ZERO,
-                readable_until: WeightedTimestamp::from_millis(5_000),
             },
         );
-        state.committed_ts = WeightedTimestamp::from_millis(5_001);
+        state.committed_ts = WeightedTimestamp::from_millis(6_001);
 
         let abort: Arc<Verifiable<Finalization>> =
             Arc::new(Verified::<Finalization>::seal(abandonment_of(local, tx_hash)).into());
@@ -6910,7 +7105,7 @@ mod tests {
         state.unresolved.record_terminal(
             PEER,
             WeightedTimestamp::from_millis(1000),
-            WeightedTimestamp::from_millis(1000).plus(EPOCH_DURATION * 5),
+            Some(WeightedTimestamp::from_millis(1000).plus(EPOCH_DURATION * 5)),
         );
 
         let abort: Arc<Verifiable<Finalization>> =

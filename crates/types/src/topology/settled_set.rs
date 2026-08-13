@@ -19,7 +19,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::BuildHasher;
 
 use crate::{
-    BlockHash, BlockHeight, SettledTxsRoot, ShardId, TopologySchedule, TxHash, WeightedTimestamp,
+    BlockHash, BlockHeight, ScheduleLookup, SettledTxsRoot, ShardId, TopologySchedule, TxHash,
+    WeightedTimestamp,
 };
 
 /// What a survivor needs to acquire a departed shard's settled set and to
@@ -39,12 +40,14 @@ pub struct TerminalEvidence {
     pub block_hash: BlockHash,
     /// The terminal cut's weighted timestamp.
     pub terminal_wt: WeightedTimestamp,
-    /// The cut's
-    /// [terminal-evidence expiry](crate::EpochWindows::terminal_evidence_expiry).
-    pub readable_until: WeightedTimestamp,
     /// The beacon-attested `settled_txs_root` a fetched list must
     /// recompute to.
     pub attested_root: SettledTxsRoot,
+    /// When this acquisition stops being worth driving: the shard's
+    /// handoff-anchored evidence expiry, or `None` while the beacon has
+    /// not stamped the handoff complete (an open window). Refreshed on
+    /// every scan, so a driver armed before the stamp picks it up.
+    pub expires: Option<WeightedTimestamp>,
 }
 
 /// A terminated shard's settled-transaction set.
@@ -52,9 +55,11 @@ pub struct TerminalEvidence {
 /// `txs` are the **cross-shard** transactions whose certificate committed
 /// in its chain at or before its terminal block — the only ones a
 /// counterpart fence ever queries. `terminal_wt` is the weighted timestamp
-/// at which the shard terminated; `readable_until` is how long the set
-/// stays relevant, past which any outcome naming the shard is
-/// categorically unreachable everywhere.
+/// at which the shard terminated. How long the set stays readable is not
+/// carried here: the evidence window is derived from the schedule at each
+/// judgment ([`TopologySchedule::terminal_evidence_readable`]), because a
+/// value stamped at acquisition can differ between replicas that acquired
+/// at different moments relative to the beacon's handoff-complete stamp.
 #[derive(Clone, Debug)]
 pub struct SettledTxSet {
     /// Cross-shard transactions the terminated shard settled by its
@@ -62,12 +67,6 @@ pub struct SettledTxSet {
     pub txs: BTreeSet<TxHash>,
     /// The terminal block's weighted timestamp.
     pub terminal_wt: WeightedTimestamp,
-    /// The shard's
-    /// [terminal-evidence expiry](crate::EpochWindows::terminal_evidence_expiry),
-    /// derived from the schedule's window grid when the set is recorded.
-    /// Carried on the set so every consumer — the fence, and the caches
-    /// holding it — reads one value rather than deriving its own.
-    pub readable_until: WeightedTimestamp,
 }
 
 /// The verdict on a set of cross-shard execution certificates against the
@@ -179,12 +178,34 @@ where
             }
             continue;
         }
-        match settled_sets.get(&shard) {
-            // Past the evidence window the set stops being readable at all,
-            // which rejects for the same reason eviction does.
-            Some(settled) if anchored_wt > settled.readable_until => {
-                return SettledSetVerdict::Reject;
+        // The evidence window, read off the judging anchor's own snapshot,
+        // where the beacon's handoff-complete stamp lands. An anchor
+        // before the stamp reads an open window; one after it reads the
+        // expiry the stamp fixes; one where the boundary record is gone
+        // reads a window the beacon already closed and swept.
+        match topology_schedule.lookup(anchored_wt) {
+            ScheduleLookup::Committee(snapshot) => match snapshot.boundary(shard) {
+                None => return SettledSetVerdict::Reject,
+                Some(anchor)
+                    if anchor.handoff_complete.is_some_and(|done| {
+                        anchored_wt > topology_schedule.windows().handoff_evidence_expiry(done)
+                    }) =>
+                {
+                    return SettledSetVerdict::Reject;
+                }
+                Some(_) => {}
+            },
+            // The judging anchor's window hasn't folded yet — transient
+            // lag, the same hold the missing set takes below.
+            ScheduleLookup::NotYetCommitted => {
+                defer = true;
+                continue;
             }
+            // Below the schedule floor nothing about the window is
+            // readable, which rejects for the same reason eviction does.
+            ScheduleLookup::Evicted => return SettledSetVerdict::Reject,
+        }
+        match settled_sets.get(&shard) {
             // The partner's verdict, read the way the claim needs it: a
             // settlement needs the partner to have settled, an
             // abandonment needs it not to have.
@@ -210,8 +231,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Epoch, EpochWindows, Hash, NetworkDefinition, TERMINAL_EVIDENCE_EPOCHS, TopologySnapshot,
-        ValidatorSet,
+        BeaconWitnessLeafCount, Epoch, EpochWindows, Hash, NetworkDefinition, ShardAnchor,
+        StateRoot, TERMINAL_EVIDENCE_EPOCHS, TopologySnapshot, ValidatorSet,
     };
 
     const LOCAL: ShardId = ShardId::leaf(1, 0);
@@ -230,13 +251,41 @@ mod tests {
     }
 
     fn snap(leaves: &[ShardId], cut: &[(ShardId, u64)]) -> Arc<TopologySnapshot> {
+        snap_departed(leaves, cut, &[])
+    }
+
+    /// [`snap`] carrying a terminal boundary record per departed shard, as
+    /// every projected snapshot does while the beacon retains the record.
+    /// `handoff_complete: None` is an open evidence window.
+    fn snap_departed(
+        leaves: &[ShardId],
+        cut: &[(ShardId, u64)],
+        departed: &[(ShardId, Option<Epoch>)],
+    ) -> Arc<TopologySnapshot> {
+        let boundaries: HashMap<ShardId, ShardAnchor> = departed
+            .iter()
+            .map(|(shard, handoff_complete)| {
+                (
+                    *shard,
+                    ShardAnchor {
+                        state_root: StateRoot::ZERO,
+                        block_hash: BlockHash::from_raw(Hash::from_bytes(b"terminal")),
+                        height: BlockHeight::new(9),
+                        weighted_timestamp: wt(CUT_MS),
+                        witness_base: BeaconWitnessLeafCount::ZERO,
+                        terminal_roots: None,
+                        handoff_complete: *handoff_complete,
+                    },
+                )
+            })
+            .collect();
         Arc::new(
             TopologySnapshot::from_explicit_committees(
                 NetworkDefinition::simulator(),
                 &ValidatorSet::new(Vec::new()),
                 leaves.iter().map(|s| (*s, Vec::new())).collect(),
                 HashMap::new(),
-                HashMap::new(),
+                boundaries,
                 HashMap::new(),
                 BTreeMap::new(),
                 BTreeMap::new(),
@@ -248,30 +297,34 @@ mod tests {
     }
 
     /// PEER lives in window 0 and terminates at its close; its children hold
-    /// the keyspace from window 1 on.
-    fn peer_terminated() -> TopologySchedule {
+    /// the keyspace from window 1 on. The handoff stamp is the caller's:
+    /// `None` holds the evidence window open.
+    fn peer_terminated_stamped(handoff_complete: Option<Epoch>) -> TopologySchedule {
         let (left, right) = PEER.children();
         let mut sched =
             TopologySchedule::new(EPOCH_MS, Epoch::new(0), snap(&[LOCAL, PEER], &[(PEER, 0)]));
-        // Retained through the whole evidence window, so an anchor inside it
-        // resolves a window rather than falling off the head.
-        for epoch in 1..=TERMINAL_EVIDENCE_EPOCHS + 1 {
-            sched.insert(Epoch::new(epoch), snap(&[LOCAL, left, right], &[]));
+        // Retained well past the whole evidence window, so an anchor inside
+        // it resolves a window rather than falling off the head.
+        let post = snap_departed(&[LOCAL, left, right], &[], &[(PEER, handoff_complete)]);
+        for epoch in 1..=TERMINAL_EVIDENCE_EPOCHS * 3 {
+            sched.insert(Epoch::new(epoch), Arc::clone(&post));
         }
         sched
+    }
+
+    fn peer_terminated() -> TopologySchedule {
+        peer_terminated_stamped(None)
     }
 
     /// A set for PEER carrying `txs`, readable for the terminal-evidence
     /// window past the cut — what the acquisition stamps on it.
     fn set_of(txs: &[TxHash]) -> HashMap<ShardId, SettledTxSet> {
-        let windows = EpochWindows::new(EPOCH_MS);
         let mut sets = HashMap::new();
         sets.insert(
             PEER,
             SettledTxSet {
                 txs: txs.iter().copied().collect(),
                 terminal_wt: wt(CUT_MS),
-                readable_until: windows.terminal_evidence_expiry(wt(CUT_MS)),
             },
         );
         sets
@@ -334,38 +387,47 @@ mod tests {
         }
     }
 
-    /// The window that decides is the set's own `readable_until`, which the
-    /// acquisition derives from the schedule's epoch grid. It spans the two
-    /// folds a terminal contribution takes to be attested at all, so a block
-    /// anchored two epochs past the cut — the first that can carry the
-    /// evidence — still reads the set rather than rejecting on age.
+    /// The window that decides counts from the beacon's handoff-complete
+    /// stamp on the judging anchor's snapshot, not from the cut. Before the
+    /// stamp the window is open — a slow seeding or a partition cannot age
+    /// the evidence out from under the survivor still trying to read it —
+    /// and once stamped it closes the evidence window later, refusing both
+    /// claims alike.
     #[test]
-    fn the_evidence_window_outlives_the_fold_that_delivers_it() {
+    fn the_evidence_window_counts_from_the_handoff_stamp() {
         let settled = set_of(&[tx(1)]);
-        let delivered = CUT_MS + 2 * EPOCH_MS;
 
-        assert_eq!(
-            verdict(&settled, delivered, &[(PEER, tx(1), TxClaim::Settled)]),
-            SettledSetVerdict::Pass,
-            "the roots reach a boundary record two folds past the cut",
-        );
-
-        let expiry = EpochWindows::new(EPOCH_MS).terminal_evidence_expiry(wt(CUT_MS));
+        // Unstamped: readable at any distance past the cut.
         assert_eq!(
             verdict(
                 &settled,
-                expiry.as_millis(),
-                &[(PEER, tx(1), TxClaim::Settled)]
+                CUT_MS + EPOCH_MS * (TERMINAL_EVIDENCE_EPOCHS + 2),
+                &[(PEER, tx(1), TxClaim::Settled)],
             ),
+            SettledSetVerdict::Pass,
+            "an open window reads however late the anchor",
+        );
+
+        // Stamped at epoch 2: expiry is the evidence window past that.
+        let handoff = Epoch::new(2);
+        let stamped = peer_terminated_stamped(Some(handoff));
+        let expiry = EpochWindows::new(EPOCH_MS).handoff_evidence_expiry(handoff);
+        let stamped_verdict = |anchored_ms: u64| {
+            settled_set_verdict(
+                &settled,
+                &stamped,
+                LOCAL,
+                wt(anchored_ms),
+                [(PEER, tx(1), TxClaim::Settled)],
+            )
+        };
+        assert_eq!(
+            stamped_verdict(expiry.as_millis()),
             SettledSetVerdict::Pass,
             "readable to the last instant of the window",
         );
         assert_eq!(
-            verdict(
-                &settled,
-                expiry.as_millis() + 1,
-                &[(PEER, tx(1), TxClaim::Settled)],
-            ),
+            stamped_verdict(expiry.as_millis() + 1),
             SettledSetVerdict::Reject,
             "and unreadable past it, which refuses both claims alike",
         );

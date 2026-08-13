@@ -320,6 +320,14 @@ pub struct ShardBoundary {
     /// parent) and drain the witness backlog, and drops once both have
     /// happened. `None` for a live shard.
     pub terminal_epoch: Option<Epoch>,
+    /// The epoch the fold first observed this terminal shard's reshape
+    /// successors live (produced past genesis). The terminal-evidence
+    /// window counts from here, not from the cut: evidence is only
+    /// acquirable once the boundary has folded and the network has
+    /// caught up, and the handoff's completion is the one deterministic
+    /// milestone that bounds both. `None` while the handoff is pending —
+    /// an open window — and always `None` for a live shard.
+    pub handoff_complete: Option<Epoch>,
     /// Whether this shard's terminal contribution has folded — set on a
     /// merge child, whose parent composes from both children's terminal
     /// roots and so must wait for the pair.
@@ -1704,6 +1712,7 @@ impl BeaconState {
                         weighted_timestamp: b.weighted_timestamp,
                         witness_base: b.witness_base,
                         terminal_roots: b.terminal_roots,
+                        handoff_complete: b.handoff_complete,
                     },
                 )
             })
@@ -1984,6 +1993,7 @@ mod tests {
             last_live_epoch: creation,
             consecutive_misses: 0,
             terminal_epoch: None,
+            handoff_complete: None,
             terminal_delivered: false,
             terminal_roots: None,
             reshape_admitted_epoch: None,
@@ -2052,6 +2062,7 @@ mod tests {
             last_live_epoch: Epoch::new(1),
             consecutive_misses: misses,
             terminal_epoch: None,
+            handoff_complete: None,
             terminal_delivered: false,
             terminal_roots: None,
             reshape_admitted_epoch: None,
@@ -2352,6 +2363,7 @@ mod tests {
                 last_live_epoch: Epoch::GENESIS,
                 consecutive_misses: 0,
                 terminal_epoch: None,
+                handoff_complete: None,
                 terminal_delivered: false,
                 terminal_roots: None,
                 reshape_admitted_epoch: None,
