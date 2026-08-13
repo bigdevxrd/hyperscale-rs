@@ -495,16 +495,16 @@ impl Display for StakePoolId {
 /// A stake pool the network seats.
 ///
 /// The instance whose events it reads as beacon facts, the identifier
-/// it folds them under, the principal its operator surface admits, and
-/// the validators it already operates.
+/// it folds them under, the account genesis seats its owner badge in,
+/// and the validators it already operates.
 ///
 /// Seating one is a governance act — admitting a pool is admitting a new
 /// source of beacon facts — so the whole seat is fixed where the network
 /// is defined rather than assembled from anything a transaction can
 /// reach. The two addresses are different kinds of thing and easy to
 /// confuse: `address` derives from no key and is the pool's identity,
-/// while `operator` derives from one and is the only satisfier of the
-/// pool's validator surface.
+/// while `operator` derives from one and is where genesis deposits the
+/// pool's owner badge.
 ///
 /// `founding` exists because a pool's membership and its contract have
 /// two different origins. Beacon genesis creates the founding pool and
@@ -522,7 +522,9 @@ pub struct StakePoolSeat {
     /// genesis builds out of this seat, so there is nothing here to
     /// declare it with.
     pub id: StakePoolId,
-    /// The principal whose signature the pool's operator methods admit.
+    /// The account genesis deposits the pool's owner badge into. From
+    /// then on the badge — not this record — is what the pool's
+    /// operator surface admits, and it moves like any other holding.
     pub operator: PrincipalAddr,
     /// Validators this pool already operates at genesis, with the
     /// consensus key each was registered under. Empty for a pool whose

@@ -11,16 +11,17 @@ use std::sync::{Arc, LazyLock};
 
 use hyperscale_effects_bridge::genesis::genesis_world_with_pools;
 use hyperscale_effects_bridge::{ProtocolHasher, account_address};
-use hyperscale_engine::genesis::{pool_address, staking_artifact};
+use hyperscale_engine::genesis::{pool_address, pool_owner_badge, staking_artifact};
 use hyperscale_engine::{
     ExecutedTx, ExecutionMode, Executor, TickBatchContext, XRD, genesis_writes,
 };
 use hyperscale_storage::Substates;
 use hyperscale_transactions::{Client, Terms};
 use hyperscale_types::{
-    BeaconWitnessEvent, ComponentAddr, ConsensusReceipt, Ed25519PrivateKey, EnvelopeExt, NetworkId,
-    PrincipalAddr, ProvisionalHolds, RevealChain, ShardId, ShardTrie, Stake, StakePoolId,
-    StakePoolSeat, SubstateKey, TimestampRange, Transaction, Verified, WeightedTimestamp,
+    BeaconWitnessEvent, ComponentAddr, ConsensusReceipt, Ed25519PrivateKey, EntryKey, EnvelopeExt,
+    NetworkId, PrincipalAddr, ProvisionalHolds, RevealChain, ShardId, ShardTrie, Stake,
+    StakePoolId, StakePoolSeat, SubstateKey, TimestampRange, Transaction, Verified,
+    WeightedTimestamp,
 };
 use hyperscale_vm_effects::{Address, CollectionId, package_hash};
 use hyperscale_vm_manifest_builder::native::{account, staking};
@@ -35,34 +36,58 @@ const OPERATOR: u8 = 8;
 const OUTSIDER: u8 = 9;
 
 /// A snapshot over the flattened genesis updates.
-struct MapDb(BTreeMap<SubstateKey, Vec<u8>>);
+struct MapDb {
+    cells: BTreeMap<SubstateKey, Vec<u8>>,
+    entries: BTreeMap<EntryKey, Vec<u8>>,
+}
 
 impl MapDb {
     fn genesis(accounts: &[(PrincipalAddr, u128)], pools: &[StakePoolSeat]) -> Self {
-        let writes = genesis_writes(accounts, pools);
-        let mut map = BTreeMap::new();
-        for (key, change) in writes.cells() {
-            let value = change.clone().expect("genesis writes are Set-only");
-            map.insert(*key, value);
+        let (cells, entries) = genesis_writes(accounts, pools).into_parts();
+        Self {
+            cells: cells
+                .into_iter()
+                .map(|(key, change)| (key, change.expect("genesis writes are Set-only")))
+                .collect(),
+            entries: entries
+                .into_iter()
+                .map(|(key, change)| (key, change.expect("genesis writes are Set-only")))
+                .collect(),
         }
-        Self(map)
     }
 }
 
 impl Substates for MapDb {
     fn cell(&self, key: SubstateKey) -> Option<Vec<u8>> {
-        self.0.get(&key).cloned()
+        self.cells.get(&key).cloned()
     }
 
     fn entries_in_range(
         &self,
-        _owner: Address,
-        _collection: CollectionId,
-        _lo: u128,
-        _hi: u128,
-        _limit: usize,
+        owner: Address,
+        collection: CollectionId,
+        lo: u128,
+        hi: u128,
+        limit: usize,
     ) -> Vec<(u128, Vec<u8>)> {
-        Vec::new()
+        if lo > hi {
+            return Vec::new();
+        }
+        let lo_key = EntryKey {
+            owner,
+            collection,
+            order: lo,
+        };
+        let hi_key = EntryKey {
+            owner,
+            collection,
+            order: hi,
+        };
+        self.entries
+            .range(lo_key..=hi_key)
+            .take(limit)
+            .map(|(key, value)| (key.order, value.clone()))
+            .collect()
     }
 }
 
@@ -137,7 +162,14 @@ fn signed_stake(pool: ComponentAddr, amount: u128) -> Transaction {
 }
 
 fn execute(executor: &Executor, tx: Transaction) -> Vec<ExecutedTx> {
-    let store = MapDb::genesis(&[(delegator(), 10_000)], &[]);
+    let store = MapDb::genesis(
+        &[
+            (delegator(), 10_000),
+            (account_of(OPERATOR), 10_000),
+            (account_of(OUTSIDER), 10_000),
+        ],
+        &[seat(POOL_ID), seat(99)],
+    );
     let trie = ShardTrie::single();
     let ctx = TickBatchContext {
         local_shard: ShardId::ROOT,
@@ -215,13 +247,18 @@ fn an_ordinary_transfer_is_not_a_beacon_fact() {
 }
 
 /// `pool.register-validator(id, pubkey, proof)`, signed and paid for by
-/// `seed` whatever the pool's configuration says.
+/// `seed`, presenting the pool's owner badge from their own account —
+/// whether or not they hold it.
 fn signed_registration(pool: ComponentAddr, seed: u8) -> Transaction {
     let key = key_of(seed);
     let cache = client().cache();
     let mut b = client().builder(&cache);
-    let proof = account::authorize(&mut b, account_address(&key.public_key().0))
-        .expect("an account signs in");
+    let proof = account::present_badge(
+        &mut b,
+        account_address(&key.public_key().0),
+        pool_owner_badge(pool),
+    )
+    .expect("a presentation types");
     staking::register_validator(&mut b, proof, pool, 11, vec![0xC1; 48], vec![0xC2; 96])
         .expect("a pool answers a registration");
     let graph = b.build().expect("a registration produces nothing");
@@ -229,16 +266,17 @@ fn signed_registration(pool: ComponentAddr, seed: u8) -> Transaction {
 }
 
 /// A pool instance is owned by nobody, so its own authority is
-/// unsatisfiable and the surface would be uncallable if it asked for one.
-/// It names a principal its configuration carries instead, and only that
-/// principal's signature reaches it.
+/// unsatisfiable and the surface would be uncallable if it asked for
+/// one. It admits whoever presents the pool's owner badge instead, and
+/// genesis seats that badge in the seat's operator account.
 #[test]
-fn only_the_configured_operator_may_register_a_validator() {
+fn only_the_badge_holder_may_register_a_validator() {
     let executor = Executor::with_pools(&[seat(POOL_ID)], ExecutionMode::Serial);
 
-    // Well-formed: the outsider presents their own badge, which is what
-    // admission asks of a guarded call. The pool's configured identity is
-    // what it is not, and the pool says so when the call reaches it.
+    // Well-formed: the outsider presents a badge from their own
+    // account, which is what admission asks of a custodial call. The
+    // badge is what they do not hold, and the gate says so when the
+    // call reaches it.
     let outsider = signed_registration(pool_at(POOL_ID), OUTSIDER);
     assert!(outsider.body().signature_is_valid());
     assert!(outsider.try_derived().is_ok(), "the shape is well-formed");
@@ -254,7 +292,7 @@ fn only_the_configured_operator_may_register_a_validator() {
     let executed = execute(&executor, signed_registration(pool_at(POOL_ID), OPERATOR));
     assert!(
         matches!(&executed[0].consensus, ConsensusReceipt::Succeeded { .. }),
-        "the configured operator's own registration settles: {:?}",
+        "the badge holder's own registration settles: {:?}",
         executed[0].consensus
     );
 }

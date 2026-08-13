@@ -8,13 +8,16 @@
 //! kernel's own amount encoding.
 
 pub use hyperscale_effects_bridge::genesis::{
-    World, account_artifact, genesis_publisher, genesis_world, genesis_world_with_pools,
-    pool_address, pool_meta, stake_unit, staking_artifact,
+    OWNER_BADGE_RECORD, World, account_artifact, genesis_publisher, genesis_world,
+    genesis_world_with_pools, owner_badge_id, pool_address, pool_meta, pool_owner_badge,
+    stake_unit, staking_artifact,
 };
 use hyperscale_effects_bridge::{ProtocolHasher, validator_key};
 pub use hyperscale_effects_bridge::{XRD, entropy_key, vault_key};
-use hyperscale_types::{PrincipalAddr, SettledWrites, StakePoolSeat};
-use hyperscale_vm_effects::package_hash;
+use hyperscale_types::{EntryKey, PrincipalAddr, SettledWrites, StakePoolSeat};
+use hyperscale_vm_effects::{
+    holdings_collection, instance_data_key, package_hash, resource_record_key,
+};
 use hyperscale_vm_kernel::encode_amount;
 use hyperscale_vm_stdlib::genesis_writes as stdlib_genesis_writes;
 
@@ -37,8 +40,14 @@ pub struct GenesisConfig {
 /// The genesis substate writes.
 ///
 /// The protocol's stdlib flash composed with this network's allocations:
-/// a seated pool's validator records and one [`XRD`] vault cell per
-/// funded account, identity-keyed under the owner's prefix.
+/// a seated pool's validator records, its owner-badge custody, and one
+/// [`XRD`] vault cell per funded account, identity-keyed under the
+/// owner's prefix.
+///
+/// # Panics
+///
+/// Panics if the badge record exceeds its wire depth, which the one
+/// fixed record cannot.
 #[must_use]
 pub fn genesis_writes(
     accounts: &[(PrincipalAddr, u128)],
@@ -57,12 +66,41 @@ pub fn genesis_writes(
     // demonstrably operates — and its own methods would refuse to speak
     // about them.
     for seat in pools {
+        let pool = pool_address(staking_package, seat);
         for (validator, pubkey) in &seat.founding {
             writes.cells.insert(
-                validator_key(pool_address(staking_package, seat), validator.inner()),
+                validator_key(pool, validator.inner()),
                 Some(pubkey.as_bytes().to_vec()),
             );
         }
+        // Custody of the pool: the badge's record under the pool, the
+        // instance's data cell, and the holdings entry in the seat's
+        // operator account. The badge and its id both derive from the
+        // pool, so these three writes are the whole seating — nothing
+        // stores a mapping, and selling the pool is an ordinary
+        // holdings transfer from here on.
+        let badge = pool_owner_badge(pool);
+        let id = owner_badge_id(pool);
+        writes.cells.insert(
+            resource_record_key(&ProtocolHasher, pool, badge),
+            Some(
+                OWNER_BADGE_RECORD
+                    .to_cell()
+                    .expect("a record encodes within its wire depth"),
+            ),
+        );
+        writes.cells.insert(
+            instance_data_key(&ProtocolHasher, pool, badge, id),
+            Some(vec![1]),
+        );
+        writes.entries.insert(
+            EntryKey {
+                owner: seat.operator.address(),
+                collection: holdings_collection(&ProtocolHasher, seat.operator, badge),
+                order: u128::from(id),
+            },
+            Some(vec![1]),
+        );
     }
     for (address, balance) in accounts {
         writes.cells.insert(
@@ -70,7 +108,7 @@ pub fn genesis_writes(
             Some(encode_amount(*balance).to_vec()),
         );
     }
-    SettledWrites::from_absolutes(writes.cells)
+    SettledWrites::from_parts(writes.cells, writes.entries)
 }
 
 #[cfg(test)]

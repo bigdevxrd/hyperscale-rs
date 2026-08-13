@@ -8,9 +8,10 @@
 //! target, and none of them executes anything.
 
 use hyperscale_types::{ComponentAddr, ResourceAddr, StakePoolSeat};
+use hyperscale_vm_effects::stdlib::OWNER_BADGE;
 use hyperscale_vm_effects::{
-    Address, Hasher, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash, Value,
-    package_hash, resource_address,
+    Address, Fungibility, Hasher, InstanceMeta, InstanceRegistry, MetadataCache, PackageHash,
+    ResourceRecord, Value, package_hash, resource_address,
 };
 pub use hyperscale_vm_stdlib::{account_artifact, genesis_publisher, staking_artifact};
 
@@ -108,9 +109,10 @@ pub fn genesis_world_with_pools(pools: &[StakePoolSeat]) -> World {
 /// A genesis-seated pool's creation-fixed record.
 ///
 /// Its configuration is the resource a delegation is denominated in and
-/// the principal its operator surface admits. The resource the pool
-/// *issues* is derived from the pool rather than configured, and the
-/// pool's own identity is its address — so neither is named here.
+/// nothing else. The resource the pool *issues* and the owner badge its
+/// operator surface admits are both derived from the pool rather than
+/// configured, and the pool's own identity is its address — so none of
+/// them is named here.
 ///
 /// The salt stands in for a creating transaction's fresh id, which
 /// genesis has none of: the pool's own beacon identifier separates two
@@ -119,10 +121,7 @@ pub fn genesis_world_with_pools(pools: &[StakePoolSeat]) -> World {
 pub fn pool_meta(staking_package: PackageHash, seat: &StakePoolSeat) -> InstanceMeta {
     InstanceMeta {
         package: staking_package,
-        config: vec![
-            Value::Address(XRD.address()),
-            Value::Address(seat.operator.address()),
-        ],
+        config: vec![Value::Address(XRD.address())],
         salt: ProtocolHasher.hash(DOMAIN_GENESIS_SALT, &[&seat.id.inner().to_le_bytes()]),
     }
 }
@@ -150,6 +149,39 @@ const DOMAIN_GENESIS_SALT: &[u8] = b"hyperscale/engine/genesis-instance";
 pub fn stake_unit(pool: impl Into<Address>) -> ResourceAddr {
     resource_address(&ProtocolHasher, pool, &[])
 }
+
+/// The pool's owner badge: the identity its operator surface admits.
+///
+/// Derived like the stake unit and separated from it by the stdlib's
+/// badge material — the same derivation the operator gate evaluates, so
+/// holding this resource is operating the pool and selling the pool is
+/// transferring it.
+#[must_use]
+pub fn pool_owner_badge(pool: impl Into<Address>) -> ResourceAddr {
+    resource_address(
+        &ProtocolHasher,
+        pool,
+        &[Value::Bytes(OWNER_BADGE.to_vec()).canonical_bytes()],
+    )
+}
+
+/// The badge instance genesis seats: derived from the pool like the
+/// badge itself, so it is recomputable from the seat and stored nowhere.
+#[must_use]
+pub fn owner_badge_id(pool: impl Into<Address>) -> u64 {
+    let digest = ProtocolHasher.hash(DOMAIN_OWNER_BADGE_ID, &[&pool.into().to_bytes()]);
+    let [b0, b1, b2, b3, b4, b5, b6, b7, ..] = digest.0;
+    u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
+}
+
+/// The domain separating a badge instance's id from every other
+/// derivation of a pool's address.
+const DOMAIN_OWNER_BADGE_ID: &[u8] = b"hyperscale/engine/owner-badge-id";
+
+/// The owner badge's resource record: one non-fungible kind.
+pub const OWNER_BADGE_RECORD: ResourceRecord = ResourceRecord {
+    kind: Fungibility::NonFungible,
+};
 
 #[cfg(test)]
 mod tests {

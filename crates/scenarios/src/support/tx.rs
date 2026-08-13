@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use hyperscale_effects_bridge::genesis::genesis_world_with_pools;
 use hyperscale_effects_bridge::{ProtocolHasher, attach_metadata};
-use hyperscale_engine::genesis::{pool_address, stake_unit, staking_artifact};
+use hyperscale_engine::genesis::{pool_address, pool_owner_badge, stake_unit, staking_artifact};
 use hyperscale_engine::{XRD, account_address};
 use hyperscale_transactions::{Client, DEFAULT_GAS_LIMIT, Terms};
 use hyperscale_types::{
@@ -1391,7 +1391,11 @@ pub fn build_deactivate_tx(
     validity: TimestampRange,
 ) -> Transaction {
     let graph = graph(|b| {
-        let proof = account::authorize(b, account_address(&operator.public_key().0))?;
+        let proof = account::present_badge(
+            b,
+            account_address(&operator.public_key().0),
+            pool_owner_badge(pool),
+        )?;
         staking::deactivate_validator(b, proof, pool, validator.inner())
     });
     Transaction::new(envelope(graph, operator, validity))
@@ -1400,9 +1404,10 @@ pub fn build_deactivate_tx(
 /// Register `validator` against `pool`, carrying the consensus key it
 /// will be known by and the proof it holds that key.
 ///
-/// Signed by the pool's operator, which is the whole of the action's
-/// authority: the manifest names a method only that principal may call,
-/// and admission refuses the envelope otherwise.
+/// Signed by the badge holder, whose presentation of the pool's owner
+/// badge is the whole of the action's authority: the operator surface
+/// admits exactly that identity, and the custody gate refuses a
+/// presenter who does not hold it.
 #[must_use]
 pub fn build_register_tx(
     operator: &Ed25519PrivateKey,
@@ -1413,7 +1418,11 @@ pub fn build_register_tx(
     validity: TimestampRange,
 ) -> Transaction {
     let graph = graph(|b| {
-        let proof = account::authorize(b, account_address(&operator.public_key().0))?;
+        let proof = account::present_badge(
+            b,
+            account_address(&operator.public_key().0),
+            pool_owner_badge(pool),
+        )?;
         staking::register_validator(
             b,
             proof,
@@ -1642,7 +1651,11 @@ pub fn build_reshape_threshold_vote_tx(
     validity: TimestampRange,
 ) -> Transaction {
     let graph = graph(|b| {
-        let proof = account::authorize(b, account_address(&operator.public_key().0))?;
+        let proof = account::present_badge(
+            b,
+            account_address(&operator.public_key().0),
+            pool_owner_badge(pool_at(GENESIS_POOL_ID)),
+        )?;
         staking::cast_param_vote(
             b,
             proof,
