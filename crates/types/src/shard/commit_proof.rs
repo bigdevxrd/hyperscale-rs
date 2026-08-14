@@ -28,8 +28,18 @@ use crate::{
 ///
 /// A block commits as the prefix of a later two-chain only across a
 /// bounded view-change gap (INV-SHARD-4), so the parent-hash link from the
-/// directly-committed block down to the proven block is short. Caps
-/// verifier work and, once the proof rides gossip, wire decode.
+/// directly-committed block down to the proven block is short: a link of
+/// `k` needs `k` consecutive heights that each failed to commit directly,
+/// and rounds rise per block, so every one of them costs a skipped round —
+/// `2k` rounds without a single round-contiguous pair.
+///
+/// The same number bounds the producer, the wire, and the verifier. A
+/// producer abandons a run past it (`reshape::observer`), decode refuses a
+/// longer link before allocating for it, and
+/// [`verify_structure`](CommitProof::verify_structure) refuses one built
+/// locally. Erring generous is the safe direction: a cap under what an
+/// honest run reaches makes a real fork unprovable, and a fence that never
+/// engages is the failure that costs safety rather than bytes.
 pub const MAX_COMMIT_PROOF_ANCESTRY: usize = 256;
 
 /// A committee resolved for one QC in a [`CommitProof`].
@@ -92,6 +102,7 @@ pub struct CommitProof {
     /// block. `ancestry[0]` is `certified`'s parent; `ancestry[i].hash()
     /// == ancestry[i-1].parent_block_hash()`; the last element is the
     /// proven block.
+    #[hbor(max = MAX_COMMIT_PROOF_ANCESTRY)]
     ancestry: Vec<BlockHeader>,
 }
 
@@ -323,5 +334,84 @@ impl CommitProof {
             ch.qc().verify(&ctx)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hyperscale_hbor::{
+        DecodeError, HborWidth, from_slice as hbor_from_slice, to_vec as hbor_to_vec, varint,
+    };
+
+    use super::*;
+    use crate::test_utils::{anchor_qc, fork_header};
+    use crate::{BlockHeight, Round, WeightedTimestamp};
+
+    const SHARD: ShardId = ShardId::ROOT;
+
+    fn certified_header(height: u64, round: u64) -> CertifiedBlockHeader {
+        let header = fork_header(
+            SHARD,
+            BlockHeight::new(height),
+            Round::new(round),
+            BlockHash::ZERO,
+            height,
+        );
+        CertifiedBlockHeader::new(header, anchor_qc(SHARD, WeightedTimestamp::from_millis(1)))
+    }
+
+    /// A link past the cap is refused at decode, before the bytes behind it
+    /// are read — the producer and the verifier already refuse it, and the
+    /// wire is the third party to the same contract.
+    #[test]
+    fn decode_rejects_oversized_ancestry() {
+        let mut buf = hbor_to_vec(&certified_header(5, 5)).unwrap();
+        buf.extend_from_slice(&hbor_to_vec(&certified_header(6, 6)).unwrap());
+        buf.extend_from_slice(&hbor_to_vec(&Option::<BlockHeader>::None).unwrap());
+        varint::write(&mut buf, MAX_COMMIT_PROOF_ANCESTRY + 1).unwrap();
+        // Enough bytes behind the claim that the length passes the
+        // input-capacity check and the cap is what rejects it.
+        buf.extend(std::iter::repeat_n(
+            0u8,
+            (MAX_COMMIT_PROOF_ANCESTRY + 1) * BlockHeader::MIN_ENCODED_LEN,
+        ));
+
+        let err = hbor_from_slice::<CommitProof>(&buf).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DecodeError::BoundExceeded { max, actual }
+                    if max == MAX_COMMIT_PROOF_ANCESTRY
+                        && actual == MAX_COMMIT_PROOF_ANCESTRY + 1
+            ),
+            "expected the ancestry cap to reject, got {err:?}"
+        );
+    }
+
+    /// And a link at the cap still round-trips, so the bound admits every
+    /// proof `verify_structure` would.
+    #[test]
+    fn ancestry_at_the_cap_round_trips() {
+        let ancestry: Vec<BlockHeader> = (0..MAX_COMMIT_PROOF_ANCESTRY)
+            .map(|i| {
+                fork_header(
+                    SHARD,
+                    BlockHeight::new(i as u64),
+                    Round::new(i as u64),
+                    BlockHash::ZERO,
+                    i as u64,
+                )
+            })
+            .collect();
+        let proof = CommitProof::new(
+            certified_header(500, 500),
+            certified_header(501, 501),
+            None,
+            ancestry,
+        );
+
+        let bytes = hbor_to_vec(&proof).unwrap();
+        let decoded: CommitProof = hbor_from_slice(&bytes).unwrap();
+        assert_eq!(proof, decoded);
     }
 }
