@@ -806,10 +806,11 @@ pub fn test_boundary_unpinned_height_not_served<S: BoundaryStore>(
     assert!(storage.open_boundary(BlockHeight::new(1)).is_none());
 }
 
-/// The entry pipeline both backends serve identically: two commits over
-/// one collection — create, overwrite, remove, add — with range scans,
-/// the cap, the self-describing leaf, and the historical scan at the
-/// first version asserted between them. Backend-specific tails (GC,
+/// The entry pipeline both backends serve identically.
+///
+/// Two commits over one collection — create, overwrite, remove, add — with
+/// range scans, the cap, the self-describing leaf, and the historical scan at
+/// the first version asserted between them. Backend-specific tails (GC,
 /// retention) stay with their backend.
 ///
 /// # Panics
