@@ -29,8 +29,8 @@ use hyperscale_storage::ShardStorage;
 use hyperscale_types::network::response::GetBlockResponse;
 use hyperscale_types::{
     BlockHeight, CertificateRoot, CertifiedBlock, ElidedCertifiedBlock, Hash, Inventory,
-    LocalReceiptRoot, ProvisionsRoot, RehydrateError, StoredReceipt, TerminalVerdictRoot,
-    TransactionRoot, Verifiable, Verified,
+    LocalReceiptRoot, ProvisionHash, ProvisionsRoot, RehydrateError, StoredReceipt,
+    TerminalVerdictRoot, TransactionRoot, Verifiable, Verified,
 };
 
 use crate::event::classify_fetch_error;
@@ -341,21 +341,30 @@ fn cache_sensitive_validation_failure(reason: &str) -> bool {
 
 /// Structural validation for a rehydrated synced block.
 ///
-/// Confirms identity (height + QC binding) and that every Merkle root
-/// the block header commits to is reproducible from the body the
-/// requester now holds. Receipts ride inside `Finalization`s, so
-/// `local_receipt_root` is checked when certificates are present.
-/// Provisions only ride on `Block::Live`, so `provision_root` is checked
-/// only when the response carried provision bodies.
+/// Confirms identity (height + QC binding) and that every Merkle root the
+/// block header commits to is reproducible from the body the requester now
+/// holds.
 ///
-/// The terminal-verdict root is checked whether or not the block carries
-/// records, because an empty record list has a root of its own rather
-/// than no root: a header claiming records the body does not carry is as
-/// much a mismatch as the reverse. The records are what a verdict against
-/// a departed counterpart is composed on, and they are the one body list
-/// no hash in the manifest binds — they ride inline rather than by
-/// reference — so this is where a serving peer's copy is held to the
-/// header the committee actually signed.
+/// Every root is checked whatever the body carries, because an empty list
+/// has a root of its own — `ZERO`, the empty-input compute — rather than no
+/// root: a header claiming content the body does not carry is as much a
+/// mismatch as the reverse. A root left unchecked because its list came
+/// back empty is a serving peer's licence to strip the body off an
+/// otherwise genuine, QC-signed header. Nothing downstream would catch it:
+/// a synced block is admitted on QC attestation and its state root is never
+/// verified locally, so the stripped body reaches the inline JMT prep at
+/// commit and diverges there, which is fatal to the node rather than fatal
+/// to the response.
+///
+/// Provisions are read as hashes rather than bodies, since a `Sealed` block
+/// drops the bodies and retains the list, and `Block::provision_hashes`
+/// derives the `Live` list by hashing the same bodies the root is computed
+/// over. One expression therefore binds both variants.
+///
+/// The terminal-verdict records are the one body list no hash in the
+/// manifest binds — they ride inline rather than by reference — so this is
+/// the only place a serving peer's copy is held to the header the committee
+/// actually signed.
 ///
 /// On `Err`, the returned `&'static str` is suitable for both the
 /// metrics label and the warn message.
@@ -382,55 +391,49 @@ fn validate_synced_block(
         return Err("terminal_verdict_root_mismatch");
     }
 
-    if !certified.block().transactions().is_empty()
-        && Verified::<TransactionRoot>::compute(certified.block().transactions()).into_inner()
-            != header.transaction_root()
+    if Verified::<TransactionRoot>::compute(certified.block().transactions()).into_inner()
+        != header.transaction_root()
     {
         return Err("transaction_root_mismatch");
     }
 
-    if !certified.block().certificates().is_empty() {
-        if Verified::<CertificateRoot>::compute(certified.block().certificates()).into_inner()
-            != header.certificate_root()
-        {
-            return Err("certificate_root_mismatch");
-        }
+    if Verified::<CertificateRoot>::compute(certified.block().certificates()).into_inner()
+        != header.certificate_root()
+    {
+        return Err("certificate_root_mismatch");
+    }
 
-        // Per-tick shape: receipts must match each tick's EC tx_outcomes
-        // (one receipt per non-aborted outcome, canonical order, matching
-        // success/failure). `local_receipt_root` below catches content
-        // mismatches but doesn't enforce per-tick grouping.
-        for fw in certified.block().certificates().iter() {
-            if fw.validate_receipts_against_ec().is_err() {
-                return Err("receipts_vs_ec_mismatch");
-            }
-        }
-
-        let receipts: Vec<StoredReceipt> = certified
-            .block()
-            .certificates()
-            .iter()
-            .flat_map(|fw| fw.receipts().iter().cloned())
-            .collect();
-        if Verified::<LocalReceiptRoot>::compute(&receipts).into_inner()
-            != header.local_receipt_root()
-        {
-            return Err("local_receipt_root_mismatch");
+    // Per-tick shape: receipts must match each tick's EC tx_outcomes
+    // (one receipt per non-aborted outcome, canonical order, matching
+    // success/failure). `local_receipt_root` below catches content
+    // mismatches but doesn't enforce per-tick grouping.
+    for fw in certified.block().certificates().iter() {
+        if fw.validate_receipts_against_ec().is_err() {
+            return Err("receipts_vs_ec_mismatch");
         }
     }
 
-    if !certified.block().provisions().is_empty() {
-        let provision_hashes: Vec<Hash> = certified
-            .block()
-            .provisions()
-            .iter()
-            .map(|p| p.hash().into_raw())
-            .collect();
-        if Verified::<ProvisionsRoot>::compute(&provision_hashes).into_inner()
-            != header.provision_root()
-        {
-            return Err("provision_root_mismatch");
-        }
+    let receipts: Vec<StoredReceipt> = certified
+        .block()
+        .certificates()
+        .iter()
+        .flat_map(|fw| fw.receipts().iter().cloned())
+        .collect();
+    if Verified::<LocalReceiptRoot>::compute(&receipts).into_inner() != header.local_receipt_root()
+    {
+        return Err("local_receipt_root_mismatch");
+    }
+
+    let provision_hashes: Vec<Hash> = certified
+        .block()
+        .provision_hashes()
+        .into_iter()
+        .map(ProvisionHash::into_raw)
+        .collect();
+    if Verified::<ProvisionsRoot>::compute(&provision_hashes).into_inner()
+        != header.provision_root()
+    {
+        return Err("provision_root_mismatch");
     }
 
     Ok(())
@@ -769,6 +772,100 @@ mod tests {
         let qc = qc_for(&block);
         let certified = CertifiedBlock::new_unchecked(block, qc);
         assert!(validate_synced_block(HEIGHT, &certified).is_ok());
+    }
+
+    /// A serving peer keeps the genuine, QC-signed header and returns an
+    /// empty transaction list. The header's root is what the committee
+    /// signed over, so the empty body is the mismatch — the check cannot
+    /// be conditioned on the list the peer chose to send.
+    #[test]
+    fn validate_rejects_stripped_transactions() {
+        let tx = Arc::new(Verifiable::from(test_transaction(1)));
+        let h = header_with_roots(
+            &header(),
+            Some(Verified::<TransactionRoot>::compute(std::slice::from_ref(&tx)).into_inner()),
+            None,
+            None,
+        );
+        let block = Block::Live {
+            header: h,
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
+            terminal_verdicts: Arc::new(Vec::new()),
+            witness_sources: Arc::new(WitnessSources::empty()),
+        };
+        let qc = qc_for(&block);
+        let certified = CertifiedBlock::new_unchecked(block, qc);
+        assert_eq!(
+            validate_synced_block(HEIGHT, &certified).unwrap_err(),
+            "transaction_root_mismatch"
+        );
+    }
+
+    /// And the same for the certificates, which carry the receipts the
+    /// state root is computed over.
+    #[test]
+    fn validate_rejects_stripped_certificates() {
+        let (_fw, lrr, cr) = make_tick(true);
+        let h = header_with_roots(&header(), None, Some(cr), Some(lrr));
+        let block = Block::Live {
+            header: h,
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provisions: Arc::new(Vec::new()),
+            terminal_verdicts: Arc::new(Vec::new()),
+            witness_sources: Arc::new(WitnessSources::empty()),
+        };
+        let qc = qc_for(&block);
+        let certified = CertifiedBlock::new_unchecked(block, qc);
+        assert_eq!(
+            validate_synced_block(HEIGHT, &certified).unwrap_err(),
+            "certificate_root_mismatch"
+        );
+    }
+
+    /// A `Sealed` block drops the provision bodies and keeps their hashes,
+    /// so the root binds against the retained list. Both directions: the
+    /// hashes the header commits pass, a stripped list does not.
+    #[test]
+    fn validate_binds_provision_root_on_sealed_block() {
+        let hashes = vec![ProvisionHash::from_raw(Hash::from_bytes(b"batch"))];
+        let root = Verified::<ProvisionsRoot>::compute(
+            &hashes.iter().map(|h| h.into_raw()).collect::<Vec<_>>(),
+        )
+        .into_inner();
+        let sealed = |provision_hashes: Vec<ProvisionHash>| Block::Sealed {
+            header: BlockHeader::new(BlockHeaderParts {
+                height: HEIGHT,
+                parent_block_hash: BlockHash::ZERO,
+                parent_qc: QuorumCertificate::genesis(ShardId::ROOT, ChainOrigin::ROOT).into(),
+                timestamp: ProposerTimestamp::from_millis(1_000),
+                provision_tx_roots: std::collections::BTreeMap::new(),
+                provision_root: root,
+                ..Default::default()
+            }),
+            transactions: Arc::new(Vec::new()),
+            certificates: Arc::new(Vec::new()),
+            provision_hashes: Arc::new(provision_hashes),
+            terminal_verdicts: Arc::new(Vec::new()),
+            witness_sources: Arc::new(WitnessSources::empty()),
+        };
+
+        let stripped = sealed(Vec::new());
+        let qc = qc_for(&stripped);
+        assert_eq!(
+            validate_synced_block(HEIGHT, &CertifiedBlock::new_unchecked(stripped, qc))
+                .unwrap_err(),
+            "provision_root_mismatch"
+        );
+
+        let carried = sealed(hashes);
+        let qc = qc_for(&carried);
+        assert!(
+            validate_synced_block(HEIGHT, &CertifiedBlock::new_unchecked(carried, qc)).is_ok(),
+            "the batches the header commits are the ones it accepts"
+        );
     }
 
     #[test]
