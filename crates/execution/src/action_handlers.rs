@@ -152,7 +152,9 @@ pub fn accumulate_tick_output(
 ///
 /// For a leg that did complete, declared and granted are the same
 /// number: the kernel grants a reservation at the amount the declaration
-/// named or refuses it outright.
+/// named or refuses it outright. Completion is read off the receipt —
+/// every abort, a refused reservation included, is a `Failed` receipt,
+/// and a `Failed` receipt carries no writes.
 ///
 /// A reservation targets an amount cell, which is a point, so an
 /// owner-granular declaration is never one. Cells this shard does not own

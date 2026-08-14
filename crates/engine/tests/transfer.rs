@@ -992,6 +992,54 @@ fn an_event_lands_only_on_its_emitters_home_shard() {
     );
 }
 
+/// A reservation is judged against committed balance less what
+/// unresolved legs already hold, and a refusal fails the leg whole: the
+/// receipt is `Failed` and carries no writes, exactly like any other
+/// abort. The same transfer with nothing held completes, so the hold is
+/// what refused it.
+#[test]
+fn a_provisional_hold_refuses_a_reservation_and_fails_the_leg() {
+    let executor = Executor::new(ExecutionMode::Serial);
+    let trie = ShardTrie::uniform(1);
+    let near_shard = trie.shard_for_prefix(alice());
+    let tx = Arc::new(Verified::<Transaction>::from_persisted(signed_transfer(
+        ALICE_SEED,
+        alice(),
+        far(),
+        100,
+    )));
+    let snapshot_store = MapDb::genesis(&[(alice(), 1_000), (far(), 50)]);
+    let mut holds = ProvisionalHolds::new();
+    holds
+        .entry(vault_key(alice(), *XRD))
+        .or_default()
+        .insert(Hash::from_bytes(b"an unresolved leg").into(), 950);
+    let ctx = TickBatchContext {
+        local_shard: near_shard,
+        shard_trie: &trie,
+        tick_ts: WeightedTimestamp::from_millis(1_000),
+        tick_reveal: RevealChain::ZERO,
+        holds: &holds,
+    };
+    let executed = executor.execute_batch(&ctx, &snapshot_store, std::slice::from_ref(&tx));
+    assert!(
+        matches!(executed[0].consensus, ConsensusReceipt::Failed),
+        "a reservation the hold leaves uncovered must fail its leg: {:?}",
+        executed[0].consensus
+    );
+
+    let unheld = TickBatchContext {
+        holds: &ProvisionalHolds::new(),
+        ..ctx
+    };
+    let executed = executor.execute_batch(&unheld, &snapshot_store, &[tx]);
+    assert!(
+        matches!(executed[0].consensus, ConsensusReceipt::Succeeded { .. }),
+        "with nothing held the same transfer completes: {:?}",
+        executed[0].consensus
+    );
+}
+
 /// A fan-out: two withdrawals from one account funding two deposits in
 /// a single manifest — the shape a multi-recipient cross-shard payment
 /// takes.
