@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use hyperscale_types::{ShardForkProof, ShardId};
+use hyperscale_types::{MAX_FORK_PROOFS_PER_PROPOSER, ShardForkProof, ShardId};
 
 /// Buffered fork proofs awaiting inclusion in a beacon proposal.
 #[derive(Debug, Default)]
@@ -54,19 +54,32 @@ impl ForkProofObservations {
         true
     }
 
-    /// Drain every buffered proof for a proposal build, keyed by shard,
-    /// moving each into the in-flight buffer until a fold confirms it.
-    /// The per-shard map caps at `MAX_SHARDS` on the wire, so there is no
-    /// per-proposer overflow to re-record.
+    /// Drain up to [`MAX_FORK_PROOFS_PER_PROPOSER`] buffered proofs for a
+    /// proposal build, keyed by shard, moving each into the in-flight
+    /// buffer until a fold confirms it.
+    ///
+    /// A proposal carries at most that many, so a build past the cap would
+    /// fail to encode and the proposer would fall silent. The overflow
+    /// stays buffered and rides the next build instead — lowest shard
+    /// first, which makes the split deterministic and drains the same
+    /// order every epoch until the backlog clears.
+    ///
+    /// The cap applies here rather than at the caller, unlike the
+    /// equivocation buffers the coordinator caps after draining. Those
+    /// hand their overflow back through `record`, which this buffer would
+    /// refuse: a drained proof is already in flight, and `observe` declines
+    /// a shard held there. Draining past the cap and re-recording would
+    /// drop the overflow on the floor rather than carry it.
     pub fn drain_for_proposal(&mut self) -> BTreeMap<ShardId, ShardForkProof> {
-        std::mem::take(&mut self.by_shard)
-            .into_iter()
-            .map(|(shard, boxed)| {
-                let proof = *boxed.clone();
-                self.in_flight.insert(shard, boxed);
-                (shard, proof)
-            })
-            .collect()
+        let mut drained = BTreeMap::new();
+        while drained.len() < MAX_FORK_PROOFS_PER_PROPOSER {
+            let Some((shard, boxed)) = self.by_shard.pop_first() else {
+                break;
+            };
+            drained.insert(shard, *boxed.clone());
+            self.in_flight.insert(shard, boxed);
+        }
+        drained
     }
 
     /// Drop every buffered or in-flight proof whose shard `obsolete`
@@ -187,6 +200,37 @@ mod tests {
         f.prune(|shard| shard == SHARD);
         f.restore_undelivered();
         assert!(f.is_empty());
+        assert!(f.drain_for_proposal().is_empty());
+    }
+
+    /// A build past the per-proposer cap would fail to encode, so the
+    /// drain stops at it — and the shards it left behind ride the next
+    /// build rather than going unreported.
+    #[test]
+    fn drain_stops_at_the_proposal_cap_and_carries_the_rest() {
+        let committee = TestCommittee::new(4, 6);
+        let mut f = ForkProofObservations::new();
+        let shards: Vec<ShardId> = (0..MAX_FORK_PROOFS_PER_PROPOSER + 3)
+            .map(|i| ShardId::leaf(4, i as u64))
+            .collect();
+        for shard in &shards {
+            assert!(f.observe(shard_fork_proof(&committee, *shard, BlockHeight::new(9))));
+        }
+
+        let first = f.drain_for_proposal();
+        assert_eq!(first.len(), MAX_FORK_PROOFS_PER_PROPOSER);
+        // Lowest shard first, so the split is deterministic across replicas.
+        assert_eq!(
+            first.keys().copied().collect::<Vec<_>>(),
+            shards[..MAX_FORK_PROOFS_PER_PROPOSER].to_vec()
+        );
+
+        let second = f.drain_for_proposal();
+        assert_eq!(
+            second.keys().copied().collect::<Vec<_>>(),
+            shards[MAX_FORK_PROOFS_PER_PROPOSER..].to_vec(),
+            "the overflow rides the next build instead of being dropped",
+        );
         assert!(f.drain_for_proposal().is_empty());
     }
 

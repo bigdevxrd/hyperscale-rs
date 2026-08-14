@@ -54,6 +54,25 @@ pub const MAX_WITNESSES_PER_SHARD: usize = 4096;
 /// a Byzantine proposer's forged-evidence verification cost.
 pub const MAX_EQUIVOCATIONS_PER_PROPOSER: usize = 16;
 
+/// Per-proposer cap on shard fork proofs in a single
+/// [`BeaconProposal`](crate::BeaconProposal).
+///
+/// Tighter than the equivocation cap because a fork proof costs far more
+/// to admit: four QC verifies against committees resolved from the
+/// schedule, plus a parent-hash walk over two ancestry links that reach
+/// [`MAX_COMMIT_PROOF_ANCESTRY`](crate::MAX_COMMIT_PROOF_ANCESTRY)
+/// headers each. Sizing by shard count instead would let one proposer
+/// claim orders of magnitude more bytes than a frame carries.
+///
+/// A cap rather than the live shard count is sound because a fork needs
+/// f+1 corrupt seats on the shard it forks: a cohort holding that in
+/// more shards at once than this has broken the security assumption at a
+/// scale no proposal size recovers from. The overflow is not dropped —
+/// the observation buffer holds what a build leaves behind and carries it
+/// into the next proposal — so the cost of the bound is epochs to work
+/// through a mass fork, not forks that go unreported.
+pub const MAX_FORK_PROOFS_PER_PROPOSER: usize = 8;
+
 /// Hard cap on a [`PcVector`](crate::PcVector)'s element count.
 ///
 /// Bounds attacker-controlled length prefixes on PC vote / QC

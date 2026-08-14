@@ -14,10 +14,10 @@ use hyperscale_hbor::{Hbor, to_vec as hbor_to_vec};
 use thiserror::Error;
 
 use crate::{
-    ConsensusPublicKey, Epoch, MAX_EQUIVOCATIONS_PER_PROPOSER, MAX_SHARDS, NetworkDefinition,
-    PC_VALUE_ELEMENT_BYTES, PcValueElement, PcVoteEquivocation, QuorumCertificate, ShardForkProof,
-    ShardId, ShardVoteEquivocation, Verifiable, Verified, Verify, VrfOutput, VrfProof,
-    beacon_reveal_sign, beacon_reveal_verify, vrf_output_from_proof,
+    ConsensusPublicKey, Epoch, MAX_EQUIVOCATIONS_PER_PROPOSER, MAX_FORK_PROOFS_PER_PROPOSER,
+    MAX_SHARDS, NetworkDefinition, PC_VALUE_ELEMENT_BYTES, PcValueElement, PcVoteEquivocation,
+    QuorumCertificate, ShardForkProof, ShardId, ShardVoteEquivocation, Verifiable, Verified,
+    Verify, VrfOutput, VrfProof, beacon_reveal_sign, beacon_reveal_verify, vrf_output_from_proof,
 };
 
 /// One committee member's slot submission.
@@ -43,7 +43,7 @@ pub struct BeaconProposal {
     /// wire-decoded proposals land `Unverified`; admission re-verifies
     /// against the topology schedule and the fold stamps a fork-caused
     /// `ShardRecovery` for each shard named here.
-    #[hbor(max = MAX_SHARDS)]
+    #[hbor(max = MAX_FORK_PROOFS_PER_PROPOSER)]
     fork_proofs: BTreeMap<ShardId, Verifiable<Box<ShardForkProof>>>,
     /// Self-authenticating shard double-vote pairs the proposer has
     /// observed via gossip — the recovery lane for evidence whose
@@ -166,8 +166,12 @@ impl BeaconProposal {
     ///
     /// # Panics
     ///
-    /// Never in practice: every field is `Hbor` and the struct is
-    /// closed, so encoding is total.
+    /// Never for a proposal any construction path produces. Encoding a
+    /// capped field past its cap is an error rather than a panic, so the
+    /// claim rests on every producer capping what it builds — the
+    /// coordinator's equivocation drains and the fork-proof buffer's own
+    /// — and on a wire-decoded proposal having cleared the same caps at
+    /// decode. A new capped field with no producer-side cap breaks it.
     #[must_use]
     pub fn pc_element_hash(&self, epoch: Epoch) -> PcValueElement {
         const DOMAIN: &[u8] = b"hyperscale-beacon-proposal-v1";
@@ -254,11 +258,6 @@ impl Verified<BeaconProposal> {
     /// # Errors
     ///
     /// Propagates [`SignError`] when the signer cannot sign.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any list or map exceeds its per-proposer cap (inherited
-    /// from [`BeaconProposal::new`]).
     pub fn sign_local(
         signer: &dyn Signer,
         network: &NetworkDefinition,
