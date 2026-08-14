@@ -12,15 +12,14 @@ use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeRea
 use hyperscale_types::{
     BeaconWitnessLeafCount, BlockHash, BlockHeight, CertifiedBlock, CertifiedBlockHeader,
     ConsensusReceipt, DeclaredRange, EntryKey, ExecutionCertificate, Finalization,
-    FinalizationHash, MerkleInclusionProof, QuorumCertificate, RETENTION_HORIZON, ShardId,
-    ShardWitnessPayload, StateRoot, SubstateKey, TerminalRoots, TickId, Transaction, TxHash,
-    Verifiable, Verified, WeightedTimestamp, committed_txs_root_from_hashes,
-    local_settled_tx_hashes, settled_txs_root_from_hashes,
+    FinalizationHash, QuorumCertificate, RETENTION_HORIZON, ShardId, ShardWitnessPayload,
+    StateRoot, SubstateKey, TerminalRoots, TickId, Transaction, TxHash, Verifiable, Verified,
+    WeightedTimestamp, committed_txs_root_from_hashes, local_settled_tx_hashes,
+    settled_txs_root_from_hashes,
 };
 use hyperscale_vm_effects::{Address, CollectionId};
 
 use crate::lock_recover::{lock_or_recover, read_or_recover, write_or_recover};
-use crate::tree::proofs::generate_proof;
 use crate::{
     BlockForSync, JmtSnapshot, ShardChainReader, SubstateStore, Substates, VersionedStore,
     entry_overlay_range, merge_entry_overlay, merge_entry_overlay_with,
@@ -1069,41 +1068,12 @@ impl<S: SubstateStore + VersionedStore> SubstateStore for SubstateView<S> {
             range.cap as usize,
         )
     }
-
-    fn generate_merkle_proofs(
-        &self,
-        keys: &[SubstateKey],
-        block_height: BlockHeight,
-    ) -> Option<MerkleInclusionProof> {
-        // Try base first — works for heights already persisted.
-        if let Some(proof) = (*self.base).generate_merkle_proofs(keys, block_height) {
-            return Some(proof);
-        }
-        // Beyond persisted — caller should use `generate_merkle_proofs_overlay`
-        // which uses the JMT overlay via this view's `TreeReader` impl.
-        None
-    }
 }
 
-/// Override `generate_merkle_proofs` for callers that have a
-/// `jmt::TreeReader`-capable base, using the JMT overlay for unpersisted
-/// heights.
-impl<S: SubstateStore + TreeReader + Sync> SubstateView<S> {
-    /// Generate merkle proofs, falling back to the JMT overlay for
-    /// unpersisted block heights.
-    #[must_use]
-    pub fn generate_merkle_proofs_overlay(
-        &self,
-        keys: &[SubstateKey],
-        block_height: BlockHeight,
-    ) -> Option<MerkleInclusionProof> {
-        if let Some(proof) = (*self.base).generate_merkle_proofs(keys, block_height) {
-            return Some(proof);
-        }
-        generate_proof(self, keys, block_height)
-    }
-}
-
+/// The JMT reader proof generation walks: pending snapshots' nodes over
+/// the base store, so [`crate::tree::proofs::generate_proof`] over a
+/// view serves persisted and unpersisted heights alike from one root
+/// lookup.
 impl<S: TreeReader + Send + Sync> TreeReader for SubstateView<S> {
     fn get_node(&self, key: &JmtNodeKey) -> Option<Arc<JmtNode>> {
         self.jmt_nodes
@@ -1232,13 +1202,6 @@ mod tests {
             _key: SubstateKey,
             _block_height: BlockHeight,
         ) -> Option<Option<Vec<u8>>> {
-            None
-        }
-        fn generate_merkle_proofs(
-            &self,
-            _keys: &[SubstateKey],
-            _block_height: BlockHeight,
-        ) -> Option<MerkleInclusionProof> {
             None
         }
     }

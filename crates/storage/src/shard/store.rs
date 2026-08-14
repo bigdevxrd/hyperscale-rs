@@ -3,7 +3,7 @@
 //! This module defines the storage abstraction used by runners to persist
 //! substate state.
 
-use hyperscale_types::{BlockHeight, DeclaredRange, MerkleInclusionProof, StateRoot, SubstateKey};
+use hyperscale_types::{BlockHeight, DeclaredRange, StateRoot, SubstateKey};
 
 use crate::Substates;
 
@@ -91,16 +91,6 @@ pub trait SubstateStore: Substates + Send + Sync + 'static {
         range: DeclaredRange,
         block_height: BlockHeight,
     ) -> Option<Vec<(u128, Vec<u8>)>>;
-
-    /// Generate a batched merkle multiproof for the given substate keys.
-    ///
-    /// Returns `None` if the requested version is unavailable (GC'd or
-    /// not committed).
-    fn generate_merkle_proofs(
-        &self,
-        keys: &[SubstateKey],
-        block_height: BlockHeight,
-    ) -> Option<MerkleInclusionProof>;
 }
 
 /// Storage that supports reads at an explicit historical version.

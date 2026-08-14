@@ -5,11 +5,9 @@ use std::time::Instant;
 use hex::encode as hex_encode;
 use hyperscale_metrics::{record_storage_operation, record_storage_write};
 use hyperscale_storage::tree::carry_noop_root;
-use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{JmtSnapshot, SubstateStore, VersionedStore};
 use hyperscale_types::{
-    Block, BlockHeight, DeclaredRange, MerkleInclusionProof, QuorumCertificate, StateRoot,
-    SubstateKey, Verified,
+    Block, BlockHeight, DeclaredRange, QuorumCertificate, StateRoot, SubstateKey, Verified,
 };
 use rocksdb::{WriteBatch, WriteOptions};
 
@@ -97,17 +95,6 @@ impl SubstateStore for RocksDbShardStorage {
             range.hi,
             range.cap as usize,
         ))
-    }
-
-    fn generate_merkle_proofs(
-        &self,
-        keys: &[SubstateKey],
-        block_height: BlockHeight,
-    ) -> Option<MerkleInclusionProof> {
-        // Use a RocksDB snapshot for all reads so concurrent JMT GC cannot
-        // delete nodes mid-proof-generation.
-        let snapshot_store = SnapshotTreeStore::new(&self.db, self.root_path.clone());
-        generate_proof(&snapshot_store, keys, block_height)
     }
 }
 

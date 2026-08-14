@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use hyperscale_jmt::{NibblePath, Node as JmtNode, NodeKey as JmtNodeKey, TreeReader};
 use hyperscale_storage::lock_recover::read_or_recover;
-use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{SubstateStore, Substates, VersionedStore};
-use hyperscale_types::{BlockHeight, DeclaredRange, MerkleInclusionProof, StateRoot, SubstateKey};
+use hyperscale_types::{BlockHeight, DeclaredRange, StateRoot, SubstateKey};
 
 use super::core::SimShardStorage;
 use super::snapshot::SimSnapshot;
@@ -65,15 +64,6 @@ impl SubstateStore for SimShardStorage {
             range.hi,
             range.cap as usize,
         ))
-    }
-
-    fn generate_merkle_proofs(
-        &self,
-        keys: &[SubstateKey],
-        block_height: BlockHeight,
-    ) -> Option<MerkleInclusionProof> {
-        let s = read_or_recover(&self.state);
-        generate_proof(&s.tree_store, keys, block_height)
     }
 }
 

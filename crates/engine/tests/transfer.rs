@@ -16,10 +16,9 @@ use hyperscale_storage::{SubstateStore, Substates, TickChain, TickOutput, Versio
 use hyperscale_transactions::{Client, Terms};
 use hyperscale_types::{
     BlockHeight, ComponentAddr, ConsensusReceipt, DeclaredRange, Ed25519PrivateKey, EnvelopeExt,
-    Hash, MerkleInclusionProof, NetworkId, PrincipalAddr, ProvisionalHolds, RevealChain, SchemeId,
-    SettledWrites, ShardId, ShardTrie, StateRoot, StateWrites, SubstateKey, TimestampRange,
-    Transaction, TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp,
-    absorb_committed_cells,
+    Hash, NetworkId, PrincipalAddr, ProvisionalHolds, RevealChain, SchemeId, SettledWrites,
+    ShardId, ShardTrie, StateRoot, StateWrites, SubstateKey, TimestampRange, Transaction,
+    TransactionBody, TransactionEnvelope, Verified, WeightedTimestamp, absorb_committed_cells,
 };
 use hyperscale_vm_effects::{AbiParam, Address, CollectionId, Expr, package_hash};
 use hyperscale_vm_kernel::{amount_cell, encode_amount};
@@ -128,13 +127,6 @@ impl SubstateStore for MapDb {
         _key: SubstateKey,
         _block_height: BlockHeight,
     ) -> Option<Option<Vec<u8>>> {
-        None
-    }
-    fn generate_merkle_proofs(
-        &self,
-        _keys: &[SubstateKey],
-        _block_height: BlockHeight,
-    ) -> Option<MerkleInclusionProof> {
         None
     }
 }

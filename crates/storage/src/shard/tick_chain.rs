@@ -523,8 +523,8 @@ mod tests {
     use std::sync::Mutex;
 
     use hyperscale_types::{
-        Address, AddressClass, DeclaredRange, Hash, LocalKey, MerkleInclusionProof, Movement,
-        ShardId, StateRoot, encode_amount,
+        Address, AddressClass, DeclaredRange, Hash, LocalKey, Movement, ShardId, StateRoot,
+        encode_amount,
     };
 
     use super::*;
@@ -643,13 +643,6 @@ mod tests {
             _key: SubstateKey,
             _block_height: BlockHeight,
         ) -> Option<Option<Vec<u8>>> {
-            None
-        }
-        fn generate_merkle_proofs(
-            &self,
-            _keys: &[SubstateKey],
-            _block_height: BlockHeight,
-        ) -> Option<MerkleInclusionProof> {
             None
         }
     }

@@ -88,8 +88,8 @@ impl SharedState {
                 .insert(jmt_key.clone(), Arc::clone(jmt_node));
         }
         // Stale JMT nodes are NOT deleted here. Historical JMT nodes must be
-        // retained so that provision fetch (generate_merkle_proofs) can read
-        // the tree at past block heights. In production, RocksDB GC handles
+        // retained so that provision-fetch proof generation can read the
+        // tree at past block heights. In production, RocksDB GC handles
         // pruning after `jmt_history_length` blocks (default 256). In
         // simulation, we retain all nodes (tests are short-lived).
 

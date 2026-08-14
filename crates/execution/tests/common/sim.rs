@@ -184,13 +184,6 @@ impl SubstateStore for StubBase {
     ) -> Option<Option<Vec<u8>>> {
         None
     }
-    fn generate_merkle_proofs(
-        &self,
-        _keys: &[SubstateKey],
-        _block_height: BlockHeight,
-    ) -> Option<MerkleInclusionProof> {
-        None
-    }
 }
 
 impl VersionedStore for StubBase {

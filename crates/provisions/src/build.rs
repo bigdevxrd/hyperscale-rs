@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use hyperscale_core::ProvisionsRequest;
 use hyperscale_jmt::TreeReader as JmtTreeReader;
+use hyperscale_storage::tree::proofs::generate_proof;
 use hyperscale_storage::{SubstateStore, SubstateView, VersionedStore};
 use hyperscale_types::{
     BlockHeight, EntryKey, MerkleInclusionProof, ProtocolHasher, ProvisionEntry, Provisions,
@@ -135,7 +136,12 @@ where
     let proof = if all_keys.is_empty() {
         MerkleInclusionProof::new(Vec::new())
     } else {
-        view.generate_merkle_proofs_overlay(&all_keys, source_block_height)?
+        // The view is the proof walk's tree reader: pending snapshots'
+        // nodes over the base store, one root lookup for persisted and
+        // unpersisted heights alike. `None` — the root or a node pruned
+        // mid-walk — surfaces as the same fetch-side retry as any other
+        // unavailable height, never as a wrong proof.
+        generate_proof(view, &all_keys, source_block_height)?
     };
 
     let transactions = staged
